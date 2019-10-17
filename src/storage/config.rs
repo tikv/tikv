@@ -14,10 +14,10 @@ use libc::c_int;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
+const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
 const DEFAULT_SCHED_CAPACITY: usize = 10240;
 const DEFAULT_SCHED_CONCURRENCY: usize = 2048000;
-const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 
 // According to "Little's law", assuming you can write 100MB per
 // second, and it takes about 100ms to process the write requests

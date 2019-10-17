@@ -51,7 +51,7 @@ const BEGIN_KEY: &[u8] = b"";
 const PROCESS_TYPE_GC: &str = "gc";
 const PROCESS_TYPE_SCAN: &str = "scan";
 
-pub const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
+const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
@@ -79,7 +79,7 @@ impl Default for GCConfig {
 impl GCConfig {
     pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if self.batch_keys == 0 {
-            return Err(("storage.gc.batch_keys should not be 0.").into());
+            return Err(("gc.batch_keys should not be 0.").into());
         }
         Ok(())
     }
