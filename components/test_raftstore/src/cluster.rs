@@ -168,34 +168,6 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
-    // start new engines on same directory as before.
-    pub fn start_new_engines(&mut self) -> ServerResult<()> {
-        // first clear engines.
-        self.engines.clear();
-        self.dbs.clear();
-
-        // reuse data path to start new nodes.
-        let mut sim = self.sim.wl();
-        for i in 0..self.paths.len() {
-            let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
-            let engines =
-                create_test_engine_on_dir(None, router.clone(), &self.cfg, &self.paths[i]);
-            self.dbs.push(engines.clone());
-            let node_id = sim.run_node(0, self.cfg.clone(), engines.clone(), router, system)?;
-            self.engines.insert(node_id, engines);
-        }
-        // fallback to start new nodes if dir is not enough.
-        for _ in 0..self.count - self.paths.len() {
-            let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
-            let (engines, path) = create_test_engine(None, router.clone(), &self.cfg);
-            self.dbs.push(engines.clone());
-            self.paths.push(path.unwrap());
-            let node_id = sim.run_node(0, self.cfg.clone(), engines.clone(), router, system)?;
-            self.engines.insert(node_id, engines);
-        }
-        Ok(())
-    }
-
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
             let handle = rocks::util::get_cf_handle(&engine.kv, "default").unwrap();
