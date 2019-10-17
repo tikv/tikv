@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
 
@@ -33,7 +33,7 @@ fn test_turnoff_titan() {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(region.get_peers()[0].clone());
 
-    bulk_insert(&ctx, &storage, 100);
+    bulk_insert(&ctx, &storage, 10);
 
     cluster.must_flush_cf(CF_DEFAULT, true);
     cluster.compact_data();
