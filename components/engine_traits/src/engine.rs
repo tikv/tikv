@@ -21,10 +21,12 @@ pub trait WriteBatch: Mutable + Send {
     fn rollback_to_save_point(&mut self) -> Result<()>;
 }
 
-pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone + Debug + 'static {
+pub trait KvEngine: Peekable + Mutable + Iterable
+    + DBOptionsExt
+    + Send + Sync + Clone + Debug + 'static
+{
     type Snap: Snapshot;
     type Batch: WriteBatch;
-    type DBOptions: DBOptions;
     // FIXME: With the current rocks implementation this
     // type wants to be able to contain a lifetime, but it's
     // not possible without "generic associated types".
@@ -33,10 +35,6 @@ pub trait KvEngine: Peekable + Mutable + Iterable + Send + Sync + Clone + Debug 
     // https://github.com/rust-lang/rust/issues/44265
     type CFHandle: CFHandle;
     type CFOptions: CFOptions;
-
-    fn get_db_options(&self) -> Self::DBOptions;
-    // FIXME: return type
-    fn set_db_options(&self, options: &[(&str, &str)]) -> StdResult<(), String>;
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::Batch) -> Result<()>;
     fn write(&self, wb: &Self::Batch) -> Result<()> {

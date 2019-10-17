@@ -16,7 +16,6 @@ use tikv_util::file::calc_crc32;
 
 use crate::cf::RocksCFHandle;
 use crate::cf_options::RocksCFOptions;
-use crate::db_options::RocksDBOptions;
 use crate::options::{RocksReadOptions, RocksWriteOptions};
 use crate::util::{delete_all_in_range_cf, get_cf_handle};
 use crate::{Iterator, Snapshot};
@@ -91,16 +90,8 @@ impl Into<Arc<DB>> for Rocks {
 impl KvEngine for Rocks {
     type Snap = Snapshot;
     type Batch = crate::WriteBatch;
-    type DBOptions = RocksDBOptions;
     type CFHandle = RocksCFHandle;
     type CFOptions = RocksCFOptions;
-
-    fn get_db_options(&self) -> Self::DBOptions {
-        RocksDBOptions::from_raw(self.0.get_db_options())
-    }
-    fn set_db_options(&self, options: &[(&str, &str)]) -> StdResult<(), String> {
-        self.0.set_db_options(options)
-    }
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::Batch) -> Result<()> {
         if wb.get_db().path() != self.0.path() {
