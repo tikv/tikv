@@ -26,7 +26,7 @@ use crate::rocks::set_external_sst_file_global_seq_no;
 use crate::rocks::supported_compression;
 use crate::rocks::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
-    DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
+    DBCompressionType, DBOptions, Env, Range, SliceTransform, TxnDBOptions, DB,
 };
 use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
 use tikv_util::file::calc_crc32;
@@ -153,6 +153,24 @@ pub fn new_engine_opt(
     mut db_opt: DBOptions,
     cfs_opts: Vec<CFOptions<'_>>,
 ) -> Result<DB> {
+    return create_rocksdb_engine(path, db_opt, None, cfs_opts);
+}
+
+pub fn new_transaction_engine_opt(
+    path: &str,
+    mut db_opt: DBOptions,
+    txn_opt: TxnDBOptions,
+    cfs_opts: Vec<CFOptions<'_>>,
+) -> Result<DB> {
+    return create_rocksdb_engine(path, db_opt, Some(txn_opt), cfs_opts);
+}
+
+pub fn create_rocksdb_engine(
+    path: &str,
+    mut db_opt: DBOptions,
+    transaction_opts: Option<TxnDBOptions>,
+    cfs_opts: Vec<CFOptions<'_>>,
+) -> Result<DB> {
     // Creates a new db if it doesn't exist.
     if !db_exist(path) {
         db_opt.create_if_missing(true);
@@ -163,7 +181,12 @@ pub fn new_engine_opt(
             cfs_v.push(x.cf);
             cf_opts_v.push(x.options.clone());
         }
-        let mut db = DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cf_opts_v).collect())?;
+        let cfds = cfs_v.into_iter().zip(cf_opts_v).collect();
+        let mut db = if let Some(txn_opt) = transaction_opts {
+            DB::open_transaction_cf(db_opt, txn_opt, path, cfds)?
+        } else {
+            DB::open_cf(db_opt, path, cfds)?
+        };
         for x in cfs_opts {
             if x.cf == CF_DEFAULT {
                 continue;
@@ -205,7 +228,13 @@ pub fn new_engine_opt(
             cfs_opts_v.push(x.options);
         }
 
-        let db = DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cfs_opts_v).collect())?;
+        let cfds = cfs_v.into_iter().zip(cfs_opts_v).collect();
+        let db = if let Some(txn_opt) = transaction_opts {
+            DB::open_transaction_cf(db_opt, txn_opt, path, cfds)?
+        } else {
+            DB::open_cf(db_opt, path, cfds)?
+        };
+
         return Ok(db);
     }
 
@@ -226,7 +255,11 @@ pub fn new_engine_opt(
         }
     }
     let cfds = cfs_v.into_iter().zip(cfs_opts_v).collect();
-    let mut db = DB::open_cf(db_opt, path, cfds).unwrap();
+    let mut db = if let Some(txn_opt) = transaction_opts {
+        DB::open_transaction_cf(db_opt, txn_opt, path, cfds)?
+    } else {
+        DB::open_cf(db_opt, path, cfds)?
+    };
 
     // Drops discarded column families.
     //    for cf in existed.iter().filter(|x| needed.iter().find(|y| y == x).is_none()) {

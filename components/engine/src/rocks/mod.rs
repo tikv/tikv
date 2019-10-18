@@ -21,8 +21,8 @@ pub use rocksdb::{
     IngestExternalFileOptions, IngestionInfo, Kv, LRUCacheOptions, MemoryAllocator, PerfContext,
     Range, RateLimiter, ReadOptions, SeekKey, SequentialFile, SliceTransform,
     TablePropertiesCollection, TablePropertiesCollector, TablePropertiesCollectorFactory,
-    TitanBlobIndex, TitanDBOptions, UserCollectedProperties, Writable, WriteBatch, WriteOptions,
-    WriteStallCondition, WriteStallInfo, DB,
+    TitanBlobIndex, TitanDBOptions, TxnDBOptions, UserCollectedProperties, Writable, WriteBatch,
+    WriteOptions, WriteStallCondition, WriteStallInfo, DB,
 };
 
 #[cfg(test)]

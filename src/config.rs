@@ -17,7 +17,7 @@ use std::usize;
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
-    TitanDBOptions,
+    TitanDBOptions, TxnDBOptions,
 };
 use slog;
 use sys_info;
@@ -681,6 +681,7 @@ pub struct DbConfig {
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
+    pub enable_transaction_db: bool,
     pub defaultcf: DefaultCfConfig,
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
@@ -716,6 +717,7 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
+            enable_transaction_db: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -777,6 +779,15 @@ impl DbConfig {
             opts.set_titandb_options(&self.titan.build_opts());
         }
         opts
+    }
+
+    pub fn build_txn_opts(&self) -> Option<TxnDBOptions> {
+        if !self.enable_transaction_db {
+            return None;
+        } else {
+            let txn = TxnDBOptions::new();
+            return Some(txn);
+        }
     }
 
     pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
@@ -1491,6 +1502,14 @@ impl TiKvConfig {
                 "raft dir have been changed, former raft dir is '{}', \
                  current raft dir is '{}', please check if it is expected.",
                 last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
+            ));
+        }
+
+        if last_cfg.rocksdb.enable_transaction_db != self.rocksdb.enable_transaction_db {
+            return Err(format!(
+                "rocksdb type have been changed, it was '{}', \
+                 current raft dir is '{}', please check if it is expected.",
+                last_cfg.rocksdb.enable_transaction_db, self.rocksdb.enable_transaction_db
             ));
         }
 
