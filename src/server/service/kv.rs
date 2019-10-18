@@ -98,6 +98,7 @@ impl RegionVerId {
 
 /// BatchLimiter controls submit timing of request batch.
 struct BatchLimiter {
+    cmd: String,
     timeout: Option<Duration>,
     last_submit_time: Instant,
     latency_observer: HistogramObserver,
@@ -106,15 +107,18 @@ struct BatchLimiter {
     thread_load_estimation: usize,
     sample_size: usize,
     enable_batch: bool,
+    batch_input: usize,
 }
 
 impl BatchLimiter {
     fn new(
+        cmd: String,
         timeout: Option<Duration>,
         latency_observer: HistogramObserver,
         thread_load_observer: Arc<ThreadLoad>,
     ) -> Self {
         BatchLimiter {
+            cmd,
             timeout,
             last_submit_time: Instant::now(),
             latency_observer,
@@ -123,6 +127,7 @@ impl BatchLimiter {
             thread_load_estimation: 100,
             sample_size: 0,
             enable_batch: false,
+            batch_input: 0,
         }
     }
 
@@ -185,12 +190,23 @@ impl BatchLimiter {
     /// Observe the size of commands been examined by batcher.
     /// Command may not be batched but must have the valid type for this batch.
     #[inline]
-    fn observe_input(&mut self, _size: u64) {}
+    fn observe_input(&mut self, size: usize) {
+        self.batch_input += size;
+    }
 
     /// Observe the time and output size of one batch submit.
     #[inline]
-    fn observe_submit(&mut self, now: Instant, _size: u64) {
+    fn observe_submit(&mut self, now: Instant, size: usize) {
         self.last_submit_time = now;
+        REQUEST_BATCH_SIZE_COUNTER_VEC
+            .with_label_values(&[self.cmd.as_str()])
+            .observe(self.batch_input as f64);
+        if size > 0 {
+            REQUEST_BATCH_RATIO_HISTOGRAM_VEC
+                .with_label_values(&[self.cmd.as_str()])
+                .observe(self.batch_input as f64 / size as f64);
+        }
+        self.batch_input = 0;
     }
 }
 
@@ -209,7 +225,7 @@ trait Batcher<E: Engine, L: LockMgr> {
         &mut self,
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
-    ) -> u64;
+    ) -> usize;
 
     fn is_empty(&self) -> bool;
 }
@@ -297,11 +313,11 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
         &mut self,
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
-    ) -> u64 {
+    ) -> usize {
         let mut output = 0;
         for (id, (reqs, commands)) in self.router.drain() {
             let tx = tx.clone();
-            output += commands.len();
+            output += 1;
             match id.cf {
                 Some(cf) => {
                     let f = future_batch_async_raw_get(storage, tx, reqs, cf, commands);
@@ -313,7 +329,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
                 }
             }
         }
-        output as u64
+        output
     }
 
     #[inline]
@@ -342,6 +358,7 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
             "get".to_string(),
             (
                 BatchLimiter::new(
+                    "get".to_string(),
                     timeout,
                     HistogramObserver::new(GRPC_MSG_HISTOGRAM_VEC.kv_get.clone()),
                     readpool_thread_load,

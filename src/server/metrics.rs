@@ -131,6 +131,20 @@ lazy_static! {
         &["cf", "name"]
     )
     .unwrap();
+    pub static ref REQUEST_BATCH_SIZE_COUNTER_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_server_request_batch_size",
+        "Size of request batch input",
+        &["type"],
+        exponential_buckets(1f64, 5f64, 10).unwrap()
+    )
+    .unwrap();
+    pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_server_request_batch_ratio",
+        "Ratio of request batch output to input",
+        &["type"],
+        exponential_buckets(1f64, 5f64, 10).unwrap()
+    )
+    .unwrap();
 }
 
 make_static_metric! {
