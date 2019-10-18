@@ -4404,10 +4404,26 @@ mod tests {
             .async_check_txn_status(
                 Context::default(),
                 k.clone(),
-                ts(10, 0),
-                ts(12, 0),
-                ts(15, 0),
+                ts(9, 0),
+                ts(9, 1),
+                ts(9, 1),
                 expect_value_callback(tx.clone(), 0, (0, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // A rollback will be written, so an later-arriving prewrite will fail.
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((k.clone(), v.clone()))],
+                k.as_encoded().to_vec(),
+                ts(9, 0),
+                Options::default(),
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
             )
             .unwrap();
         rx.recv().unwrap();
