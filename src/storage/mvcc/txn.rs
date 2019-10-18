@@ -256,7 +256,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 info.set_lock_version(lock.ts);
                 info.set_key(key.into_raw()?);
                 info.set_lock_ttl(lock.ttl);
-                info.set_txn_size(options.txn_size);
+                info.set_txn_size(lock.txn_size);
                 return Err(Error::KeyIsLocked(info));
             }
             if lock.lock_type != LockType::Pessimistic {
