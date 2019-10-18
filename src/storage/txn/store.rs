@@ -170,9 +170,6 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             || key.as_encoded().as_slice() < self.last_point_get_key.as_slice()
         {
             // Only reuse point getter when keys are given in ascending order.
-            self.last_point_get_key.clear();
-            self.last_point_get_key
-                .extend_from_slice(key.as_encoded().as_slice());
             self.point_getter_cache = Some(
                 PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
                     .fill_cache(self.fill_cache)
@@ -181,6 +178,9 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     .build()?,
             );
         }
+        self.last_point_get_key.clear();
+        self.last_point_get_key
+            .extend_from_slice(key.as_encoded().as_slice());
         let point_getter = self.point_getter_cache.as_mut().unwrap();
         let v = point_getter.get(key)?;
         statistics.add(&point_getter.take_statistics());
