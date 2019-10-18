@@ -3,9 +3,9 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
-use crate::storage::mvcc::EntryScanner;
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::mvcc::PointGetterBuilder;
+use crate::storage::mvcc::{EntryScanner, PointGetter};
 use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
@@ -17,6 +17,10 @@ pub trait Store: Send {
 
     /// Fetch the provided key.
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
+
+    /// Re-use last cursor to incrementally (if possible) fetch the provided key. When function
+    /// is not called in ascending order, the cursor can not be reused which will be slower.
+    fn incremental_get(&mut self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
 
     /// Fetch the provided set of keys.
     fn batch_get(
@@ -142,6 +146,9 @@ pub struct SnapshotStore<S: Snapshot> {
     start_ts: u64,
     isolation_level: IsolationLevel,
     fill_cache: bool,
+
+    point_getter_cache: Option<PointGetter<S>>,
+    last_point_get_key: Vec<u8>,
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
@@ -153,6 +160,28 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .isolation_level(self.isolation_level)
             .multi(false)
             .build()?;
+        let v = point_getter.get(key)?;
+        statistics.add(&point_getter.take_statistics());
+        Ok(v)
+    }
+
+    fn incremental_get(&mut self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
+        if self.point_getter_cache.is_none()
+            || key.as_encoded().as_slice() < self.last_point_get_key.as_slice()
+        {
+            // Only reuse point getter when keys are given in ascending order.
+            self.last_point_get_key.clear();
+            self.last_point_get_key
+                .extend_from_slice(key.as_encoded().as_slice());
+            self.point_getter_cache = Some(
+                PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
+                    .fill_cache(self.fill_cache)
+                    .isolation_level(self.isolation_level)
+                    .multi(true)
+                    .build()?,
+            );
+        }
+        let point_getter = self.point_getter_cache.as_mut().unwrap();
         let v = point_getter.get(key)?;
         statistics.add(&point_getter.take_statistics());
         Ok(v)
@@ -250,6 +279,9 @@ impl<S: Snapshot> SnapshotStore<S> {
             start_ts,
             isolation_level,
             fill_cache,
+
+            point_getter_cache: None,
+            last_point_get_key: Vec::new(),
         }
     }
 
@@ -325,6 +357,15 @@ impl Store for FixtureStore {
             Some(Ok(v)) => Ok(Some(v.clone())),
             Some(Err(e)) => Err(e.maybe_clone().unwrap()),
         }
+    }
+
+    #[inline]
+    fn incremental_get(
+        &mut self,
+        key: &Key,
+        statistics: &mut Statistics,
+    ) -> Result<Option<Vec<u8>>> {
+        self.get(key, statistics)
     }
 
     #[inline]

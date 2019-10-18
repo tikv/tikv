@@ -64,7 +64,7 @@ impl<S: Store> Storage for TiKVStorage<S> {
         let key = range.0;
         let value = self
             .store
-            .get(&Key::from_raw(&key), &mut self.cf_stats_backlog)
+            .incremental_get(&Key::from_raw(&key), &mut self.cf_stats_backlog)
             .map_err(Error::from)?;
         Ok(value.map(move |v| (key, v)))
     }
