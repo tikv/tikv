@@ -253,6 +253,7 @@ mod tests {
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use tikv_util::security::SecurityConfig;
+    use tikv_util::ts_validator::TsValidator;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -338,7 +339,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             storage.get_engine(),
         );
-        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool);
+        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool, TsValidator::new_dummy());
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(

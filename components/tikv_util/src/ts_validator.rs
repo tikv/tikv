@@ -35,6 +35,10 @@ impl SafePoint {
 }
 
 impl TsValidator {
+    pub fn new_dummy() -> Self {
+        Self(Arc::new(AtomicU64::new(0)))
+    }
+
     /// For a given TS, check if the ts is expired, which means, earlier than the current safe point.
     #[inline]
     pub fn is_ts_expired(&self, ts: u64) -> bool {

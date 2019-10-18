@@ -21,6 +21,7 @@ use crate::storage::{
 };
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
+use tikv_util::ts_validator::TsValidator;
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
@@ -124,15 +125,23 @@ pub struct Executor<E: Engine, S: MsgScheduler, L: LockMgr> {
     // If the task releases some locks, we wake up waiters waiting for them.
     lock_mgr: Option<L>,
 
+    ts_validator: TsValidator,
+
     _phantom: PhantomData<E>,
 }
 
 impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
-    pub fn new(scheduler: S, pool: SchedPool, lock_mgr: Option<L>) -> Self {
+    pub fn new(
+        scheduler: S,
+        pool: SchedPool,
+        lock_mgr: Option<L>,
+        ts_validator: TsValidator,
+    ) -> Self {
         Executor {
             sched_pool: Some(pool),
             scheduler: Some(scheduler),
             lock_mgr,
+            ts_validator,
             _phantom: Default::default(),
         }
     }
@@ -163,6 +172,29 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
         match snapshot {
             Ok(snapshot) => {
                 SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_ok.inc();
+
+                if let Some(ts) = task.cmd.safe_ts() {
+                    if self.ts_validator.is_ts_expired(ts) {
+                        SCHED_STAGE_COUNTER_VEC.get(task.tag).ts_expired.inc();
+
+                        info!("task's ts has expired"; "cid" => task.cid, "ts" => ts);
+                        self.take_pool()
+                            .pool
+                            .spawn(move || {
+                                notify_scheduler(
+                                    self.take_scheduler(),
+                                    Msg::FinishedWithErr {
+                                        cid: task.cid,
+                                        err: Error::TsExpired,
+                                        tag: task.tag,
+                                    },
+                                );
+                                future::ok::<_, ()>(())
+                            })
+                            .unwrap();
+                        return;
+                    }
+                }
 
                 self.process_by_worker(cb_ctx, snapshot, task);
             }

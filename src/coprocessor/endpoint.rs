@@ -52,6 +52,7 @@ impl<E: Engine> Clone for Endpoint<E> {
             read_pool_high: self.read_pool_high.clone(),
             read_pool_normal: self.read_pool_normal.clone(),
             read_pool_low: self.read_pool_low.clone(),
+            ts_validator: self.ts_validator.clone(),
             ..*self
         }
     }
@@ -223,6 +224,16 @@ impl<E: Engine> Endpoint<E> {
             .map_err(Error::from)
     }
 
+    #[inline]
+    fn validate_ts(ts_validator: &TsValidator, req_ctx: &ReqContext) -> Result<()> {
+        if let Some(ts) = req_ctx.txn_start_ts {
+            if ts_validator.is_ts_expired(ts) {
+                return Err(Error::Other("ts is expired".to_string()));
+            }
+        }
+        Ok(())
+    }
+
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
@@ -232,6 +243,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_unary_request_impl(
         tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
+        ts_validator: TsValidator,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
@@ -243,6 +255,10 @@ impl<E: Engine> Endpoint<E> {
                     Self::async_snapshot(engine, &tracker.req_ctx.context)
                         .map(|snapshot| (tracker, snapshot))
                 })
+            })
+            .and_then(move |(tracker, snapshot)| {
+                future::result(Self::validate_ts(&ts_validator, &tracker.req_ctx))
+                    .map(|_| (tracker, snapshot))
             })
             .and_then(move |(tracker, snapshot)| {
                 // When snapshot is retrieved, deadline may exceed.
@@ -291,9 +307,12 @@ impl<E: Engine> Endpoint<E> {
         let read_pool = self.get_read_pool(req_ctx.context.get_priority());
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
+        let ts_validator = self.ts_validator.clone();
 
         read_pool
-            .spawn_handle(move || Self::handle_unary_request_impl(tracker, handler_builder))
+            .spawn_handle(move || {
+                Self::handle_unary_request_impl(tracker, handler_builder, ts_validator)
+            })
             .map_err(|_| Error::MaxPendingTasksExceeded)
     }
 
@@ -326,6 +345,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_stream_request_impl(
         tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
+        ts_validator: TsValidator,
     ) -> impl Stream<Item = coppb::Response, Error = Error> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
@@ -341,6 +361,10 @@ impl<E: Engine> Endpoint<E> {
                                 .map(|snapshot| (tracker, snapshot))
                         })
                     }
+                })
+                .and_then(move |(tracker, snapshot)| {
+                    future::result(Self::validate_ts(&ts_validator, &tracker.req_ctx))
+                        .map(|_| (tracker, snapshot))
                 })
                 .and_then(move |(tracker, snapshot)| {
                     // When snapshot is retrieved, deadline may exceed.
@@ -426,10 +450,11 @@ impl<E: Engine> Endpoint<E> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let read_pool = self.get_read_pool(req_ctx.context.get_priority());
         let tracker = Box::new(Tracker::new(req_ctx));
+        let ts_validator = self.ts_validator.clone();
 
         read_pool
             .spawn(move || {
-                Self::handle_stream_request_impl(tracker, handler_builder) // Stream<Resp, Error>
+                Self::handle_stream_request_impl(tracker, handler_builder, ts_validator) // Stream<Resp, Error>
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
             })
@@ -643,7 +668,8 @@ mod tests {
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop =
+            Endpoint::<RocksEngine>::new(&Config::default(), read_pool, TsValidator::new_dummy());
 
         // a normal request
         let handler_builder =
@@ -684,6 +710,7 @@ mod tests {
                 ..Config::default()
             },
             read_pool,
+            TsValidator::new_dummy(),
         );
 
         let req = {
@@ -714,7 +741,8 @@ mod tests {
     fn test_invalid_req_type() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop =
+            Endpoint::<RocksEngine>::new(&Config::default(), read_pool, TsValidator::new_dummy());
 
         let mut req = coppb::Request::default();
         req.set_tp(9999);
@@ -730,7 +758,8 @@ mod tests {
     fn test_invalid_req_body() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop =
+            Endpoint::<RocksEngine>::new(&Config::default(), read_pool, TsValidator::new_dummy());
 
         let mut req = coppb::Request::default();
         req.set_tp(REQ_TYPE_DAG);
@@ -769,7 +798,8 @@ mod tests {
         })
         .collect();
 
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop =
+            Endpoint::<RocksEngine>::new(&Config::default(), read_pool, TsValidator::new_dummy());
 
         let (tx, rx) = mpsc::channel();
 
@@ -815,7 +845,8 @@ mod tests {
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop =
+            Endpoint::<RocksEngine>::new(&Config::default(), read_pool, TsValidator::new_dummy());
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
@@ -832,7 +863,8 @@ mod tests {
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop =
+            Endpoint::<RocksEngine>::new(&Config::default(), read_pool, TsValidator::new_dummy());
 
         // Fail immediately
         let handler_builder =
@@ -875,7 +907,8 @@ mod tests {
     fn test_empty_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop =
+            Endpoint::<RocksEngine>::new(&Config::default(), read_pool, TsValidator::new_dummy());
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
         let resp_vec = cop
@@ -893,7 +926,8 @@ mod tests {
     fn test_special_streaming_handlers() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop =
+            Endpoint::<RocksEngine>::new(&Config::default(), read_pool, TsValidator::new_dummy());
 
         // handler returns `finished == true` should not be called again.
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -985,6 +1019,7 @@ mod tests {
                 ..Config::default()
             },
             read_pool,
+            TsValidator::new_dummy(),
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1043,7 +1078,7 @@ mod tests {
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cop = Endpoint::<RocksEngine>::new(&config, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&config, read_pool, TsValidator::new_dummy());
 
         let (tx, rx) = std::sync::mpsc::channel();
 

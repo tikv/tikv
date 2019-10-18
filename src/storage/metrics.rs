@@ -39,6 +39,7 @@ make_static_metric! {
         async_snapshot_err,
         snapshot_ok,
         snapshot_err,
+        ts_expired,
         read_finish,
         next_cmd,
         lock_wait,

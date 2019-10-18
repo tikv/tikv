@@ -515,6 +515,29 @@ impl Command {
         }
     }
 
+    /// Some transactional commands can't be executed before safe point. Use this function to get
+    /// the command's ts limit.
+    pub fn safe_ts(&self) -> Option<u64> {
+        match *self {
+            Command::Prewrite { start_ts, .. }
+            | Command::AcquirePessimisticLock { start_ts, .. }
+            | Command::PessimisticRollback { start_ts, .. }
+            | Command::TxnHeartBeat { start_ts, .. } => Some(start_ts),
+            Command::Commit { lock_ts, .. } | Command::CheckTxnStatus { lock_ts, .. } => {
+                Some(lock_ts)
+            }
+            Command::ResolveLock { .. }
+            | Command::ResolveLockLite { .. }
+            | Command::DeleteRange { .. }
+            | Command::Pause { .. }
+            | Command::Cleanup { .. }
+            | Command::Rollback { .. }
+            | Command::MvccByStartTs { .. }
+            | Command::ScanLock { .. }
+            | Command::MvccByKey { .. } => None,
+        }
+    }
+
     pub fn get_context(&self) -> &Context {
         match *self {
             Command::Prewrite { ref ctx, .. }
@@ -658,6 +681,7 @@ impl Options {
 pub struct TestStorageBuilder<E: Engine> {
     engine: E,
     config: Config,
+    ts_validator: Option<TsValidator>,
 }
 
 impl TestStorageBuilder<RocksEngine> {
@@ -666,6 +690,7 @@ impl TestStorageBuilder<RocksEngine> {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: Config::default(),
+            ts_validator: None,
         }
     }
 }
@@ -675,6 +700,7 @@ impl<E: Engine> TestStorageBuilder<E> {
         Self {
             engine,
             config: Config::default(),
+            ts_validator: None,
         }
     }
 
@@ -692,7 +718,8 @@ impl<E: Engine> TestStorageBuilder<E> {
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
-        Storage::from_engine(self.engine, &self.config, read_pool, None)
+        let ts_validator = self.ts_validator.unwrap_or_else(TsValidator::new_dummy);
+        Storage::from_engine(self.engine, &self.config, read_pool, None, ts_validator)
     }
 }
 
@@ -793,6 +820,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
+            ts_validator,
         );
 
         let read_pool_high = read_pool.remove(2);

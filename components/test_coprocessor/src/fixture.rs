@@ -11,6 +11,8 @@ use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
 
+use tikv_util::ts_validator::TsValidator;
+
 #[derive(Clone)]
 pub struct ProductTable(Table);
 
@@ -83,7 +85,7 @@ pub fn init_data_with_details<E: Engine>(
         &CoprReadPoolConfig::default_for_test(),
         store.get_engine(),
     );
-    let cop = Endpoint::new(cfg, pool);
+    let cop = Endpoint::new(cfg, pool, TsValidator::new_dummy());
     (store, cop)
 }
 

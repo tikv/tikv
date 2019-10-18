@@ -57,6 +57,9 @@ quick_error! {
                         start_ts,
                         commit_ts)
         }
+        TsExpired {
+            description("Tso has expired")
+        }
         InvalidReqRange {start: Option<Vec<u8>>,
                         end: Option<Vec<u8>>,
                         lower_bound: Option<Vec<u8>>,
@@ -95,6 +98,7 @@ impl Error {
                 lower_bound: lower_bound.clone(),
                 upper_bound: upper_bound.clone(),
             }),
+            Error::TsExpired => Some(Error::TsExpired),
             Error::Other(_) | Error::ProtoBuf(_) | Error::Io(_) => None,
         }
     }

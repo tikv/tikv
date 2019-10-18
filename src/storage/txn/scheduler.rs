@@ -28,6 +28,7 @@ use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
+use tikv_util::ts_validator::TsValidator;
 use tikv_util::{collections::HashMap, time::SlowTimer};
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
@@ -158,6 +159,8 @@ struct SchedulerInner<L: LockMgr> {
     running_write_bytes: AtomicUsize,
 
     lock_mgr: Option<L>,
+
+    ts_validator: TsValidator,
 }
 
 #[inline]
@@ -248,6 +251,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
+        ts_validator: TsValidator,
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
@@ -270,6 +274,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
                 "sched-high-pri-pool",
             ),
             lock_mgr,
+            ts_validator,
         });
 
         slow_log!(t, "initialized the transaction scheduler");
@@ -295,7 +300,12 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
             engine: None,
             inner: Arc::clone(&self.inner),
         };
-        Executor::new(scheduler, pool, self.inner.lock_mgr.clone())
+        Executor::new(
+            scheduler,
+            pool,
+            self.inner.lock_mgr.clone(),
+            self.inner.ts_validator.clone(),
+        )
     }
 
     /// Releases all the latches held by a command.

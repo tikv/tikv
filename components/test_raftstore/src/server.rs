@@ -34,6 +34,7 @@ use tikv::server::{
 use tikv::storage;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::security::SecurityManager;
+use tikv_util::ts_validator::SafePoint;
 use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
@@ -146,7 +147,15 @@ impl Simulator for ServerCluster {
             GCWorker::new(engine.clone(), None, None, cfg.storage.gc_ratio_threshold);
         gc_worker.start().unwrap();
 
-        let store = create_raft_storage(engine, &cfg.storage, storage_read_pool, None)?;
+        let safe_point = SafePoint::new();
+
+        let store = create_raft_storage(
+            engine,
+            &cfg.storage,
+            storage_read_pool,
+            None,
+            safe_point.get_ts_validator(),
+        )?;
         self.storages.insert(node_id, raft_engine);
 
         // Create import service.
@@ -172,7 +181,8 @@ impl Simulator for ServerCluster {
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         );
-        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
+        let cop =
+            coprocessor::Endpoint::new(&server_cfg, cop_read_pool, safe_point.get_ts_validator());
         let mut server = None;
         for _ in 0..100 {
             let mut svr = Server::new(
