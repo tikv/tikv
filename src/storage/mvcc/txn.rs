@@ -689,10 +689,34 @@ impl<S: Snapshot> MvccTxn<S> {
                     .reader
                     .get_txn_commit_info(&primary_key, self.start_ts)?
                 {
-                    Some((ts, write_type)) if write_type != WriteType::Rollback => {
-                        Ok((0, ts, false))
+                    Some((ts, write_type)) => {
+                        if write_type == WriteType::Rollback {
+                            Ok((0, 0, false))
+                        } else {
+                            Ok((0, ts, false))
+                        }
                     }
-                    _ => Ok((0, 0, false)),
+                    None => {
+                        let ts = self.start_ts;
+
+                        // collapse previous rollback if exist.
+                        if self.collapse_rollback {
+                            self.collapse_prev_rollback(primary_key.clone())?;
+                        }
+
+                        // Insert a Rollback to Write CF in case that a stale prewrite command
+                        // is received after a cleanup command.
+                        // Pessimistic transactions prewrite successfully only if all its
+                        // pessimistic locks exist. So collapsing the rollback of a pessimistic
+                        // lock is safe. After a pessimistic transaction acquires all its locks,
+                        // it is impossible that neither a lock nor a write record is found.
+                        // Therefore, we don't need to protect the rollback here.
+                        let write = Write::new_rollback(ts, false);
+                        self.put_write(primary_key, ts, write.to_bytes());
+                        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
+
+                        Ok((0, 0, false))
+                    }
                 }
             }
         }
@@ -1860,7 +1884,16 @@ mod tests {
         let ts = super::super::compose_ts;
 
         // Try to check a not exist thing.
-        must_check_txn_status(&engine, k, ts(8, 0), ts(12, 0), ts(13, 0), 0, 0);
+        must_check_txn_status(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), 0, 0);
+        // A rollback record will be written.
+        must_seek_write(
+            &engine,
+            k,
+            u64::max_value(),
+            ts(3, 0),
+            ts(3, 0),
+            WriteType::Rollback,
+        );
 
         // Lock the key with TTL=100.
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(5, 0), 100, 0);
@@ -1907,6 +1940,15 @@ mod tests {
 
         // Check a not existing transaction, gets nothing.
         must_check_txn_status(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), 0, 0);
+        // And a rollback record will be written.
+        must_seek_write(
+            &engine,
+            k,
+            ts(6, 0),
+            ts(6, 0),
+            ts(6, 0),
+            WriteType::Rollback,
+        );
 
         // TTL check is based on physical time (in ms). When logical time's difference is larger
         // than TTL, the lock won't be resolved.
