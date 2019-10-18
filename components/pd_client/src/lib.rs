@@ -82,6 +82,8 @@ pub trait PdClient: Send + Sync {
     /// Returns the cluster ID.
     fn get_cluster_id(&self) -> Result<u64>;
 
+    fn tso(&self, count: u32) -> PdFuture<(u32, pdpb::Timestamp)>;
+
     /// Creates the cluster with cluster ID, node, stores and first Region.
     /// If the cluster is already bootstrapped, return ClusterBootstrapped error.
     /// When a node starts, if it finds nothing in the node and
