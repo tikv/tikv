@@ -78,7 +78,7 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
     }
 }
 
-fn checksum_crc64_xor(checksum: u64, k: &[u8], v: &[u8]) -> u64 {
+pub fn checksum_crc64_xor(checksum: u64, k: &[u8], v: &[u8]) -> u64 {
     let mut digest = Digest::new(crc64::ECMA);
     digest.write(k);
     digest.write(v);
