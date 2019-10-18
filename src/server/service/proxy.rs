@@ -1,27 +1,27 @@
-use crate::server::{StoreAddrResolver, Error};
+use crate::server::{Error, StoreAddrResolver};
 
-use kvproto::tikvpb;
 use kvproto::kvrpcpb::{
-    GetCommittedIndexAndTsRequest,
-    GetCommittedIndexAndTsResponse,
-    ReadIndexRequest,
+    GetCommittedIndexAndTsRequest, GetCommittedIndexAndTsResponse, ReadIndexRequest,
 };
+use kvproto::tikvpb;
 use kvproto::tikvpb::TikvClient;
 
-use grpcio::{RpcContext, UnarySink, ChannelBuilder, Environment};
+use grpcio::{ChannelBuilder, Environment, RpcContext, UnarySink};
 
-use futures::prelude::*;
 use futures::future;
+use futures::prelude::*;
 use std::sync::Arc;
 
 use tikv_util::future::{paired_future_callback, AndThenWith};
+use pd_client::PdClient;
 
 #[derive(Clone)]
-pub struct Service<S: StoreAddrResolver> {
+pub struct Service<S: StoreAddrResolver, P: PdClient> {
     store_resolver: S,
+    pd: P,
 }
 
-impl<S: StoreAddrResolver + 'static> tikvpb::DcProxy for Service<S> {
+impl<S: StoreAddrResolver + 'static, P: PdClient + 'static> tikvpb::DcProxy for Service<S, P> {
     fn get_committed_index_and_ts(
         &mut self,
         ctx: RpcContext<'_>,
@@ -43,17 +43,26 @@ impl<S: StoreAddrResolver + 'static> tikvpb::DcProxy for Service<S> {
                     let client = TikvClient::new(channel);
                     let mut read_index_req = ReadIndexRequest::default();
                     read_index_req.set_context(region_ctx.clone());
-                    client.read_index_async(&read_index_req).unwrap().map_err(Error::from)
+                    client
+                        .read_index_async(&read_index_req)
+                        .unwrap()
+                        .map_err(Error::from)
                 })
-                .map(|res| {
-                    res.get_read_index()
-                });
+                .map(|res| res.get_read_index());
             fs.push(Box::new(f));
         }
 
-        let f = future::join_all(fs).and_then(|indexes| {
+        let f1 = future::join_all(fs);
+
+        let f2 = self.pd.tso(1).map(move |(count, ts)| {
+            assert_eq!(count, 1); // FIXME
+            ts
+        }).map_err(Error::from);
+
+        let f = Future::join(f1, f2).and_then(|(indexes, ts)| {
             let mut res = GetCommittedIndexAndTsResponse::default();
-            res.set_committed_index(*indexes.iter().max().unwrap()); // FIXME: handle region error.
+            res.set_committed_index(*indexes.iter().max().unwrap());
+            res.set_timestamp(ts);
             sink.success(res).map_err(Error::from)
         }).map_err(|_| {});
 
