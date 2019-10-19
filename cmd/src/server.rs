@@ -240,6 +240,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         raft_router,
         resolver.clone(),
         snap_mgr.clone(),
+        pd_client.clone(),
     )
     .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 

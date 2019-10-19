@@ -15,10 +15,27 @@ use std::sync::Arc;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use pd_client::PdClient;
 
-#[derive(Clone)]
 pub struct Service<S: StoreAddrResolver, P: PdClient> {
     store_resolver: S,
-    pd: P,
+    pd: Arc<P>,
+}
+
+impl<S: StoreAddrResolver + 'static, P: PdClient + 'static>  std::clone::Clone for Service<S, P> {
+    fn clone(&self) -> Self {
+        Service {
+            store_resolver: self.store_resolver.clone(),
+            pd: self.pd.clone(),
+        }
+    }
+}
+
+impl<S: StoreAddrResolver + 'static, P: PdClient + 'static> Service<S, P> {
+    pub fn new(store_resolver: S, pd: Arc<P>) -> Self {
+        Service {
+            store_resolver,
+            pd,
+        }
+    }
 }
 
 impl<S: StoreAddrResolver + 'static, P: PdClient + 'static> tikvpb::DcProxy for Service<S, P> {

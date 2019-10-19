@@ -20,6 +20,7 @@ use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Worker;
 use tikv_util::Either;
+use pd_client::PdClient;
 
 use super::load_statistics::*;
 use super::raft_client::RaftClient;
@@ -38,7 +39,7 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 ///
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
-pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
+pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static, P: PdClient + 'static> {
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -56,9 +57,10 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     stats_pool: Option<ThreadPool>,
     thread_load: Arc<ThreadLoad>,
     timer: Handle,
+    pd: Arc<P>,
 }
 
-impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
+impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static, P: PdClient + 'static> Server<T, S, P> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockMgr>(
         cfg: &Arc<Config>,
@@ -68,6 +70,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
+        pd: Arc<P>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = ThreadPoolBuilder::new()
@@ -92,6 +95,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(&thread_load),
         );
 
+        let proxy_service = ProxyService::new(resolver.clone(), pd.clone());
+
         let addr = SocketAddr::from_str(&cfg.addr)?;
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
@@ -104,7 +109,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let builder = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
                 .channel_args(channel_args)
-                .register_service(create_tikv(kv_service));
+                .register_service(create_tikv(kv_service))
+                .register_service(create_dc_proxy(proxy_service));
             sb = security_mgr.bind(sb, &ip, addr.port());
             Either::Left(sb)
         };
@@ -136,6 +142,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             stats_pool: Some(stats_pool),
             thread_load,
             timer: GLOBAL_TIMER_HANDLE.clone(),
+            pd: pd,
         };
 
         Ok(svr)
