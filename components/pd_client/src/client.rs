@@ -126,6 +126,47 @@ impl PdClient for RpcClient {
         Ok(self.cluster_id)
     }
 
+    fn tso(&self, count: u32) -> PdFuture<(u32, pdpb::Timestamp)> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::TsoRequest::default();
+        req.set_header(self.header());
+        req.set_count(count);
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::TsoRequest| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let (sender, receiver) = client.rl().client_stub.tso_opt(option).unwrap();
+            let send = sender.send((req, WriteFlags::default().buffer_hint(false)));
+            Box::new(send.map_err(Error::Grpc).and_then(move |mut s| {
+                receiver
+                    .into_future()
+                    .then(move |res| {
+                        // After receiving, close the sink and continue
+                        future::poll_fn(move || s.close()).then(move |_| res)
+                    })
+                    .map_err(|(e, _)| Error::Grpc(e))
+                    .and_then(|(res, _)| {
+                        res.ok_or_else(|| {
+                            let e = box_err!("no response received from pd");
+                            error!("get tso failed"; "err" => ?e);
+                            e
+                        })
+                    })
+                    .and_then(move |resp| {
+                        PD_REQUEST_HISTOGRAM_VEC
+                            .with_label_values(&["get_timestamp"])
+                            .observe(duration_to_sec(timer.elapsed()));
+                        check_resp_header(resp.get_header())?;
+                        Ok((resp.get_count(), resp.get_timestamp().clone()))
+                    })
+            })) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
     fn bootstrap_cluster(&self, stores: metapb::Store, region: metapb::Region) -> Result<()> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["bootstrap_cluster"])
