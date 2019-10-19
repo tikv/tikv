@@ -70,11 +70,11 @@ impl<S: Snapshot> DeltaScanner<S> {
             // the key or its clones without reallocation.
             let current_user_key = Key::from_encoded_slice(user_key);
             // goto next key
-            if commit_ts < self.begin_ts {
+            if commit_ts <= self.begin_ts {
                 self.move_write_cursor_to_next_user_key(&current_user_key)?;
                 continue;
             }
-            if commit_ts < self.cfg.ts {
+            if commit_ts <= self.cfg.ts {
                 let v = self.load_data_and_write(&current_user_key)?;
                 self.write_cursor.next(&mut self.statistics.write);
                 return Ok(Some(v));
@@ -228,8 +228,8 @@ mod tests {
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 1);
         assert_eq!(statistics.write.next, 1);
-        let mut rollback_ts = end_ts - 1;
-        while rollback_ts >= begin_ts {
+        let mut rollback_ts = end_ts;
+        while rollback_ts > begin_ts {
             let entry = EntryBuilder::default()
                 .key(b"b")
                 .start_ts(rollback_ts)
