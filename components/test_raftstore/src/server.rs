@@ -38,6 +38,7 @@ use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use tikv::server::gc_worker::GCWorker;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
 type SimulateServerTransport =
@@ -138,14 +139,14 @@ impl Simulator for ServerCluster {
             &tikv::config::StorageReadPoolConfig::default_for_test(),
             raft_engine.clone(),
         );
-        let store = create_raft_storage(
-            RaftKv::new(sim_router.clone()),
-            &cfg.storage,
-            storage_read_pool,
-            None,
-            None,
-            None,
-        )?;
+
+        let engine = RaftKv::new(sim_router.clone());
+
+        let mut gc_worker =
+            GCWorker::new(engine.clone(), None, None, cfg.storage.gc_ratio_threshold);
+        gc_worker.start().unwrap();
+
+        let store = create_raft_storage(engine, &cfg.storage, storage_read_pool, None)?;
         self.storages.insert(node_id, raft_engine);
 
         // Create import service.
@@ -182,6 +183,7 @@ impl Simulator for ServerCluster {
                 sim_router.clone(),
                 resolver.clone(),
                 snap_mgr.clone(),
+                gc_worker.clone(),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
