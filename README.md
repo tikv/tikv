@@ -100,7 +100,7 @@ These are the clients for TiKV:
 - [Go](https://github.com/tikv/client-go) (The most stable and widely used)
 - [Java](https://github.com/tikv/client-java)
 - [Rust](https://github.com/tikv/client-rust)
-- [C](https://github.com/tikv/client-rust)
+- [C](https://github.com/tikv/client-c)
 
 If you want to try the Go client, see [Try Two Types of APIs](docs/reference/clients/go-client-api.md).
 
