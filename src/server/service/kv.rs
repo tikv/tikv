@@ -2101,6 +2101,19 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             deadlock.set_deadlock_key_hash(*deadlock_key_hash);
             key_error.set_deadlock(deadlock);
         }
+        storage::Error::Txn(TxnError::Mvcc(MvccError::CommitTsExpired {
+            start_ts,
+            commit_ts,
+            key,
+            min_commit_ts,
+        })) => {
+            let mut commit_ts_expired = CommitTsExpired::default();
+            commit_ts_expired.set_start_ts(*start_ts);
+            commit_ts_expired.set_attempted_commit_ts(*commit_ts);
+            commit_ts_expired.set_key(key.to_owned());
+            commit_ts_expired.set_min_commit_ts(*min_commit_ts);
+            key_error.set_commit_ts_expired(commit_ts_expired);
+        }
         _ => {
             error!("txn aborts"; "err" => ?err);
             key_error.set_abort(format!("{:?}", err));
