@@ -139,17 +139,14 @@ impl ConvertTo<Json> for Decimal {
 
 impl ConvertTo<Json> for Time {
     #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
+    fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
         let tp = self.get_time_type();
         let s = if tp == TimeType::DateTime || tp == TimeType::Timestamp {
-            // TODO: avoid this clone
-            let mut val = self.clone();
-            val.set_fsp(mysql::MAX_FSP as u8);
-            val.to_string()
+            self.round_frac(ctx, mysql::MAX_FSP)?
         } else {
-            self.to_string()
+            *self
         };
-        Ok(Json::String(s))
+        Ok(Json::String(s.to_string()))
     }
 }
 

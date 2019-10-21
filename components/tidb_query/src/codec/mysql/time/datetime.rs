@@ -1,20 +1,21 @@
-// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
+/*// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Write;
+use std::mem;
 
-use crate::codec;
-use crate::codec::mysql::{check_fsp, Duration, Tz};
-use crate::codec::TEN_POW;
-use crate::codec::{Error, Result};
-use crate::expr::{EvalContext, Flag, SqlMode};
-
-use super::extension::{DateTimeExtension, WeekdayExtension};
-use super::weekmode::WeekMode;
-
+use codec::prelude::*;
 use tidb_query_datatype::FieldTypeTp;
 
+use crate::codec::convert::ConvertTo;
+use crate::codec::mysql::{check_fsp, Decimal, Duration, Tz};
+use crate::codec::{Error, Result, TEN_POW};
+use crate::expr::{EvalContext, Flag, SqlMode};
+
+[>use super::extension::{DateTimeExtension, WeekdayExtension};
+use super::weekmode::WeekMode;
+<]
 use bitfield::bitfield;
 use boolinator::Boolinator;
 use chrono::prelude::*;
@@ -118,7 +119,6 @@ fn chrono_naive_datetime(
 
 fn round_frac(frac: u32, fsp: u8) -> (bool, u32) {
     debug_assert!(frac < 100_000_000 && fsp < 7);
-    dbg!(frac);
     if frac < 1_000_000 && fsp == 6 {
         return (false, frac);
     }
@@ -154,7 +154,7 @@ bitfield! {
     // | fsp: 3 bits | type: 1 bit |
     // When `fsp` is valid (in range [0, 6]):
     // 1. `type` bit 0 represent `DateTime`
-    // 2. `type` bit 1 represent `TimeStamp`
+    // 2. `type` bit 1 represent `Timestamp`
     //
     // Since `Date` does not require `fsp`, we could use `fsp` == 0b111 to represent it.
     #[inline]
@@ -165,18 +165,28 @@ bitfield! {
 pub enum TimeType {
     Date,
     DateTime,
-    TimeStamp,
+    Timestamp,
 }
 
 impl TryFrom<FieldTypeTp> for TimeType {
-    type Error = codec::Error;
+    type Error = crate::codec::Error;
     fn try_from(time_type: FieldTypeTp) -> Result<TimeType> {
         Ok(match time_type {
             FieldTypeTp::Date => TimeType::Date,
             FieldTypeTp::DateTime => TimeType::DateTime,
-            FieldTypeTp::Timestamp => TimeType::TimeStamp,
+            FieldTypeTp::Timestamp => TimeType::Timestamp,
             _ => return Err(box_err!("Time does not support field type {}", time_type)),
         })
+    }
+}
+
+impl From<TimeType> for FieldTypeTp {
+    fn from(time_type: TimeType) -> FieldTypeTp {
+        match time_type {
+            TimeType::Timestamp => FieldTypeTp::Timestamp,
+            TimeType::DateTime => FieldTypeTp::DateTime,
+            TimeType::Date => FieldTypeTp::Date,
+        }
     }
 }
 
@@ -444,7 +454,7 @@ impl Time {
         fsp: i8,
         round: bool,
     ) -> Result<Time> {
-        Self::parse(ctx, input, TimeType::TimeStamp, fsp, round)
+        Self::parse(ctx, input, TimeType::Timestamp, fsp, round)
     }
 }
 
@@ -524,7 +534,7 @@ impl TimeArgs {
         match self.time_type {
             TimeType::Date => self.check_date(ctx),
             TimeType::DateTime => self.check_datetime(ctx),
-            TimeType::TimeStamp => self.check_timestamp(ctx),
+            TimeType::Timestamp => self.check_timestamp(ctx),
         }
         .map(|datetime| datetime.unwrap_or_else(|| TimeArgs::zero(fsp, time_type)))
         .ok()
@@ -742,7 +752,7 @@ impl Time {
         time.set_second(second);
         time.set_micro(micro);
         time.set_fsp(fsp as u8);
-        time.set_time_type(time_type);
+        time.set_tt(time_type);
         time
     }
 
@@ -820,18 +830,34 @@ impl Time {
         } else if ft & 1 == 0 {
             TimeType::DateTime
         } else {
-            TimeType::TimeStamp
+            TimeType::Timestamp
         }
     }
 
     #[inline]
-    fn set_time_type(&mut self, time_type: TimeType) {
+    pub fn set_time_type(&mut self, time_type: TimeType) -> Result<()> {
+        if self.get_time_type() != time_type && time_type == TimeType::Date {
+            self.set_hour(0);
+            self.set_minute(0);
+            self.set_second(0);
+            self.set_micro(0);
+            self.set_fsp(0);
+        }
+        if self.get_time_type() != time_type && time_type == TimeType::Timestamp {
+            return Err(box_err!("can not convert datetime/date to timestamp"));
+        }
+        self.set_tt(TimeType::Date);
+        Ok(())
+    }
+
+    #[inline]
+    fn set_tt(&mut self, time_type: TimeType) {
         let ft = self.get_fsp_tt();
         let mask = match time_type {
             // Set `fsp_tt` to 0b111x
             TimeType::Date => ft | 0b1110,
             TimeType::DateTime => ft & 0b1110,
-            TimeType::TimeStamp => ft | 1,
+            TimeType::Timestamp => ft | 1,
         };
         self.set_fsp_tt(mask);
     }
@@ -860,7 +886,7 @@ impl Time {
         let hour = (hms >> 12) as u32;
         let micro = (value & ((1 << 24) - 1)) as u32;
 
-        if time_type == TimeType::TimeStamp {
+        if time_type == TimeType::Timestamp {
             let utc = chrono_datetime(&Utc, year, month, day, hour, minute, second, micro)?;
             let timestamp = ctx.cfg.tz.from_utc_datetime(&utc.naive_utc());
             Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp as i8)
@@ -887,7 +913,7 @@ impl Time {
             return Ok(0);
         }
 
-        if self.get_time_type() == TimeType::TimeStamp {
+        if self.get_time_type() == TimeType::Timestamp {
             let ts = self.try_into_chrono_datetime(ctx)?;
             self = Time::try_from_chrono_datetime(
                 ctx,
@@ -947,7 +973,7 @@ impl Time {
     }
 
     pub fn normalized(self, ctx: &mut EvalContext) -> Result<Self> {
-        if self.get_time_type() == TimeType::TimeStamp {
+        if self.get_time_type() == TimeType::Timestamp {
             return Ok(self);
         }
 
@@ -976,18 +1002,18 @@ impl Time {
     pub fn checked_add(self, ctx: &mut EvalContext, rhs: Duration) -> Option<Time> {
         let normalized = self.normalized(ctx).ok()?;
         let duration = chrono::Duration::nanoseconds(rhs.to_nanos());
-        if self.get_time_type() == TimeType::TimeStamp {
+        if self.get_time_type() == TimeType::Timestamp {
             let datetime = normalized
                 .try_into_chrono_datetime(ctx)
                 .ok()
                 .and_then(|datetime| datetime.checked_add_signed(duration))?;
-            Time::try_from_chrono_datetime(ctx, datetime, TimeType::TimeStamp, self.fsp() as i8)
+            Time::try_from_chrono_datetime(ctx, datetime, TimeType::Timestamp, self.fsp() as i8)
         } else {
             let naive = normalized
                 .try_into_chrono_naive_datetime()
                 .ok()
                 .and_then(|datetime| datetime.checked_add_signed(duration))?;
-            Time::try_from_chrono_datetime(ctx, naive, TimeType::TimeStamp, self.fsp() as i8)
+            Time::try_from_chrono_datetime(ctx, naive, TimeType::Timestamp, self.fsp() as i8)
         }
         .ok()
     }
@@ -995,18 +1021,18 @@ impl Time {
     pub fn checked_sub(self, ctx: &mut EvalContext, rhs: Duration) -> Option<Time> {
         let normalized = self.normalized(ctx).ok()?;
         let duration = chrono::Duration::nanoseconds(rhs.to_nanos());
-        if self.get_time_type() == TimeType::TimeStamp {
+        if self.get_time_type() == TimeType::Timestamp {
             let datetime = normalized
                 .try_into_chrono_datetime(ctx)
                 .ok()
                 .and_then(|datetime| datetime.checked_sub_signed(duration))?;
-            Time::try_from_chrono_datetime(ctx, datetime, TimeType::TimeStamp, self.fsp() as i8)
+            Time::try_from_chrono_datetime(ctx, datetime, TimeType::Timestamp, self.fsp() as i8)
         } else {
             let naive = normalized
                 .try_into_chrono_naive_datetime()
                 .ok()
                 .and_then(|datetime| datetime.checked_sub_signed(duration))?;
-            Time::try_from_chrono_datetime(ctx, naive, TimeType::TimeStamp, self.fsp() as i8)
+            Time::try_from_chrono_datetime(ctx, naive, TimeType::Timestamp, self.fsp() as i8)
         }
         .ok()
     }
@@ -1222,6 +1248,69 @@ impl Time {
         }
         Ok(ret)
     }
+
+    /// Converts a `DateTime` to printable string representation
+    #[inline]
+    pub fn to_numeric_string(&self) -> String {
+        let mut buffer = String::with_capacity(15);
+        write!(&mut buffer, "{}", self.date_format("%Y%m%d").unwrap()).unwrap();
+        if self.get_time_type() != TimeType::Date {
+            write!(&mut buffer, "{}", self.date_format("%H%i%S").unwrap()).unwrap();
+        }
+        let fsp = usize::from(self.fsp());
+        if fsp > 0 {
+            write!(
+                &mut buffer,
+                ".{:0width$}",
+                self.micro() / TEN_POW[MICRO_WIDTH - fsp],
+                width = fsp
+            )
+            .unwrap();
+        }
+        buffer
+    }
+}
+
+impl ConvertTo<f64> for Time {
+    /// This function should not return err,
+    /// if it return err, then the err is because of bug.
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<f64> {
+        if self.is_zero() {
+            return Ok(0f64);
+        }
+        let r = self.to_numeric_string().parse::<f64>();
+        debug_assert!(r.is_ok());
+        Ok(r?)
+    }
+}
+
+impl ConvertTo<Decimal> for Time {
+    // Port from TiDB's Time::ToNumber
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
+        if self.is_zero() {
+            return Ok(0.into());
+        }
+
+        self.to_numeric_string().parse()
+    }
+}
+
+impl ConvertTo<Duration> for Time {
+    /// Port from TiDB's Time::ConvertToDuration
+    #[inline]
+    fn convert(&self, _: &mut EvalContext) -> Result<Duration> {
+        if self.is_zero() {
+            return Ok(Duration::zero());
+        }
+        let seconds = i64::from(self.hour() * 3600 + self.minute() * 60 + self.second());
+        // `nanosecond` returns the number of nanoseconds since the whole non-leap second.
+        // Such as for 2019-09-22 07:21:22.670936103 UTC,
+        // it will return 670936103.
+        let nanosecond = i64::from(self.micro());
+        Duration::from_micros(seconds * 1_000_000 + nanosecond, self.fsp() as i8)
+    }
 }
 
 impl PartialEq for Time {
@@ -1301,6 +1390,90 @@ impl std::fmt::Debug for Time {
             self.fsp(),
             self.0
         )
+    }
+}
+
+impl<T: BufferWriter> TimeEncoder for T {}
+
+/// Time Encoder for Chunk format
+pub trait TimeEncoder: NumberEncoder {
+    fn write_time(&mut self, v: &Time) -> Result<()> {
+        if !v.is_zero() {
+            self.write_u32_le(v.hour() as u32)?;
+            self.write_u32_le(v.micro())?;
+            self.write_u16_le(v.year() as u16)?;
+            self.write_u8(v.month() as u8)?;
+            self.write_u8(v.day() as u8)?;
+            self.write_u8(v.minute() as u8)?;
+            self.write_u8(v.second() as u8)?;
+        } else {
+            let len = mem::size_of::<u16>() + 2 * mem::size_of::<u32>() + 4;
+            let buf = vec![0; len];
+            self.write_bytes(&buf)?;
+        }
+        // Encode an useless u16 to make byte alignment 16 bytes.
+        self.write_u16_le(0 as u16)?;
+
+        let tp = FieldTypeTp::from(v.get_time_type());
+        self.write_u8(tp.to_u8().unwrap())?;
+        self.write_u8(v.fsp())?;
+        // Encode an useless u16 to make byte alignment 20 bytes.
+        self.write_u16_le(0 as u16).map_err(From::from)
+    }
+}
+
+pub trait TimeDecoder: NumberDecoder {
+    /// Decodes time encoded by `write_time` for Chunk format.
+    fn read_time(&mut self, ctx: &mut EvalContext) -> Result<Time> {
+        let hour = self.read_u32_le()?;
+        let micro = self.read_u32_le()?;
+        let year = i32::from(self.read_u16_le()?);
+        let buf = self.read_bytes(4)?;
+        let (month, day, minute, second) = (
+            u32::from(buf[0]),
+            u32::from(buf[1]),
+            u32::from(buf[2]),
+            u32::from(buf[3]),
+        );
+        let _ = self.read_u16();
+        let buf = self.read_bytes(2)?;
+        let (time_type, fsp): (TimeType, _) = (
+            FieldTypeTp::from_u8(buf[0])
+                .unwrap_or(FieldTypeTp::Unspecified)
+                .try_into()?,
+            buf[1],
+        );
+        let _ = self.read_u16();
+
+        if time_type == TimeType::Timestamp {
+            let utc = chrono_datetime(&Utc, year as u32, month, day, hour, minute, second, micro)?;
+            let timestamp = ctx.cfg.tz.from_utc_datetime(&utc.naive_utc());
+            Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp as i8)
+        } else {
+            Time::new(
+                ctx,
+                TimeArgs {
+                    year: year as u32,
+                    month,
+                    day,
+                    hour,
+                    minute,
+                    second,
+                    micro,
+                    fsp: fsp as i8,
+                    time_type,
+                },
+            )
+        }
+    }
+}
+
+impl<T: BufferReader> TimeDecoder for T {}
+
+impl crate::codec::data_type::AsMySQLBool for Time {
+    #[inline]
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::Result<bool> {
+        Ok(!self.is_zero())
     }
 }
 
@@ -1821,7 +1994,7 @@ mod tests {
 
                 let packed = time.to_packed_u64(&mut ctx)?;
                 let reverted_datetime =
-                    Time::from_packed_u64(&mut ctx, packed, TimeType::TimeStamp, fsp)?;
+                    Time::from_packed_u64(&mut ctx, packed, TimeType::Timestamp, fsp)?;
 
                 assert_eq!(time, reverted_datetime);
             }
@@ -2107,4 +2280,71 @@ mod tests {
         }
         Ok(())
     }
-}
+
+    #[test]
+    fn test_to_numeric_string() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "20121231113045.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "20121231113045.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "20121231113045"),
+            ("2012-12-31 11:30:45.999999", 0, "20121231113046"),
+            ("2017-01-05 08:40:59.575601", 0, "20170105084100"),
+            ("2017-01-05 23:59:59.575601", 0, "20170106000000"),
+            ("0000-00-00 00:00:00", 6, "00000000000000.000000"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
+            let get = t.to_numeric_string();
+            assert_eq!(get, expect);
+        }
+    }
+
+    #[test]
+    fn test_to_decimal() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, "20121231113045.1235"),
+            ("2012-12-31 11:30:45.123456", 6, "20121231113045.123456"),
+            ("2012-12-31 11:30:45.123456", 0, "20121231113045"),
+            ("2012-12-31 11:30:45.999999", 0, "20121231113046"),
+            ("2017-01-05 08:40:59.575601", 0, "20170105084100"),
+            ("2017-01-05 23:59:59.575601", 0, "20170106000000"),
+            ("0000-00-00 00:00:00", 6, "0"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
+            let get: Decimal = t.convert(&mut ctx).unwrap();
+            assert_eq!(
+                get,
+                expect.as_bytes().convert(&mut ctx).unwrap(),
+                "convert datetime {} to decimal",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn test_convert_to_f64() {
+        let cases = vec![
+            ("2012-12-31 11:30:45.123456", 4, 20121231113045.1235f64),
+            ("2012-12-31 11:30:45.123456", 6, 20121231113045.123456f64),
+            ("2012-12-31 11:30:45.123456", 0, 20121231113045f64),
+            ("2012-12-31 11:30:45.999999", 0, 20121231113046f64),
+            ("2017-01-05 08:40:59.575601", 0, 20170105084100f64),
+            ("2017-01-05 23:59:59.575601", 0, 20170106000000f64),
+            ("0000-00-00 00:00:00", 6, 0f64),
+        ];
+        let mut ctx = EvalContext::default();
+        for (s, fsp, expect) in cases {
+            let t = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
+            let get: f64 = t.convert(&mut ctx).unwrap();
+            assert!(
+                (expect - get).abs() < std::f64::EPSILON,
+                "expect: {}, got: {}",
+                expect,
+                get
+            );
+        }
+    }
+}*/

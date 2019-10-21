@@ -215,7 +215,6 @@ mod tests {
 
     use crate::batch::executors::util::aggr_executor::tests::*;
     use crate::batch::executors::util::mock_executor::MockExecutor;
-    use crate::codec::mysql::Tz;
     use crate::expr::{EvalContext, EvalWarnings};
     use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 
@@ -359,7 +358,7 @@ mod tests {
             fn parse(
                 &self,
                 aggr_def: Expr,
-                _time_zone: &Tz,
+                _ctx: &mut EvalContext,
                 _src_schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,
@@ -608,7 +607,7 @@ mod tests {
             fn parse(
                 &self,
                 _aggr_def: Expr,
-                _time_zone: &Tz,
+                _ctx: &mut EvalContext,
                 _src_schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,

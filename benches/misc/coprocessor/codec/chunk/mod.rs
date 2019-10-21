@@ -10,6 +10,7 @@ use tipb::FieldType;
 use tidb_query::codec::chunk::{Chunk, ChunkEncoder};
 use tidb_query::codec::datum::Datum;
 use tidb_query::codec::mysql::*;
+use tidb_query::expr::EvalContext;
 
 fn field_type(tp: FieldTypeTp) -> FieldType {
     let mut fp = FieldType::default();
@@ -91,6 +92,7 @@ fn bench_chunk_iter_tidb(b: &mut Bencher) {
         field_type(FieldTypeTp::Double),
     ];
     let mut chunk = Chunk::new(&fields, rows);
+    let mut ctx = EvalContext::default();
     for row_id in 0..rows {
         if row_id & 1 == 0 {
             chunk.append_datum(0, &Datum::Null).unwrap();
@@ -104,12 +106,12 @@ fn bench_chunk_iter_tidb(b: &mut Bencher) {
         let mut col1 = 0;
         let mut col2 = 0.0;
         for row in chunk.iter() {
-            col1 += match row.get_datum(0, &fields[0]).unwrap() {
+            col1 += match row.get_datum(0, &fields[0], &mut ctx).unwrap() {
                 Datum::I64(v) => v,
                 Datum::Null => 0,
                 _ => unreachable!(),
             };
-            col2 += match row.get_datum(1, &fields[1]).unwrap() {
+            col2 += match row.get_datum(1, &fields[1], &mut ctx).unwrap() {
                 Datum::F64(v) => v,
                 _ => unreachable!(),
             };

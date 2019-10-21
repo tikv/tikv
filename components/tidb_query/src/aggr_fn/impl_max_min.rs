@@ -8,7 +8,6 @@ use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, ExprType, FieldType};
 
 use crate::codec::data_type::*;
-use crate::codec::mysql::Tz;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::Result;
@@ -53,7 +52,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
     fn parse(
         &self,
         mut aggr_def: Expr,
-        time_zone: &Tz,
+        ctx: &mut EvalContext,
         // We use the same structure for all data types, so this parameter is not needed.
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
@@ -77,7 +76,7 @@ impl<T: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
         out_schema.push(out_ft);
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
-            time_zone,
+            ctx,
             src_schema.len(),
         )?);
 
@@ -315,15 +314,16 @@ mod tests {
         let mut schema = vec![];
         let mut exp = vec![];
 
+        let mut ctx = EvalContext::default();
         let max_fn = max_parser
-            .parse(max, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .parse(max, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 1);
         assert_eq!(schema[0].as_accessor().tp(), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 1);
 
         let min_fn = min_parser
-            .parse(min, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .parse(min, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 2);
         assert_eq!(schema[1].as_accessor().tp(), FieldTypeTp::LongLong);
@@ -376,8 +376,9 @@ mod tests {
         let src_schema = [FieldTypeTp::LongLong.into()];
         let mut schema = vec![];
         let mut exp = vec![];
+        let mut ctx = EvalContext::default();
         AggrFnDefinitionParserExtremum::<Max>::new()
-            .parse(expr, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .parse(expr, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap_err();
     }
 }

@@ -6,7 +6,6 @@ use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 use tipb::{Expr, ExprType, FieldType};
 
 use crate::codec::data_type::*;
-use crate::codec::mysql::Tz;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::Result;
@@ -23,7 +22,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserCount {
     fn parse(
         &self,
         mut aggr_def: Expr,
-        time_zone: &Tz,
+        ctx: &mut EvalContext,
         // We use the same structure for all data types, so this parameter is not needed.
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
@@ -43,7 +42,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserCount {
         // COUNT doesn't need to cast, so using the expression directly.
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
-            time_zone,
+            ctx,
             src_schema.len(),
         )?);
 

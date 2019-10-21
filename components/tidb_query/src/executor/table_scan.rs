@@ -9,6 +9,7 @@ use tipb::TableScan;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::codec::table;
+use crate::expr::EvalContext;
 use crate::storage::Storage;
 use crate::Result;
 
@@ -35,6 +36,7 @@ impl TableInnerExecutor {
 impl InnerExecutor for TableInnerExecutor {
     fn decode_row(
         &self,
+        _ctx: &mut EvalContext,
         key: Vec<u8>,
         value: Vec<u8>,
         columns: Arc<Vec<ColumnInfo>>,
@@ -50,6 +52,7 @@ pub type TableScanExecutor<S> = ScanExecutor<S, TableInnerExecutor>;
 impl<S: Storage> TableScanExecutor<S> {
     pub fn table_scan(
         mut meta: TableScan,
+        context: EvalContext,
         key_ranges: Vec<KeyRange>,
         storage: S,
         is_scanned_range_aware: bool,
@@ -59,6 +62,7 @@ impl<S: Storage> TableScanExecutor<S> {
 
         Self::new(ScanExecutorOptions {
             inner,
+            context,
             columns: meta.take_columns().to_vec(),
             key_ranges,
             storage,
@@ -80,6 +84,7 @@ mod tests {
     use super::super::tests::*;
     use super::super::Executor;
     use crate::execute_stats::ExecuteStats;
+    use crate::expr::EvalContext;
     use crate::storage::fixture::FixtureStorage;
 
     const TABLE_ID: i64 = 1;
@@ -133,6 +138,7 @@ mod tests {
 
         let mut table_scanner = super::TableScanExecutor::table_scan(
             wrapper.table_scan,
+            EvalContext::default(),
             wrapper.ranges,
             wrapper.store,
             false,
@@ -177,6 +183,7 @@ mod tests {
 
         let mut table_scanner = super::TableScanExecutor::table_scan(
             wrapper.table_scan,
+            EvalContext::default(),
             wrapper.ranges,
             wrapper.store,
             false,
@@ -220,6 +227,7 @@ mod tests {
 
         let mut table_scanner = super::TableScanExecutor::table_scan(
             wrapper.table_scan,
+            EvalContext::default(),
             wrapper.ranges,
             wrapper.store,
             true,

@@ -184,7 +184,8 @@ impl Datum {
             }
             Datum::Time(ref t) => {
                 let s = str::from_utf8(bs)?;
-                let t2 = Time::parse_datetime(s, DEFAULT_FSP, &ctx.cfg.tz)?;
+                // FIXME: requires FieldType info here.
+                let t2 = Time::parse_datetime(ctx, s, DEFAULT_FSP, true)?;
                 Ok(t.cmp(&t2))
             }
             Datum::Dur(ref d) => {
@@ -229,7 +230,7 @@ impl Datum {
         match *self {
             Datum::Bytes(ref bs) => {
                 let s = str::from_utf8(bs)?;
-                let t = Time::parse_datetime(s, DEFAULT_FSP, &ctx.cfg.tz)?;
+                let t = Time::parse_datetime(ctx, s, DEFAULT_FSP, true)?;
                 Ok(t.cmp(time))
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
@@ -385,7 +386,7 @@ impl Datum {
             Datum::Time(t) => {
                 // if time has no precision, return int64
                 let dec: Decimal = t.convert(ctx)?;
-                if t.get_fsp() == 0 {
+                if t.fsp() == 0 {
                     return Ok(Datum::I64(dec.as_i64().unwrap()));
                 }
                 Ok(Datum::Dec(dec))
@@ -832,7 +833,12 @@ pub trait DatumEncoder:
     DecimalEncoder + JsonEncoder + CompactByteEncoder + MemComparableByteEncoder
 {
     /// Encode values to buf slice.
-    fn write_datum(&mut self, values: &[Datum], comparable: bool) -> Result<()> {
+    fn write_datum(
+        &mut self,
+        values: &[Datum],
+        ctx: &mut EvalContext,
+        comparable: bool,
+    ) -> Result<()> {
         let mut find_min = false;
         for v in values {
             if find_min {
@@ -880,7 +886,7 @@ pub trait DatumEncoder:
                 Datum::Max => self.write_u8(MAX_FLAG)?,
                 Datum::Time(ref t) => {
                     self.write_u8(UINT_FLAG)?;
-                    self.write_u64(t.to_packed_u64())?;
+                    self.write_u64(t.to_packed_u64(ctx)?)?;
                 }
                 Datum::Dur(ref d) => {
                     self.write_u8(DURATION_FLAG)?;
@@ -945,28 +951,33 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
 
 /// `encode` encodes a datum slice into a buffer.
 /// Uses comparable to encode or not to encode a memory comparable buffer.
-pub fn encode(values: &[Datum], comparable: bool) -> Result<Vec<u8>> {
+pub fn encode(values: &[Datum], ctx: &mut EvalContext, comparable: bool) -> Result<Vec<u8>> {
     let mut buf = vec![];
-    encode_to(&mut buf, values, comparable)?;
+    encode_to(&mut buf, ctx, values, comparable)?;
     buf.shrink_to_fit();
     Ok(buf)
 }
 
 /// `encode_key` encodes a datum slice into a memory comparable buffer as the key.
-pub fn encode_key(values: &[Datum]) -> Result<Vec<u8>> {
-    encode(values, true)
+pub fn encode_key(values: &[Datum], ctx: &mut EvalContext) -> Result<Vec<u8>> {
+    encode(values, ctx, true)
 }
 
 /// `encode_value` encodes a datum slice into a buffer.
-pub fn encode_value(values: &[Datum]) -> Result<Vec<u8>> {
-    encode(values, false)
+pub fn encode_value(values: &[Datum], ctx: &mut EvalContext) -> Result<Vec<u8>> {
+    encode(values, ctx, false)
 }
 
 /// `encode_to` encodes a datum slice and appends the buffer to a vector.
 /// Uses comparable to encode a memory comparable buffer or not.
-pub fn encode_to(buf: &mut Vec<u8>, values: &[Datum], comparable: bool) -> Result<()> {
+pub fn encode_to(
+    buf: &mut Vec<u8>,
+    ctx: &mut EvalContext,
+    values: &[Datum],
+    comparable: bool,
+) -> Result<()> {
     buf.reserve(approximate_size(values, comparable));
-    buf.write_datum(values, comparable)?;
+    buf.write_datum(values, ctx, comparable)?;
     Ok(())
 }
 
@@ -1037,6 +1048,7 @@ mod tests {
 
     #[test]
     fn test_datum_codec() {
+        let mut ctx = EvalContext::default();
         let table = vec![
             vec![Datum::I64(1)],
             vec![Datum::F64(1.0), Datum::F64(3.15), b"123".as_ref().into()],
@@ -1098,11 +1110,11 @@ mod tests {
             ],
         ];
         for vs in table {
-            let mut buf = encode_key(&vs).unwrap();
+            let mut buf = encode_key(&vs, &mut ctx).unwrap();
             let decoded = decode(&mut buf.as_slice()).unwrap();
             assert_eq!(vs, decoded);
 
-            buf = encode_value(&vs).unwrap();
+            buf = encode_value(&vs, &mut ctx).unwrap();
             let decoded = decode(&mut buf.as_slice()).unwrap();
             assert_eq!(vs, decoded);
         }
@@ -1110,6 +1122,7 @@ mod tests {
 
     #[test]
     fn test_datum_cmp() {
+        let mut ctx = EvalContext::default();
         let tests = vec![
             (Datum::F64(-1.0), Datum::Min, Ordering::Greater),
             (Datum::F64(1.0), Datum::Max, Ordering::Less),
@@ -1230,48 +1243,48 @@ mod tests {
                 Ordering::Greater,
             ),
             (
-                Time::parse_utc_datetime("2011-10-10 00:00:00", 0)
+                Time::parse_datetime(&mut ctx, "2011-10-10 00:00:00", 0, true)
                     .unwrap()
                     .into(),
-                Time::parse_utc_datetime("2000-12-12 11:11:11", 0)
+                Time::parse_datetime(&mut ctx, "2000-12-12 11:11:11", 0, true)
                     .unwrap()
                     .into(),
                 Ordering::Greater,
             ),
             (
-                Time::parse_utc_datetime("2011-10-10 00:00:00", 0)
+                Time::parse_datetime(&mut ctx, "2011-10-10 00:00:00", 0, true)
                     .unwrap()
                     .into(),
                 b"2000-12-12 11:11:11".as_ref().into(),
                 Ordering::Greater,
             ),
             (
-                Time::parse_utc_datetime("2000-10-10 00:00:00", 0)
+                Time::parse_datetime(&mut ctx, "2000-10-10 00:00:00", 0, true)
                     .unwrap()
                     .into(),
-                Time::parse_utc_datetime("2001-10-10 00:00:00", 0)
+                Time::parse_datetime(&mut ctx, "2001-10-10 00:00:00", 0, true)
                     .unwrap()
                     .into(),
                 Ordering::Less,
             ),
             (
-                Time::parse_utc_datetime("2000-10-10 00:00:00", 0)
+                Time::parse_datetime(&mut ctx, "2000-10-10 00:00:00", 0, true)
                     .unwrap()
                     .into(),
-                Time::parse_utc_datetime("2000-10-10 00:00:00", 0)
+                Time::parse_datetime(&mut ctx, "2000-10-10 00:00:00", 0, true)
                     .unwrap()
                     .into(),
                 Ordering::Equal,
             ),
             (
-                Time::parse_utc_datetime("2000-10-10 00:00:00", 0)
+                Time::parse_datetime(&mut ctx, "2000-10-10 00:00:00", 0, true)
                     .unwrap()
                     .into(),
                 Datum::I64(20001010000000),
                 Ordering::Equal,
             ),
             (
-                Time::parse_utc_datetime("2000-10-10 00:00:00", 0)
+                Time::parse_datetime(&mut ctx, "2000-10-10 00:00:00", 0, true)
                     .unwrap()
                     .into(),
                 Datum::I64(0),
@@ -1279,7 +1292,7 @@ mod tests {
             ),
             (
                 Datum::I64(0),
-                Time::parse_utc_datetime("2000-10-10 00:00:00", 0)
+                Time::parse_datetime(&mut ctx, "2000-10-10 00:00:00", 0, true)
                     .unwrap()
                     .into(),
                 Ordering::Less,
@@ -1600,7 +1613,6 @@ mod tests {
                 Ordering::Less,
             ),
         ];
-        let mut ctx = EvalContext::default();
         for (lhs, rhs, ret) in tests {
             if ret != lhs.cmp(&mut ctx, &rhs).unwrap() {
                 panic!("{:?} should be {:?} to {:?}", lhs, ret, rhs);
@@ -1613,8 +1625,8 @@ mod tests {
             }
 
             if same_type(&lhs, &rhs) {
-                let lhs_bs = encode_key(from_ref(&lhs)).unwrap();
-                let rhs_bs = encode_key(from_ref(&rhs)).unwrap();
+                let lhs_bs = encode_key(from_ref(&lhs), &mut ctx).unwrap();
+                let rhs_bs = encode_key(from_ref(&rhs), &mut ctx).unwrap();
 
                 if ret != lhs_bs.cmp(&rhs_bs) {
                     panic!("{:?} should be {:?} to {:?} when encoded", lhs, ret, rhs);
@@ -1631,6 +1643,7 @@ mod tests {
 
     #[test]
     fn test_datum_to_bool() {
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let tests = vec![
             (Datum::I64(0), Some(false)),
             (Datum::I64(-1), Some(true)),
@@ -1648,7 +1661,7 @@ mod tests {
             (b"2".as_ref().into(), Some(true)),
             (b"abc".as_ref().into(), Some(false)),
             (
-                Time::parse_utc_datetime("2011-11-10 11:11:11.999999", 6)
+                Time::parse_datetime(&mut ctx, "2011-11-10 11:11:11.999999", 6, true)
                     .unwrap()
                     .into(),
                 Some(true),
@@ -1663,8 +1676,6 @@ mod tests {
             ),
             (Datum::Dec(0u64.into()), Some(false)),
         ];
-
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
 
         for (d, b) in tests {
             if d.clone().into_bool(&mut ctx).unwrap() != b {
@@ -1707,22 +1718,23 @@ mod tests {
             ],
         ];
 
+        let mut ctx = EvalContext::default();
         for case in table {
-            let key_bs = encode_key(&case).unwrap();
+            let key_bs = encode_key(&case, &mut ctx).unwrap();
             let mut buf = key_bs.as_slice();
             for exp in &case {
                 let (act, rem) = split_datum(buf, false).unwrap();
-                let exp_bs = encode_key(from_ref(exp)).unwrap();
+                let exp_bs = encode_key(from_ref(exp), &mut ctx).unwrap();
                 assert_eq!(exp_bs, act);
                 buf = rem;
             }
             assert!(buf.is_empty());
 
-            let value_bs = encode_value(&case).unwrap();
+            let value_bs = encode_value(&case, &mut ctx).unwrap();
             let mut buf = value_bs.as_slice();
             for exp in &case {
                 let (act, rem) = split_datum(buf, false).unwrap();
-                let exp_bs = encode_value(from_ref(exp)).unwrap();
+                let exp_bs = encode_value(from_ref(exp), &mut ctx).unwrap();
                 assert_eq!(exp_bs, act);
                 buf = rem;
             }
@@ -1816,6 +1828,7 @@ mod tests {
 
     #[test]
     fn test_into_f64() {
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let tests = vec![
             (Datum::I64(1), f64::from(1)),
             (Datum::U64(1), f64::from(1)),
@@ -1823,7 +1836,9 @@ mod tests {
             (Datum::Bytes(b"Hello,world".to_vec()), f64::from(0)),
             (Datum::Bytes(b"123".to_vec()), f64::from(123)),
             (
-                Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45", 0).unwrap()),
+                Datum::Time(
+                    Time::parse_datetime(&mut ctx, "2012-12-31 11:30:45", 0, true).unwrap(),
+                ),
                 20121231113045f64,
             ),
             (
@@ -1840,7 +1855,6 @@ mod tests {
             ),
         ];
 
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (d, exp) in tests {
             let got = d.into_f64(&mut ctx).unwrap();
             assert_eq!(Datum::F64(got), Datum::F64(exp));
@@ -1849,6 +1863,7 @@ mod tests {
 
     #[test]
     fn test_into_i64() {
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let tests = vec![
             (Datum::Bytes(b"0".to_vec()), 0),
             (Datum::I64(1), 1),
@@ -1856,7 +1871,9 @@ mod tests {
             (Datum::F64(3.3), 3),
             (Datum::Bytes(b"100".to_vec()), 100),
             (
-                Datum::Time(Time::parse_utc_datetime("2012-12-31 11:30:45.9999", 0).unwrap()),
+                Datum::Time(
+                    Time::parse_datetime(&mut ctx, "2012-12-31 11:30:45.9999", 0, true).unwrap(),
+                ),
                 20121231113046,
             ),
             (
@@ -1870,7 +1887,6 @@ mod tests {
             (Datum::Json(Json::from_str(r#"false"#).unwrap()), 0),
         ];
 
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (d, exp) in tests {
             let d2 = d.clone();
             let got = d.into_i64(&mut ctx);

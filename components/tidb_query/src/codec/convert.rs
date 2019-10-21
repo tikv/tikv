@@ -408,9 +408,7 @@ impl ToInt for DateTime {
     //  will get 2000-01-01T12:13:14, this is a bug
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
-        // TODO: avoid this clone after refactor the `Time`
-        let mut t = self.clone();
-        t.round_frac(DEFAULT_FSP)?;
+        let t = self.round_frac(ctx, DEFAULT_FSP)?;
         let dec: Decimal = t.convert(ctx)?;
         let val = dec.as_i64();
         let val = val.into_result(ctx)?;
@@ -419,9 +417,7 @@ impl ToInt for DateTime {
 
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        // TODO: avoid this clone after refactor the `Time`
-        let mut t = self.clone();
-        t.round_frac(DEFAULT_FSP)?;
+        let t = self.round_frac(ctx, DEFAULT_FSP)?;
         let dec: Decimal = t.convert(ctx)?;
         decimal_as_u64(ctx, dec, tp)
     }

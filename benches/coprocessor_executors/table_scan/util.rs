@@ -14,7 +14,7 @@ use tidb_query::batch::executors::BatchTableScanExecutor;
 use tidb_query::batch::interface::*;
 use tidb_query::executor::Executor;
 use tidb_query::executor::TableScanExecutor;
-use tidb_query::expr::EvalConfig;
+use tidb_query::expr::{EvalConfig, EvalContext};
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
@@ -46,6 +46,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
 
         let mut executor = TableScanExecutor::table_scan(
             black_box(req),
+            black_box(EvalContext::default()),
             black_box(ranges.to_vec()),
             black_box(TiKVStorage::from(ToTxnStore::<Self::T>::to_store(store))),
             black_box(false),

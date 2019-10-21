@@ -548,7 +548,7 @@ mod tests {
                 .contains(FieldTypeFlag::UNSIGNED);
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(&ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
+            let mut op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_field_type()
@@ -654,7 +654,7 @@ mod tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(&ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, tt.3);
         }
@@ -879,7 +879,7 @@ mod tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(&ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, tt.3);
         }
@@ -964,7 +964,7 @@ mod tests {
                 .contains(FieldTypeFlag::UNSIGNED);
             let unsigned = lus | rus;
 
-            let mut op = Expression::build(&ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
+            let mut op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             if unsigned {
                 // According to TiDB, the result is unsigned if any of arguments is unsigned.
                 op.mut_field_type()
@@ -1000,7 +1000,7 @@ mod tests {
             let rhs = datum_expr(right);
 
             let mut op = Expression::build(
-                &ctx,
+                &mut ctx,
                 scalar_func_expr(ScalarFuncSig::MultiplyIntUnsigned, &[lhs, rhs]),
             )
             .unwrap();
@@ -1024,7 +1024,7 @@ mod tests {
             let rhs = datum_expr(right);
 
             let mut op = Expression::build(
-                &ctx,
+                &mut ctx,
                 scalar_func_expr(ScalarFuncSig::MultiplyIntUnsigned, &[lhs, rhs]),
             )
             .unwrap();
@@ -1066,7 +1066,7 @@ mod tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let op = Expression::build(&ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
@@ -1127,7 +1127,7 @@ mod tests {
                 let mut cfg = EvalConfig::new();
                 cfg.set_flag(*flag).set_sql_mode(*sql_mode);
                 let mut ctx = EvalContext::new(::std::sync::Arc::new(cfg));
-                let op = Expression::build(&ctx, scalar_func.clone()).unwrap();
+                let op = Expression::build(&mut ctx, scalar_func.clone()).unwrap();
                 let got = op.eval(&mut ctx, &[]);
                 if *is_ok {
                     assert_eq!(got.unwrap(), Datum::Null);

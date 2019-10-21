@@ -8,8 +8,9 @@ use tipb::FieldType;
 
 use super::data_type::*;
 use crate::codec::datum;
-use crate::codec::mysql::{DecimalDecoder, JsonDecoder, Tz};
+use crate::codec::mysql::{DecimalDecoder, JsonDecoder};
 use crate::codec::{Error, Result};
+use crate::expr::EvalContext;
 
 #[inline]
 fn decode_int(v: &mut &[u8]) -> Result<i64> {
@@ -72,12 +73,16 @@ fn decode_duration_from_i64(v: i64, field_type: &FieldType) -> Result<Duration> 
 }
 
 #[inline]
-fn decode_date_time_from_uint(v: u64, time_zone: &Tz, field_type: &FieldType) -> Result<DateTime> {
+fn decode_date_time_from_uint(
+    v: u64,
+    ctx: &mut EvalContext,
+    field_type: &FieldType,
+) -> Result<DateTime> {
     use std::convert::TryInto;
 
     let fsp = field_type.decimal() as i8;
     let time_type = field_type.as_accessor().tp().try_into()?;
-    DateTime::from_packed_u64(v, time_type, fsp, time_zone)
+    DateTime::from_packed_u64(ctx, v, time_type, fsp)
 }
 
 pub fn decode_int_datum(mut raw_datum: &[u8]) -> Result<Option<Int>> {
@@ -170,7 +175,7 @@ pub fn decode_bytes_datum(mut raw_datum: &[u8]) -> Result<Option<Bytes>> {
 pub fn decode_date_time_datum(
     mut raw_datum: &[u8],
     field_type: &FieldType,
-    time_zone: &Tz,
+    ctx: &mut EvalContext,
 ) -> Result<Option<DateTime>> {
     if raw_datum.is_empty() {
         return Err(Error::InvalidDataType(
@@ -184,13 +189,13 @@ pub fn decode_date_time_datum(
         // In index, it's flag is `UINT`. See TiDB's `encode()`.
         datum::UINT_FLAG => {
             let v = decode_uint(&mut raw_datum)?;
-            let v = decode_date_time_from_uint(v, time_zone, field_type)?;
+            let v = decode_date_time_from_uint(v, ctx, field_type)?;
             Ok(Some(v))
         }
         // In record, it's flag is `VAR_UINT`. See TiDB's `flatten()` and `encode()`.
         datum::VAR_UINT_FLAG => {
             let v = decode_var_uint(&mut raw_datum)?;
-            let v = decode_date_time_from_uint(v, time_zone, field_type)?;
+            let v = decode_date_time_from_uint(v, ctx, field_type)?;
             Ok(Some(v))
         }
         _ => Err(Error::InvalidDataType(format!(
@@ -252,47 +257,47 @@ pub fn decode_json_datum(mut raw_datum: &[u8]) -> Result<Option<Json>> {
 }
 
 pub trait RawDatumDecoder<T> {
-    fn decode(self, field_type: &FieldType, time_zone: &Tz) -> Result<Option<T>>;
+    fn decode(self, field_type: &FieldType, ctx: &mut EvalContext) -> Result<Option<T>>;
 }
 
 impl<'a> RawDatumDecoder<Int> for &'a [u8] {
-    fn decode(self, _field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Int>> {
+    fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Int>> {
         decode_int_datum(self)
     }
 }
 
 impl<'a> RawDatumDecoder<Real> for &'a [u8] {
-    fn decode(self, field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Real>> {
+    fn decode(self, field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Real>> {
         decode_real_datum(self, field_type)
     }
 }
 
 impl<'a> RawDatumDecoder<Decimal> for &'a [u8] {
-    fn decode(self, _field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Decimal>> {
+    fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Decimal>> {
         decode_decimal_datum(self)
     }
 }
 
 impl<'a> RawDatumDecoder<Bytes> for &'a [u8] {
-    fn decode(self, _field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Bytes>> {
+    fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Bytes>> {
         decode_bytes_datum(self)
     }
 }
 
 impl<'a> RawDatumDecoder<DateTime> for &'a [u8] {
-    fn decode(self, field_type: &FieldType, time_zone: &Tz) -> Result<Option<DateTime>> {
-        decode_date_time_datum(self, field_type, time_zone)
+    fn decode(self, field_type: &FieldType, ctx: &mut EvalContext) -> Result<Option<DateTime>> {
+        decode_date_time_datum(self, field_type, ctx)
     }
 }
 
 impl<'a> RawDatumDecoder<Duration> for &'a [u8] {
-    fn decode(self, field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Duration>> {
+    fn decode(self, field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Duration>> {
         decode_duration_datum(self, field_type)
     }
 }
 
 impl<'a> RawDatumDecoder<Json> for &'a [u8] {
-    fn decode(self, _field_type: &FieldType, _time_zone: &Tz) -> Result<Option<Json>> {
+    fn decode(self, _field_type: &FieldType, _ctx: &mut EvalContext) -> Result<Option<Json>> {
         decode_json_datum(self)
     }
 }

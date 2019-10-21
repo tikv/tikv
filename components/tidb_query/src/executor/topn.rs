@@ -89,7 +89,8 @@ impl<Src: Executor> TopNExecutor<Src> {
         let mut heap = TopNHeap::new(self.limit, Arc::clone(&ctx))?;
         while let Some(row) = self.src.next()? {
             let row = row.take_origin()?;
-            let cols = row.inflate_cols_with_offsets(&ctx.borrow(), &self.related_cols_offset)?;
+            let cols =
+                row.inflate_cols_with_offsets(&mut ctx.borrow_mut(), &self.related_cols_offset)?;
             let ob_values = self.order_by.eval(&mut ctx.borrow_mut(), &cols)?;
             heap.try_add_row(row, ob_values, Arc::clone(&self.order_by.items))?;
         }

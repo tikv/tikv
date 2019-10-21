@@ -7,7 +7,6 @@ use tidb_query_datatype::EvalType;
 use tipb::{Expr, ExprType, FieldType};
 
 use crate::codec::data_type::*;
-use crate::codec::mysql::Tz;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::Result;
@@ -24,7 +23,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
     fn parse(
         &self,
         mut aggr_def: Expr,
-        time_zone: &Tz,
+        ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
@@ -50,7 +49,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
         out_schema.push(out_ft);
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
-            time_zone,
+            ctx,
             src_schema.len(),
         )?);
 
@@ -288,8 +287,9 @@ mod tests {
         let src_schema = [FieldTypeTp::LongLong.into()];
         let mut schema = vec![];
         let mut exp = vec![];
+        let mut ctx = EvalContext::default();
         AggrFnDefinitionParserFirst
-            .parse(expr, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .parse(expr, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap_err();
     }
 }

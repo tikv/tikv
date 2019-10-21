@@ -6,7 +6,6 @@ use tipb::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
 use crate::codec::data_type::*;
-use crate::codec::mysql::Tz;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::Result;
@@ -23,7 +22,7 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
     fn parse(
         &self,
         mut aggr_def: Expr,
-        time_zone: &Tz,
+        ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
@@ -38,8 +37,7 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
 
         // Rewrite expression, inserting CAST if necessary. See `typeInfer4Sum` in TiDB.
         let child = aggr_def.take_children().into_iter().next().unwrap();
-        let mut exp =
-            RpnExpressionBuilder::build_from_expr_tree(child, time_zone, src_schema.len())?;
+        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, ctx, src_schema.len())?;
         // The rewrite should always success.
         super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
@@ -177,9 +175,10 @@ mod tests {
 
         let mut schema = vec![];
         let mut exp = vec![];
+        let mut ctx = EvalContext::default();
 
         let aggr_fn = AggrFnDefinitionParserSum
-            .parse(expr, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .parse(expr, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 1);
         assert_eq!(schema[0].as_accessor().tp(), FieldTypeTp::Double);
@@ -187,7 +186,6 @@ mod tests {
         assert_eq!(exp.len(), 1);
 
         let mut state = aggr_fn.create_state();
-        let mut ctx = EvalContext::default();
 
         let exp_result = exp[0]
             .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 4)
@@ -214,8 +212,9 @@ mod tests {
         let src_schema = [FieldTypeTp::LongLong.into()];
         let mut schema = vec![];
         let mut exp = vec![];
+        let mut ctx = EvalContext::default();
         AggrFnDefinitionParserSum
-            .parse(expr, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .parse(expr, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap_err();
     }
 }

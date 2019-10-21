@@ -5,7 +5,7 @@ use tipb::{Expr, ExprType, FieldType};
 use crate::aggr_fn::impl_bit_op::*;
 use crate::aggr_fn::impl_max_min::*;
 use crate::aggr_fn::AggrFunction;
-use crate::codec::mysql::Tz;
+use crate::expr::EvalContext;
 use crate::rpn_expr::RpnExpression;
 use crate::Result;
 
@@ -34,7 +34,7 @@ pub trait AggrDefinitionParser {
     fn parse(
         &self,
         aggr_def: Expr,
-        time_zone: &Tz,
+        ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
@@ -87,12 +87,12 @@ impl AggrDefinitionParser for AllAggrDefinitionParser {
     fn parse(
         &self,
         aggr_def: Expr,
-        time_zone: &Tz,
+        ctx: &mut EvalContext,
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
         let parser = map_pb_sig_to_aggr_func_parser(aggr_def.get_tp()).unwrap();
-        parser.parse(aggr_def, time_zone, src_schema, out_schema, out_exp)
+        parser.parse(aggr_def, ctx, src_schema, out_schema, out_exp)
     }
 }
