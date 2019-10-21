@@ -21,6 +21,7 @@ use kvproto::tikvpb_grpc::TikvClient;
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv_util::collections::HashMap;
+use tikv_util::file::calc_crc32_bytes;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 
@@ -192,6 +193,7 @@ fn name_to_cf(name: &str) -> engine::CfName {
     }
 }
 
+// TODO: change this test to use sst_importer instead of importer
 #[test]
 fn test_backup_and_import() {
     let mut suite = TestSuite::new(3);
@@ -264,7 +266,7 @@ fn test_backup_and_import() {
         let mut content = vec![];
         reader.read_to_end(&mut content).unwrap();
         let mut m = sst_meta.clone();
-        m.crc32 = f.crc32;
+        m.crc32 = calc_crc32_bytes(&content);
         m.length = content.len() as _;
         m.cf_name = name_to_cf(&f.name).to_owned();
         metas.push((m, content));

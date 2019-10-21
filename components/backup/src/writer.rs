@@ -60,7 +60,7 @@ impl BackupWriter {
     }
 
     /// Wrtie entries to buffered SST files.
-    pub fn write<I>(&mut self, entries: I) -> Result<()>
+    pub fn write<I>(&mut self, entries: I, need_checksum: bool) -> Result<()>
     where
         I: Iterator<Item = TxnEntry>,
     {
@@ -88,18 +88,24 @@ impl BackupWriter {
             }
             match value_in_default {
                 Some(true) => {
+                    self.default_kvs += 1;
+                    if !need_checksum {
+                        continue;
+                    }
                     let (k, v) = e
                         .into_kvpair()
-                        .map_err(|err| Error::from(box_err!("Decode error: {:?}", err)))?;
-                    self.default_kvs += 1;
+                        .map_err(|err| Error::Other(box_err!("Decode error: {:?}", err)))?;
                     self.default_bytes += (k.len() + v.len()) as u64;
                     self.default_checksum = checksum_crc64_xor(self.default_checksum, &k, &v);
                 }
                 Some(false) => {
+                    self.write_kvs += 1;
+                    if !need_checksum {
+                        continue;
+                    }
                     let (k, v) = e
                         .into_kvpair()
-                        .map_err(|err| Error::from(box_err!("Decode error: {:?}", err)))?;
-                    self.write_kvs += 1;
+                        .map_err(|err| Error::Other(box_err!("Decode error: {:?}", err)))?;
                     self.write_bytes += (k.len() + v.len()) as u64;
                     self.write_checksum = checksum_crc64_xor(self.write_checksum, &k, &v);
                 }
@@ -119,7 +125,7 @@ impl BackupWriter {
                     .observe(contents.len() as _);
                 let name = format!("{}_{}.sst", name, cf);
                 let checksum = tikv_util::file::sha256(&contents)
-                    .map_err(|e| Error::from(box_err!("Sha256 error: {:?}", e)))?;
+                    .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
                 let mut limit_reader = LimitReader::new(limiter, &mut contents);
                 storage.write(&name, &mut limit_reader)?;
                 let mut file = File::new();
@@ -141,7 +147,7 @@ impl BackupWriter {
             files.push(default);
             buf.clear();
         }
-        if self.write_kvs != 0 {
+        if self.write_kvs != 0 || self.default_kvs != 0 {
             // Save write cf contents.
             buf.reserve(self.write.file_size() as _);
             self.write.finish_into(&mut buf)?;
@@ -219,7 +225,7 @@ mod tests {
 
         // Test empty file.
         let mut writer = BackupWriter::new(db.clone(), "foo", None).unwrap();
-        writer.write(vec![].into_iter()).unwrap();
+        writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
@@ -231,6 +237,7 @@ mod tests {
                     write: (vec![b'a'], vec![b'a']),
                 }]
                 .into_iter(),
+                false,
             )
             .unwrap();
         let files = writer.save(&storage).unwrap();
@@ -249,6 +256,7 @@ mod tests {
                     write: (vec![b'a'], vec![b'a']),
                 }]
                 .into_iter(),
+                false,
             )
             .unwrap();
         let files = writer.save(&storage).unwrap();
