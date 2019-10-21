@@ -19,7 +19,7 @@ pub trait CFHandleExt {
     type CFHandle: CFHandle;
     type CFOptions: CFOptions;
 
-    fn cf_handle(&self, name: &str) -> Option<&Self::CFHandle>;
+    fn get_cf_handle(&self, name: &str) -> Option<&Self::CFHandle>;
     fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::CFOptions;
     // FIXME: return type
     fn set_options_cf(

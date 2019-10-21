@@ -11,7 +11,7 @@ impl CFHandleExt for Rocks {
     type CFHandle = RocksCFHandle;
     type CFOptions = RocksCFOptions;
 
-    fn cf_handle(&self, name: &str) -> Option<&Self::CFHandle> {
+    fn get_cf_handle(&self, name: &str) -> Option<&Self::CFHandle> {
         self.as_inner().cf_handle(name).map(RocksCFHandle::from_raw)
     }
 

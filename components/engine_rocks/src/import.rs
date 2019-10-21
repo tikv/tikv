@@ -1,17 +1,31 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::util::get_cf_handle;
 use crate::Rocks;
 use engine::rocks::util::prepare_sst_for_ingestion;
 use engine_traits::Import;
 use engine_traits::IngestExternalFileOptions;
 use engine_traits::{Error, Result};
 use rocksdb::set_external_sst_file_global_seq_no;
+use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
 use std::fs::File;
 use std::path::Path;
 use tikv_util::file::calc_crc32;
 
+pub struct RocksIngestExternalFileOptions(RawIngestExternalFileOptions);
+
+impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
+    fn move_files(&mut self, f: bool) {
+        self.0.move_files(f);
+    }
+}
+
 impl Import for Rocks {
+    type IngestExternalFileOptions = RocksIngestExternalFileOptions;
+
+    fn new_ingest_external_file_options() -> RocksIngestExternalFileOptions {
+        RocksIngestExternalFileOptions(RawIngestExternalFileOptions::new())
+    }
+
     fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
         path: P,
@@ -22,21 +36,19 @@ impl Import for Rocks {
 
     fn ingest_external_file_cf(
         &self,
-        cf: &str,
-        opts: &IngestExternalFileOptions,
+        cf: &Self::CFHandle,
+        opts: &Self::IngestExternalFileOptions,
         files: &[&str],
     ) -> Result<()> {
-        let mut rocks_opts = rocksdb::IngestExternalFileOptions::new();
-        rocks_opts.move_files(opts.move_files);
-        let handle = get_cf_handle(&self.as_inner(), cf)?;
+        let cf = cf.as_inner();
         self.as_inner()
-            .ingest_external_file_cf(&handle, &rocks_opts, files)?;
+            .ingest_external_file_cf(&cf, &opts.0, files)?;
         Ok(())
     }
 
-    fn validate_file_for_ingestion<P: AsRef<Path>>(
+    fn validate_sst_for_ingestion<P: AsRef<Path>>(
         &self,
-        cf: &str,
+        cf: &Self::CFHandle,
         path: P,
         expected_size: u64,
         expected_checksum: u32,
@@ -60,8 +72,8 @@ impl Import for Rocks {
         }
 
         // RocksDB may have modified the global seqno.
-        let cf_handle = get_cf_handle(&self.as_inner(), cf)?;
-        set_external_sst_file_global_seq_no(&self.as_inner(), cf_handle, path, 0)?;
+        let cf = cf.as_inner();
+        set_external_sst_file_global_seq_no(&self.as_inner(), cf, path, 0)?;
         f.sync_all()
             .map_err(|e| format!("sync {}: {:?}", path, e))?;
 

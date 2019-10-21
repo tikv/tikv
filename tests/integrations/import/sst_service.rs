@@ -109,18 +109,69 @@ fn test_ingest_sst() {
     assert!(!resp.has_error());
 
     // Check ingested kvs
-    for i in sst_range.0..sst_range.1 {
-        let mut m = RawGetRequest::default();
-        m.set_context(ctx.clone());
-        m.set_key(vec![i]);
-        let resp = tikv.raw_get(&m).unwrap();
-        assert!(resp.get_error().is_empty());
-        assert!(!resp.has_region_error());
-        assert_eq!(resp.get_value(), &[i]);
-    }
+    check_ingested_kvs(&tikv, &ctx, sst_range);
 
     // Upload the same file again to check if the ingested file has been deleted.
     send_upload_sst(&import, &meta, &data).unwrap();
+}
+
+#[test]
+fn test_download_sst() {
+    use grpcio::{Error, RpcStatus};
+
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let temp_dir = Builder::new()
+        .prefix("test_download_sst")
+        .tempdir()
+        .unwrap();
+
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, _) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+    // Checks that downloading a non-existing storage returns error.
+    let mut download = DownloadRequest::default();
+    download.set_sst(meta.clone());
+    download.set_url(format!("local://{}", temp_dir.path().display()));
+    download.set_name("missing.sst".to_owned());
+
+    let result = import.download(&download);
+    match &result {
+        Err(Error::RpcFailure(RpcStatus {
+            details: Some(msg), ..
+        })) if msg.contains("CannotReadExternalStorage") => {}
+        _ => panic!("unexpected download reply: {:?}", result),
+    }
+
+    // Checks that downloading an empty SST returns OK (but cannot be ingested)
+    download.set_name("test.sst".to_owned());
+    download.mut_sst().mut_range().set_start(vec![sst_range.1]);
+    download
+        .mut_sst()
+        .mut_range()
+        .set_end(vec![sst_range.1 + 1]);
+    let result = import.download(&download).unwrap();
+    assert!(result.get_is_empty());
+
+    // Now perform a proper download.
+    download.mut_sst().mut_range().set_start(Vec::new());
+    download.mut_sst().mut_range().set_end(Vec::new());
+    let result = import.download(&download).unwrap();
+    assert!(!result.get_is_empty());
+    assert_eq!(result.get_range().get_start(), &[sst_range.0]);
+    assert_eq!(result.get_range().get_end(), &[sst_range.1]);
+
+    // Do an ingest and verify the result is correct.
+
+    let mut ingest = IngestRequest::default();
+    ingest.set_context(ctx.clone());
+    ingest.set_sst(meta);
+    let resp = import.ingest(&ingest).unwrap();
+    assert!(!resp.has_error());
+
+    check_ingested_kvs(&tikv, &ctx, sst_range);
 }
 
 #[test]
@@ -189,6 +240,18 @@ fn send_upload_sst(
     let (tx, rx) = client.upload().unwrap();
     let stream = stream::iter_ok(reqs);
     stream.forward(tx).and_then(|_| rx).wait()
+}
+
+fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {
+    for i in sst_range.0..sst_range.1 {
+        let mut m = RawGetRequest::default();
+        m.set_context(ctx.clone());
+        m.set_key(vec![i]);
+        let resp = tikv.raw_get(&m).unwrap();
+        assert!(resp.get_error().is_empty());
+        assert!(!resp.has_region_error());
+        assert_eq!(resp.get_value(), &[i]);
+    }
 }
 
 fn check_sst_deleted(client: &ImportSstClient, meta: &SstMeta, data: &[u8]) {
