@@ -60,6 +60,18 @@ quick_error! {
             display("Invalid SST path {:?}", path)
         }
         InvalidChunk {}
+        CannotReadExternalStorage(url: String, name: String, err: IoError) {
+            cause(err)
+            display("Cannot read {}/{}", url, name)
+        }
+        WrongKeyPrefix(what: &'static str, key: Vec<u8>, prefix: Vec<u8>) {
+            display("\
+                {} has wrong prefix: key {} does not start with {}",
+                what,
+                hex::encode_upper(&key),
+                hex::encode_upper(&prefix),
+            )
+        }
     }
 }
 
