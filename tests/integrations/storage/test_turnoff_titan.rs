@@ -9,6 +9,7 @@ use tikv_util::config::ReadableSize;
 fn test_turnoff_titan() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.rocksdb.defaultcf.disable_auto_compactions = true;
+    cluster.cfg.rocksdb.defaultcf.num_levels = 1;
     configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
     cluster.run();
     assert_eq!(cluster.must_get(b"k1"), None);
@@ -27,11 +28,11 @@ fn test_turnoff_titan() {
         let db = cluster.get_engine(i);
         info!("CLUSTER LOG"; "level0" => db.get_property_int(&"rocksdb.num-files-at-level0").unwrap());
         info!("CLUSTER LOG"; "level1" => db.get_property_int(&"rocksdb.num-files-at-level1").unwrap());
-        info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
-        info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
-        info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
-        info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
-        info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
+        // info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
+        // info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
+        // info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
+        // info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
+        // info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
     }
     cluster.shutdown();
 
@@ -63,11 +64,11 @@ fn test_turnoff_titan() {
         let db = cluster.get_engine(i);
         info!("CLUSTER LOG"; "level0" => db.get_property_int(&"rocksdb.num-files-at-level0").unwrap());
         info!("CLUSTER LOG"; "level1" => db.get_property_int(&"rocksdb.num-files-at-level1").unwrap());
-        info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
-        info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
-        info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
-        info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
-        info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
+        // info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
+        // info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
+        // info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
+        // info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
+        // info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
     }
     cluster.compact_data();
     cluster.must_flush_cf(CF_DEFAULT, true);
@@ -75,11 +76,11 @@ fn test_turnoff_titan() {
         let db = cluster.get_engine(i);
         info!("CLUSTER LOG"; "level0" => db.get_property_int(&"rocksdb.num-files-at-level0").unwrap());
         info!("CLUSTER LOG"; "level1" => db.get_property_int(&"rocksdb.num-files-at-level1").unwrap());
-        info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
-        info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
-        info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
-        info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
-        info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
+        // info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
+        // info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
+        // info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
+        // info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
+        // info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
     }
     cluster.shutdown();
     sleep_ms(2000);
