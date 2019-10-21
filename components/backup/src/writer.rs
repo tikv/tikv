@@ -148,7 +148,7 @@ impl BackupWriter {
             let mut write = save_and_build_file(CF_WRITE, &mut buf, self.limiter)?;
             write.set_crc64xor(self.write_checksum);
             write.set_total_kvs(self.write_kvs);
-            write.set_total_bytes(default_bytes);
+            write.set_total_bytes(self.write_bytes);
             files.push(write);
         }
         BACKUP_RANGE_HISTOGRAM_VEC
