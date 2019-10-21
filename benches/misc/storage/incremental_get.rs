@@ -1,11 +1,11 @@
 use test::{black_box, Bencher};
 
-use tidb_query::codec::table;
-use test_storage::SyncTestStorageBuilder;
+use engine::SyncSnapshot;
 use keys::Key;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
-use tikv::storage::{Mutation, Engine, SnapshotStore, Statistics, Store};
-use engine::SyncSnapshot;
+use test_storage::SyncTestStorageBuilder;
+use tidb_query::codec::table;
+use tikv::storage::{Engine, Mutation, SnapshotStore, Statistics, Store};
 
 fn table_lookup_gen_data() -> (SnapshotStore<SyncSnapshot>, Vec<Key>) {
     let store = SyncTestStorageBuilder::new().build().unwrap();
@@ -22,7 +22,9 @@ fn table_lookup_gen_data() -> (SnapshotStore<SyncSnapshot>, Vec<Key>) {
 
     let pk = table::encode_row_key(5, 0);
 
-    store.prewrite(Context::default(), mutations, pk, 1).unwrap();
+    store
+        .prewrite(Context::default(), mutations, pk, 1)
+        .unwrap();
     store.commit(Context::default(), keys, 1, 2).unwrap();
 
     let engine = store.get_engine();
@@ -32,12 +34,7 @@ fn table_lookup_gen_data() -> (SnapshotStore<SyncSnapshot>, Vec<Key>) {
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
     let snapshot = engine.snapshot(&Context::default()).unwrap();
-    let store = SnapshotStore::new(
-        snapshot,
-        10,
-        IsolationLevel::Si,
-        true,
-    );
+    let store = SnapshotStore::new(snapshot, 10, IsolationLevel::Si, true);
 
     // Keys are given in order, and are far away from each other to simulate a normal table lookup
     // scenario.
