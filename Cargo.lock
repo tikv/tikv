@@ -1026,9 +1026,9 @@ dependencies = [
 
 [[package]]
 name = "gperftools-static"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de08e2791fb017eec1316f0a6f2060f7a341c90970625805d3a4e6fc9e13da78"
+checksum = "77f00c2f691449aa3cfe170b2e32d82457b8489bcf697d93d571d509ff852d16"
 dependencies = [
  "fs_extra",
  "gperftools",
