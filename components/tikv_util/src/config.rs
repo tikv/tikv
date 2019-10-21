@@ -773,7 +773,7 @@ fn get_file_count(data_path: &str, extension: &str) -> Result<usize, ConfigError
         let path = entry.path();
         if path.is_file() {
             if let Some(ext) = path.extension() {
-                if extension == ext {
+                if extension.is_empty() || extension == ext {
                     file_count += 1;
                 }
             } else if extension.is_empty() {
@@ -784,7 +784,7 @@ fn get_file_count(data_path: &str, extension: &str) -> Result<usize, ConfigError
     Ok(file_count)
 }
 
-// check dir is empty of file with certain extension
+// check dir is empty of file with certain extension, empty string for any extension.
 pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), ConfigError> {
     let op = "data-dir.empty.check";
     let dir = Path::new(data_path);

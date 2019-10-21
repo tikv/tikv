@@ -24,7 +24,7 @@ use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::kv::CompactionListener;
-use tikv::storage::Config as StorageConfig;
+use tikv::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::config::*;
 use tikv_util::escape;
 
@@ -520,7 +520,7 @@ pub fn create_test_engine(
             ));
             let cache = cfg.storage.block_cache.build_shared_cache();
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
-            let kv_path = path.as_ref().unwrap().path().join("kv");
+            let kv_path = path.as_ref().unwrap().path().join(DEFAULT_ROCKSDB_SUB_DIR);
             let engine = Arc::new(
                 rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
@@ -591,6 +591,8 @@ pub fn configure_for_enable_titan<T: Simulator>(
     min_blob_size: ReadableSize,
 ) {
     cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::millis(1);
+    cluster.cfg.rocksdb.titan.max_background_gc = 10;
     cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = min_blob_size;
     cluster.cfg.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
 }
