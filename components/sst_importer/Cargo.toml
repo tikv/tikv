@@ -16,10 +16,11 @@ uuid = { version = "0.7", features = [ "serde", "v4" ] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-
 engine = { path = "../engine" }
 keys = { path = "../keys" }
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
+external_storage = { path = "../external_storage" }
+hex = "0.3"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"

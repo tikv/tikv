@@ -12,6 +12,7 @@ use byteorder::{BigEndian, ByteOrder};
 use kvproto::metapb::Region;
 use std::mem;
 
+pub mod rewrite;
 mod types;
 
 pub use types::{Key, KvPair, Value};
@@ -228,6 +229,45 @@ pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
         DATA_MAX_KEY.to_vec()
     } else {
         data_key(region_end_key)
+    }
+}
+
+pub fn origin_end_key(key: &[u8]) -> &[u8] {
+    if key == DATA_MAX_KEY {
+        b""
+    } else {
+        origin_key(key)
+    }
+}
+
+pub(crate) fn next_key_no_alloc(key: &[u8]) -> Option<(&[u8], u8)> {
+    let pos = key.iter().rposition(|b| *b != 0xff)?;
+    Some((&key[..pos], key[pos] + 1))
+}
+
+/// Computes the next key of the given key.
+///
+/// If the key has no successor key (e.g. the input is "\xff\xff"), the result
+/// would be an empty vector.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(next_key(b"123"), b"124");
+/// assert_eq!(next_key(b"12\xff"), b"13");
+/// assert_eq!(next_key(b"\xff\xff"), b"");
+/// assert_eq!(next_key(b"\xff\xfe"), b"\xff\xff");
+/// assert_eq!(next_key(b"T"), b"U");
+/// assert_eq!(next_key(b""), b"");
+/// ```
+pub fn next_key(key: &[u8]) -> Vec<u8> {
+    if let Some((s, e)) = next_key_no_alloc(key) {
+        let mut res = Vec::with_capacity(s.len() + 1);
+        res.extend_from_slice(s);
+        res.push(e);
+        res
+    } else {
+        Vec::new()
     }
 }
 

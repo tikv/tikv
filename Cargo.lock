@@ -2702,8 +2702,10 @@ version = "0.1.0"
 dependencies = [
  "crc",
  "engine",
+ "external_storage",
  "futures",
  "grpcio",
+ "hex",
  "keys",
  "kvproto",
  "lazy_static",
