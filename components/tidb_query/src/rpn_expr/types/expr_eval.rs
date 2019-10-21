@@ -511,15 +511,15 @@ mod tests {
             let mut col = LazyBatchColumn::raw_with_capacity(3);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(-5)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(-7)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(3)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             col
@@ -714,15 +714,15 @@ mod tests {
             let mut col = LazyBatchColumn::raw_with_capacity(3);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(-5)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(-7)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(3)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             col

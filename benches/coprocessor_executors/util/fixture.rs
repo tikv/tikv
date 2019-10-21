@@ -7,6 +7,8 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
 
+use criterion::measurement::Measurement;
+
 use test_coprocessor::*;
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tikv_util::collections::HashMap;
@@ -257,7 +259,7 @@ impl FixtureBuilder {
                 let mut c = LazyBatchColumn::raw_with_capacity(datums.len());
                 for datum in datums {
                     let mut v = vec![];
-                    DatumEncoder::encode(&mut v, &[datum], false).unwrap();
+                    v.write_datum(&[datum], false).unwrap();
                     c.mut_raw().push(v);
                 }
                 c
@@ -296,7 +298,7 @@ impl FixtureBuilder {
             let mut data = RowColsDict::new(HashMap::default(), Vec::new());
             for col_index in 0..self.columns.len() {
                 let mut v = vec![];
-                DatumEncoder::encode(&mut v, &[self.columns[col_index][row_index].clone()], false)
+                v.write_datum(&[self.columns[col_index][row_index].clone()], false)
                     .unwrap();
                 data.append(col_index as i64, &mut v);
             }
@@ -410,7 +412,10 @@ impl Executor for NormalFixtureExecutor {
 
 /// Benches the performance of the batch fixture executor itself. When using it as the source
 /// executor in other benchmarks, we need to take out these costs.
-fn bench_util_batch_fixture_executor_next_1024(b: &mut criterion::Bencher) {
+fn bench_util_batch_fixture_executor_next_1024<M>(b: &mut criterion::Bencher<M>)
+where
+    M: Measurement,
+{
     super::bencher::BatchNext1024Bencher::new(|| {
         FixtureBuilder::new(5000)
             .push_column_i64_random()
@@ -419,7 +424,10 @@ fn bench_util_batch_fixture_executor_next_1024(b: &mut criterion::Bencher) {
     .bench(b);
 }
 
-fn bench_util_normal_fixture_executor_next_1024(b: &mut criterion::Bencher) {
+fn bench_util_normal_fixture_executor_next_1024<M>(b: &mut criterion::Bencher<M>)
+where
+    M: Measurement,
+{
     super::bencher::NormalNext1024Bencher::new(|| {
         FixtureBuilder::new(5000)
             .push_column_i64_random()
@@ -429,15 +437,18 @@ fn bench_util_normal_fixture_executor_next_1024(b: &mut criterion::Bencher) {
 }
 
 /// Checks whether our test utilities themselves are fast enough.
-pub fn bench(c: &mut criterion::Criterion) {
+pub fn bench<M>(c: &mut criterion::Criterion<M>)
+where
+    M: Measurement + 'static,
+{
     if crate::util::bench_level() >= 1 {
         c.bench_function(
             "util_batch_fixture_executor_next_1024",
-            bench_util_batch_fixture_executor_next_1024,
+            bench_util_batch_fixture_executor_next_1024::<M>,
         );
         c.bench_function(
             "util_normal_fixture_executor_next_1024",
-            bench_util_normal_fixture_executor_next_1024,
+            bench_util_normal_fixture_executor_next_1024::<M>,
         );
     }
 }

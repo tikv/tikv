@@ -4,8 +4,8 @@ use std::borrow::Cow;
 use std::fmt::Display;
 use std::{self, char, i16, i32, i64, i8, str, u16, u32, u64, u8};
 
-use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_datatype::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
+use tidb_query_datatype::{Collation, FieldTypeAccessor};
 use tipb::FieldType;
 
 use super::mysql::{RoundMode, DEFAULT_FSP};
@@ -80,7 +80,6 @@ where
 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Bytes> {
-        // FIXME: There is an additional step `ProduceStrWithSpecifiedTp` in TiDB.
         Ok(self.to_string().into_bytes())
     }
 }
@@ -711,7 +710,9 @@ pub fn pad_zero_for_binary_type(s: &mut Vec<u8>, ft: &FieldType) {
         return;
     }
     let flen = flen as usize;
-    if ft.as_accessor().tp() == FieldTypeTp::String && ft.is_binary_string_like() && s.len() < flen
+    if ft.as_accessor().tp() == FieldTypeTp::String
+        && ft.as_accessor().collation() == Collation::Binary
+        && s.len() < flen
     {
         // it seems MaxAllowedPacket has not push down to tikv, so we needn't to handle it
         s.resize(flen, 0);
@@ -1039,12 +1040,11 @@ mod tests {
     use std::{f64, i64, isize, u64};
 
     use crate::codec::error::{
-        ERR_DATA_OUT_OF_RANGE, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
+        ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE, WARN_DATA_TRUNCATED,
     };
-    use crate::codec::mysql::Res;
-    use crate::expr::Flag;
-    use crate::expr::{EvalConfig, EvalContext};
-    use tidb_query_datatype::Collation;
+    use crate::codec::mysql::{Res, UNSPECIFIED_FSP};
+    use crate::expr::{EvalConfig, EvalContext, Flag};
+    use tidb_query_datatype::{Collation, FieldTypeFlag};
 
     use super::*;
 
@@ -1951,6 +1951,7 @@ mod tests {
             (1.36, 10, 2, Res::Ok(1.36)),
             (f64::NAN, 10, 1, Res::Overflow(0f64)),
         ];
+
         for (f, flen, decimal, exp) in cases {
             let res = truncate_f64(f, flen, decimal);
             assert_eq!(res, exp);
@@ -2075,6 +2076,429 @@ mod tests {
             assert!(nd.is_ok());
             let nd = nd.unwrap();
             assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
+        }
+    }
+
+    #[test]
+    fn test_produce_dec_with_specified_tp_2() {
+        let ul = isize::from(UNSPECIFIED_FSP);
+        let cs = vec![
+            // (
+            // origin,
+            // (origin_flen, origin_decimal), (res_flen, res_decimal), is_unsigned,
+            // expect, warning_err_code,
+            // ((InInsertStmt || InUpdateStmt || InDeleteStmt), overflow_as_warning, truncate_as_warning)
+            // )
+            //
+            // The origin_flen, origin_decimal field is to
+            // let the programmer clearly know what the flen and decimal of the decimal is.
+
+            // res_flen and res_decimal isn't UNSPECIFIED_FSP
+            // flen < decimal
+            (
+                Decimal::zero(),
+                (1, 0),
+                (1, 2),
+                false,
+                Err(Error::m_bigger_than_d("")),
+                None,
+                (false, false, false),
+            ),
+            (
+                Decimal::from(0),
+                (1, 0),
+                (1, 2),
+                false,
+                Err(Error::m_bigger_than_d("")),
+                None,
+                (false, false, false),
+            ),
+            // origin not zero, but res's int part len < origin's int part
+            (
+                Decimal::from(1024),
+                (4, 0),
+                (3, 0),
+                false,
+                Ok(Decimal::from(999)),
+                Some(ERR_DATA_OUT_OF_RANGE),
+                (false, true, false),
+            ),
+            (
+                Decimal::from(-1024),
+                (4, 0),
+                (3, 0),
+                false,
+                Ok(Decimal::from(-999)),
+                Some(ERR_DATA_OUT_OF_RANGE),
+                (false, true, false),
+            ),
+            (
+                Decimal::from_f64(10240.01).unwrap(),
+                (7, 2),
+                (5, 1),
+                false,
+                Ok(Decimal::from_f64(9999.9).unwrap()),
+                Some(ERR_DATA_OUT_OF_RANGE),
+                (false, true, false),
+            ),
+            (
+                Decimal::from_f64(-10240.01).unwrap(),
+                (7, 2),
+                (5, 1),
+                false,
+                Ok(Decimal::from_f64(-9999.9).unwrap()),
+                Some(ERR_DATA_OUT_OF_RANGE),
+                (false, true, false),
+            ),
+            // origin_decimal < res_decimal
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                (6, 4),
+                (7, 5),
+                false,
+                Ok(Decimal::from_f64(10.12340).unwrap()),
+                None,
+                (false, false, false),
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                (6, 4),
+                (7, 5),
+                false,
+                Ok(Decimal::from_f64(10.12340).unwrap()),
+                None,
+                (true, false, false),
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                (6, 4),
+                (7, 5),
+                false,
+                Ok(Decimal::from_f64(-10.12340).unwrap()),
+                None,
+                (false, false, false),
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                (6, 4),
+                (7, 5),
+                false,
+                Ok(Decimal::from_f64(-10.12340).unwrap()),
+                None,
+                (true, false, false),
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                (6, 4),
+                (7, 5),
+                true,
+                Ok(Decimal::from_f64(10.12340).unwrap()),
+                None,
+                (false, false, false),
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                (6, 4),
+                (7, 5),
+                true,
+                Ok(Decimal::from_f64(10.12340).unwrap()),
+                None,
+                (true, false, false),
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                (6, 4),
+                (7, 5),
+                true,
+                Ok(Decimal::zero()),
+                None,
+                (false, false, false),
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                (6, 4),
+                (7, 5),
+                true,
+                Ok(Decimal::zero()),
+                None,
+                (true, false, false),
+            ),
+            // origin_decimal > res_decimal
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                (6, 4),
+                (5, 3),
+                false,
+                Ok(Decimal::from_f64(10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                (false, false, true),
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                (6, 4),
+                (5, 3),
+                false,
+                Ok(Decimal::from_f64(10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                (true, false, false),
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                (6, 4),
+                (5, 3),
+                false,
+                Ok(Decimal::from_f64(-10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                (false, false, true),
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                (6, 4),
+                (5, 3),
+                false,
+                Ok(Decimal::from_f64(-10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                (true, false, false),
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                (6, 4),
+                (5, 3),
+                true,
+                Ok(Decimal::from_f64(10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                (false, false, true),
+            ),
+            (
+                Decimal::from_f64(10.1234).unwrap(),
+                (6, 4),
+                (5, 3),
+                true,
+                Ok(Decimal::from_f64(10.123).unwrap()),
+                Some(WARN_DATA_TRUNCATED),
+                (true, false, false),
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                (6, 4),
+                (5, 3),
+                true,
+                Ok(Decimal::zero()),
+                Some(WARN_DATA_TRUNCATED),
+                (false, false, true),
+            ),
+            (
+                Decimal::from_f64(-10.1234).unwrap(),
+                (6, 4),
+                (5, 3),
+                true,
+                Ok(Decimal::zero()),
+                Some(WARN_DATA_TRUNCATED),
+                (true, false, false),
+            ),
+            // if after round, the dec is zero, then there is no err or warning
+            (
+                Decimal::from_f64(0.00001).unwrap(),
+                (5, 5),
+                (4, 4),
+                false,
+                Ok(Decimal::zero()),
+                None,
+                (false, false, false),
+            ),
+            (
+                Decimal::from_f64(0.00001).unwrap(),
+                (5, 5),
+                (4, 4),
+                false,
+                Ok(Decimal::zero()),
+                None,
+                (true, false, false),
+            ),
+            (
+                Decimal::from_f64(-0.00001).unwrap(),
+                (5, 5),
+                (4, 4),
+                false,
+                Ok(Decimal::zero()),
+                None,
+                (false, false, false),
+            ),
+            (
+                Decimal::from_f64(-0.00001).unwrap(),
+                (5, 5),
+                (4, 4),
+                false,
+                Ok(Decimal::zero()),
+                None,
+                (true, false, false),
+            ),
+            (
+                Decimal::from_f64(0.00001).unwrap(),
+                (5, 5),
+                (4, 4),
+                true,
+                Ok(Decimal::zero()),
+                None,
+                (false, false, false),
+            ),
+            (
+                Decimal::from_f64(0.00001).unwrap(),
+                (5, 5),
+                (4, 4),
+                true,
+                Ok(Decimal::zero()),
+                None,
+                (true, false, false),
+            ),
+            (
+                Decimal::from_f64(-0.00001).unwrap(),
+                (5, 5),
+                (4, 4),
+                true,
+                Ok(Decimal::zero()),
+                None,
+                (false, false, false),
+            ),
+            (
+                Decimal::from_f64(-0.00001).unwrap(),
+                (5, 5),
+                (4, 4),
+                true,
+                Ok(Decimal::zero()),
+                None,
+                (true, false, false),
+            ),
+            // TODO: add test case for Decimal::round failure
+
+            // zero
+            // FIXME:
+            //  according to Decimal::prec_and_frac,
+            //  the decimals' prec(the number of all digits) and frac(the number of digit after number point) are
+            //  Decimal::zero()'s is (1, 0)
+            //  Decimal::from_bytes(b"00.00")'s is (2, 2)
+            //  Decimal::from_bytes(b"000.00")'s is (2, 2)
+            //  Decimal::from_bytes(b"000.00")'s is (2, 2)
+            //  Decimal::from_bytes(b"00.000")'s is (3, 3)
+            //  Decimal::from_bytes(b"00.0000")'s is (4, 4)
+            //  Decimal::from_bytes(b"00.00000")'s is (5, 5)
+            //  This may be a bug.
+            //  However, the case below are based on these expect.
+            (
+                Decimal::from_bytes(b"0.00").unwrap().unwrap(),
+                (2, 2),
+                (ul, ul),
+                false,
+                Ok(Decimal::zero()),
+                None,
+                (false, false, false),
+            ),
+            (
+                Decimal::zero(),
+                (1, 0),
+                (0, 0),
+                false,
+                Ok(Decimal::zero()),
+                None,
+                (false, false, false),
+            ),
+            (
+                Decimal::from_bytes(b"0.0000").unwrap().unwrap(),
+                (4, 4),
+                (4, 1),
+                false,
+                Ok(Decimal::zero()),
+                None,
+                (false, false, false),
+            ),
+        ];
+
+        for (
+            input,
+            (origin_flen, origin_decimal),
+            (res_flen, res_decimal),
+            is_unsigned,
+            expect,
+            warning_err_code,
+            (in_dml, overflow_as_warning, truncate_as_warning),
+        ) in cs
+        {
+            // check origin_flen and origin_decimal
+            let (f, d) = input.prec_and_frac();
+            let log = format!(
+                    "input: {}, origin_flen: {}, origin_decimal: {}, actual flen: {}, actual decimal: {}",
+                    input, origin_flen, origin_decimal, f, d
+                );
+            assert_eq!(f, origin_flen, "{}", log);
+            assert_eq!(d, origin_decimal, "{}", log);
+
+            // run test case
+            let ctx_in_dml_flag = vec![Flag::IN_INSERT_STMT, Flag::IN_UPDATE_OR_DELETE_STMT];
+            for in_dml_flag in ctx_in_dml_flag {
+                // make ctx
+                let mut flag: Flag = Flag::empty();
+                if overflow_as_warning {
+                    flag |= Flag::OVERFLOW_AS_WARNING;
+                }
+                if truncate_as_warning {
+                    flag |= Flag::TRUNCATE_AS_WARNING;
+                }
+                if in_dml {
+                    flag |= in_dml_flag;
+                }
+                let cfg = Arc::new(EvalConfig::from_flag(flag));
+                let mut ctx = EvalContext::new(cfg);
+
+                // make field_type
+                let mut rft = FieldType::default();
+                let fta = rft.as_mut_accessor();
+                fta.set_flen(res_flen);
+                fta.set_decimal(res_decimal);
+                if is_unsigned {
+                    fta.set_flag(FieldTypeFlag::UNSIGNED);
+                }
+
+                // call produce_dec_with_specified_tp
+                let r = produce_dec_with_specified_tp(&mut ctx, input.clone(), &rft);
+
+                // make log
+                let rs = r.as_ref().map(|x| x.to_string());
+                let expect_str = expect.as_ref().map(|x| x.to_string());
+                let log =
+                    format!(
+                            "input: {}, origin_flen: {}, origin_decimal: {}, \
+                     res_flen: {}, res_decimal: {}, is_unsigned: {}, \
+                     in_dml: {}, in_dml_flag(if in_dml is false, it will take no effect): {:?}, \
+                     expect: {:?}, expect: {:?}",
+                            input, origin_flen, origin_decimal, res_flen, res_decimal,
+                            is_unsigned, in_dml, in_dml_flag, expect_str, rs
+                        );
+
+                // check result
+                match &expect {
+                    Ok(d) => {
+                        assert!(r.is_ok(), "{}", log);
+                        assert_eq!(&r.unwrap(), d, "{}", log);
+                    }
+                    Err(Error::Eval(_, _)) => {
+                        if let Error::Eval(_, d) = r.err().unwrap() {
+                            assert_eq!(d, ERR_M_BIGGER_THAN_D, "{}", log);
+                        } else {
+                            unreachable!("{}", log);
+                        }
+                    }
+                    _ => unreachable!("{}", log),
+                }
+
+                // check warning
+                match warning_err_code {
+                    Some(code) => {
+                        assert_eq!(ctx.warnings.warning_cnt, 1, "{}", log);
+                        assert_eq!(ctx.warnings.warnings[0].get_code(), code, "{}", log);
+                    }
+                    None => assert_eq!(ctx.warnings.warning_cnt, 0, "{}", log),
+                }
+            }
         }
     }
 }

@@ -2557,13 +2557,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
-        // When restart, the approximate size will be None. The
-        // split check will first check the region size, and then
-        // check whether the region should split.  This should
-        // work even if we change the region max size.
-        // If peer says should update approximate size, update region
-        // size and check whether the region should split.
+        // When restart, the approximate size will be None. The split check will first
+        // check the region size, and then check whether the region should split. This
+        // should work even if we change the region max size.
+        // If peer says should update approximate size, update region size and check
+        // whether the region should split.
         if self.fsm.peer.approximate_size.is_some()
+            && self.fsm.peer.approximate_size.unwrap() < self.ctx.cfg.region_max_size.0
             && self.fsm.peer.compaction_declined_bytes < self.ctx.cfg.region_split_check_diff.0
             && self.fsm.peer.size_diff_hint < self.ctx.cfg.region_split_check_diff.0
         {
