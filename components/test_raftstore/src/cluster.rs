@@ -24,6 +24,7 @@ use tikv::raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSy
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
+use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 
@@ -128,13 +129,17 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn pre_start_check(&mut self) -> result::Result<(), Box<dyn StdError>> {
-        self.cfg.validate()
+        for path in &self.paths {
+            self.cfg.storage.data_dir = path.path().to_str().unwrap().to_owned();
+            self.cfg.validate()?
+        }
+        Ok(())
     }
 
     pub fn create_engines(&mut self) {
         for _ in 0..self.count {
             let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
-            let kv_path = dir.path().join("kv");
+            let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
             let cache = self.cfg.storage.block_cache.build_shared_cache();
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
