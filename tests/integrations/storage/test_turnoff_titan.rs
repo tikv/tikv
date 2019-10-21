@@ -23,6 +23,16 @@ fn test_turnoff_titan() {
     }
     // make sure data is flushed to disk.
     cluster.must_flush_cf(CF_DEFAULT, true);
+    for i in cluster.get_node_ids().into_iter() {
+        let db = cluster.get_engine(i);
+        info!("CLUSTER LOG"; "level0" => db.get_property_int(&"rocksdb.num-files-at-level0").unwrap());
+        info!("CLUSTER LOG"; "level1" => db.get_property_int(&"rocksdb.num-files-at-level1").unwrap());
+        info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
+        info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
+        info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
+        info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
+        info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
+    }
     cluster.shutdown();
 
     // try reopen db when titandb dir is non-empty
@@ -49,8 +59,28 @@ fn test_turnoff_titan() {
             .is_ok());
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
+    for i in cluster.get_node_ids().into_iter() {
+        let db = cluster.get_engine(i);
+        info!("CLUSTER LOG"; "level0" => db.get_property_int(&"rocksdb.num-files-at-level0").unwrap());
+        info!("CLUSTER LOG"; "level1" => db.get_property_int(&"rocksdb.num-files-at-level1").unwrap());
+        info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
+        info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
+        info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
+        info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
+        info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
+    }
     cluster.compact_data();
     cluster.must_flush_cf(CF_DEFAULT, true);
+    for i in cluster.get_node_ids().into_iter() {
+        let db = cluster.get_engine(i);
+        info!("CLUSTER LOG"; "level0" => db.get_property_int(&"rocksdb.num-files-at-level0").unwrap());
+        info!("CLUSTER LOG"; "level1" => db.get_property_int(&"rocksdb.num-files-at-level1").unwrap());
+        info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
+        info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
+        info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
+        info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
+        info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
+    }
     cluster.shutdown();
     sleep_ms(2000);
 
