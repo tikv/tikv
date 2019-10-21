@@ -34,6 +34,7 @@ struct Env {
 pub struct FuturePool {
     pool: Arc<ThreadPool>,
     env: Arc<Env>,
+    // for accessing pool_size config since Tokio doesn't offer such getter.
     pool_size: usize,
     max_tasks: usize,
 }

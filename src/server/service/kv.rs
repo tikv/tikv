@@ -147,10 +147,10 @@ impl BatchLimiter {
         }
     }
 
-    /// Whether the batch is ready to be early submitted.
+    /// Whether current batch needs more requests.
     #[inline]
-    fn ready(&self) -> bool {
-        !self.enable_batch
+    fn needs_more(&self) -> bool {
+        self.enable_batch
     }
 
     /// Observe a tick from timer guard. Limiter will update statistics at this point.
@@ -385,7 +385,9 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
                 | batch_commands_request::request::Cmd::RawGet(_) => self.inners.get_mut("get"),
                 _ => None,
             } {
-                if !limiter.ready() {
+                // in normal mode, batch requests inside one `batch_commands`.
+                // in cross-command mode, only batch request when limiter permits.
+                if limiter.disabled() || limiter.needs_more() {
                     limiter.observe_input(1);
                     return batcher.filter(request_id, cmd);
                 }
@@ -400,7 +402,7 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
     pub fn maybe_submit(&mut self, storage: &Storage<E, L>) {
         let mut now = None;
         for (limiter, batcher) in self.inners.values_mut() {
-            if limiter.disabled() || limiter.ready() {
+            if limiter.disabled() || !limiter.needs_more() {
                 if now.is_none() {
                     now = Some(Instant::now());
                 }
@@ -1452,6 +1454,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
                     timer
                         .interval(start, duration)
                         .take_while(move |_| {
+                            // only stop timer when no more incoming and old batch is submitted.
                             future::ok(
                                 !stopped.load(Ordering::Relaxed)
                                     || !req_batcher2.lock().unwrap().is_empty(),
@@ -1499,7 +1502,15 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
                 let requests: Vec<_> = req.take_requests().into();
                 GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
                 for (id, req) in request_ids.into_iter().zip(requests) {
-                    handle_batch_commands_request(&storage, &cop, &peer, id, req, tx.clone());
+                    handle_batch_commands_request(
+                        &storage,
+                        &gc_worker,
+                        &cop,
+                        &peer,
+                        id,
+                        req,
+                        tx.clone(),
+                    );
                 }
                 future::ok(())
             });

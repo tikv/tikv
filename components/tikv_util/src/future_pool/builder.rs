@@ -27,7 +27,7 @@ pub struct Builder {
     inner_builder: TokioBuilder,
     name_prefix: Option<String>,
     on_tick: Option<Box<dyn Fn() + Send + Sync>>,
-    // only a cached value
+    // for accessing pool_size config since Tokio doesn't offer such getter.
     pool_size: usize,
     max_tasks: usize,
 }

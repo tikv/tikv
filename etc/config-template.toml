@@ -114,10 +114,10 @@
 # enable-request-batch = true
 
 ## Whether to collect batch across commands. When disabled, wait duration is ignored.
-# request-batch-enable-cross-command = false
+# request-batch-enable-cross-command = true
 
 ## Wait duration before each mini-batch is processed.
-# request-batch-wait-duration = "0ms"
+# request-batch-wait-duration = "1ms"
 
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
