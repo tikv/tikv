@@ -82,8 +82,8 @@ fn test_turnoff_titan() {
         // info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
         // info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
     }
-    cluster.shutdown();
     sleep_ms(2000);
+    cluster.shutdown();
 
     configure_for_disable_titan(&mut cluster);
     assert!(cluster
