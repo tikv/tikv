@@ -69,7 +69,7 @@ fn prepare_prime_numbers() -> Vec<usize> {
 fn main() {
     let prime_numbers = prepare_prime_numbers();
 
-    profiler::start("/tmp/prime.profile");
+    profiler::start("prime.profile").unwrap();
 
     let mut v = 0;
     for i in 2..50000 {

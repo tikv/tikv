@@ -7,6 +7,9 @@ use std::sync::Mutex;
 
 use callgrind::CallgrindClientRequest;
 
+use path_abs::PathInfo;
+use std::io;
+
 #[derive(Debug, PartialEq)]
 enum Profiler {
     None,
@@ -29,27 +32,38 @@ lazy_static::lazy_static! {
 /// will be generated to the file specified by `name`.
 // TODO: Better multi-thread support.
 #[inline]
-pub fn start(name: impl AsRef<str>) -> bool {
+pub fn start(name: impl AsRef<str>) -> io::Result<bool> {
     let mut profiler = ACTIVE_PROFILER.lock().unwrap();
 
     // Profiling in progress.
     if *profiler != Profiler::None {
-        return false;
+        return Ok(false);
     }
 
     if valgrind_request::running_on_valgrind() != 0 {
         *profiler = Profiler::CallGrind;
         CallgrindClientRequest::start();
     } else {
+        let path = path_abs::PathAbs::new(name.as_ref())?;
+        let path_str = match path.to_str() {
+            Some(path) => path,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "check for UTF-8 validity failed",
+                ))
+            }
+        };
+
         *profiler = Profiler::GPerfTools;
         gperftools::PROFILER
             .lock()
             .unwrap()
-            .start(name.as_ref())
+            .start(path_str)
             .unwrap();
     }
 
-    true
+    Ok(true)
 }
 
 /// Stop profiling. Returns false if failed, i.e. there is no profiling in progress.
