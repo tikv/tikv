@@ -24,12 +24,12 @@ use std::{cmp, error, u64};
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::errorpb;
-use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo, Op};
+use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
 use tikv_util::collections::HashMap;
 
 use self::metrics::*;
-use self::mvcc::{Lock, LockType};
+use self::mvcc::Lock;
 
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use self::kv::with_tls_engine;
@@ -2060,23 +2060,6 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
 
 pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
     get_error_kind_from_header(header).get_str()
-}
-
-pub fn new_lock_info(lock: Lock, raw_key: Vec<u8>) -> LockInfo {
-    let mut info = LockInfo::default();
-    info.set_primary_lock(lock.primary);
-    info.set_lock_version(lock.ts);
-    info.set_key(raw_key);
-    info.set_lock_ttl(lock.ttl);
-    info.set_txn_size(lock.txn_size);
-    let lock_type = match lock.lock_type {
-        LockType::Put => Op::Put,
-        LockType::Delete => Op::Del,
-        LockType::Lock => Op::Lock,
-        LockType::Pessimistic => Op::PessimisticLock,
-    };
-    info.set_lock_type(lock_type);
-    info
 }
 
 #[cfg(test)]

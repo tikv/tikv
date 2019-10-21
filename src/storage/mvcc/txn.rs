@@ -7,8 +7,7 @@ use super::write::{Write, WriteType};
 use super::{extract_physical, Error, Result};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
-    is_short_value, new_lock_info, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
@@ -229,7 +228,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // abort. Resolve it immediately.
         // Optimistic lock's for_update_ts is zero.
         if for_update_ts > lock.for_update_ts {
-            let mut info = new_lock_info(lock, key.into_raw()?);
+            let mut info = lock.into_lock_info(key.into_raw()?);
             // Set ttl to 0 so TiDB will resolve lock immediately.
             info.set_lock_ttl(0);
             Err(Error::KeyIsLocked(info))
@@ -248,8 +247,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let for_update_ts = options.for_update_ts;
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
-                let info = new_lock_info(lock, key.into_raw()?);
-                return Err(Error::KeyIsLocked(info));
+                return Err(Error::KeyIsLocked(lock.into_lock_info(key.into_raw()?)));
             }
             if lock.lock_type != LockType::Pessimistic {
                 return Err(Error::LockTypeNotMatch {
@@ -408,8 +406,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // Check whether the current key is locked at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
-                let info = new_lock_info(lock, key.into_raw()?);
-                return Err(Error::KeyIsLocked(info));
+                return Err(Error::KeyIsLocked(lock.into_lock_info(key.into_raw()?)));
             }
             // TODO: remove it in future
             if lock.lock_type == LockType::Pessimistic {
@@ -507,8 +504,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 if current_ts > 0
                     && extract_physical(lock.ts) + lock.ttl >= extract_physical(current_ts)
                 {
-                    let info = new_lock_info(lock.clone(), key.into_raw()?);
-                    return Err(Error::KeyIsLocked(info));
+                    return Err(Error::KeyIsLocked(
+                        lock.clone().into_lock_info(key.into_raw()?),
+                    ));
                 }
 
                 let is_pessimistic_txn = lock.for_update_ts != 0;

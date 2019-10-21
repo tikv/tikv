@@ -221,8 +221,7 @@ impl Scheduler {
 pub struct WaiterManager {
     wait_table: Rc<RefCell<WaitTable>>,
     detector_scheduler: DetectorScheduler,
-    /// Default timeout of waiting for lock.
-    wait_for_lock_timeout: u64,
+    default_wait_for_lock_timeout: u64,
     wake_up_delay_duration: u64,
 }
 
@@ -237,7 +236,7 @@ impl WaiterManager {
         Self {
             wait_table: Rc::new(RefCell::new(WaitTable::new(waiter_count))),
             detector_scheduler,
-            wait_for_lock_timeout: cfg.wait_for_lock_timeout,
+            default_wait_for_lock_timeout: cfg.wait_for_lock_timeout,
             wake_up_delay_duration: cfg.wake_up_delay_duration,
         }
     }
@@ -248,8 +247,8 @@ impl WaiterManager {
 
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
-            if timeout == 0 {
-                timeout = self.wait_for_lock_timeout;
+            if timeout == 0 || timeout > self.default_wait_for_lock_timeout {
+                timeout = self.default_wait_for_lock_timeout;
             }
             let when = Instant::now() + Duration::from_millis(timeout);
             // TODO: cancel timer when wake up.

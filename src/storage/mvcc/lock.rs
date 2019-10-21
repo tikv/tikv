@@ -7,6 +7,7 @@ use crate::storage::{
     TXN_SIZE_PREFIX,
 };
 use byteorder::ReadBytesExt;
+use kvproto::kvrpcpb::{LockInfo, Op};
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
@@ -167,6 +168,23 @@ impl Lock {
             txn_size,
             min_commit_ts,
         ))
+    }
+
+    pub fn into_lock_info(self, raw_key: Vec<u8>) -> LockInfo {
+        let mut info = LockInfo::default();
+        info.set_primary_lock(self.primary);
+        info.set_lock_version(self.ts);
+        info.set_key(raw_key);
+        info.set_lock_ttl(self.ttl);
+        info.set_txn_size(self.txn_size);
+        let lock_type = match self.lock_type {
+            LockType::Put => Op::Put,
+            LockType::Delete => Op::Del,
+            LockType::Lock => Op::Lock,
+            LockType::Pessimistic => Op::PessimisticLock,
+        };
+        info.set_lock_type(lock_type);
+        info
     }
 }
 
