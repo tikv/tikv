@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::result::Result as StdResult;
-use engine_traits::CFHandleExt;
-use crate::db::Rocks;
 use crate::cf_options::RocksCFOptions;
+use crate::db::Rocks;
 use engine_traits::CFHandle;
+use engine_traits::CFHandleExt;
 use rocksdb::CFHandle as RawCFHandle;
+use std::result::Result as StdResult;
 
 impl CFHandleExt for Rocks {
     type CFHandle = RocksCFHandle;

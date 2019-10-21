@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
 use crate::errors::Result;
+use std::path::Path;
 
 pub struct IngestExternalFileOptions {
     pub move_files: bool,

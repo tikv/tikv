@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::result::Result as StdResult;
 use crate::cf_options::CFOptions;
+use std::result::Result as StdResult;
 
 /// Trait for engines with column family handles.
 ///

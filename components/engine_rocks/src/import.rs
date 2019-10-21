@@ -1,14 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::util::get_cf_handle;
 use crate::Rocks;
+use engine::rocks::util::prepare_sst_for_ingestion;
 use engine_traits::Import;
 use engine_traits::IngestExternalFileOptions;
-use engine_traits::{Result, Error};
+use engine_traits::{Error, Result};
+use rocksdb::set_external_sst_file_global_seq_no;
 use std::fs::File;
 use std::path::Path;
-use rocksdb::set_external_sst_file_global_seq_no;
-use engine::rocks::util::prepare_sst_for_ingestion;
-use crate::util::get_cf_handle;
 use tikv_util::file::calc_crc32;
 
 impl Import for Rocks {

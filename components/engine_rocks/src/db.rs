@@ -6,8 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use engine_traits::{
-    Error, IterOptions, Iterable, KvEngine, Mutable, Peekable,
-    ReadOptions, Result, WriteOptions,
+    Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions, Result, WriteOptions,
 };
 use rocksdb::{DBIterator, Writable, DB};
 

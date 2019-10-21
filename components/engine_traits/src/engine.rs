@@ -19,9 +19,18 @@ pub trait WriteBatch: Mutable + Send {
     fn rollback_to_save_point(&mut self) -> Result<()>;
 }
 
-pub trait KvEngine: Peekable + Mutable + Iterable
-    + DBOptionsExt + CFHandleExt + Import
-    + Send + Sync + Clone + Debug + 'static
+pub trait KvEngine:
+    Peekable
+    + Mutable
+    + Iterable
+    + DBOptionsExt
+    + CFHandleExt
+    + Import
+    + Send
+    + Sync
+    + Clone
+    + Debug
+    + 'static
 {
     type Snap: Snapshot;
     type Batch: WriteBatch;
