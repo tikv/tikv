@@ -64,6 +64,11 @@ ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
 
+# Update Titan to latest master before build
+ifneq ($(UPDATE_TITAN), 0)
+ENABLE_FEATURES += update_titan
+endif
+
 ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
@@ -135,6 +140,9 @@ prof_release:
 fail_release:
 	FAIL_POINT=1 make release
 
+# Build with latest Titan. Mainly used for test bot.
+titan_release:
+	UPDATE_TITAN=1 make release
 
 ## Distribution builds (true release builds)
 ## -------------------
