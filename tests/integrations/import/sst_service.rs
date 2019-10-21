@@ -121,10 +121,7 @@ fn test_download_sst() {
     use grpcio::{Error, RpcStatus};
 
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
-    let temp_dir = Builder::new()
-        .prefix("test_download_sst")
-        .tempdir()
-        .unwrap();
+    let temp_dir = TempDir::new("test_download_sst").unwrap();
 
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
@@ -255,7 +252,7 @@ fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {
     }
 }
 
-fn check_sst_deleted(client: &ImportSstClient, meta: &SstMeta, data: &[u8]) {
+fn check_sst_deleted(client: &ImportSstClient, meta: &SSTMeta, data: &[u8]) {
     for _ in 0..10 {
         if send_upload_sst(client, meta, data).is_ok() {
             // If we can upload the file, it means the previous file has been deleted.

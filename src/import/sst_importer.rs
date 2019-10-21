@@ -16,6 +16,7 @@ use engine::rocks::{IngestExternalFileOptions, SeekKey, SstReader, SstWriterBuil
 use external_storage::create_storage;
 
 use super::{Error, Result};
+use crate::raftstore::store::keys;
 
 /// SSTImporter manages SST files that are waiting for ingesting.
 pub struct SSTImporter {
@@ -83,7 +84,7 @@ impl SSTImporter {
     // region info in PD.
     pub fn download(
         &self,
-        meta: &SstMeta,
+        meta: &SSTMeta,
         url: &str,
         name: &str,
         rewrite_rule: &RewriteRule,
@@ -110,7 +111,7 @@ impl SSTImporter {
 
     fn do_download(
         &self,
-        meta: &SstMeta,
+        meta: &SSTMeta,
         url: &str,
         name: &str,
         rewrite_rule: &RewriteRule,
@@ -278,7 +279,7 @@ impl SSTImporter {
         }
     }
 
-    pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
+    pub fn list_ssts(&self) -> Result<Vec<SSTMeta>> {
         self.dir.list_ssts()
     }
 }
@@ -385,7 +386,7 @@ impl ImportDir {
             match path_to_sst_meta(&path) {
                 Ok(sst) => ssts.push(sst),
                 Err(e) => {
-                    error!("path_to_sst_meta failed"; "path" => %path.to_str().unwrap(), "err" => %e)
+                    error!("path_to_sst_meta failed"; "path" => %path.to_str().unwrap(), "err" => %e);
                 }
             }
         }
@@ -671,8 +672,8 @@ mod tests {
         assert_eq!(meta, new_meta);
     }
 
-    fn create_sample_external_sst_file() -> Result<(tempfile::TempDir, SstMeta)> {
-        let ext_sst_dir = tempfile::tempdir()?;
+    fn create_sample_external_sst_file() -> Result<(TempDir, SSTMeta)> {
+        let ext_sst_dir = TempDir::new("external_storage")?;
         let mut sst_writer = SstWriterBuilder::new()
             .build(ext_sst_dir.path().join("sample.sst").to_str().unwrap())?;
         sst_writer.put(b"zt123_r01", b"abc")?;
@@ -683,7 +684,7 @@ mod tests {
         let sst_info = sst_writer.finish()?;
 
         // make up the SST meta for downloading.
-        let mut meta = SstMeta::default();
+        let mut meta = SSTMeta::default();
         let uuid = Uuid::new_v4();
         meta.set_uuid(uuid.as_bytes().to_vec());
         meta.set_cf_name("default".to_owned());
@@ -708,8 +709,8 @@ mod tests {
         let (ext_sst_dir, meta) = create_sample_external_sst_file().unwrap();
 
         // performs the download.
-        let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let importer_dir = TempDir::new("importer_dir").unwrap();
+        let importer = SSTImporter::new(importer_dir.path()).unwrap();
 
         let range = importer
             .download(
@@ -755,8 +756,8 @@ mod tests {
         let (ext_sst_dir, meta) = create_sample_external_sst_file().unwrap();
 
         // performs the download.
-        let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let importer_dir = TempDir::new("importer_dir").unwrap();
+        let importer = SSTImporter::new(importer_dir.path()).unwrap();
 
         let range = importer
             .download(
@@ -799,8 +800,8 @@ mod tests {
         let (ext_sst_dir, mut meta) = create_sample_external_sst_file().unwrap();
 
         // performs the download.
-        let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let importer_dir = TempDir::new("importer_dir").unwrap();
+        let importer = SSTImporter::new(importer_dir.path()).unwrap();
 
         let range = importer
             .download(
@@ -817,7 +818,7 @@ mod tests {
         assert_eq!(range.get_end(), b"t9102_r14");
 
         // performs the ingest
-        let ingest_dir = tempfile::tempdir().unwrap();
+        let ingest_dir = TempDir::new("ingest_dir").unwrap();
         let db = new_engine(
             ingest_dir.path().to_str().unwrap(),
             None,
@@ -847,8 +848,8 @@ mod tests {
     #[test]
     fn test_download_sst_partial_range() {
         let (ext_sst_dir, mut meta) = create_sample_external_sst_file().unwrap();
-        let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let importer_dir = TempDir::new("importer_dir").unwrap();
+        let importer = SSTImporter::new(importer_dir.path()).unwrap();
 
         // note: the range doesn't contain the DATA_PREFIX 'z'.
         meta.mut_range().set_start(b"t123_r02".to_vec());
@@ -890,8 +891,8 @@ mod tests {
     #[test]
     fn test_download_sst_partial_range_with_key_rewrite() {
         let (ext_sst_dir, mut meta) = create_sample_external_sst_file().unwrap();
-        let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let importer_dir = TempDir::new("importer_dir").unwrap();
+        let importer = SSTImporter::new(importer_dir.path()).unwrap();
 
         meta.mut_range().set_start(b"t5_r02".to_vec());
         meta.mut_range().set_end(b"t5_r13".to_vec());
@@ -930,13 +931,13 @@ mod tests {
 
     #[test]
     fn test_download_sst_invalid() {
-        let ext_sst_dir = tempfile::tempdir().unwrap();
+        let ext_sst_dir = TempDir::new("external_storage").unwrap();
         fs::write(ext_sst_dir.path().join("sample.sst"), b"not an SST file").unwrap();
 
-        let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let importer_dir = TempDir::new("importer_dir").unwrap();
+        let importer = SSTImporter::new(importer_dir.path()).unwrap();
 
-        let mut meta = SstMeta::new();
+        let mut meta = SSTMeta::new();
         meta.set_uuid(vec![0u8; 16]);
 
         let result = importer.download(
@@ -955,8 +956,8 @@ mod tests {
     #[test]
     fn test_download_sst_empty() {
         let (ext_sst_dir, mut meta) = create_sample_external_sst_file().unwrap();
-        let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let importer_dir = TempDir::new("importer_dir").unwrap();
+        let importer = SSTImporter::new(importer_dir.path()).unwrap();
 
         meta.mut_range().set_start(vec![b'x']);
         meta.mut_range().set_end(vec![b'y']);
@@ -978,8 +979,8 @@ mod tests {
     #[test]
     fn test_download_sst_wrong_key_prefix() {
         let (ext_sst_dir, meta) = create_sample_external_sst_file().unwrap();
-        let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let importer_dir = TempDir::new("importer_dir").unwrap();
+        let importer = SSTImporter::new(importer_dir.path()).unwrap();
 
         let result = importer.download(
             &meta,
