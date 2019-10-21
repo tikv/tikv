@@ -16,6 +16,11 @@ gperftools = { version = "0.2.0", optional = true }
 callgrind = { version = "1.1.0", optional = true }
 valgrind_request = { version = "1.1.0", optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies.gperftools-static]
+version = "0.1.0"
+default-features = false
+features = ["static_unwind", "static_gperftools"]
+
 [[example]]
 name = "prime"
 required-features = ["profiling"]

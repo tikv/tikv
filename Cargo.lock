@@ -1025,6 +1025,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gperftools-static"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40f035b1910917fd0e9245e097ae7ae11e5291fa77621942dd6df53ee9cedd26"
+dependencies = [
+ "fs_extra",
+ "gperftools",
+ "num_cpus",
+]
+
+[[package]]
 name = "grpcio"
 version = "0.5.0-alpha.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1962,6 +1973,7 @@ version = "0.0.1"
 dependencies = [
  "callgrind",
  "gperftools",
+ "gperftools-static",
  "lazy_static",
  "tikv_alloc",
  "valgrind_request",
