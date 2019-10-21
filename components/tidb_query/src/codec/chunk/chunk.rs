@@ -156,7 +156,7 @@ impl Chunk {
                             col.append_null().unwrap();
                         }
                         Some(val) => {
-                            col.append_time(&val).unwrap();
+                            col.append_time(*val).unwrap();
                         }
                     }
                 }

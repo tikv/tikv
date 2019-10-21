@@ -1277,7 +1277,7 @@ impl Time {
         Ok(())
     }
 
-    pub fn date_format(&self, layout: &str) -> Result<String> {
+    pub fn date_format(self, layout: &str) -> Result<String> {
         let mut ret = String::new();
         let mut pattern_match = false;
         for b in layout.chars() {
@@ -1297,7 +1297,7 @@ impl Time {
 
     /// Converts a `DateTime` to printable string representation
     #[inline]
-    pub fn to_numeric_string(&self) -> String {
+    pub fn to_numeric_string(self) -> String {
         let mut buffer = String::with_capacity(15);
         write!(&mut buffer, "{}", self.date_format("%Y%m%d").unwrap()).unwrap();
         if self.get_time_type() != TimeType::Date {
@@ -1453,7 +1453,7 @@ impl<T: BufferWriter> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
-    fn write_time(&mut self, v: &Time) -> Result<()> {
+    fn write_time(&mut self, v: Time) -> Result<()> {
         if !v.is_zero() {
             self.write_u32_le(v.hour() as u32)?;
             self.write_u32_le(v.micro())?;

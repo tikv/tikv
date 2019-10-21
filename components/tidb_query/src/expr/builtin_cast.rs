@@ -959,7 +959,7 @@ mod tests {
             (
                 ScalarFuncSig::CastTimeAsReal,
                 FieldTypeTp::DateTime,
-                vec![Datum::Time(t.clone())],
+                vec![Datum::Time(t)],
                 tidb_query_datatype::UNSPECIFIED_LENGTH,
                 tidb_query_datatype::UNSPECIFIED_LENGTH,
                 int_t as f64,
@@ -1103,7 +1103,7 @@ mod tests {
             (
                 ScalarFuncSig::CastTimeAsDecimal,
                 FieldTypeTp::DateTime,
-                vec![Datum::Time(t.clone())],
+                vec![Datum::Time(t)],
                 tidb_query_datatype::UNSPECIFIED_LENGTH,
                 tidb_query_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(int_t),
@@ -1252,7 +1252,7 @@ mod tests {
                 FieldTypeTp::DateTime,
                 charset::CHARSET_UTF8,
                 None,
-                vec![Datum::Time(t.clone())],
+                vec![Datum::Time(t)],
                 tidb_query_datatype::UNSPECIFIED_LENGTH,
                 t_str.as_bytes().to_vec(),
             ),
@@ -1356,7 +1356,7 @@ mod tests {
         let t_time_str = format!("{}", today.format("%Y-%m-%d %H:%M:%S"));
         let t_time = Time::parse_datetime(&mut ctx, t_time_str.as_ref(), 0, false).unwrap();
         let t_date = {
-            let mut date = t_time.clone();
+            let mut date = t_time;
             date.set_time_type(TimeType::Date).unwrap();
             date
         };
@@ -1368,14 +1368,14 @@ mod tests {
         let duration_t = Duration::parse(dur_str.as_bytes(), 0).unwrap();
         let dur_to_time_str = format!("{} 12:00:23", t_date_str);
         let dur_to_time = Time::parse_datetime(&mut ctx, &dur_to_time_str, 0, false).unwrap();
-        let mut dur_to_date = dur_to_time.clone();
+        let mut dur_to_date = dur_to_time;
         dur_to_date.set_time_type(TimeType::Date).unwrap();
 
         let json_cols = vec![Datum::Json(Json::String(t_time_str.clone()))];
         let int_cols = vec![Datum::U64(t_int)];
         let str_cols = vec![Datum::Bytes(t_time_str.as_bytes().to_vec())];
         let f64_cols = vec![Datum::F64(t_int as f64)];
-        let time_cols = vec![Datum::Time(t_time.clone())];
+        let time_cols = vec![Datum::Time(t_time)];
         let duration_cols = vec![Datum::Dur(duration_t)];
         let dec_cols = vec![Datum::Dec(Decimal::from(t_int))];
 
@@ -1513,7 +1513,7 @@ mod tests {
 
             let res = e.eval_time(&mut ctx, col).unwrap();
             let data = res.unwrap().into_owned();
-            let mut expt = exp.clone();
+            let mut expt = *exp;
             if to_fsp != mysql::UNSPECIFIED_FSP {
                 expt = expt.round_frac(&mut ctx, to_fsp).unwrap();
             }
@@ -1542,7 +1542,7 @@ mod tests {
         let duration = Duration::parse(dur_str.as_bytes(), 0).unwrap();
         let dur_to_time_str = format!("{} 12:00:23", t_date_str);
         let dur_to_time = Time::parse_datetime(&mut ctx, &dur_to_time_str, 0, false).unwrap();
-        let mut dur_to_date = dur_to_time.clone();
+        let mut dur_to_date = dur_to_time;
         dur_to_date.set_time_type(TimeType::Date).unwrap();
 
         let json_cols = vec![Datum::Json(Json::String(String::from(dur_str)))];
@@ -1822,7 +1822,7 @@ mod tests {
             Time::from_packed_u64(&mut ctx, t, TimeType::Timestamp, mysql::DEFAULT_FSP).unwrap()
         };
         let date = {
-            let mut t = time.clone();
+            let mut t = time;
             t.set_time_type(TimeType::Date).unwrap();
             t
         };

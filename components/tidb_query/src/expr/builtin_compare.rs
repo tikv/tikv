@@ -554,7 +554,7 @@ mod tests {
             ),
             (
                 ScalarFuncSig::CoalesceTime,
-                vec![Datum::Time(t.clone())],
+                vec![Datum::Time(t)],
                 Datum::Time(t),
             ),
         ];
@@ -675,16 +675,12 @@ mod tests {
             ),
             (
                 ScalarFuncSig::InTime,
-                vec![Datum::Time(t1.clone()), Datum::Time(t2.clone())],
+                vec![Datum::Time(t1), Datum::Time(t2)],
                 Datum::I64(0),
             ),
             (
                 ScalarFuncSig::InTime,
-                vec![
-                    Datum::Time(t1.clone()),
-                    Datum::Time(t2.clone()),
-                    Datum::Time(t1.clone()),
-                ],
+                vec![Datum::Time(t1), Datum::Time(t2), Datum::Time(t1)],
                 Datum::I64(1),
             ),
         ];

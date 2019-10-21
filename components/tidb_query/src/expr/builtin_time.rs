@@ -43,7 +43,7 @@ impl ScalarFunc {
                 .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
                 .map(|_| None);
         }
-        let mut res = t.to_mut().clone();
+        let mut res = *t.to_mut();
         res.set_time_type(TimeType::Date)?;
         Ok(Some(Cow::Owned(res)))
     }
@@ -193,7 +193,7 @@ impl ScalarFunc {
                 .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
                 .map(|_| None);
         }
-        let res = t.to_mut().clone();
+        let res = *t.to_mut();
         Ok(res.last_date_of_month().map(Cow::Owned))
     }
 

@@ -124,7 +124,7 @@ impl Datum {
             Datum::Bytes(ref bs) => self.cmp_bytes(ctx, bs),
             Datum::Dur(d) => self.cmp_dur(ctx, d),
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
-            Datum::Time(ref t) => self.cmp_time(ctx, t),
+            Datum::Time(ref t) => self.cmp_time(ctx, *t),
             Datum::Json(ref j) => self.cmp_json(ctx, j),
         }
     }
@@ -226,14 +226,14 @@ impl Datum {
         }
     }
 
-    fn cmp_time(&self, ctx: &mut EvalContext, time: &Time) -> Result<Ordering> {
+    fn cmp_time(&self, ctx: &mut EvalContext, time: Time) -> Result<Ordering> {
         match *self {
             Datum::Bytes(ref bs) => {
                 let s = str::from_utf8(bs)?;
                 let t = Time::parse_datetime(ctx, s, DEFAULT_FSP, true)?;
-                Ok(t.cmp(time))
+                Ok(t.cmp(&time))
             }
-            Datum::Time(ref t) => Ok(t.cmp(time)),
+            Datum::Time(ref t) => Ok(t.cmp(&time)),
             _ => {
                 let f: Decimal = time.convert(ctx)?;
                 let f: f64 = f.convert(ctx)?;
