@@ -28,6 +28,7 @@ use crate::storage::mvcc::{MvccReader, MvccTxn};
 use crate::storage::{Callback, Error, Key, Result};
 use pd_client::PdClient;
 use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::ts_validator::SafePoint;
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 
 // TODO: make it configurable.
@@ -481,6 +482,8 @@ pub struct AutoGCConfig<S: GCSafePointProvider, R: RegionInfoProvider> {
 
     pub poll_safe_point_interval: Duration,
 
+    pub safe_point: SafePoint,
+
     /// If this is set, safe_point will be checked before doing GC on every region while working.
     /// Otherwise safe_point will be only checked when `poll_safe_point_interval` has past since
     /// last checking.
@@ -493,12 +496,18 @@ pub struct AutoGCConfig<S: GCSafePointProvider, R: RegionInfoProvider> {
 
 impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
     /// Creates a new config.
-    pub fn new(safe_point_provider: S, region_info_provider: R, self_store_id: u64) -> Self {
+    pub fn new(
+        safe_point_provider: S,
+        region_info_provider: R,
+        self_store_id: u64,
+        safe_point: SafePoint,
+    ) -> Self {
         Self {
             safe_point_provider,
             region_info_provider,
             self_store_id,
             poll_safe_point_interval: Duration::from_secs(POLL_SAFE_POINT_INTERVAL_SECS),
+            safe_point,
             always_check_safe_point: false,
             post_a_round_of_gc: None,
         }
@@ -516,6 +525,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
             region_info_provider,
             self_store_id,
             poll_safe_point_interval: Duration::from_millis(100),
+            safe_point: SafePoint::new(),
             always_check_safe_point: true,
             post_a_round_of_gc: None,
         }
@@ -674,10 +684,6 @@ impl GCManagerHandle {
 struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
     cfg: AutoGCConfig<S, R>,
 
-    /// The current safe point. `GCManager` will try to update it periodically. When `safe_point` is
-    /// updated, `GCManager` will start to do GC on all regions.
-    safe_point: u64,
-
     safe_point_last_check_time: Instant,
 
     /// Used to schedule `GCTask`s.
@@ -694,7 +700,6 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     ) -> GCManager<S, R> {
         GCManager {
             cfg,
-            safe_point: 0,
             safe_point_last_check_time: Instant::now(),
             worker_scheduler,
             gc_manager_ctx: GCManagerContext::new(),
@@ -757,16 +762,15 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// updated to a greater value than initial value.
     fn initialize(&mut self) {
         debug!("gc-manager is initializing");
-        self.safe_point = 0;
         self.try_update_safe_point();
-        debug!("gc-manager started"; "safe_point" => self.safe_point);
+        debug!("gc-manager started"; "safe_point" => self.get_safe_point());
     }
 
     /// Waits until the safe_point updates. Returns the new safe point.
     fn wait_for_next_safe_point(&mut self) -> GCManagerResult<u64> {
         loop {
             if self.try_update_safe_point() {
-                return Ok(self.safe_point);
+                return Ok(self.get_safe_point());
             }
 
             self.gc_manager_ctx
@@ -788,22 +792,31 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             }
         };
 
-        match safe_point.cmp(&self.safe_point) {
+        match safe_point.cmp(&self.get_safe_point()) {
             Ordering::Less => {
                 panic!(
                     "got new safe point {} which is less than current safe point {}. \
                      there must be something wrong.",
-                    safe_point, self.safe_point
+                    safe_point,
+                    self.get_safe_point()
                 );
             }
             Ordering::Equal => false,
             Ordering::Greater => {
                 debug!("gc_worker: update safe point"; "safe_point" => safe_point);
-                self.safe_point = safe_point;
+                self.set_safe_point(safe_point);
                 AUTO_GC_SAFE_POINT_GAUGE.set(safe_point as i64);
                 true
             }
         }
+    }
+
+    fn get_safe_point(&self) -> u64 {
+        self.cfg.safe_point.load()
+    }
+
+    fn set_safe_point(&mut self, safe_point: u64) {
+        self.cfg.safe_point.store(safe_point)
     }
 
     /// Scans all regions on the TiKV whose leader is this TiKV, and does GC on all of them.
@@ -859,7 +872,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         let mut processed_regions = 0;
 
         info!(
-            "gc_worker: start auto gc"; "safe_point" => self.safe_point
+            "gc_worker: start auto gc"; "safe_point" => self.get_safe_point()
         );
 
         // The following loop iterates all regions whose leader is on this TiKV and does GC on them.
@@ -940,13 +953,13 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             *need_rewind = false;
             *end = None;
             info!(
-                "gc_worker: auto gc will go to the end"; "safe_point" => self.safe_point
+                "gc_worker: auto gc will go to the end"; "safe_point" => self.get_safe_point()
             );
         } else {
             *need_rewind = true;
             *end = progress.clone();
             info!(
-                "gc_worker: auto gc will go to rewind"; "safe_point" => self.safe_point,
+                "gc_worker: auto gc will go to rewind"; "safe_point" => self.get_safe_point(),
                 "next_rewind_key" => %(end.as_ref().unwrap())
             );
         }
@@ -974,7 +987,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             "trying gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
             "end_key" => next_key.as_ref().map(DisplayValue)
         );
-        if let Err(e) = gc(&self.worker_scheduler, ctx.clone(), self.safe_point) {
+        if let Err(e) = gc(&self.worker_scheduler, ctx.clone(), self.get_safe_point()) {
             error!(
                 "failed gc"; "region_id" => ctx.get_region_id(), "region_epoch" => ?ctx.region_epoch.as_ref(),
                 "end_key" => next_key.as_ref().map(DisplayValue),
@@ -1274,6 +1287,7 @@ mod tests {
                 },
                 MockRegionInfoProvider { regions },
                 1,
+                SafePoint::new(),
             );
             cfg.poll_safe_point_interval = Duration::from_millis(100);
             cfg.always_check_safe_point = true;
@@ -1382,10 +1396,10 @@ mod tests {
     fn test_update_safe_point() {
         let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
         let mut gc_manager = test_util.gc_manager.take().unwrap();
-        assert_eq!(gc_manager.safe_point, 0);
+        assert_eq!(gc_manager.get_safe_point(), 0);
         test_util.add_next_safe_point(233);
         assert!(gc_manager.try_update_safe_point());
-        assert_eq!(gc_manager.safe_point, 233);
+        assert_eq!(gc_manager.get_safe_point(), 233);
 
         let (tx, rx) = channel();
         ThreadBuilder::new()
@@ -1406,13 +1420,13 @@ mod tests {
     fn test_gc_manager_initialize() {
         let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
         let mut gc_manager = test_util.gc_manager.take().unwrap();
-        assert_eq!(gc_manager.safe_point, 0);
+        assert_eq!(gc_manager.get_safe_point(), 0);
         test_util.add_next_safe_point(0);
         test_util.add_next_safe_point(5);
         gc_manager.initialize();
-        assert_eq!(gc_manager.safe_point, 0);
+        assert_eq!(gc_manager.get_safe_point(), 0);
         assert!(gc_manager.try_update_safe_point());
-        assert_eq!(gc_manager.safe_point, 5);
+        assert_eq!(gc_manager.get_safe_point(), 5);
     }
 
     #[test]

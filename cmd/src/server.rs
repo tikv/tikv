@@ -331,6 +331,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Arc::clone(&pd_client),
         region_info_accessor.clone(),
         node.id(),
+        safe_point,
     );
     if let Err(e) = gc_worker.start_auto_gc(auto_gc_cfg) {
         fatal!("failed to start auto_gc on storage, error: {}", e);
