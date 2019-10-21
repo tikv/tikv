@@ -46,10 +46,15 @@ impl ThreadLoadStatistics {
     }
 
     /// Designate target thread count of this collector.
+    #[cfg(not(test))]
     #[inline]
     pub fn set_thread_target(&mut self, target: usize) {
         self.target = target;
     }
+
+    #[cfg(test)]
+    #[inline]
+    pub fn set_thread_target(&mut self, _target: usize) {}
 
     /// For every threads with the name prefix given in `ThreadLoadStatistics::new`,
     /// gather cpu usage from `/proc/<pid>/task/<tid>` and store it in `thread_load`
