@@ -61,9 +61,9 @@ impl Drop for Snapshot {
 }
 
 impl Iterable for Snapshot {
-    type Iter = Iterator;
+    type Iterator = Iterator;
 
-    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iter> {
+    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
@@ -72,7 +72,7 @@ impl Iterable for Snapshot {
         Ok(Iterator::from_raw(DBIterator::new(self.db.clone(), opt)))
     }
 
-    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iter> {
+    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {

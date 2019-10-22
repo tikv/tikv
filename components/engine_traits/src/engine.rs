@@ -17,16 +17,16 @@ pub trait KvEngine:
     + Debug
     + 'static
 {
-    type Snap: Snapshot;
-    type Batch: WriteBatch;
+    type Snapshot: Snapshot;
+    type WriteBatch: WriteBatch;
 
-    fn write_opt(&self, opts: &WriteOptions, wb: &Self::Batch) -> Result<()>;
-    fn write(&self, wb: &Self::Batch) -> Result<()> {
+    fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()>;
+    fn write(&self, wb: &Self::WriteBatch) -> Result<()> {
         self.write_opt(&WriteOptions::default(), wb)
     }
-    fn write_batch(&self) -> Self::Batch;
-    fn write_batch_with_cap(&self, cap: usize) -> Self::Batch;
-    fn snapshot(&self) -> Self::Snap;
+    fn write_batch(&self) -> Self::WriteBatch;
+    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch;
+    fn snapshot(&self) -> Self::Snapshot;
     fn sync(&self) -> Result<()>;
 
     fn cf_names(&self) -> Vec<&str>;

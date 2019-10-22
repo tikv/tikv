@@ -48,10 +48,10 @@ impl Rocks {
 }
 
 impl KvEngine for Rocks {
-    type Snap = Snapshot;
-    type Batch = crate::WriteBatch;
+    type Snapshot = Snapshot;
+    type WriteBatch = crate::WriteBatch;
 
-    fn write_opt(&self, opts: &WriteOptions, wb: &Self::Batch) -> Result<()> {
+    fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()> {
         if wb.get_db().path() != self.0.path() {
             return Err(Error::Engine("mismatched db path".to_owned()));
         }
@@ -61,12 +61,12 @@ impl KvEngine for Rocks {
             .map_err(Error::Engine)
     }
 
-    fn write_batch_with_cap(&self, cap: usize) -> Self::Batch {
-        Self::Batch::with_capacity(Arc::clone(&self.0), cap)
+    fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
+        Self::WriteBatch::with_capacity(Arc::clone(&self.0), cap)
     }
 
-    fn write_batch(&self) -> Self::Batch {
-        Self::Batch::new(Arc::clone(&self.0))
+    fn write_batch(&self) -> Self::WriteBatch {
+        Self::WriteBatch::new(Arc::clone(&self.0))
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -83,9 +83,9 @@ impl KvEngine for Rocks {
 }
 
 impl Iterable for Rocks {
-    type Iter = Iterator;
+    type Iterator = Iterator;
 
-    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iter> {
+    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         Ok(Iterator::from_raw(DBIterator::new(
             self.0.clone(),
@@ -93,7 +93,7 @@ impl Iterable for Rocks {
         )))
     }
 
-    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iter> {
+    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iterator> {
         let handle = get_cf_handle(&self.0, cf)?;
         let opt: RocksReadOptions = opts.into();
         Ok(Iterator::from_raw(DBIterator::new_cf(
