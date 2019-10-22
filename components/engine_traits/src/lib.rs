@@ -26,6 +26,8 @@ mod mutable;
 pub use crate::mutable::*;
 mod peekable;
 pub use crate::peekable::*;
+mod snapshot;
+pub use crate::snapshot::*;
 
 // These modules contain support code that does not need to be implemented by
 // engines.
