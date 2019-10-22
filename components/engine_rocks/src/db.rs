@@ -75,12 +75,6 @@ impl AsMut<Rocks> for Arc<DB> {
     }
 }
 
-impl Into<Arc<DB>> for Rocks {
-    fn into(self) -> Arc<DB> {
-        self.0
-    }
-}
-
 impl KvEngine for Rocks {
     type Snap = Snapshot;
     type Batch = crate::WriteBatch;
