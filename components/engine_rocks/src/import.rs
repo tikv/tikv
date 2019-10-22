@@ -2,7 +2,7 @@
 
 use crate::Rocks;
 use engine::rocks::util::prepare_sst_for_ingestion;
-use engine_traits::Import;
+use engine_traits::ImportExt;
 use engine_traits::IngestExternalFileOptions;
 use engine_traits::{Error, Result};
 use rocksdb::set_external_sst_file_global_seq_no;
@@ -11,7 +11,7 @@ use std::fs::File;
 use std::path::Path;
 use tikv_util::file::calc_crc32;
 
-impl Import for Rocks {
+impl ImportExt for Rocks {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
     fn new_ingest_external_file_options() -> RocksIngestExternalFileOptions {

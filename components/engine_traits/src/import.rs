@@ -4,7 +4,7 @@ use crate::cf_handle::CFHandleExt;
 use crate::errors::Result;
 use std::path::Path;
 
-pub trait Import: CFHandleExt {
+pub trait ImportExt: CFHandleExt {
     type IngestExternalFileOptions: IngestExternalFileOptions;
 
     fn new_ingest_external_file_options() -> Self::IngestExternalFileOptions;

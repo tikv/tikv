@@ -10,7 +10,7 @@ pub trait KvEngine:
     + Iterable
     + DBOptionsExt
     + CFHandleExt
-    + Import
+    + ImportExt
     + Send
     + Sync
     + Clone
