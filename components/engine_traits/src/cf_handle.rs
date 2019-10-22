@@ -21,11 +21,7 @@ pub trait CFHandleExt {
 
     fn get_cf_handle(&self, name: &str) -> Option<&Self::CFHandle>;
     fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::CFOptions;
-    fn set_options_cf(
-        &self,
-        cf: &Self::CFHandle,
-        options: &[(&str, &str)],
-    ) -> Result<()>;
+    fn set_options_cf(&self, cf: &Self::CFHandle, options: &[(&str, &str)]) -> Result<()>;
 }
 
 pub trait CFHandle {}

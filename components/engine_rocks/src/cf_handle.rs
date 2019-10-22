@@ -4,8 +4,8 @@ use crate::cf_options::RocksCFOptions;
 use crate::db::Rocks;
 use engine_traits::CFHandle;
 use engine_traits::CFHandleExt;
-use rocksdb::CFHandle as RawCFHandle;
 use engine_traits::Result;
+use rocksdb::CFHandle as RawCFHandle;
 
 impl CFHandleExt for Rocks {
     type CFHandle = RocksCFHandle;
@@ -19,12 +19,10 @@ impl CFHandleExt for Rocks {
         RocksCFOptions::from_raw(self.as_inner().get_options_cf(cf.as_inner()))
     }
 
-    fn set_options_cf(
-        &self,
-        cf: &Self::CFHandle,
-        options: &[(&str, &str)],
-    ) -> Result<()> {
-        self.as_inner().set_options_cf(cf.as_inner(), options).map_err(|e| box_err!(e))
+    fn set_options_cf(&self, cf: &Self::CFHandle, options: &[(&str, &str)]) -> Result<()> {
+        self.as_inner()
+            .set_options_cf(cf.as_inner(), options)
+            .map_err(|e| box_err!(e))
     }
 }
 

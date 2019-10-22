@@ -3,8 +3,8 @@
 use crate::db::Rocks;
 use engine_traits::DBOptions;
 use engine_traits::DBOptionsExt;
-use rocksdb::DBOptions as RawDBOptions;
 use engine_traits::Result;
+use rocksdb::DBOptions as RawDBOptions;
 
 impl DBOptionsExt for Rocks {
     type DBOptions = RocksDBOptions;
@@ -13,7 +13,9 @@ impl DBOptionsExt for Rocks {
         RocksDBOptions::from_raw(self.as_inner().get_db_options())
     }
     fn set_db_options(&self, options: &[(&str, &str)]) -> Result<()> {
-        self.as_inner().set_db_options(options).map_err(|e| box_err!(e))
+        self.as_inner()
+            .set_db_options(options)
+            .map_err(|e| box_err!(e))
     }
 }
 
