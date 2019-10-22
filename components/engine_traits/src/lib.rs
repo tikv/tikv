@@ -28,6 +28,8 @@ mod import;
 pub use import::*;
 mod snapshot;
 pub use crate::snapshot::*;
+mod write_batch;
+pub use crate::write_batch::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.

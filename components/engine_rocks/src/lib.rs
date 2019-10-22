@@ -17,8 +17,8 @@ mod import;
 pub use crate::import::*;
 mod snapshot;
 pub use crate::snapshot::*;
-mod writebatch;
-pub use crate::writebatch::*;
+mod write_batch;
+pub use crate::write_batch::*;
 
 mod iterator;
 pub use crate::iterator::*;
