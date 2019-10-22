@@ -26,11 +26,11 @@ impl CFHandleExt for Rocks {
     }
 }
 
-// FIXME: This a nasty representation pointer casting is due to the lack of
-// generic associated types. See comment on the KvEngine::CFHandle associated
-// type. This could also be fixed if the CFHandle impl was defined inside the
-// rust-rocksdb crate where the RawCFHandles are managed, but that would be an
-// ugly abstraction violation.
+// FIXME: This nasty representation with pointer casting is due to the lack of
+// generic associated types in Rust. See comment on the KvEngine::CFHandle
+// associated type. This could also be fixed if the CFHandle impl was defined
+// inside the rust-rocksdb crate where the RawCFHandles are managed, but that
+// would be an ugly abstraction violation.
 #[repr(transparent)]
 pub struct RocksCFHandle(RawCFHandle);
 
