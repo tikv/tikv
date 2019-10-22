@@ -10,6 +10,7 @@ assignees: ''
 ## PCP Issue
 
 - difficult: medium
+- score: 150
 - min score required: 100
 - expired: 7d
 - Recommended Skills:
