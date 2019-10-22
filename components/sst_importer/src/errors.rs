@@ -6,8 +6,8 @@ use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::result;
 
-use futures::sync::oneshot::Canceled;
 use grpcio::Error as GrpcError;
+use tokio_sync::oneshot::error::RecvError;
 use uuid::{parser::ParseError, BytesError};
 
 quick_error! {
@@ -33,7 +33,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Future(err: Canceled) {
+        Future(err: RecvError) {
             from()
             cause(err)
         }
