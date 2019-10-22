@@ -1,14 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::result::Result as StdResult;
+use crate::errors::Result;
 
 /// A trait for engines that support setting global options
 pub trait DBOptionsExt {
     type DBOptions: DBOptions;
 
     fn get_db_options(&self) -> Self::DBOptions;
-    // FIXME: return type
-    fn set_db_options(&self, options: &[(&str, &str)]) -> StdResult<(), String>;
+    fn set_db_options(&self, options: &[(&str, &str)]) -> Result<()>;
 }
 
 /// A handle to a database's options
