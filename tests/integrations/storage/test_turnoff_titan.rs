@@ -26,13 +26,24 @@ fn test_turnoff_titan() {
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
-        info!("CLUSTER LOG"; "level0" => db.get_property_int(&"rocksdb.num-files-at-level0").unwrap());
-        info!("CLUSTER LOG"; "level1" => db.get_property_int(&"rocksdb.num-files-at-level1").unwrap());
-        // info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
-        // info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
-        // info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
-        // info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
-        // info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
+        assert_eq!(
+            db.get_property_int(&"rocksdb.num-files-at-level0").unwrap(),
+            1
+        );
+        assert_eq!(
+            db.get_property_int(&"rocksdb.num-files-at-level1").unwrap(),
+            0
+        );
+        assert_eq!(
+            db.get_property_int(&"rocksdb.titandb.num-live-blob-file")
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.get_property_int(&"rocksdb.titandb.num-obsolete-blob-file")
+                .unwrap(),
+            0
+        );
     }
     cluster.shutdown();
 
@@ -44,13 +55,6 @@ fn test_turnoff_titan() {
     assert!(cluster.pre_start_check().is_ok());
     cluster.start().unwrap();
     assert_eq!(cluster.must_get(b"k1"), None);
-    for i in cluster.get_node_ids().into_iter() {
-        let db = cluster.get_engine(i);
-        let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
-        let mut opt = Vec::new();
-        opt.push(("blob_run_mode", "kFallback"));
-        assert!(db.set_options_cf(handle, &opt).is_ok());
-    }
     for i in 0..size {
         assert!(cluster
             .put(
@@ -62,27 +66,56 @@ fn test_turnoff_titan() {
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
-        info!("CLUSTER LOG"; "level0" => db.get_property_int(&"rocksdb.num-files-at-level0").unwrap());
-        info!("CLUSTER LOG"; "level1" => db.get_property_int(&"rocksdb.num-files-at-level1").unwrap());
-        // info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
-        // info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
-        // info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
-        // info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
-        // info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
+        assert_eq!(
+            db.get_property_int(&"rocksdb.num-files-at-level0").unwrap(),
+            2
+        );
+        assert_eq!(
+            db.get_property_int(&"rocksdb.num-files-at-level1").unwrap(),
+            0
+        );
+        assert_eq!(
+            db.get_property_int(&"rocksdb.titandb.num-live-blob-file")
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            db.get_property_int(&"rocksdb.titandb.num-obsolete-blob-file")
+                .unwrap(),
+            0
+        );
     }
-    cluster.compact_data();
-    cluster.must_flush_cf(CF_DEFAULT, true);
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
-        info!("CLUSTER LOG"; "level0" => db.get_property_int(&"rocksdb.num-files-at-level0").unwrap());
-        info!("CLUSTER LOG"; "level1" => db.get_property_int(&"rocksdb.num-files-at-level1").unwrap());
-        // info!("CLUSTER LOG"; "level2" => db.get_property_int(&"rocksdb.num-files-at-level2").unwrap());
-        // info!("CLUSTER LOG"; "level3" => db.get_property_int(&"rocksdb.num-files-at-level3").unwrap());
-        // info!("CLUSTER LOG"; "level4" => db.get_property_int(&"rocksdb.num-files-at-level4").unwrap());
-        // info!("CLUSTER LOG"; "level5" => db.get_property_int(&"rocksdb.num-files-at-level5").unwrap());
-        // info!("CLUSTER LOG"; "level6" => db.get_property_int(&"rocksdb.num-files-at-level6").unwrap());
+        let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
+        let mut opt = Vec::new();
+        opt.push(("blob_run_mode", "kFallback"));
+        assert!(db.set_options_cf(handle, &opt).is_ok());
     }
-    sleep_ms(2000);
+    cluster.compact_data();
+    assert!(cluster.put(b"a", b"v",).is_ok());
+    sleep_ms(1000);
+    for i in cluster.get_node_ids().into_iter() {
+        let db = cluster.get_engine(i);
+        assert_eq!(
+            db.get_property_int(&"rocksdb.num-files-at-level0").unwrap(),
+            0
+        );
+        assert_eq!(
+            db.get_property_int(&"rocksdb.num-files-at-level1").unwrap(),
+            1
+        );
+        assert_eq!(
+            db.get_property_int(&"rocksdb.titandb.num-live-blob-file")
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.get_property_int(&"rocksdb.titandb.num-obsolete-blob-file")
+                .unwrap(),
+            2
+        );
+    }
     cluster.shutdown();
 
     configure_for_disable_titan(&mut cluster);
