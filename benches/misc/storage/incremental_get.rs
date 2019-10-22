@@ -60,9 +60,8 @@ fn bench_table_lookup_mvcc_get(b: &mut Bencher) {
 fn bench_table_lookup_mvcc_incremental_get(b: &mut Bencher) {
     let (mut store, keys) = table_lookup_gen_data();
     b.iter(|| {
-        let mut stats = Statistics::default();
         for key in &keys {
-            black_box(store.incremental_get(key, &mut stats).unwrap());
+            black_box(store.incremental_get(key).unwrap());
         }
     })
 }
