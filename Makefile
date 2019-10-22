@@ -141,7 +141,7 @@ fail_release:
 	FAIL_POINT=1 make release
 
 # Build with latest Titan. Mainly used for test bot.
-# You can use environment variables `TITAN_REPO` and `TITAN_BRANCH` to update to specify Titan codeabse
+# You can use environment variables `TITAN_REPO` and `TITAN_BRANCH` to update to specified Titan codeabse
 # -- https://github.com/{TITAN_REPO}/titan/tree/{TITAN_BRANCH}.
 # Default: TITAN_REPO=pingcap, TITAN_BRANCH=master
 titan_release:
