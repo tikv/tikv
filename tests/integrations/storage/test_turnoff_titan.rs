@@ -14,7 +14,7 @@ fn test_turnoff_titan() {
     cluster.run();
     assert_eq!(cluster.must_get(b"k1"), None);
 
-    let size = 50;
+    let size = 5;
     for i in 0..size {
         assert!(cluster
             .put(
@@ -24,37 +24,6 @@ fn test_turnoff_titan() {
             .is_ok());
     }
     cluster.must_flush_cf(CF_DEFAULT, true);
-    for i in cluster.get_node_ids().into_iter() {
-        let db = cluster.get_engine(i);
-        assert_eq!(
-            db.get_property_int(&"rocksdb.num-files-at-level0").unwrap(),
-            1
-        );
-        assert_eq!(
-            db.get_property_int(&"rocksdb.num-files-at-level1").unwrap(),
-            0
-        );
-        assert_eq!(
-            db.get_property_int(&"rocksdb.titandb.num-live-blob-file")
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            db.get_property_int(&"rocksdb.titandb.num-obsolete-blob-file")
-                .unwrap(),
-            0
-        );
-    }
-    cluster.shutdown();
-
-    // try reopen db when titan isn't properly turned off.
-    configure_for_disable_titan(&mut cluster);
-    assert!(cluster.pre_start_check().is_err());
-
-    configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
-    assert!(cluster.pre_start_check().is_ok());
-    cluster.start().unwrap();
-    assert_eq!(cluster.must_get(b"k1"), None);
     for i in 0..size {
         assert!(cluster
             .put(
@@ -85,8 +54,16 @@ fn test_turnoff_titan() {
             0
         );
     }
+    cluster.shutdown();
 
-    // turn off titan.
+    // try reopen db when titan isn't properly turned off.
+    configure_for_disable_titan(&mut cluster);
+    assert!(cluster.pre_start_check().is_err());
+
+    configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
+    assert!(cluster.pre_start_check().is_ok());
+    cluster.start().unwrap();
+    assert_eq!(cluster.must_get(b"k1"), None);
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
@@ -95,10 +72,8 @@ fn test_turnoff_titan() {
         assert!(db.set_options_cf(handle, &opt).is_ok());
     }
     cluster.compact_data();
-    // make sure there is no background error.
-    assert_eq!(cluster.must_get(b"k1"), None);
     // wait for gc completes.
-    sleep_ms(100);
+    sleep_ms(10);
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
         assert_eq!(
@@ -113,11 +88,6 @@ fn test_turnoff_titan() {
             db.get_property_int(&"rocksdb.titandb.num-live-blob-file")
                 .unwrap(),
             0
-        );
-        assert_eq!(
-            db.get_property_int(&"rocksdb.titandb.num-obsolete-blob-file")
-                .unwrap(),
-            2
         );
     }
     cluster.shutdown();
