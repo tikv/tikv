@@ -22,9 +22,9 @@ pub use self::topn::TopNExecutor;
 
 use std::sync::Arc;
 
+use codec::prelude::NumberDecoder;
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::FieldTypeFlag;
-use tikv_util::codec::number;
 use tikv_util::collections::HashSet;
 use tipb::ColumnInfo;
 use tipb::{Expr, ExprType};
@@ -53,7 +53,7 @@ impl ExprColumnRefVisitor {
 
     pub fn visit(&mut self, expr: &Expr) -> Result<()> {
         if expr.get_tp() == ExprType::ColumnRef {
-            let offset = box_try!(number::decode_i64(&mut expr.get_val())) as usize;
+            let offset = box_try!(expr.get_val().read_i64()) as usize;
             if offset >= self.cols_len {
                 return Err(other_err!(
                     "offset {} overflow, should be less than {}",
@@ -99,7 +99,7 @@ impl AggCols {
     pub fn get_binary(&self) -> Result<Vec<u8>> {
         let mut value =
             Vec::with_capacity(self.suffix.len() + datum::approximate_size(&self.value, false));
-        box_try!(value.encode(&self.value, false));
+        box_try!(value.write_datum(&self.value, false));
         if !self.suffix.is_empty() {
             value.extend_from_slice(&self.suffix);
         }
@@ -182,7 +182,7 @@ impl OriginCols {
                 Some(value) => values.extend_from_slice(value),
                 None if col.get_pk_handle() => {
                     let pk = util::get_pk(col, self.handle);
-                    box_try!(values.encode(&[pk], false));
+                    box_try!(values.write_datum(&[pk], false));
                 }
                 None if col.has_default_val() => {
                     values.extend_from_slice(col.get_default_val());
@@ -195,7 +195,7 @@ impl OriginCols {
                     ));
                 }
                 None => {
-                    box_try!(values.encode(&[Datum::Null], false));
+                    box_try!(values.write_datum(&[Datum::Null], false));
                 }
             }
         }
@@ -354,9 +354,9 @@ pub mod tests {
     use super::{Executor, TableScanExecutor};
     use crate::codec::{datum, table, Datum};
     use crate::storage::fixture::FixtureStorage;
+    use codec::prelude::NumberEncoder;
     use kvproto::coprocessor::KeyRange;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
-    use tikv_util::codec::number::NumberEncoder;
     use tikv_util::collections::HashMap;
     use tikv_util::map;
     use tipb::ColumnInfo;
@@ -367,7 +367,7 @@ pub mod tests {
         let mut expr = Expr::default();
         expr.set_tp(tp);
         if tp == ExprType::ColumnRef {
-            expr.mut_val().encode_i64(id.unwrap()).unwrap();
+            expr.mut_val().write_i64(id.unwrap()).unwrap();
         } else {
             expr.mut_children().push(child.unwrap());
         }

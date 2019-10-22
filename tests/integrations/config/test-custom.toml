@@ -132,7 +132,7 @@ apply-pool-size = 4
 store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
-hibernate-regions = true
+hibernate-regions = false
 
 [coprocessor]
 split-region-on-table = true
@@ -214,6 +214,7 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 enable-doubly-skiplist = false
@@ -267,6 +268,7 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 
@@ -308,6 +310,7 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 
@@ -349,6 +352,7 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 
@@ -415,6 +419,7 @@ compaction-style = 1
 disable-auto-compactions = true
 soft-pending-compaction-bytes-limit = "12GB"
 hard-pending-compaction-bytes-limit = "12GB"
+force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 

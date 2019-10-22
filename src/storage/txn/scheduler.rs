@@ -508,6 +508,9 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         Command::TxnHeartBeat {
             ref primary_key, ..
         } => latches.gen_lock(&[primary_key]),
+        Command::CheckTxnStatus {
+            ref primary_key, ..
+        } => latches.gen_lock(&[primary_key]),
 
         // Avoid using wildcard _ here to avoid forgetting add new commands here.
         Command::ScanLock { .. }
@@ -577,6 +580,7 @@ mod tests {
                 ctx: Context::default(),
                 key: Key::from_raw(b"k"),
                 start_ts: 10,
+                current_ts: 20,
             },
             Command::Rollback {
                 ctx: Context::default(),
@@ -595,7 +599,7 @@ mod tests {
                 scan_key: None,
                 key_locks: vec![(
                     Key::from_raw(b"k"),
-                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, 0, 0),
+                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, 0, 0, 0),
                 )],
             },
             Command::ResolveLockLite {

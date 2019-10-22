@@ -7,14 +7,14 @@ use std::str;
 
 use rand_xorshift::XorShiftRng;
 
+use codec::prelude::NumberDecoder;
 use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::FieldTypeFlag;
-use tikv_util::codec::number;
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::codec::mysql::charset;
 use crate::codec::mysql::{Decimal, DecimalDecoder, Duration, Json, JsonDecoder, Time, MAX_FSP};
-use crate::codec::{self, datum, Datum};
+use crate::codec::{datum, Datum};
 
 mod builtin_arithmetic;
 mod builtin_cast;
@@ -235,11 +235,15 @@ impl Expression {
         let field_type = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, field_type)),
-            ExprType::Int64 => number::decode_i64(&mut expr.get_val())
+            ExprType::Int64 => expr
+                .get_val()
+                .read_i64()
                 .map(Datum::I64)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
-            ExprType::Uint64 => number::decode_u64(&mut expr.get_val())
+            ExprType::Uint64 => expr
+                .get_val()
+                .read_u64()
                 .map(Datum::U64)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
@@ -247,11 +251,15 @@ impl Expression {
                 Datum::Bytes(expr.take_val()),
                 field_type,
             )),
-            ExprType::Float32 | ExprType::Float64 => number::decode_f64(&mut expr.get_val())
+            ExprType::Float32 | ExprType::Float64 => expr
+                .get_val()
+                .read_f64()
                 .map(Datum::F64)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
-            ExprType::MysqlTime => number::decode_u64(&mut expr.get_val())
+            ExprType::MysqlTime => expr
+                .get_val()
+                .read_u64()
                 .map_err(Error::from)
                 .and_then(|i| {
                     let fsp = field_type.decimal() as i8;
@@ -263,20 +271,22 @@ impl Expression {
                     )
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), field_type)),
-            ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
+            ExprType::MysqlDuration => expr
+                .get_val()
+                .read_i64()
                 .map_err(Error::from)
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                 .map(Datum::Dur)
                 .map(|e| Expression::new_const(e, field_type)),
             ExprType::MysqlDecimal => expr
                 .get_val()
-                .decode_decimal()
+                .read_decimal()
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
             ExprType::MysqlJson => expr
                 .get_val()
-                .decode_json()
+                .read_json()
                 .map(Datum::Json)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
@@ -300,7 +310,7 @@ impl Expression {
                     })
             }
             ExprType::ColumnRef => {
-                let offset = number::decode_i64(&mut expr.get_val()).map_err(Error::from)? as usize;
+                let offset = expr.get_val().read_i64().map_err(Error::from)? as usize;
                 let column = Column { offset, field_type };
                 Ok(Expression::ColumnRef(column))
             }
@@ -312,7 +322,7 @@ impl Expression {
 #[inline]
 pub fn eval_arith<F>(ctx: &mut EvalContext, left: Datum, right: Datum, f: F) -> Result<Datum>
 where
-    F: FnOnce(Datum, &mut EvalContext, Datum) -> codec::Result<Datum>,
+    F: FnOnce(Datum, &mut EvalContext, Datum) -> Result<Datum>,
 {
     let left = left.into_arith(ctx)?;
     let right = right.into_arith(ctx)?;
@@ -338,7 +348,7 @@ mod tests {
     use crate::codec::mysql::json::JsonEncoder;
     use crate::codec::mysql::{charset, Decimal, DecimalEncoder, Duration, Json, Time};
     use crate::codec::{mysql, Datum};
-    use tikv_util::codec::number::{self, NumberEncoder};
+    use codec::{number, prelude::NumberEncoder};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
@@ -383,7 +393,7 @@ mod tests {
         let mut expr = Expr::default();
         expr.set_tp(ExprType::ColumnRef);
         let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(col_id).unwrap();
+        buf.write_i64(col_id).unwrap();
         expr.set_val(buf);
         expr
     }
@@ -421,13 +431,13 @@ mod tests {
             Datum::I64(i) => {
                 expr.set_tp(ExprType::Int64);
                 let mut buf = Vec::with_capacity(number::I64_SIZE);
-                buf.encode_i64(i).unwrap();
+                buf.write_i64(i).unwrap();
                 expr.set_val(buf);
             }
             Datum::U64(u) => {
                 expr.set_tp(ExprType::Uint64);
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
-                buf.encode_u64(u).unwrap();
+                buf.write_u64(u).unwrap();
                 expr.set_val(buf);
                 expr.mut_field_type()
                     .as_mut_accessor()
@@ -442,20 +452,20 @@ mod tests {
             Datum::F64(f) => {
                 expr.set_tp(ExprType::Float64);
                 let mut buf = Vec::with_capacity(number::F64_SIZE);
-                buf.encode_f64(f).unwrap();
+                buf.write_f64(f).unwrap();
                 expr.set_val(buf);
             }
             Datum::Dur(d) => {
                 expr.set_tp(ExprType::MysqlDuration);
                 let mut buf = Vec::with_capacity(number::I64_SIZE);
-                buf.encode_i64(d.to_nanos()).unwrap();
+                buf.write_i64(d.to_nanos()).unwrap();
                 expr.set_val(buf);
             }
             Datum::Dec(d) => {
                 expr.set_tp(ExprType::MysqlDecimal);
                 let (prec, frac) = d.prec_and_frac();
                 let mut buf = Vec::with_capacity(mysql::dec_encoded_len(&[prec, frac]).unwrap());
-                buf.encode_decimal(&d, prec, frac).unwrap();
+                buf.write_decimal(&d, prec, frac).unwrap();
                 expr.set_val(buf);
             }
             Datum::Time(t) => {
@@ -467,13 +477,13 @@ mod tests {
                 expr.set_field_type(ft);
                 let u = t.to_packed_u64();
                 let mut buf = Vec::with_capacity(number::U64_SIZE);
-                buf.encode_u64(u).unwrap();
+                buf.write_u64(u).unwrap();
                 expr.set_val(buf);
             }
             Datum::Json(j) => {
                 expr.set_tp(ExprType::MysqlJson);
                 let mut buf = Vec::new();
-                buf.encode_json(&j).unwrap();
+                buf.write_json(&j).unwrap();
                 expr.set_val(buf);
             }
             Datum::Null => expr.set_tp(ExprType::Null),

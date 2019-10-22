@@ -8,10 +8,9 @@
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
 pub mod config;
-pub mod gc_worker;
 pub mod kv;
 pub mod lock_manager;
-mod metrics;
+pub mod metrics;
 pub mod mvcc;
 pub mod readpool_impl;
 pub mod txn;
@@ -22,21 +21,17 @@ use std::io::Error as IoError;
 use std::sync::{atomic, Arc};
 use std::{cmp, error, u64};
 
-use engine::rocks::DB;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
-use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
 
-use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
 
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 use self::kv::with_tls_engine;
 pub use self::kv::{
     CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics,
@@ -54,10 +49,11 @@ pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 // Short value max len must <= 255.
-pub const SHORT_VALUE_MAX_LEN: usize = 64;
+pub const SHORT_VALUE_MAX_LEN: usize = 255;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
+pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use tikv_util::future_pool::FuturePool;
@@ -175,6 +171,9 @@ pub enum Command {
         key: Key,
         /// The transaction timestamp.
         start_ts: u64,
+        /// The approximate current ts when cleanup request is invoked, which is used to check the
+        /// lock's TTL. 0 means do not check TTL.
+        current_ts: u64,
     },
     /// Rollback from the transaction that was started at `start_ts`.
     ///
@@ -201,6 +200,13 @@ pub enum Command {
         primary_key: Key,
         start_ts: u64,
         advise_ttl: u64,
+    },
+    CheckTxnStatus {
+        ctx: Context,
+        primary_key: Key,
+        lock_ts: u64,
+        caller_start_ts: u64,
+        current_ts: u64,
     },
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     ScanLock {
@@ -361,6 +367,17 @@ impl Display for Command {
                 "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}",
                 primary_key, start_ts, advise_ttl, ctx
             ),
+            Command::CheckTxnStatus {
+                ref ctx,
+                ref primary_key,
+                lock_ts,
+                caller_start_ts,
+                current_ts,
+            } => write!(
+                f,
+                "kv::command::check_txn_status {} @ {} curr({}, {}) | {:?}",
+                primary_key, lock_ts, caller_start_ts, current_ts, ctx
+            ),
             Command::ScanLock {
                 ref ctx,
                 max_ts,
@@ -467,6 +484,7 @@ impl Command {
             Command::Rollback { .. } => CommandKind::rollback,
             Command::PessimisticRollback { .. } => CommandKind::pessimistic_rollback,
             Command::TxnHeartBeat { .. } => CommandKind::txn_heart_beat,
+            Command::CheckTxnStatus { .. } => CommandKind::check_txn_status,
             Command::ScanLock { .. } => CommandKind::scan_lock,
             Command::ResolveLock { .. } => CommandKind::resolve_lock,
             Command::ResolveLockLite { .. } => CommandKind::resolve_lock_lite,
@@ -486,7 +504,7 @@ impl Command {
             | Command::PessimisticRollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. }
             | Command::TxnHeartBeat { start_ts, .. } => start_ts,
-            Command::Commit { lock_ts, .. } => lock_ts,
+            Command::Commit { lock_ts, .. } | Command::CheckTxnStatus { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
             Command::ResolveLockLite { start_ts, .. } => start_ts,
             Command::ResolveLock { .. }
@@ -505,6 +523,7 @@ impl Command {
             | Command::Rollback { ref ctx, .. }
             | Command::PessimisticRollback { ref ctx, .. }
             | Command::TxnHeartBeat { ref ctx, .. }
+            | Command::CheckTxnStatus { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
             | Command::ResolveLockLite { ref ctx, .. }
@@ -524,6 +543,7 @@ impl Command {
             | Command::Rollback { ref mut ctx, .. }
             | Command::PessimisticRollback { ref mut ctx, .. }
             | Command::TxnHeartBeat { ref mut ctx, .. }
+            | Command::CheckTxnStatus { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
             | Command::ResolveLockLite { ref mut ctx, .. }
@@ -584,6 +604,11 @@ impl Command {
             } => {
                 bytes += primary_key.as_encoded().len();
             }
+            Command::CheckTxnStatus {
+                ref primary_key, ..
+            } => {
+                bytes += primary_key.as_encoded().len();
+            }
             _ => {}
         }
         bytes
@@ -601,6 +626,7 @@ pub struct Options {
     pub is_pessimistic_lock: Vec<bool>,
     // How many keys this transaction involved.
     pub txn_size: u64,
+    pub min_commit_ts: u64,
 }
 
 impl Options {
@@ -614,6 +640,7 @@ impl Options {
             for_update_ts: 0,
             is_pessimistic_lock: vec![],
             txn_size: 0,
+            min_commit_ts: 0,
         }
     }
 
@@ -630,8 +657,6 @@ impl Options {
 pub struct TestStorageBuilder<E: Engine> {
     engine: E,
     config: Config,
-    local_storage: Option<Arc<DB>>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
 }
 
 impl TestStorageBuilder<RocksEngine> {
@@ -640,8 +665,6 @@ impl TestStorageBuilder<RocksEngine> {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: Config::default(),
-            local_storage: None,
-            raft_store_router: None,
         }
     }
 }
@@ -651,8 +674,6 @@ impl<E: Engine> TestStorageBuilder<E> {
         Self {
             engine,
             config: Config::default(),
-            local_storage: None,
-            raft_store_router: None,
         }
     }
 
@@ -664,36 +685,13 @@ impl<E: Engine> TestStorageBuilder<E> {
         self
     }
 
-    /// Set local storage for GCWorker.
-    ///
-    /// By default, `None` will be used.
-    pub fn local_storage(mut self, local_storage: Arc<DB>) -> Self {
-        self.local_storage = Some(local_storage);
-        self
-    }
-
-    /// Set raft store router for GCWorker.
-    ///
-    /// By default, `None` will be used.
-    pub fn raft_store_router(mut self, raft_store_router: ServerRaftStoreRouter) -> Self {
-        self.raft_store_router = Some(raft_store_router);
-        self
-    }
-
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, DummyLockMgr>> {
         let read_pool = self::readpool_impl::build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
-        Storage::from_engine(
-            self.engine,
-            &self.config,
-            read_pool,
-            self.local_storage,
-            self.raft_store_router,
-            None,
-        )
+        Storage::from_engine(self.engine, &self.config, read_pool, None)
     }
 }
 
@@ -728,9 +726,6 @@ pub struct Storage<E: Engine, L: LockMgr> {
     read_pool_normal: FuturePool,
     read_pool_high: FuturePool,
 
-    /// Used to handle requests related to GC.
-    gc_worker: GCWorker<E>,
-
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
     // TODO: This should be implemented in thread pool and worker.
@@ -757,7 +752,6 @@ impl<E: Engine, L: LockMgr> Clone for Storage<E, L> {
             read_pool_low: self.read_pool_low.clone(),
             read_pool_normal: self.read_pool_normal.clone(),
             read_pool_high: self.read_pool_high.clone(),
-            gc_worker: self.gc_worker.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
             pessimistic_txn_enabled: self.pessimistic_txn_enabled,
@@ -778,11 +772,6 @@ impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
             return;
         }
 
-        let r = self.gc_worker.stop();
-        if let Err(e) = r {
-            error!("Failed to stop gc_worker:"; "err" => ?e);
-        }
-
         info!("Storage stopped.");
     }
 }
@@ -793,8 +782,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         engine: E,
         config: &Config,
         mut read_pool: Vec<FuturePool>,
-        local_storage: Option<Arc<DB>>,
-        raft_store_router: Option<ServerRaftStoreRouter>,
         lock_mgr: Option<L>,
     ) -> Result<Self> {
         let pessimistic_txn_enabled = lock_mgr.is_some();
@@ -805,14 +792,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
         );
-        let mut gc_worker = GCWorker::new(
-            engine.clone(),
-            local_storage,
-            raft_store_router,
-            config.gc_ratio_threshold,
-        );
-
-        gc_worker.start()?;
 
         let read_pool_high = read_pool.remove(2);
         let read_pool_normal = read_pool.remove(1);
@@ -826,19 +805,10 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             read_pool_low,
             read_pool_normal,
             read_pool_high,
-            gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
             pessimistic_txn_enabled,
         })
-    }
-
-    /// Starts running GC automatically.
-    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
-        &self,
-        cfg: AutoGCConfig<S, R>,
-    ) -> Result<()> {
-        self.gc_worker.start_auto_gc(cfg)
     }
 
     /// Get the underlying `Engine` of the `Storage`.
@@ -1231,9 +1201,15 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         ctx: Context,
         key: Key,
         start_ts: u64,
+        current_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Cleanup { ctx, key, start_ts };
+        let cmd = Command::Cleanup {
+            ctx,
+            key,
+            start_ts,
+            current_ts,
+        };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
         Ok(())
@@ -1288,7 +1264,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Check the specified primary key and enlarge it's TTL if necessary. Returns the new TTL.
     ///
-    /// Schedules a [`Command::TxnHeartBeat`]
+    /// Schedules a [`Command::TxnHeartBeat`].
     pub fn async_txn_heart_beat(
         &self,
         ctx: Context,
@@ -1305,6 +1281,37 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         };
         self.schedule(cmd, StorageCb::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.txn_heart_beat.inc();
+        Ok(())
+    }
+
+    /// Check the status of a transaction.
+    ///
+    /// This operation checks whether a transaction has expired it's Lock's TTL, rollback the
+    /// transaction if expired, and update the transaction's min_commit_ts according to the metadata
+    /// in the primary lock.
+    /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
+    /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
+    /// no information about the transaction, results will be both 0.
+    ///
+    /// Schedules a [`Command::CheckTxnStatus`].
+    pub fn async_check_txn_status(
+        &self,
+        ctx: Context,
+        primary_key: Key,
+        lock_ts: u64,
+        caller_start_ts: u64,
+        current_ts: u64,
+        callback: Callback<(u64, u64)>,
+    ) -> Result<()> {
+        let cmd = Command::CheckTxnStatus {
+            ctx,
+            primary_key,
+            lock_ts,
+            caller_start_ts,
+            current_ts,
+        };
+        self.schedule(cmd, StorageCb::TxnStatus(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.check_txn_status.inc();
         Ok(())
     }
 
@@ -1382,36 +1389,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc();
-        Ok(())
-    }
-
-    /// Do garbage collection, which means cleaning up old MVCC keys.
-    ///
-    /// It guarantees that all reads with timestamp > `safe_point` can be performed correctly
-    /// during and after the GC operation.
-    pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
-        self.gc_worker.async_gc(ctx, safe_point, callback)?;
-        KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
-        Ok(())
-    }
-
-    /// Delete all data in the range.
-    ///
-    /// This function is **VERY DANGEROUS**. It's not only running on one single region, but it can
-    /// delete a large range that spans over many regions, bypassing the Raft layer. This is
-    /// designed for TiDB to quickly free up the disk space and do GC afterward.
-    /// drop/truncate table/index. By invoking this function, it's user's responsibility to make
-    /// sure no more operations will be performed in this destroyed range.
-    pub fn async_unsafe_destroy_range(
-        &self,
-        ctx: Context,
-        start_key: Key,
-        end_key: Key,
-        callback: Callback<()>,
-    ) -> Result<()> {
-        self.gc_worker
-            .async_unsafe_destroy_range(ctx, start_key, end_key, callback)?;
-        KV_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
         Ok(())
     }
 
@@ -2704,6 +2681,7 @@ mod tests {
                 Context::default(),
                 Key::from_raw(b"x"),
                 100,
+                0,
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2711,6 +2689,59 @@ mod tests {
         expect_none(
             storage
                 .async_get(Context::default(), Key::from_raw(b"x"), 105)
+                .wait(),
+        );
+    }
+
+    #[test]
+    fn test_cleanup_check_ttl() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        let mut options = Options::default();
+        options.lock_ttl = 100;
+        let ts = mvcc::compose_ts;
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((Key::from_raw(b"x"), b"110".to_vec()))],
+                b"x".to_vec(),
+                ts(110, 0),
+                options,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_cleanup(
+                Context::default(),
+                Key::from_raw(b"x"),
+                ts(110, 0),
+                ts(120, 0),
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info))) => {
+                        assert_eq!(info.get_lock_ttl(), 100)
+                    }
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_cleanup(
+                Context::default(),
+                Key::from_raw(b"x"),
+                ts(110, 0),
+                ts(220, 0),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_none(
+            storage
+                .async_get(Context::default(), Key::from_raw(b"x"), ts(230, 0))
                 .wait(),
         );
     }
@@ -3839,6 +3870,10 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+
+        let mut options = Options::default();
+        options.lock_ttl = 123;
+        options.txn_size = 3;
         storage
             .async_prewrite(
                 Context::default(),
@@ -3849,17 +3884,20 @@ mod tests {
                 ],
                 b"c".to_vec(),
                 101,
-                Options::default(),
+                options,
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
         rx.recv().unwrap();
+
         let (lock_a, lock_b, lock_c, lock_x, lock_y, lock_z) = (
             {
                 let mut lock = LockInfo::default();
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"a".to_vec());
+                lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
@@ -3867,6 +3905,8 @@ mod tests {
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"b".to_vec());
+                lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
@@ -3874,6 +3914,8 @@ mod tests {
                 lock.set_primary_lock(b"c".to_vec());
                 lock.set_lock_version(101);
                 lock.set_key(b"c".to_vec());
+                lock.set_lock_ttl(123);
+                lock.set_txn_size(3);
                 lock
             },
             {
@@ -3898,6 +3940,7 @@ mod tests {
                 lock
             },
         );
+
         storage
             .async_scan_locks(
                 Context::default(),
@@ -4337,6 +4380,138 @@ mod tests {
                 k.clone(),
                 11,
                 150,
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_check_txn_status() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        let k = Key::from_raw(b"k");
+        let v = b"b".to_vec();
+
+        let ts = mvcc::compose_ts;
+
+        // No lock and no commit info. Gets nothing.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(9, 0),
+                ts(9, 1),
+                ts(9, 1),
+                expect_value_callback(tx.clone(), 0, (0, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // A rollback will be written, so an later-arriving prewrite will fail.
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((k.clone(), v.clone()))],
+                k.as_encoded().to_vec(),
+                ts(9, 0),
+                Options::default(),
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        let mut options = Options::default();
+        options.lock_ttl = 100;
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((k.clone(), v.clone()))],
+                k.as_encoded().to_vec(),
+                ts(10, 0),
+                options.clone(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // If lock exists and not expired, returns the lock's TTL.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(10, 0),
+                ts(12, 0),
+                ts(15, 0),
+                expect_value_callback(tx.clone(), 0, (100, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // TODO: Check the lock's min_commit_ts field.
+
+        storage
+            .async_commit(
+                Context::default(),
+                vec![k.clone()],
+                ts(10, 0),
+                ts(20, 0),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // If the transaction is committed, returns the commit_ts.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(10, 0),
+                ts(12, 0),
+                ts(15, 0),
+                expect_value_callback(tx.clone(), 0, (0, ts(20, 0))),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((k.clone(), v))],
+                k.as_encoded().to_vec(),
+                ts(25, 0),
+                options,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // If the lock has expired, cleanup it and return nothing.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(25, 0),
+                ts(126, 0),
+                ts(127, 0),
+                expect_value_callback(tx.clone(), 0, (0, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_commit(
+                Context::default(),
+                vec![k.clone()],
+                ts(25, 0),
+                ts(28, 0),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
                     e => panic!("unexpected error chain: {:?}", e),

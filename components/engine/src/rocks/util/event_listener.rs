@@ -2,8 +2,10 @@
 
 use crate::rocks::util::engine_metrics::*;
 use crate::rocks::{
-    CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallCondition, WriteStallInfo,
+    CompactionJobInfo, DBBackgroundErrorReason, FlushJobInfo, IngestionInfo, WriteStallCondition,
+    WriteStallInfo,
 };
+use tikv_util::set_panic_mark;
 
 pub struct EventListener {
     db_name: String,
@@ -26,7 +28,7 @@ fn tag_write_stall_condition(e: WriteStallCondition) -> &'static str {
     }
 }
 
-impl engine_rocksdb::EventListener for EventListener {
+impl rocksdb::EventListener for EventListener {
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "flush"])
@@ -62,6 +64,26 @@ impl engine_rocksdb::EventListener for EventListener {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "ingestion"])
             .inc();
+    }
+
+    fn on_background_error(&self, reason: DBBackgroundErrorReason, result: Result<(), String>) {
+        assert!(result.is_err());
+        if let Err(err) = result {
+            let r = match reason {
+                DBBackgroundErrorReason::Flush => "flush",
+                DBBackgroundErrorReason::Compaction => "compaction",
+                DBBackgroundErrorReason::WriteCallback => "write_callback",
+                DBBackgroundErrorReason::MemTable => "memtable",
+            };
+            // Avoid tikv from restarting if rocksdb get corruption.
+            if err.starts_with("Corruption") {
+                set_panic_mark();
+            }
+            panic!(
+                "rocksdb background error. db: {}, reason: {}, error: {}",
+                self.db_name, r, err
+            );
+        }
     }
 
     fn on_stall_conditions_changed(&self, info: &WriteStallInfo) {

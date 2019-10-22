@@ -4,7 +4,7 @@
 //!
 //! The macro should be applied to a function:
 //!
-//! ```rust
+//! ```ignore
 //! #[rpn_fn]
 //! fn foo(x: &Option<u32>) -> Result<Option<u8>> {
 //!     Ok(None)
@@ -133,9 +133,9 @@
 //!     fn eval(
 //!         self,
 //!         ctx: &mut EvalContext,
-//          output_rows: usize,
-//          args: &[RpnStackNode<'_>],
-//          extra: &mut RpnFnCallExtra<'_>,
+//!          output_rows: usize,
+//!          args: &[RpnStackNode<'_>],
+//!          extra: &mut RpnFnCallExtra<'_>,
 //!     ) -> Result<VectorValue> {
 //!         let (regex, arg) = self.extract(0);
 //!         let regex = build_regex(regex);
@@ -171,7 +171,7 @@ pub fn transform(attr: TokenStream, item_fn: TokenStream) -> Result<TokenStream>
     let item_fn = parse2::<ItemFn>(item_fn)?;
 
     // FIXME: The macro cannot handle lifetime definitions now
-    if let Some(lifetime) = item_fn.decl.generics.lifetimes().next() {
+    if let Some(lifetime) = item_fn.sig.generics.lifetimes().next() {
         return Err(Error::new_spanned(
             lifetime,
             "Lifetime definition is not allowed",
@@ -243,7 +243,7 @@ impl parse::Parse for RpnFnAttr {
                             let lit: LitInt = parse2(right.into_token_stream()).map_err(|_| {
                                 Error::new_spanned(right, "Expect int literal for `min_args`")
                             })?;
-                            min_args = Some(lit.value() as usize);
+                            min_args = Some(lit.base10_parse()?);
                         }
                         "extra_validator" => {
                             extra_validator = Some((&**right).into_token_stream());
@@ -374,7 +374,7 @@ impl parse::Parse for RpnFnSignatureReturnType {
             ..
         }) = &tp
         {
-            let result_type = (*segments.last().unwrap().value()).clone();
+            let result_type = segments.last().unwrap().clone();
             if let PathArguments::AngleBracketed(AngleBracketedGenericArguments { args, .. }) =
                 result_type.arguments
             {
@@ -488,27 +488,28 @@ struct VargsRpnFn {
 
 impl VargsRpnFn {
     fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
-        if item_fn.decl.inputs.len() != attr.captures.len() + 1 {
+        if item_fn.sig.inputs.len() != attr.captures.len() + 1 {
             return Err(Error::new_spanned(
-                item_fn.decl.inputs,
+                item_fn.sig.inputs,
                 format!("Expect {} parameters", attr.captures.len() + 1),
             ));
         }
 
-        let fn_arg = item_fn.decl.inputs.iter().nth(attr.captures.len()).unwrap();
+        let fn_arg = item_fn.sig.inputs.iter().nth(attr.captures.len()).unwrap();
         let arg_type =
             parse2::<VargsRpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
                 Error::new_spanned(fn_arg, "Expect parameter type to be like `&[&Option<T>]`")
             })?;
 
-        let ret_type =
-            parse2::<RpnFnSignatureReturnType>((&item_fn.decl.output).into_token_stream())
-                .map_err(|_| {
-                    Error::new_spanned(
-                        &item_fn.decl.output,
-                        "Expect return type to be like `Result<Option<T>>`",
-                    )
-                })?;
+        let ret_type = parse2::<RpnFnSignatureReturnType>(
+            (&item_fn.sig.output).into_token_stream(),
+        )
+        .map_err(|_| {
+            Error::new_spanned(
+                &item_fn.sig.output,
+                "Expect return type to be like `Result<Option<T>>`",
+            )
+        })?;
         Ok(Self {
             captures: attr.captures,
             min_args: attr.min_args,
@@ -530,14 +531,13 @@ impl VargsRpnFn {
 
     fn generate_constructor(&self) -> TokenStream {
         let constructor_ident = Ident::new(
-            &format!("{}_fn_meta", &self.item_fn.ident),
+            &format!("{}_fn_meta", &self.item_fn.sig.ident),
             Span::call_site(),
         );
-        let (impl_generics, ty_generics, where_clause) =
-            self.item_fn.decl.generics.split_for_impl();
+        let (impl_generics, ty_generics, where_clause) = self.item_fn.sig.generics.split_for_impl();
         let ty_generics_turbofish = ty_generics.as_turbofish();
-        let fn_ident = &self.item_fn.ident;
-        let fn_name = self.item_fn.ident.to_string();
+        let fn_ident = &self.item_fn.sig.ident;
+        let fn_name = self.item_fn.sig.ident.to_string();
         let arg_type = &self.arg_type;
 
         let validator_fn = ValidatorFnGenerator::new()
@@ -560,6 +560,7 @@ impl VargsRpnFn {
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue> #where_clause {
                     crate::rpn_expr::function::VARG_PARAM_BUF.with(|vargs_buf| {
+                        use crate::codec::data_type::Evaluable;
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         vargs_buf.resize(args_len, 0);
@@ -602,21 +603,22 @@ struct RawVargsRpnFn {
 
 impl RawVargsRpnFn {
     fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
-        if item_fn.decl.inputs.len() != attr.captures.len() + 1 {
+        if item_fn.sig.inputs.len() != attr.captures.len() + 1 {
             return Err(Error::new_spanned(
-                item_fn.decl.inputs,
+                item_fn.sig.inputs,
                 format!("Expect {} parameters", attr.captures.len() + 1),
             ));
         }
 
-        let ret_type =
-            parse2::<RpnFnSignatureReturnType>((&item_fn.decl.output).into_token_stream())
-                .map_err(|_| {
-                    Error::new_spanned(
-                        &item_fn.decl.output,
-                        "Expect return type to be like `Result<Option<T>>`",
-                    )
-                })?;
+        let ret_type = parse2::<RpnFnSignatureReturnType>(
+            (&item_fn.sig.output).into_token_stream(),
+        )
+        .map_err(|_| {
+            Error::new_spanned(
+                &item_fn.sig.output,
+                "Expect return type to be like `Result<Option<T>>`",
+            )
+        })?;
         Ok(Self {
             captures: attr.captures,
             min_args: attr.min_args,
@@ -637,14 +639,13 @@ impl RawVargsRpnFn {
 
     fn generate_constructor(&self) -> TokenStream {
         let constructor_ident = Ident::new(
-            &format!("{}_fn_meta", &self.item_fn.ident),
+            &format!("{}_fn_meta", &self.item_fn.sig.ident),
             Span::call_site(),
         );
-        let (impl_generics, ty_generics, where_clause) =
-            self.item_fn.decl.generics.split_for_impl();
+        let (impl_generics, ty_generics, where_clause) = self.item_fn.sig.generics.split_for_impl();
         let ty_generics_turbofish = ty_generics.as_turbofish();
-        let fn_ident = &self.item_fn.ident;
-        let fn_name = self.item_fn.ident.to_string();
+        let fn_ident = &self.item_fn.sig.ident;
+        let fn_name = self.item_fn.sig.ident.to_string();
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
@@ -712,22 +713,23 @@ struct NormalRpnFn {
 impl NormalRpnFn {
     fn new(attr: RpnFnAttr, item_fn: ItemFn) -> Result<Self> {
         let mut arg_types = Vec::new();
-        for fn_arg in item_fn.decl.inputs.iter().skip(attr.captures.len()) {
+        for fn_arg in item_fn.sig.inputs.iter().skip(attr.captures.len()) {
             let arg_type =
                 parse2::<RpnFnSignatureParam>(fn_arg.into_token_stream()).map_err(|_| {
                     Error::new_spanned(fn_arg, "Expect parameter type to be like `&Option<T>`")
                 })?;
             arg_types.push(arg_type.eval_type);
         }
-        let ret_type =
-            parse2::<RpnFnSignatureReturnType>((&item_fn.decl.output).into_token_stream())
-                .map_err(|_| {
-                    Error::new_spanned(
-                        &item_fn.decl.output,
-                        "Expect return type to be like `Result<Option<T>>`",
-                    )
-                })?;
-        let camel_name = item_fn.ident.to_string().to_camel_case();
+        let ret_type = parse2::<RpnFnSignatureReturnType>(
+            (&item_fn.sig.output).into_token_stream(),
+        )
+        .map_err(|_| {
+            Error::new_spanned(
+                &item_fn.sig.output,
+                "Expect return type to be like `Result<Option<T>>`",
+            )
+        })?;
+        let camel_name = item_fn.sig.ident.to_string().to_camel_case();
         let fn_trait_ident = Ident::new(&format!("{}_Fn", camel_name), Span::call_site());
         let evaluator_ident = Ident::new(&format!("{}_Evaluator", camel_name), Span::call_site());
         Ok(Self {
@@ -755,7 +757,7 @@ impl NormalRpnFn {
     }
 
     fn generate_fn_trait(&self) -> TokenStream {
-        let (impl_generics, _, where_clause) = self.item_fn.decl.generics.split_for_impl();
+        let (impl_generics, _, where_clause) = self.item_fn.sig.generics.split_for_impl();
         let fn_trait_ident = &self.fn_trait_ident;
         quote! {
             trait #fn_trait_ident #impl_generics #where_clause {
@@ -771,14 +773,13 @@ impl NormalRpnFn {
     }
 
     fn generate_dummy_fn_trait_impl(&self) -> TokenStream {
-        let mut generics = self.item_fn.decl.generics.clone();
+        let mut generics = self.item_fn.sig.generics.clone();
         generics
             .params
             .push(parse_str("D_: crate::rpn_expr::function::ArgDef").unwrap());
-        let fn_name = self.item_fn.ident.to_string();
         let fn_trait_ident = &self.fn_trait_ident;
         let tp_ident = Ident::new("D_", Span::call_site());
-        let (_, ty_generics, _) = self.item_fn.decl.generics.split_for_impl();
+        let (_, ty_generics, _) = self.item_fn.sig.generics.split_for_impl();
         let (impl_generics, _, where_clause) = generics.split_for_impl();
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp_ident #where_clause {
@@ -789,14 +790,14 @@ impl NormalRpnFn {
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    panic!("Cannot apply {} on {:?}", #fn_name, self)
+                    unreachable!()
                 }
             }
         }
     }
 
     fn generate_real_fn_trait_impl(&self) -> TokenStream {
-        let mut generics = self.item_fn.decl.generics.clone();
+        let mut generics = self.item_fn.sig.generics.clone();
         generics
             .params
             .push(LifetimeDef::new(Lifetime::new("'arg_", Span::call_site())).into());
@@ -811,9 +812,9 @@ impl NormalRpnFn {
             generics.params.push(parse2(generic_param).unwrap());
             tp = quote! { crate::rpn_expr::function::Arg<#arg_name, #tp> };
         }
-        let fn_ident = &self.item_fn.ident;
+        let fn_ident = &self.item_fn.sig.ident;
         let fn_trait_ident = &self.fn_trait_ident;
-        let (_, ty_generics, _) = self.item_fn.decl.generics.split_for_impl();
+        let (_, ty_generics, _) = self.item_fn.sig.generics.split_for_impl();
         let (impl_generics, _, where_clause) = generics.split_for_impl();
         let captures = &self.captures;
         let extract =
@@ -843,7 +844,7 @@ impl NormalRpnFn {
     }
 
     fn generate_evaluator(&self) -> TokenStream {
-        let generics = &self.item_fn.decl.generics;
+        let generics = &self.item_fn.sig.generics;
         let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
         let evaluator_ident = &self.evaluator_ident;
         let fn_trait_ident = &self.fn_trait_ident;
@@ -874,19 +875,18 @@ impl NormalRpnFn {
 
     fn generate_constructor(&self) -> TokenStream {
         let constructor_ident = Ident::new(
-            &format!("{}_fn_meta", &self.item_fn.ident),
+            &format!("{}_fn_meta", &self.item_fn.sig.ident),
             Span::call_site(),
         );
-        let (impl_generics, ty_generics, where_clause) =
-            self.item_fn.decl.generics.split_for_impl();
+        let (impl_generics, ty_generics, where_clause) = self.item_fn.sig.generics.split_for_impl();
         let ty_generics_turbofish = ty_generics.as_turbofish();
         let evaluator_ident = &self.evaluator_ident;
         let mut evaluator =
             quote! { #evaluator_ident #ty_generics_turbofish (std::marker::PhantomData) };
-        for arg_index in 0..self.arg_types.len() {
-            evaluator = quote! { ArgConstructor::new(#arg_index, #evaluator) };
+        for (arg_index, arg_type) in self.arg_types.iter().enumerate() {
+            evaluator = quote! { <ArgConstructor<#arg_type, _>>::new(#arg_index, #evaluator) };
         }
-        let fn_name = self.item_fn.ident.to_string();
+        let fn_name = self.item_fn.sig.ident.to_string();
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
@@ -968,7 +968,7 @@ mod tests_normal {
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    panic!("Cannot apply {} on {:?}", "foo", self)
+                    unreachable!()
                 }
             }
         };
@@ -984,8 +984,8 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             impl<
                 'arg_,
-                Arg1_: crate::rpn_expr::function::RpnFnArg<Type = & 'arg_ Option<Real> > ,
-                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = & 'arg_ Option<Int> >
+                Arg1_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Real> > ,
+                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Int> >
             > Foo_Fn for crate::rpn_expr::function::Arg<
                 Arg0_,
                 crate::rpn_expr::function::Arg<
@@ -1053,15 +1053,16 @@ mod tests_normal {
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
-                    ArgConstructor::new(
+                    <ArgConstructor<Real, _>>::new(
                         1usize,
-                        ArgConstructor::new(0usize, Foo_Evaluator(std::marker::PhantomData))
+                        <ArgConstructor<Int, _>>::new(0usize, Foo_Evaluator(std::marker::PhantomData))
                     )
                     .eval(Null, ctx, output_rows, args, extra)
                 }
                 fn validate(expr: &tipb::Expr) -> crate::Result<()> {
                     use crate::codec::data_type::Evaluable;
                     use crate::rpn_expr::function;
+
                     function::validate_expr_return_type(expr, Decimal::EVAL_TYPE)?;
                     function::validate_expr_arguments_eq(expr, 2usize)?;
                     let children = expr.get_children();
@@ -1083,7 +1084,7 @@ mod tests_normal {
         let item_fn = parse_str(
             r#"
             fn foo<A: M, B>(arg0: &Option<A::X>) -> Result<Option<B>>
-            where B: N<M> {
+            where B: N<A> {
                 Ok(None)
             }
         "#,
@@ -1098,7 +1099,7 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             trait Foo_Fn<A: M, B>
             where
-                B: N<M>
+                B: N<A>
             {
                 fn eval(
                     self,
@@ -1118,7 +1119,7 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             impl<A: M, B, D_: crate::rpn_expr::function::ArgDef> Foo_Fn<A, B> for D_
             where
-                B: N<M>
+                B: N<A>
             {
                 default fn eval(
                     self,
@@ -1127,7 +1128,7 @@ mod tests_normal {
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    panic!("Cannot apply {} on {:?}", "foo", self)
+                    unreachable!()
                 }
             }
         };
@@ -1145,11 +1146,11 @@ mod tests_normal {
                 'arg_,
                 A: M,
                 B,
-                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = & 'arg_ Option<A::X> >
+                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<A::X> >
             > Foo_Fn<A, B> for crate::rpn_expr::function::Arg<
                 Arg0_,
                 crate::rpn_expr::function::Null
-            > where B: N<M> {
+            > where B: N<A> {
                 default fn eval(
                     self,
                     ctx: &mut crate::expr::EvalContext,
@@ -1179,11 +1180,11 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             pub struct Foo_Evaluator<A: M, B>(std::marker::PhantomData<(A, B)>)
             where
-                B: N<M>;
+                B: N<A>;
 
             impl<A: M, B> crate::rpn_expr::function::Evaluator for Foo_Evaluator<A, B>
             where
-                B: N<M>
+                B: N<A>
             {
                 #[inline]
                 fn eval(
@@ -1207,7 +1208,7 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             pub const fn foo_fn_meta<A: M, B>() -> crate::rpn_expr::RpnFnMeta
             where
-                B: N<M>
+                B: N<A>
             {
                 #[inline]
                 fn run<A: M, B>(
@@ -1217,20 +1218,15 @@ mod tests_normal {
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                 ) -> crate::Result<crate::codec::data_type::VectorValue>
                 where
-                    B: N<M>
+                    B: N<A>
                 {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
-                    ArgConstructor::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData)).eval(
-                        Null,
-                        ctx,
-                        output_rows,
-                        args,
-                        extra
-                    )
+                    <ArgConstructor<A::X, _>>::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData))
+                                .eval(Null, ctx, output_rows, args, extra)
                 }
                 fn validate<A: M, B>(expr: &tipb::Expr) -> crate::Result<()>
                 where
-                    B: N<M>
+                    B: N<A>
                 {
                     use crate::codec::data_type::Evaluable;
                     use crate::rpn_expr::function;
@@ -1279,8 +1275,8 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             impl<
                 'arg_,
-                Arg1_: crate::rpn_expr::function::RpnFnArg<Type = & 'arg_ Option<Real> > ,
-                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = & 'arg_ Option<Int> >
+                Arg1_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Real> > ,
+                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Int> >
             > Foo_Fn for crate::rpn_expr::function::Arg<
                 Arg0_,
                 crate::rpn_expr::function::Arg<

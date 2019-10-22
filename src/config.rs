@@ -5,6 +5,7 @@
 //! TiKV is configured through the `TiKvConfig` type, which is in turn
 //! made up of many other configuration types.
 
+use std::cmp;
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -158,6 +159,7 @@ macro_rules! cf_config {
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
+            pub force_consistency_checks: bool,
             pub prop_size_index_distance: u64,
             pub prop_keys_index_distance: u64,
             pub enable_doubly_skiplist: bool,
@@ -266,9 +268,11 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "hard_pending_compaction_bytes_limit"])
             .set($cf.hard_pending_compaction_bytes_limit.0 as f64);
         $metrics
+            .with_label_values(&[$tag, "force_consistency_checks"])
+            .set(($cf.force_consistency_checks as i32).into());
+        $metrics
             .with_label_values(&[$tag, "enable_doubly_skiplist"])
             .set(($cf.enable_doubly_skiplist as i32).into());
-
         $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
             .set($cf.titan.min_blob_size.0 as f64);
@@ -339,6 +343,7 @@ macro_rules! build_cf_opt {
         cf_opts.set_soft_pending_compaction_bytes_limit($opt.soft_pending_compaction_bytes_limit.0);
         cf_opts.set_hard_pending_compaction_bytes_limit($opt.hard_pending_compaction_bytes_limit.0);
         cf_opts.set_optimize_filters_for_hits($opt.optimize_filters_for_hits);
+        cf_opts.set_force_consistency_checks($opt.force_consistency_checks);
         if $opt.enable_doubly_skiplist {
             cf_opts.set_doubly_skiplist();
         }
@@ -388,6 +393,7 @@ impl Default for DefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -454,6 +460,7 @@ impl Default for WriteCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -522,6 +529,7 @@ impl Default for LockCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -580,6 +588,7 @@ impl Default for RaftCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -848,6 +857,7 @@ impl Default for RaftDefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -1187,7 +1197,8 @@ macro_rules! readpool_config {
     };
 }
 
-const DEFAULT_STORAGE_READPOOL_CONCURRENCY: usize = 4;
+const DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY: usize = 4;
+const DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY: usize = 8;
 
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
@@ -1201,10 +1212,14 @@ readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
+        let cpu_num = sys_info::cpu_num().unwrap();
+        let mut concurrency = (f64::from(cpu_num) * 0.5) as usize;
+        concurrency = cmp::max(DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY, concurrency);
+        concurrency = cmp::min(DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY, concurrency);
         Self {
-            high_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
-            normal_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
-            low_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
+            high_concurrency: concurrency,
+            normal_concurrency: concurrency,
+            low_concurrency: concurrency,
             max_tasks_per_worker_high: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             max_tasks_per_worker_normal: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             max_tasks_per_worker_low: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
@@ -1213,7 +1228,7 @@ impl Default for StorageReadPoolConfig {
     }
 }
 
-const DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY: usize = 8;
+const DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY: usize = 2;
 
 readpool_config!(
     CoprReadPoolConfig,
@@ -1224,11 +1239,8 @@ readpool_config!(
 impl Default for CoprReadPoolConfig {
     fn default() -> Self {
         let cpu_num = sys_info::cpu_num().unwrap();
-        let concurrency = if cpu_num > 8 {
-            (f64::from(cpu_num) * 0.8) as usize
-        } else {
-            DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY
-        };
+        let mut concurrency = (f64::from(cpu_num) * 0.8) as usize;
+        concurrency = cmp::max(DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             high_concurrency: concurrency,
             normal_concurrency: concurrency,

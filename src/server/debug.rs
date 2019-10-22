@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::collections::Bound::Excluded;
 use std::iter::FromIterator;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1437,13 +1436,13 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec
         let props = RangeProperties::decode(v.user_collected_properties())?;
         keys.extend(
             props
-                .offsets
-                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
+                .take_excluded_range(start.as_slice(), end.as_slice())
+                .into_iter()
                 .filter(|_| {
                     found_keys_count += 1;
                     found_keys_count % 100 == 0
                 })
-                .map(|(k, _)| k.to_owned()),
+                .map(|(k, _)| k),
         );
     }
 
@@ -1790,7 +1789,7 @@ mod tests {
         for &(prefix, tp, value, version) in &cf_lock_data {
             let encoded_key = Key::from_raw(prefix);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            let lock = Lock::new(tp, value.to_vec(), version, 0, None, 0, 0);
+            let lock = Lock::new(tp, value.to_vec(), version, 0, None, 0, 0, 0);
             let value = lock.to_bytes();
             engine
                 .put_cf(lock_cf, key.as_slice(), value.as_slice())
@@ -2178,7 +2177,7 @@ mod tests {
             } else {
                 None
             };
-            let lock = Lock::new(tp, vec![], ts, 0, v, 0, 0);
+            let lock = Lock::new(tp, vec![], ts, 0, v, 0, 0, 0);
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
         }
         for (key, start_ts, commit_ts, tp, short_value, expect) in write {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::{self, ExecType, ExecutorExecutionSummary};
-use tipb::{Chunk, DagRequest, SelectResponse};
+use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
 
 use tikv_util::deadline::Deadline;
 
@@ -46,6 +46,12 @@ pub struct BatchExecutorsRunner<SS> {
     collect_exec_summary: bool,
 
     exec_stats: ExecuteStats,
+
+    /// The encoding method for the response.
+    /// Possible encoding methods are:
+    /// 1. default: result is encoded row by row using datum format.
+    /// 2. arrow: result is encoded column by column using arrow format.
+    encode_type: EncodeType,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -304,6 +310,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
+        let encode_type = req.get_encode_type();
 
         let out_most_executor = if collect_exec_summary {
             build_executors::<_, ExecSummaryCollectorEnabled>(
@@ -347,6 +354,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             config,
             collect_exec_summary,
             exec_stats,
+            encode_type,
         })
     }
 
@@ -382,21 +390,40 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 let mut chunk = Chunk::default();
                 {
                     let data = chunk.mut_rows_data();
-                    data.reserve(
-                        result
-                            .physical_columns
-                            .maximum_encoded_size(&result.logical_rows, &self.output_offsets)?,
-                    );
                     // Although `schema()` can be deeply nested, it is ok since we process data in
                     // batch.
-                    result.physical_columns.encode(
-                        &result.logical_rows,
-                        &self.output_offsets,
-                        self.out_most_executor.schema(),
-                        data,
-                    )?;
+                    match self.encode_type {
+                        EncodeType::TypeArrow => {
+                            self.encode_type = EncodeType::TypeArrow;
+                            data.reserve(result.physical_columns.maximum_encoded_size_arrow(
+                                &result.logical_rows,
+                                &self.output_offsets,
+                            )?);
+                            result.physical_columns.encode_arrow(
+                                &result.logical_rows,
+                                &self.output_offsets,
+                                self.out_most_executor.schema(),
+                                data,
+                                &self.config.tz,
+                            )?;
+                        }
+                        _ => {
+                            // For the default or unsupported encode type, use datum format.
+                            self.encode_type = EncodeType::TypeDefault;
+                            data.reserve(result.physical_columns.maximum_encoded_size(
+                                &result.logical_rows,
+                                &self.output_offsets,
+                            )?);
+                            result.physical_columns.encode(
+                                &result.logical_rows,
+                                &self.output_offsets,
+                                self.out_most_executor.schema(),
+                                data,
+                            )?;
+                        }
+                    }
+                    chunks.push(chunk);
                 }
-                chunks.push(chunk);
             }
 
             if is_drained {
@@ -405,6 +432,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
                 let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());
+                sel_resp.set_encode_type(self.encode_type);
+
                 // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
                 sel_resp.set_output_counts(
                     self.exec_stats

@@ -24,6 +24,7 @@ use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use tikv::raftstore::store::{fsm, LocalReader};
 use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
+use tikv::server::gc_worker::{AutoGCConfig, GCWorker};
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve;
 use tikv::server::service::DebugService;
@@ -31,7 +32,7 @@ use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv::server::{create_raft_storage, Node, RaftKv, Server};
-use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
@@ -186,12 +187,20 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         None
     };
 
+    let mut gc_worker = GCWorker::new(
+        engine.clone(),
+        Some(engines.kv.clone()),
+        Some(raft_router.clone()),
+        cfg.storage.gc_ratio_threshold,
+    );
+    gc_worker
+        .start()
+        .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
+
     let storage = create_raft_storage(
         engine.clone(),
         &cfg.storage,
         storage_read_pool,
-        Some(engines.kv.clone()),
-        Some(raft_router.clone()),
         lock_mgr.clone(),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
@@ -240,6 +249,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         raft_router,
         resolver.clone(),
         snap_mgr.clone(),
+        gc_worker.clone(),
     )
     .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
@@ -307,8 +317,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         region_info_accessor.clone(),
         engines.kv.clone(),
     );
+    let backup_timer = backup_endpoint.new_timer();
     backup_worker
-        .start(backup_endpoint)
+        .start_with_timer(backup_endpoint, backup_timer)
         .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
     // Start auto gc
@@ -317,7 +328,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         region_info_accessor.clone(),
         node.id(),
     );
-    if let Err(e) = storage.start_auto_gc(auto_gc_cfg) {
+    if let Err(e) = gc_worker.start_auto_gc(auto_gc_cfg) {
         fatal!("failed to start auto_gc on storage, error: {}", e);
     }
 

@@ -14,7 +14,7 @@ publish = false
 [features]
 default = ["jemalloc"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
-jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc"]
+jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
 portable = ["engine/portable"]
 sse = ["engine/sse"]
@@ -120,7 +120,9 @@ engine = { path = "components/engine" }
 tidb_query = { path = "components/tidb_query" }
 pd_client = { path = "components/pd_client" }
 keys = { path = "components/keys" }
+engine_traits = { path = "components/engine_traits" }
 sst_importer = { path = "components/sst_importer" }
+engine_rocks = { path = "components/engine_rocks" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -144,7 +146,8 @@ rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.
-criterion = { version = "0.2.11", features=['real_blackbox'] }
+criterion = "0.3"
+criterion-cpu-time = "0.1"
 arrow = "0.10.0"
 rand_xorshift = "0.1"
 
@@ -162,6 +165,7 @@ signal = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }
+criterion-papi = "0.1"
 
 [workspace]
 members = [

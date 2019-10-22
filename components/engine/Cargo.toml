@@ -5,9 +5,9 @@ edition = "2018"
 publish = false
 
 [features]
-jemalloc = ["engine_rocksdb/jemalloc"]
-portable = ["engine_rocksdb/portable"]
-sse = ["engine_rocksdb/sse"]
+jemalloc = ["rocksdb/jemalloc"]
+portable = ["rocksdb/portable"]
+sse = ["rocksdb/sse"]
 
 [dependencies]
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
@@ -32,7 +32,7 @@ git = "https://github.com/pingcap/rust-prometheus.git"
 rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
 features = ["nightly", "push", "process"]
 
-[dependencies.engine_rocksdb]
+[dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
 package = "rocksdb"
 
