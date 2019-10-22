@@ -31,7 +31,7 @@ impl Import for Rocks {
         path: P,
         clone: Q,
     ) -> Result<()> {
-        Ok(prepare_sst_for_ingestion(path, clone).map_err(|e| Error::Other(box_err!(e)))?)
+        prepare_sst_for_ingestion(path, clone).map_err(|e| Error::Other(box_err!(e)))
     }
 
     fn ingest_external_file_cf(
