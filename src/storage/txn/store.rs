@@ -18,9 +18,11 @@ pub trait Store: Send {
     /// Fetch the provided key.
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
 
-    /// Re-use last cursor to incrementally (if possible) fetch the provided key. When function
-    /// is not called in ascending order, the cursor can not be reused which will be slower.
-    fn incremental_get(&mut self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
+    /// Re-use last cursor to incrementally (if possible) fetch the provided key.
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>>;
+
+    /// Take the statistics. Currently only available for `incremental_get`.
+    fn incremental_get_take_statistics(&mut self) -> Statistics;
 
     /// Fetch the provided set of keys.
     fn batch_get(
@@ -148,7 +150,6 @@ pub struct SnapshotStore<S: Snapshot> {
     fill_cache: bool,
 
     point_getter_cache: Option<PointGetter<S>>,
-    last_point_get_key: Vec<u8>,
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
@@ -165,10 +166,8 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         Ok(v)
     }
 
-    fn incremental_get(&mut self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
-        if self.point_getter_cache.is_none()
-            || key.as_encoded().as_slice() < self.last_point_get_key.as_slice()
-        {
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
+        if self.point_getter_cache.is_none() {
             // Only reuse point getter when keys are given in ascending order.
             self.point_getter_cache = Some(
                 PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
@@ -178,13 +177,15 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     .build()?,
             );
         }
-        self.last_point_get_key.clear();
-        self.last_point_get_key
-            .extend_from_slice(key.as_encoded().as_slice());
-        let point_getter = self.point_getter_cache.as_mut().unwrap();
-        let v = point_getter.get(key)?;
-        statistics.add(&point_getter.take_statistics());
-        Ok(v)
+        Ok(self.point_getter_cache.as_mut().unwrap().get(key)?)
+    }
+
+    fn incremental_get_take_statistics(&mut self) -> Statistics {
+        if self.point_getter_cache.is_none() {
+            Statistics::default()
+        } else {
+            self.point_getter_cache.as_mut().unwrap().take_statistics()
+        }
     }
 
     fn batch_get(
@@ -281,7 +282,6 @@ impl<S: Snapshot> SnapshotStore<S> {
             fill_cache,
 
             point_getter_cache: None,
-            last_point_get_key: Vec::new(),
         }
     }
 
@@ -360,12 +360,14 @@ impl Store for FixtureStore {
     }
 
     #[inline]
-    fn incremental_get(
-        &mut self,
-        key: &Key,
-        statistics: &mut Statistics,
-    ) -> Result<Option<Vec<u8>>> {
-        self.get(key, statistics)
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Vec<u8>>> {
+        let mut s = Statistics::default();
+        self.get(key, &mut s)
+    }
+
+    #[inline]
+    fn incremental_get_take_statistics(&mut self) -> Statistics {
+        Statistics::default()
     }
 
     #[inline]
