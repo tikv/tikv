@@ -1,13 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::cf_options::RocksCFOptions;
-use crate::engine::Rocks;
+use crate::engine::RocksEngine;
 use engine_traits::CFHandle;
 use engine_traits::CFHandleExt;
 use engine_traits::Result;
 use rocksdb::CFHandle as RawCFHandle;
 
-impl CFHandleExt for Rocks {
+impl CFHandleExt for RocksEngine {
     type CFHandle = RocksCFHandle;
     type CFOptions = RocksCFOptions;
 

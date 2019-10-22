@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::Rocks;
+use crate::engine::RocksEngine;
 use engine::rocks::util::prepare_sst_for_ingestion;
 use engine_traits::ImportExt;
 use engine_traits::IngestExternalFileOptions;
@@ -11,7 +11,7 @@ use std::fs::File;
 use std::path::Path;
 use tikv_util::file::calc_crc32;
 
-impl ImportExt for Rocks {
+impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
     fn new_ingest_external_file_options() -> RocksIngestExternalFileOptions {

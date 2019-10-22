@@ -11,19 +11,19 @@ use rocksdb::{DBIterator, Writable, DB};
 
 use crate::options::{RocksReadOptions, RocksWriteOptions};
 use crate::util::get_cf_handle;
-use crate::{Iterator, Snapshot};
+use crate::{RocksEngineIterator, Snapshot};
 
 #[derive(Clone, Debug)]
 #[repr(transparent)]
-pub struct Rocks(Arc<DB>);
+pub struct RocksEngine(Arc<DB>);
 
-impl Rocks {
+impl RocksEngine {
     pub fn from_db(db: Arc<DB>) -> Self {
-        Rocks(db)
+        RocksEngine(db)
     }
 
     pub fn from_ref(db: &Arc<DB>) -> &Self {
-        unsafe { &*(db as *const Arc<DB> as *const Rocks) }
+        unsafe { &*(db as *const Arc<DB> as *const RocksEngine) }
     }
 
     pub fn as_inner(&self) -> &Arc<DB> {
@@ -47,7 +47,7 @@ impl Rocks {
     }
 }
 
-impl KvEngine for Rocks {
+impl KvEngine for RocksEngine {
     type Snapshot = Snapshot;
     type WriteBatch = crate::WriteBatch;
 
@@ -82,12 +82,12 @@ impl KvEngine for Rocks {
     }
 }
 
-impl Iterable for Rocks {
-    type Iterator = Iterator;
+impl Iterable for RocksEngine {
+    type Iterator = RocksEngineIterator;
 
     fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
-        Ok(Iterator::from_raw(DBIterator::new(
+        Ok(RocksEngineIterator::from_raw(DBIterator::new(
             self.0.clone(),
             opt.into_raw(),
         )))
@@ -96,7 +96,7 @@ impl Iterable for Rocks {
     fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iterator> {
         let handle = get_cf_handle(&self.0, cf)?;
         let opt: RocksReadOptions = opts.into();
-        Ok(Iterator::from_raw(DBIterator::new_cf(
+        Ok(RocksEngineIterator::from_raw(DBIterator::new_cf(
             self.0.clone(),
             handle,
             opt.into_raw(),
@@ -104,7 +104,7 @@ impl Iterable for Rocks {
     }
 }
 
-impl Peekable for Rocks {
+impl Peekable for RocksEngine {
     fn get_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let opt: RocksReadOptions = opts.into();
         let v = self.0.get_opt(key, &opt.into_raw())?;
@@ -119,7 +119,7 @@ impl Peekable for Rocks {
     }
 }
 
-impl Mutable for Rocks {
+impl Mutable for RocksEngine {
     fn put_opt(&self, _: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
         self.0.put(key, value).map_err(Error::Engine)
     }

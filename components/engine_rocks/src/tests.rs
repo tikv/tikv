@@ -6,13 +6,13 @@ use kvproto::metapb::Region;
 use std::sync::Arc;
 use tempfile::Builder;
 
-use crate::{Rocks, Snapshot};
+use crate::{RocksEngine, Snapshot};
 
 #[test]
 fn test_base() {
     let path = Builder::new().prefix("var").tempdir().unwrap();
     let cf = "cf";
-    let engine = Rocks::from_db(Arc::new(
+    let engine = RocksEngine::from_db(Arc::new(
         util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
     ));
 
@@ -49,7 +49,7 @@ fn test_base() {
 fn test_peekable() {
     let path = Builder::new().prefix("var").tempdir().unwrap();
     let cf = "cf";
-    let engine = Rocks::from_db(Arc::new(
+    let engine = RocksEngine::from_db(Arc::new(
         util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
     ));
 
@@ -65,7 +65,7 @@ fn test_peekable() {
 fn test_scan() {
     let path = Builder::new().prefix("var").tempdir().unwrap();
     let cf = "cf";
-    let engine = Rocks::from_db(Arc::new(
+    let engine = RocksEngine::from_db(Arc::new(
         util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
     ));
 

@@ -20,8 +20,8 @@ pub use crate::snapshot::*;
 mod write_batch;
 pub use crate::write_batch::*;
 
-mod iterator;
-pub use crate::iterator::*;
+mod engine_iterator;
+pub use crate::engine_iterator::*;
 
 mod options;
 mod util;
