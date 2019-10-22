@@ -56,7 +56,21 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         let mut checksum = 0;
         let mut total_kvs = 0;
         let mut total_bytes = 0;
-        while let Some((k, v)) = self.scanner.next()? {
+        let (old_prefix, new_prefix) = if self.req.has_rule() {
+            let mut rule = self.req.get_rule().clone();
+            (rule.take_old_prefix(), rule.take_new_prefix())
+        } else {
+            (vec![], vec![])
+        };
+        while let Some((mut k, v)) = self.scanner.next()? {
+            // undo rewrite
+            if !old_prefix.is_empty() && !new_prefix.is_empty() {
+                assert!(k.starts_with(&new_prefix));
+                let mut new_k = Vec::with_capacity(k.len() - new_prefix.len() + old_prefix.len());
+                new_k.extend_from_slice(&old_prefix);
+                new_k.extend_from_slice(&k[new_prefix.len()..]);
+                k = new_k;
+            }
             checksum = checksum_crc64_xor(checksum, &k, &v);
             total_kvs += 1;
             total_bytes += k.len() + v.len();
