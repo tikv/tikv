@@ -93,8 +93,10 @@ fn test_turnoff_titan() {
         assert!(db.set_options_cf(handle, &opt).is_ok());
     }
     cluster.compact_data();
+    // make sure there is no background error.
     assert!(cluster.put(b"a", b"v",).is_ok());
-    sleep_ms(1000);
+    // wait for gc completed.
+    sleep_ms(100);
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
         assert_eq!(
@@ -116,12 +118,11 @@ fn test_turnoff_titan() {
             2
         );
     }
+    // wait till files are purged.
+    sleep_ms(2000);
     cluster.shutdown();
 
     configure_for_disable_titan(&mut cluster);
-    assert!(cluster
-        .pre_start_check()
-        .map_err(|e| error!("{}", e))
-        .is_ok());
+    assert!(cluster.pre_start_check().is_ok());
     cluster.start().unwrap();
 }
