@@ -4,10 +4,6 @@ use crate::cf_handle::CFHandleExt;
 use crate::errors::Result;
 use std::path::Path;
 
-pub trait IngestExternalFileOptions {
-    fn move_files(&mut self, f: bool);
-}
-
 pub trait Import: CFHandleExt {
     type IngestExternalFileOptions: IngestExternalFileOptions;
 
@@ -34,3 +30,8 @@ pub trait Import: CFHandleExt {
         expected_checksum: u32,
     ) -> Result<()>;
 }
+
+pub trait IngestExternalFileOptions {
+    fn move_files(&mut self, f: bool);
+}
+

@@ -11,14 +11,6 @@ use std::fs::File;
 use std::path::Path;
 use tikv_util::file::calc_crc32;
 
-pub struct RocksIngestExternalFileOptions(RawIngestExternalFileOptions);
-
-impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
-    fn move_files(&mut self, f: bool) {
-        self.0.move_files(f);
-    }
-}
-
 impl Import for Rocks {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
@@ -86,5 +78,13 @@ impl Import for Rocks {
         }
 
         Ok(())
+    }
+}
+
+pub struct RocksIngestExternalFileOptions(RawIngestExternalFileOptions);
+
+impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
+    fn move_files(&mut self, f: bool) {
+        self.0.move_files(f);
     }
 }

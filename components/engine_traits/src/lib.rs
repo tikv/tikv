@@ -1,5 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! A generic TiKV storage engine
+//!
+//! This is a work-in-progress attempt to abstract all the features
+//! needed by TiKV to store to disk.
+
 #![recursion_limit = "200"]
 
 #[macro_use]
@@ -7,8 +12,9 @@ extern crate quick_error;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-// These crates contain traits that need to be implemented by engines.
-// It is recommended that engines follow the same module layout.
+// These modules contain traits that need to be implemented by engines, either
+// they are required by KvEngine or are an associated type of KvEngine. It is
+// recommended that engines follow the same module layout.
 
 mod cf_handle;
 pub use crate::cf_handle::*;
@@ -20,14 +26,18 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use import::*;
+mod snapshot;
+pub use crate::snapshot::*;
+
+// These modules contain more general traits, some of which may be implemented
+// by multiple types.
+
 mod iterable;
 pub use crate::iterable::*;
 mod mutable;
 pub use crate::mutable::*;
 mod peekable;
 pub use crate::peekable::*;
-mod snapshot;
-pub use crate::snapshot::*;
 
 // These modules contain support code that does not need to be implemented by
 // engines.

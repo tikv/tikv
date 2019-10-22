@@ -15,12 +15,13 @@ mod engine;
 pub use crate::engine::*;
 mod import;
 pub use crate::import::*;
-mod iterator;
-pub use crate::iterator::*;
 mod snapshot;
 pub use crate::snapshot::*;
 mod writebatch;
 pub use crate::writebatch::*;
+
+mod iterator;
+pub use crate::iterator::*;
 
 mod options;
 mod util;
