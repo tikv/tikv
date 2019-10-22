@@ -58,6 +58,7 @@ scheduler-notify-capacity = 123
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
+scheduler-latch-wait-list-limit = 101
 
 [storage.block-cache]
 shared = true

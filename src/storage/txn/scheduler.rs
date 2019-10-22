@@ -37,7 +37,10 @@ use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, Pro
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
-use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
+use crate::storage::{
+    Command, Engine, Error as StorageError, Result as StorageResult, StorageCb,
+    REACH_SCHED_PENDING_WRITE_LIMIT,
+};
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
@@ -219,7 +222,7 @@ impl<L: LockMgr> SchedulerInner<L> {
     /// Tries to acquire all the required latches for a command.
     ///
     /// Returns `true` if successful; returns `false` otherwise.
-    fn acquire_lock(&self, cid: u64) -> Result<bool> {
+    fn acquire_lock(&self, cid: u64) -> StorageResult<bool> {
         let mut task_contexts = self.task_contexts[id_index(cid)].lock();
         let tctx = task_contexts.get_mut(&cid).unwrap();
         if self.latches.acquire(&mut tctx.lock, cid)? {
@@ -248,6 +251,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
+        sched_latch_waiting_list_limit: usize,
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
@@ -260,7 +264,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         let inner = Arc::new(SchedulerInner {
             task_contexts,
             id_alloc: AtomicU64::new(0),
-            latches: Latches::new(concurrency),
+            latches: Latches::new(concurrency, sched_latch_waiting_list_limit),
             running_write_bytes: AtomicUsize::new(0),
             sched_pending_write_threshold,
             worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
@@ -303,7 +307,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         let wakeup_list = self.inner.latches.release(lock, cid);
         for wcid in wakeup_list {
             self.try_to_wake_up(wcid)
-                .unwrap_or_else(|e| panic!("unexpected error {:?} in release_lock"));
+                .unwrap_or_else(|e| panic!("unexpected error {:?} in release_lock", e));
         }
     }
 
@@ -318,10 +322,13 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         self.inner.enqueue_task(task, callback);
         match self.try_to_wake_up(cid) {
             Ok(()) => {}
-            e @ Err(StorageError::LatchWaitListTooLong) => {
-                return self.finish_with_err(cid, StorageError::SchedTooBusy(e.description()));
+            Err(StorageError::LatchWaitListTooLong) => {
+                return self.finish_with_err(
+                    cid,
+                    StorageError::SchedTooBusy("latch wait list too long".to_string()),
+                );
             }
-            Err(e) => panic!("unexpected error {:?} in try_to_wake_up"),
+            Err(e) => panic!("unexpected error {:?} in try_to_wake_up", e),
         }
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -331,7 +338,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for further processing.
-    fn try_to_wake_up(&self, cid: u64) -> Result<()> {
+    fn try_to_wake_up(&self, cid: u64) -> StorageResult<()> {
         if self.inner.acquire_lock(cid)? {
             self.get_snapshot(cid);
         }
@@ -345,7 +352,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
             execute_callback(
                 callback,
                 ProcessResult::Failed {
-                    err: StorageError::SchedTooBusy("pending write bytes reach threshold"),
+                    err: StorageError::SchedTooBusy(REACH_SCHED_PENDING_WRITE_LIMIT.to_string()),
                 },
             );
             return;
@@ -370,7 +377,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
-                self.finish_with_err(cid, e.into());
+                self.finish_with_err(cid, StorageError::from(Error::from(e)));
             } else {
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
             }
@@ -386,15 +393,13 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
     }
 
     /// Calls the callback with an error.
-    fn finish_with_err(&self, cid: u64, err: Error) {
+    fn finish_with_err(&self, cid: u64, err: StorageError) {
         debug!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
 
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
 
-        let pr = ProcessResult::Failed {
-            err: StorageError::from(err),
-        };
+        let pr = ProcessResult::Failed { err };
         execute_callback(tctx.cb, pr);
 
         self.release_lock(&tctx.lock, cid);
@@ -478,7 +483,9 @@ impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
                 pr,
                 result,
             } => self.on_write_finished(cid, pr, result, tag),
-            Msg::FinishedWithErr { cid, err, .. } => self.finish_with_err(cid, err),
+            Msg::FinishedWithErr { cid, err, .. } => {
+                self.finish_with_err(cid, StorageError::from(err))
+            }
             Msg::WaitForLock {
                 cid,
                 start_ts,
@@ -624,20 +631,20 @@ mod tests {
             },
         ];
 
-        let latches = Latches::new(1024);
+        let latches = Latches::new(1024, 100);
         let write_locks: Vec<Lock> = write_cmds
             .into_iter()
             .enumerate()
             .map(|(id, cmd)| {
                 let mut lock = gen_command_lock(&latches, &cmd);
-                assert_eq!(latches.acquire(&mut lock, id as u64), id == 0);
+                assert_eq!(latches.acquire(&mut lock, id as u64).unwrap(), id == 0);
                 lock
             })
             .collect();
 
         for (id, cmd) in readonly_cmds.iter().enumerate() {
             let mut lock = gen_command_lock(&latches, cmd);
-            assert!(latches.acquire(&mut lock, id as u64));
+            assert!(latches.acquire(&mut lock, id as u64).unwrap());
         }
 
         // acquire/release locks one by one.
@@ -645,7 +652,7 @@ mod tests {
         for (id, mut lock) in write_locks.into_iter().enumerate() {
             let id = id as u64;
             if id != 0 {
-                assert!(latches.acquire(&mut lock, id));
+                assert!(latches.acquire(&mut lock, id).unwrap());
             }
             let unlocked = latches.release(&lock, id);
             if id as u64 == max_id {

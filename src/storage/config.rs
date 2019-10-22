@@ -24,6 +24,7 @@ const DEFAULT_SCHED_CONCURRENCY: usize = 2048000;
 // on average, in that situation the writing bytes estimated 10MB,
 // here we use 100MB as default value for tolerate 1s latency.
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
+const DEFAULT_SCHED_LATCH_WAIT_LIST_LIMIT: usize = 100;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -36,6 +37,7 @@ pub struct Config {
     pub scheduler_concurrency: usize,
     pub scheduler_worker_pool_size: usize,
     pub scheduler_pending_write_threshold: ReadableSize,
+    pub scheduler_latch_wait_list_limit: usize,
     pub block_cache: BlockCacheConfig,
 }
 
@@ -50,6 +52,7 @@ impl Default for Config {
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if total_cpu >= 16 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
+            scheduler_latch_wait_list_limit: DEFAULT_SCHED_LATCH_WAIT_LIST_LIMIT,
             block_cache: BlockCacheConfig::default(),
         }
     }

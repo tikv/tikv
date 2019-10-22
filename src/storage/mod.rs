@@ -55,6 +55,8 @@ pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
 pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
+pub const REACH_SCHED_PENDING_WRITE_LIMIT: &str = "reach scheduler pending write bytes limit";
+
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use tikv_util::future_pool::FuturePool;
 
@@ -791,6 +793,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
+            config.scheduler_latch_wait_list_limit,
         );
 
         let read_pool_high = read_pool.remove(2);
@@ -905,7 +908,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::SchedTooBusy(REACH_SCHED_PENDING_WRITE_LIMIT.to_string()))
             .flatten()
     }
 
@@ -970,7 +973,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::SchedTooBusy(REACH_SCHED_PENDING_WRITE_LIMIT.to_string()))
             .flatten()
     }
 
@@ -1045,7 +1048,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::SchedTooBusy(REACH_SCHED_PENDING_WRITE_LIMIT.to_string()))
             .flatten()
     }
 
@@ -1442,7 +1445,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::SchedTooBusy(REACH_SCHED_PENDING_WRITE_LIMIT.to_string()))
             .flatten()
     }
 
@@ -1503,7 +1506,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::SchedTooBusy(REACH_SCHED_PENDING_WRITE_LIMIT.to_string()))
             .flatten()
     }
 
@@ -1791,7 +1794,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::SchedTooBusy(REACH_SCHED_PENDING_WRITE_LIMIT.to_string()))
             .flatten()
     }
 
@@ -1917,7 +1920,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::SchedTooBusy(REACH_SCHED_PENDING_WRITE_LIMIT.to_string()))
             .flatten()
     }
 
@@ -2121,7 +2124,7 @@ mod tests {
         Box::new(move |x: Result<T>| {
             expect_error(
                 |err| match err {
-                    Error::SchedTooBusy => {}
+                    Error::SchedTooBusy(_) => {}
                     e => panic!("unexpected error chain: {:?}, expect too busy", e),
                 },
                 x,

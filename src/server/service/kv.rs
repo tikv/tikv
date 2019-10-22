@@ -2021,10 +2021,10 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
         | Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
             Some(e.to_owned())
         }
-        Err(Error::SchedTooBusy) => {
+        Err(Error::SchedTooBusy(ref reason)) => {
             let mut err = RegionError::default();
             let mut server_is_busy_err = ServerIsBusy::default();
-            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
+            server_is_busy_err.set_reason(format!("{}, reason {}", SCHEDULER_IS_BUSY, reason));
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
