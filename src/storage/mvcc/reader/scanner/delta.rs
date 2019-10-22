@@ -56,10 +56,11 @@ impl<S: Snapshot> DeltaScanner<S> {
         if self.lock_cursor.is_none() {
             return self.read_next_write_key();
         }
+        // TODO: read next with RR isolation
         unimplemented!()
     }
 
-    pub fn read_next_write_key(&mut self) -> Result<Option<TxnEntry>> {
+    fn read_next_write_key(&mut self) -> Result<Option<TxnEntry>> {
         loop {
             if !self.write_cursor.valid()? {
                 return Ok(None);
@@ -102,7 +103,6 @@ impl<S: Snapshot> DeltaScanner<S> {
                 write: w,
             });
         };
-        // Value is in the default CF.
         // Value is in the default CF.
         self.ensure_default_cursor()?;
         let mut default_cf = self.default_cursor.as_mut().unwrap();
@@ -194,6 +194,8 @@ mod tests {
         // Generate 1 put for [a].
         must_prewrite_put(&engine, b"a", b"value", b"a", 7);
         must_commit(&engine, b"a", 7, 7);
+        // Generate a Lock for [a] with start ts=8.
+        must_prewrite_put(&engine, b"a", b"value", b"a", 8);
 
         // Generate 5 rollback for [b].
         for ts in 0..10 {
