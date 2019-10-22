@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::cf_options::CFOptions;
-use std::result::Result as StdResult;
+use crate::errors::Result;
 
 /// Trait for engines with column family handles.
 ///
@@ -21,12 +21,11 @@ pub trait CFHandleExt {
 
     fn get_cf_handle(&self, name: &str) -> Option<&Self::CFHandle>;
     fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::CFOptions;
-    // FIXME: return type
     fn set_options_cf(
         &self,
         cf: &Self::CFHandle,
         options: &[(&str, &str)],
-    ) -> StdResult<(), String>;
+    ) -> Result<()>;
 }
 
 pub trait CFHandle {}

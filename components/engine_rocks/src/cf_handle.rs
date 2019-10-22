@@ -5,7 +5,7 @@ use crate::db::Rocks;
 use engine_traits::CFHandle;
 use engine_traits::CFHandleExt;
 use rocksdb::CFHandle as RawCFHandle;
-use std::result::Result as StdResult;
+use engine_traits::Result;
 
 impl CFHandleExt for Rocks {
     type CFHandle = RocksCFHandle;
@@ -23,8 +23,8 @@ impl CFHandleExt for Rocks {
         &self,
         cf: &Self::CFHandle,
         options: &[(&str, &str)],
-    ) -> StdResult<(), String> {
-        self.as_inner().set_options_cf(cf.as_inner(), options)
+    ) -> Result<()> {
+        self.as_inner().set_options_cf(cf.as_inner(), options).map_err(|e| box_err!(e))
     }
 }
 
