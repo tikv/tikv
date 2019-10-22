@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::errors::Result;
 use crate::engine::KvEngine;
+use crate::errors::Result;
 use crate::options::WriteOptions;
 
 #[derive(Clone, Debug)]

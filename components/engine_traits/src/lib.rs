@@ -106,4 +106,3 @@ pub const DATA_KEY_PREFIX_LEN: usize = 1;
 // In our tests, we found that if the batch size is too large, running delete_all_in_range will
 // reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.
 pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
-

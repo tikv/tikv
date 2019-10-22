@@ -69,7 +69,10 @@ impl Iterable for Snapshot {
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        Ok(RocksEngineIterator::from_raw(DBIterator::new(self.db.clone(), opt)))
+        Ok(RocksEngineIterator::from_raw(DBIterator::new(
+            self.db.clone(),
+            opt,
+        )))
     }
 
     fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iterator> {

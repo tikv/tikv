@@ -34,4 +34,3 @@ pub trait IngestExternalFileOptions {
 
     fn move_files(&mut self, f: bool);
 }
-
