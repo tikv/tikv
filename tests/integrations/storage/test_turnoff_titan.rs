@@ -13,6 +13,7 @@ fn test_turnoff_titan() {
     configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
     cluster.run();
     assert_eq!(cluster.must_get(b"k1"), None);
+
     let size = 50;
     for i in 0..size {
         assert!(cluster
@@ -22,7 +23,6 @@ fn test_turnoff_titan() {
             )
             .is_ok());
     }
-    // make sure data is flushed to disk.
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
@@ -47,7 +47,7 @@ fn test_turnoff_titan() {
     }
     cluster.shutdown();
 
-    // try reopen db when titandb dir is non-empty
+    // try reopen db when titan isn't properly turned off.
     configure_for_disable_titan(&mut cluster);
     assert!(cluster.pre_start_check().is_err());
 
@@ -85,6 +85,8 @@ fn test_turnoff_titan() {
             0
         );
     }
+
+    // turn off titan.
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
@@ -94,8 +96,8 @@ fn test_turnoff_titan() {
     }
     cluster.compact_data();
     // make sure there is no background error.
-    assert!(cluster.put(b"a", b"v",).is_ok());
-    // wait for gc completed.
+    assert_eq!(cluster.must_get(b"k1"), None);
+    // wait for gc completes.
     sleep_ms(100);
     for i in cluster.get_node_ids().into_iter() {
         let db = cluster.get_engine(i);
@@ -119,6 +121,7 @@ fn test_turnoff_titan() {
         );
     }
     cluster.shutdown();
+
     configure_for_disable_titan(&mut cluster);
     // wait till files are purged, timeout set to purge_obsolete_files_period.
     for _ in 1..100 {
