@@ -14,10 +14,6 @@ use tikv_util::file::calc_crc32;
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
-    fn new_ingest_external_file_options() -> RocksIngestExternalFileOptions {
-        RocksIngestExternalFileOptions(RawIngestExternalFileOptions::new())
-    }
-
     fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
         path: P,
@@ -84,6 +80,10 @@ impl ImportExt for RocksEngine {
 pub struct RocksIngestExternalFileOptions(RawIngestExternalFileOptions);
 
 impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
+    fn new() -> RocksIngestExternalFileOptions {
+        RocksIngestExternalFileOptions(RawIngestExternalFileOptions::new())
+    }
+
     fn move_files(&mut self, f: bool) {
         self.0.move_files(f);
     }
