@@ -601,10 +601,11 @@ pub fn configure_for_enable_titan<T: Simulator>(
     min_blob_size: ReadableSize,
 ) {
     cluster.cfg.rocksdb.titan.enabled = true;
-    cluster.cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::millis(1);
+    cluster.cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
     cluster.cfg.rocksdb.titan.max_background_gc = 10;
     cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = min_blob_size;
     cluster.cfg.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
+    cluster.cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize::kb(0);
 }
 
 pub fn configure_for_disable_titan<T: Simulator>(cluster: &mut Cluster<T>) {
