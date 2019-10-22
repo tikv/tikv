@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::db::Rocks;
+use crate::engine::Rocks;
 use engine_traits::DBOptions;
 use engine_traits::DBOptionsExt;
 use engine_traits::Result;

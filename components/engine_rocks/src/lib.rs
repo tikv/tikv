@@ -5,8 +5,6 @@ extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
 
-mod db;
-pub use self::db::*;
 mod snapshot;
 pub use self::snapshot::{Snapshot, SyncSnapshot};
 mod writebatch;
@@ -14,6 +12,8 @@ pub use self::writebatch::WriteBatch;
 mod iterator;
 pub use self::iterator::Iterator;
 mod db_options;
+mod engine;
+pub use self::engine::*;
 mod options;
 mod util;
 pub use db_options::*;
