@@ -460,7 +460,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
                 if commit_ts < lock.min_commit_ts {
-                    error!(
+                    info!(
                         "trying to commit with smaller commit_ts than min_commit_ts";
                         "key" => %key,
                         "start_ts" => self.start_ts,
