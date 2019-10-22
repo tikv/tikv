@@ -118,11 +118,14 @@ fn test_turnoff_titan() {
             2
         );
     }
-    // wait till files are purged.
-    sleep_ms(2000);
     cluster.shutdown();
-
     configure_for_disable_titan(&mut cluster);
+    // wait till files are purged, timeout set to purge_obsolete_files_period.
+    for _ in 1..100 {
+        sleep_ms(10);
+        if cluster.pre_start_check().is_ok() {
+            return;
+        }
+    }
     assert!(cluster.pre_start_check().is_ok());
-    cluster.start().unwrap();
 }
