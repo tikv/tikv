@@ -44,8 +44,8 @@ pub use crate::peekable::*;
 // These modules contain support code that does not need to be implemented by
 // engines.
 
-mod cf;
-pub use crate::cf::*;
+mod cfdefs;
+pub use crate::cfdefs::*;
 mod engines;
 pub use engines::*;
 mod errors;
