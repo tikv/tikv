@@ -402,6 +402,7 @@ impl Lease {
     pub fn expire(&mut self) {
         self.expire_remote_lease();
         self.bound = None;
+        self.last_update = Timespec::new(0, 0);
     }
 
     pub fn expire_remote_lease(&mut self) {

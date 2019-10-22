@@ -1582,6 +1582,12 @@ impl Peer {
         ctx: &mut PollContext<T, C>,
         progress: Option<ReadProgress>,
     ) {
+        if let Some(progress) = progress {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id).unwrap();
+            self.maybe_update_read_progress(reader, progress);
+        }
+
         // A nonleader peer should never has leader lease.
         if self.is_leader() &&
             // A splitting leader should not renew its lease.
@@ -1603,12 +1609,6 @@ impl Peer {
                 "is_splitting" => self.is_splitting(),
                 "is_merging" => self.is_merging(),
             );
-        }
-
-        if let Some(progress) = progress {
-            let mut meta = ctx.store_meta.lock().unwrap();
-            let reader = meta.readers.get_mut(&self.region_id).unwrap();
-            self.maybe_update_read_progress(reader, progress);
         }
     }
 
