@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::error::Error as StdError;
 use std::io::Error as IoError;
 use std::num::ParseIntError;
 use std::path::PathBuf;
@@ -36,11 +37,12 @@ quick_error! {
             from()
             cause(err)
         }
+        // FIXME: Remove concrete 'rocks' type
         RocksDB(msg: String) {
             from()
             display("RocksDB {}", msg)
         }
-        Engine(err: engine::Error) {
+        EngineTraits(err: engine_traits::Error) {
             from()
             description("Engine error")
             display("Engine {:?}", err)
@@ -60,6 +62,9 @@ quick_error! {
             display("Invalid SST path {:?}", path)
         }
         InvalidChunk {}
+        Engine(err: Box<dyn StdError + Send + Sync + 'static>) {
+            display("{}", err)
+        }
         CannotReadExternalStorage(url: String, name: String, err: IoError) {
             cause(err)
             display("Cannot read {}/{}", url, name)

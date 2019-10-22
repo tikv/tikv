@@ -160,6 +160,7 @@ test_util = { path = "components/test_util" }
 test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
 test_coprocessor = { path = "components/test_coprocessor" }
+test_sst_importer = { path = "components/test_sst_importer" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
@@ -177,6 +178,7 @@ members = [
   "components/test_raftstore",
   "components/test_storage",
   "components/test_coprocessor",
+  "components/test_sst_importer",
   "components/test_util",
   "components/tikv_alloc",
   "components/match_template",
