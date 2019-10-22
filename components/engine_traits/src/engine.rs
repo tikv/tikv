@@ -45,21 +45,4 @@ pub trait KvEngine:
     fn sync(&self) -> Result<()>;
 
     fn cf_names(&self) -> Vec<&str>;
-
-    fn delete_all_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<()> {
-        if start_key >= end_key {
-            return Ok(());
-        }
-        for cf in self.cf_names() {
-            self.delete_all_in_range_cf(cf, start_key, end_key, false)?;
-        }
-        Ok(())
-    }
-    fn delete_all_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        use_delete_range: bool,
-    ) -> Result<()>;
 }

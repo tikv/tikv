@@ -11,7 +11,7 @@ use engine_traits::{
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::options::{RocksReadOptions, RocksWriteOptions};
-use crate::util::{delete_all_in_range_cf, get_cf_handle};
+use crate::util::get_cf_handle;
 use crate::{Iterator, Snapshot};
 
 #[derive(Clone, Debug)]
@@ -107,22 +107,6 @@ impl KvEngine for Rocks {
 
     fn cf_names(&self) -> Vec<&str> {
         self.0.cf_names()
-    }
-
-    fn delete_all_in_range_cf(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        use_delete_range: bool,
-    ) -> Result<()> {
-        if start_key >= end_key {
-            return Ok(());
-        }
-        let handle = get_cf_handle(&self.0, cf)?;
-        self.0
-            .delete_files_in_range_cf(handle, start_key, end_key, false)?;
-        delete_all_in_range_cf(&self.0, cf, start_key, end_key, use_delete_range)
     }
 }
 
