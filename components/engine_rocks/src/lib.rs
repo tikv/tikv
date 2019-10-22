@@ -5,23 +5,25 @@ extern crate tikv_alloc;
 #[macro_use]
 extern crate tikv_util;
 
-mod snapshot;
-pub use self::snapshot::{Snapshot, SyncSnapshot};
-mod writebatch;
-pub use self::writebatch::WriteBatch;
-mod iterator;
-pub use self::iterator::Iterator;
+mod cf_handle;
+pub use crate::cf_handle::*;
+mod cf_options;
+pub use crate::cf_options::*;
 mod db_options;
+pub use crate::db_options::*;
 mod engine;
-pub use self::engine::*;
+pub use crate::engine::*;
+mod import;
+pub use crate::import::*;
+mod iterator;
+pub use crate::iterator::*;
+mod snapshot;
+pub use crate::snapshot::*;
+mod writebatch;
+pub use crate::writebatch::*;
+
 mod options;
 mod util;
-pub use db_options::*;
-mod cf_handle;
-pub use cf_handle::*;
-mod cf_options;
-pub use cf_options::*;
-mod import;
 
 #[cfg(test)]
 mod tests;
