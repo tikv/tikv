@@ -195,7 +195,7 @@ impl TestSuite {
         let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
         let snapshot = engine.snapshot(&self.context.clone()).unwrap();
         let snap_store = SnapshotStore::new(snapshot, backup_ts, IsolationLevel::Si, false);
-        let mut scanner: RangesScanner<TiKVStorage<_>> = RangesScanner::new(RangesScannerOptions {
+        let mut scanner = RangesScanner::new(RangesScannerOptions {
             storage: TiKVStorage::from(snap_store),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
             scan_backward_in_range: false,
@@ -222,7 +222,6 @@ fn name_to_cf(name: &str) -> engine::CfName {
     }
 }
 
-// TODO: change this test to use sst_importer instead of importer
 #[test]
 fn test_backup_and_import() {
     let mut suite = TestSuite::new(3);
@@ -392,7 +391,7 @@ fn test_backup_meta() {
     let mut total_kvs = 0;
     let mut total_bytes = 0;
     for f in files {
-        checksum = checksum ^ f.get_crc64xor();
+        checksum ^= f.get_crc64xor();
         total_kvs += f.get_total_kvs();
         total_bytes += f.get_total_bytes();
     }
