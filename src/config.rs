@@ -619,6 +619,7 @@ pub struct TitanDBConfig {
     pub dirname: String,
     pub disable_gc: bool,
     pub max_background_gc: i32,
+    // The value of this field will be truncated to seconds.
     pub purge_obsolete_files_period: ReadableDuration,
 }
 
