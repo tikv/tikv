@@ -1,0 +1,19 @@
+[package]
+name = "test_sst_importer"
+version = "0.1.0"
+edition = "2018"
+publish = false
+description = "test helpers for sst_importer"
+
+[lib]
+test = false
+
+[dependencies]
+crc = "1.8"
+uuid = { version = "0.7", features = [ "serde", "v4" ] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+
+engine = { path = "../engine" }
+engine_traits = { path = "../engine_traits" }
+engine_rocks = { path = "../engine_rocks" }
+keys = { path = "../keys" }
