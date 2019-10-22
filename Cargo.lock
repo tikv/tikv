@@ -2702,6 +2702,7 @@ version = "0.1.0"
 dependencies = [
  "crc",
  "engine",
+ "engine_traits",
  "external_storage",
  "futures",
  "grpcio",
@@ -2716,6 +2717,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_sst_importer",
  "tikv_alloc",
  "uuid",
 ]
@@ -2926,6 +2928,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_sst_importer"
+version = "0.1.0"
+dependencies = [
+ "crc",
+ "engine",
+ "engine_rocks",
+ "engine_traits",
+ "keys",
+ "kvproto",
+ "uuid",
+]
+
+[[package]]
 name = "test_storage"
 version = "0.0.1"
 dependencies = [
@@ -3102,6 +3117,7 @@ dependencies = [
  "tempfile",
  "test_coprocessor",
  "test_raftstore",
+ "test_sst_importer",
  "test_storage",
  "test_util",
  "tidb_query",
