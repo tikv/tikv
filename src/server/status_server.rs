@@ -16,6 +16,7 @@ use std::str::FromStr;
 
 use super::Result;
 use crate::config::TiKvConfig;
+use rsperftools;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
@@ -210,6 +211,104 @@ impl StatusServer {
         Box::new(ok(res))
     }
 
+    fn start_rs_profiler(
+        req: Request<Body>,
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        let query = match req.uri().query() {
+            Some(query) => query,
+            None => {
+                let response = Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::empty())
+                    .unwrap();
+                return Box::new(ok(response));
+            }
+        };
+        let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
+        let frequency: i32 = match query_pairs.get("frequency") {
+            Some(val) => match val.parse() {
+                Ok(val) => val,
+                Err(_) => {
+                    let response = Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::empty())
+                        .unwrap();
+                    return Box::new(ok(response));
+                }
+            },
+            None => 100,
+        };
+        info!("start cpu profiling at frequency {} per second", &frequency);
+
+        match rsperftools::PROFILER.lock() {
+            Ok(mut profiler) => match profiler.start(frequency) {
+                Ok(_) => Box::new(ok(Response::new(Body::from(
+                    "start rsperftools successfully",
+                )))),
+                Err(err) => Box::new(ok(Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from(format!("{:?}", err)))
+                    .unwrap())),
+            },
+            Err(_) => Box::new(ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("fail to lock global profiler"))
+                .unwrap())),
+        }
+    }
+
+    fn stop_rs_profiler() -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        match rsperftools::PROFILER.lock() {
+            Ok(mut profiler) => match profiler.stop() {
+                Ok(_) => {
+                    info!("cpu profiler stopped");
+                    Box::new(ok(Response::new(Body::from(
+                        "stop rsperftools successfully",
+                    ))))
+                }
+                Err(err) => Box::new(ok(Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from(format!("{:?}", err)))
+                    .unwrap())),
+            },
+            Err(_) => Box::new(ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("fail to lock global profiler"))
+                .unwrap())),
+        }
+    }
+
+    fn report_from_rs_profiler(
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        match rsperftools::PROFILER.lock() {
+            Ok(profiler) => match profiler.report() {
+                Ok(report) => {
+                    info!("get cpu profile report successfully");
+
+                    let mut body: Vec<u8> = Vec::new();
+                    match report.flamegraph(&mut body) {
+                        Ok(_) => {
+                            info!("write report successfully");
+                            Box::new(ok(Response::new(Body::from(body))))
+                        }
+                        Err(err) => Box::new(ok(Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::from(format!("{:?}", err)))
+                            .unwrap())),
+                    }
+                }
+                Err(err) => Box::new(ok(Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from(format!("{:?}", err)))
+                    .unwrap())),
+            },
+            Err(_) => Box::new(ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("fail to lock global profiler"))
+                .unwrap())),
+        }
+    }
+
     pub fn start(&mut self, status_addr: String) -> Result<()> {
         let addr = SocketAddr::from_str(&status_addr)?;
 
@@ -240,6 +339,9 @@ impl StatusServer {
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
                             (Method::GET, "/pprof/profile") => Self::dump_prof_to_resp(req),
                             (Method::GET, "/config") => Self::config_handler(config.clone()),
+                            (Method::GET, "/rsperf/start") => Self::start_rs_profiler(req),
+                            (Method::GET, "/rsperf/stop") => Self::stop_rs_profiler(),
+                            (Method::GET, "/rsperf/report") => Self::report_from_rs_profiler(),
                             _ => Box::new(ok(Response::builder()
                                 .status(StatusCode::NOT_FOUND)
                                 .body(Body::empty())
