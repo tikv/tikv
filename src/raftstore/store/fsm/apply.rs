@@ -1338,7 +1338,7 @@ impl ApplyDelegate {
         }
 
         ctx.importer
-            .ingest(sst, AsRef::<Rocks>::as_ref(&ctx.engines.kv))
+            .ingest(sst, Rocks::from_ref(&ctx.engines.kv))
             .unwrap_or_else(|e| {
                 // If this failed, it means that the file is corrupted or something
                 // is wrong with the engine, but we can do nothing about that.

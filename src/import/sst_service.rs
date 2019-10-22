@@ -78,10 +78,10 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
             match req.get_mode() {
                 SwitchMode::Normal => {
-                    switcher.enter_normal_mode(AsRef::<Rocks>::as_ref(&self.engine), mf)
+                    switcher.enter_normal_mode(Rocks::from_ref(&self.engine), mf)
                 }
                 SwitchMode::Import => {
-                    switcher.enter_import_mode(AsRef::<Rocks>::as_ref(&self.engine), mf)
+                    switcher.enter_import_mode(Rocks::from_ref(&self.engine), mf)
                 }
             }
         };

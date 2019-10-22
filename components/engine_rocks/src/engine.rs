@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs;
-use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -23,6 +22,10 @@ impl Rocks {
         Rocks(db)
     }
 
+    pub fn from_ref(db: &Arc<DB>) -> &Self {
+        unsafe { &*(db as *const Arc<DB> as *const Rocks) }
+    }
+
     pub fn as_inner(&self) -> &Arc<DB> {
         &self.0
     }
@@ -41,37 +44,6 @@ impl Rocks {
         // but db has not been created, `DB::list_column_families` fails and we can clean up
         // the directory by this indication.
         fs::read_dir(&path).unwrap().next().is_some()
-    }
-}
-
-// TODO: Remove these cast methods after the engine traits are completed.
-impl AsRef<DB> for Rocks {
-    fn as_ref(&self) -> &DB {
-        self.0.deref()
-    }
-}
-
-impl AsRef<Arc<DB>> for Rocks {
-    fn as_ref(&self) -> &Arc<DB> {
-        &self.0
-    }
-}
-
-impl AsMut<DB> for Rocks {
-    fn as_mut(&mut self) -> &mut DB {
-        Arc::get_mut(&mut self.0).unwrap()
-    }
-}
-
-impl AsRef<Rocks> for Arc<DB> {
-    fn as_ref(&self) -> &Rocks {
-        unsafe { &*(self as *const Arc<DB> as *const Rocks) }
-    }
-}
-
-impl AsMut<Rocks> for Arc<DB> {
-    fn as_mut(&mut self) -> &mut Rocks {
-        unsafe { &mut *(self as *mut Arc<DB> as *mut Rocks) }
     }
 }
 
