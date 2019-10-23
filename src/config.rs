@@ -682,10 +682,6 @@ impl TxnDBConfig {
         opts.set_transaction_lock_timeout(self.transaction_lock_timeout);
         opts
     }
-
-    fn validate(&self) -> Result<(), Box<dyn Error>> {
-        Ok(())
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -823,10 +819,10 @@ impl DbConfig {
 
     pub fn build_txn_opts(&self) -> Option<TxnDBOptions> {
         if !self.enable_transaction_db {
-            return None;
+            None
         } else {
             let txn = self.transaction_db.build_opts();
-            return Some(txn);
+            Some(txn)
         }
     }
 

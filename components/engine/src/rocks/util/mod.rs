@@ -148,11 +148,7 @@ fn adjust_dynamic_level_bytes(
     }
 }
 
-pub fn new_engine_opt(
-    path: &str,
-    db_opt: DBOptions,
-    cfs_opts: Vec<CFOptions<'_>>,
-) -> Result<DB> {
+pub fn new_engine_opt(path: &str, db_opt: DBOptions, cfs_opts: Vec<CFOptions<'_>>) -> Result<DB> {
     create_rocksdb_engine(path, db_opt, None, cfs_opts)
 }
 
