@@ -5,6 +5,7 @@ use std::io::{self, ErrorKind, Read};
 use std::path::Path;
 
 use crc::crc32::{self, Digest, Hasher32};
+use openssl::hash::{self, MessageDigest};
 
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     let meta = fs::metadata(path)?;
@@ -79,6 +80,10 @@ pub fn calc_crc32_bytes(contents: &[u8]) -> u32 {
     let mut digest = Digest::new(crc32::IEEE);
     digest.write(contents);
     digest.sum32()
+}
+
+pub fn sha256(input: &[u8]) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+    hash::hash(MessageDigest::sha256(), input).map(|digest| hex::encode(digest).into_bytes())
 }
 
 #[cfg(test)]
