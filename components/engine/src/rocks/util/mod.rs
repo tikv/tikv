@@ -153,7 +153,7 @@ pub fn new_engine_opt(
     mut db_opt: DBOptions,
     cfs_opts: Vec<CFOptions<'_>>,
 ) -> Result<DB> {
-    return create_rocksdb_engine(path, db_opt, None, cfs_opts);
+    create_rocksdb_engine(path, db_opt, None, cfs_opts)
 }
 
 pub fn new_transaction_engine_opt(
@@ -162,7 +162,7 @@ pub fn new_transaction_engine_opt(
     txn_opt: TxnDBOptions,
     cfs_opts: Vec<CFOptions<'_>>,
 ) -> Result<DB> {
-    return create_rocksdb_engine(path, db_opt, Some(txn_opt), cfs_opts);
+    create_rocksdb_engine(path, db_opt, Some(txn_opt), cfs_opts)
 }
 
 pub fn create_rocksdb_engine(
