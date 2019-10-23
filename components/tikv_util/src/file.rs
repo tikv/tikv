@@ -5,7 +5,6 @@ use std::io::{self, ErrorKind, Read};
 use std::path::Path;
 
 use crc::crc32::{self, Digest, Hasher32};
-use hex;
 use openssl::hash::{self, MessageDigest};
 
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {

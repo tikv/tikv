@@ -16,18 +16,82 @@ use tikv_util::{self, box_err};
 use crate::metrics::*;
 use crate::{Error, Result};
 
+struct Writer {
+    writer: SstWriter,
+    total_kvs: u64,
+    total_bytes: u64,
+    checksum: u64,
+}
+
+impl Writer {
+    fn new(writer: SstWriter) -> Self {
+        Writer {
+            writer,
+            total_kvs: 0,
+            total_bytes: 0,
+            checksum: 0,
+        }
+    }
+
+    fn write(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        // HACK: The actual key stored in TiKV is called
+        // data_key and always prefix a `z`. But iterator strips
+        // it, we need to add the prefix manually.
+        let data_key_write = keys::data_key(key);
+        self.writer.put(&data_key_write, value)?;
+        Ok(())
+    }
+
+    fn update_with(&mut self, entry: TxnEntry, need_checksum: bool) -> Result<()> {
+        self.total_kvs += 1;
+        if need_checksum {
+            let (k, v) = entry
+                .into_kvpair()
+                .map_err(|err| Error::Other(box_err!("Decode error: {:?}", err)))?;
+            self.total_bytes += (k.len() + v.len()) as u64;
+            self.checksum = checksum_crc64_xor(self.checksum, &k[..0], &k, &v);
+        }
+        Ok(())
+    }
+
+    fn save_and_build_file(
+        mut self,
+        name: &str,
+        cf: &'static str,
+        buf: &mut Vec<u8>,
+        limiter: Option<Arc<IOLimiter>>,
+        storage: &dyn ExternalStorage,
+    ) -> Result<File> {
+        buf.reserve(self.writer.file_size() as _);
+        self.writer.finish_into(buf).unwrap();
+        BACKUP_RANGE_SIZE_HISTOGRAM_VEC
+            .with_label_values(&[cf])
+            .observe(buf.len() as _);
+        let file_name = format!("{}_{}.sst", name, cf);
+        let sha256 = tikv_util::file::sha256(&buf)
+            .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
+        let mut contents = buf as &[u8];
+        let mut limit_reader = LimitReader::new(limiter, &mut contents);
+        storage.write(&file_name, &mut limit_reader).unwrap();
+        let mut file = File::new();
+        file.set_name(file_name);
+        file.set_sha256(sha256);
+        file.set_crc64xor(self.checksum);
+        file.set_total_kvs(self.total_kvs);
+        file.set_total_bytes(self.total_bytes);
+        Ok(file)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.total_kvs == 0
+    }
+}
+
 /// A writer writes txn entries into SST files.
 pub struct BackupWriter {
     name: String,
-    default: SstWriter,
-    default_kvs: u64,
-    default_bytes: u64,
-    default_checksum: u64,
-    write: SstWriter,
-    write_kvs: u64,
-    write_bytes: u64,
-    write_checksum: u64,
-
+    default: Writer,
+    write: Writer,
     limiter: Option<Arc<IOLimiter>>,
 }
 
@@ -47,114 +111,75 @@ impl BackupWriter {
         let name = name.to_owned();
         Ok(BackupWriter {
             name,
-            default,
-            default_kvs: 0,
-            default_bytes: 0,
-            default_checksum: 0,
-            write,
-            write_kvs: 0,
-            write_bytes: 0,
-            write_checksum: 0,
+            default: Writer::new(default),
+            write: Writer::new(write),
             limiter,
         })
     }
 
-    /// Wrtie entries to buffered SST files.
+    /// Write entries to buffered SST files.
     pub fn write<I>(&mut self, entries: I, need_checksum: bool) -> Result<()>
     where
         I: Iterator<Item = TxnEntry>,
     {
         for e in entries {
-            let mut value_in_default = Some(false);
+            let mut value_in_default = false;
             match &e {
                 TxnEntry::Commit { default, write } => {
                     // Default may be empty if value is small.
                     if !default.0.is_empty() {
-                        // HACK: The actual key stored in TiKV is called
-                        // data_key and always prefix a `z`. But iterator strips
-                        // it, we need to add the prefix manually.
-                        let data_key_default = keys::data_key(&default.0);
-                        self.default.put(&data_key_default, &default.1)?;
-                        value_in_default.replace(true);
+                        self.default.write(&default.0, &default.1)?;
+                        value_in_default = true;
                     }
                     assert!(!write.0.is_empty());
-                    let data_key_write = keys::data_key(&write.0);
-                    self.write.put(&data_key_write, &write.1)?;
+                    self.write.write(&write.0, &write.1)?;
                 }
                 TxnEntry::Prewrite { .. } => {
-                    value_in_default.take();
                     return Err(Error::Other("prewrite is not supported".into()));
                 }
             }
-            match value_in_default {
-                Some(true) => {
-                    self.default_kvs += 1;
-                    if !need_checksum {
-                        continue;
-                    }
-                    let (k, v) = e
-                        .into_kvpair()
-                        .map_err(|err| Error::Other(box_err!("Decode error: {:?}", err)))?;
-                    self.default_bytes += (k.len() + v.len()) as u64;
-                    self.default_checksum = checksum_crc64_xor(self.default_checksum, &k, &v);
-                }
-                Some(false) => {
-                    self.write_kvs += 1;
-                    if !need_checksum {
-                        continue;
-                    }
-                    let (k, v) = e
-                        .into_kvpair()
-                        .map_err(|err| Error::Other(box_err!("Decode error: {:?}", err)))?;
-                    self.write_bytes += (k.len() + v.len()) as u64;
-                    self.write_checksum = checksum_crc64_xor(self.write_checksum, &k, &v);
-                }
-                None => {}
+            if value_in_default {
+                self.default.update_with(e, need_checksum)?;
+            } else {
+                self.write.update_with(e, need_checksum)?;
             }
         }
         Ok(())
     }
 
     /// Save buffered SST files to the given external storage.
-    pub fn save(mut self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
-        let name = self.name;
-        let save_and_build_file =
-            |cf, mut contents: &[u8], limiter: Option<Arc<IOLimiter>>| -> Result<File> {
-                BACKUP_RANGE_SIZE_HISTOGRAM_VEC
-                    .with_label_values(&[cf])
-                    .observe(contents.len() as _);
-                let name = format!("{}_{}.sst", name, cf);
-                let checksum = tikv_util::file::sha256(&contents)
-                    .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
-                let mut limit_reader = LimitReader::new(limiter, &mut contents);
-                storage.write(&name, &mut limit_reader)?;
-                let mut file = File::new();
-                file.set_sha256(checksum);
-                file.set_name(name);
-                Ok(file)
-            };
+    pub fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         let start = Instant::now();
         let mut files = Vec::with_capacity(2);
         let mut buf = Vec::new();
-        if self.default_kvs != 0 {
+        let write_written = !self.write.is_empty() || !self.default.is_empty();
+        if !self.default.is_empty() {
             // Save default cf contents.
-            buf.reserve(self.default.file_size() as _);
-            self.default.finish_into(&mut buf)?;
-            let mut default = save_and_build_file(CF_DEFAULT, &mut buf, self.limiter.clone())?;
-            default.set_crc64xor(self.default_checksum);
-            default.set_total_kvs(self.default_kvs);
-            default.set_total_bytes(self.default_bytes);
+            let default = self
+                .default
+                .save_and_build_file(
+                    &self.name,
+                    CF_DEFAULT,
+                    &mut buf,
+                    self.limiter.clone(),
+                    storage,
+                )
+                .unwrap();
             files.push(default);
             buf.clear();
         }
-        if self.write_kvs != 0 || self.default_kvs != 0 {
+        if write_written {
             // Save write cf contents.
-            buf.reserve(self.write.file_size() as _);
-            self.write.finish_into(&mut buf)?;
-            let mut write = save_and_build_file(CF_WRITE, &mut buf, self.limiter)?;
-            write.set_crc64xor(self.write_checksum);
-            write.set_total_kvs(self.write_kvs);
-            write.set_total_bytes(self.write_bytes);
+            let write = self
+                .write
+                .save_and_build_file(
+                    &self.name,
+                    CF_WRITE,
+                    &mut buf,
+                    self.limiter.clone(),
+                    storage,
+                )
+                .unwrap();
             files.push(write);
         }
         BACKUP_RANGE_HISTOGRAM_VEC
