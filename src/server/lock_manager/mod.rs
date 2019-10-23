@@ -15,6 +15,7 @@ use self::waiter_manager::{Scheduler as WaiterMgrScheduler, WaiterManager};
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
+use crate::storage::txn::execute_callback;
 use crate::storage::{lock_manager::Lock, txn::ProcessResult, LockMgr, StorageCb};
 use pd_client::RpcClient;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -172,6 +173,10 @@ impl LockMgr for LockManager {
         is_first_lock: bool,
         timeout: u64,
     ) {
+        if timeout == 1 {
+            execute_callback(cb, pr);
+            return;
+        }
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
