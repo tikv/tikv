@@ -49,7 +49,7 @@ impl Writer {
                 .into_kvpair()
                 .map_err(|err| Error::Other(box_err!("Decode error: {:?}", err)))?;
             self.total_bytes += (k.len() + v.len()) as u64;
-            self.checksum = checksum_crc64_xor(self.checksum, &k[..0], &k, &v);
+            self.checksum = checksum_crc64_xor(self.checksum, &[], &k, &v);
         }
         Ok(())
     }

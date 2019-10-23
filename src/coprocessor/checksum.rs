@@ -70,7 +70,7 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
                 // undo rewrite
                 checksum = checksum_crc64_xor(checksum, &old_prefix, &k[new_prefix.len()..], &v);
             } else {
-                checksum = checksum_crc64_xor(checksum, &k[..0], &k, &v);
+                checksum = checksum_crc64_xor(checksum, &[], &k, &v);
             }
             total_kvs += 1;
             total_bytes += k.len() + v.len();

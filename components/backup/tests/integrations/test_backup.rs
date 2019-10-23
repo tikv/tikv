@@ -203,7 +203,7 @@ impl TestSuite {
             is_scanned_range_aware: false,
         });
         while let Some((k, v)) = scanner.next().unwrap() {
-            checksum = checksum_crc64_xor(checksum, &k[..0], &k, &v);
+            checksum = checksum_crc64_xor(checksum, &[], &k, &v);
             total_kvs += 1;
             total_bytes += (k.len() + v.len()) as u64;
         }
