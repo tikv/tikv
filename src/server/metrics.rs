@@ -18,6 +18,7 @@ make_static_metric! {
         kv_commit,
         kv_cleanup,
         kv_batch_get,
+        kv_batch_get_command,
         kv_batch_rollback,
         kv_txn_heart_beat,
         kv_check_txn_status,
@@ -27,6 +28,7 @@ make_static_metric! {
         kv_delete_range,
         raw_get,
         raw_batch_get,
+        raw_batch_get_command,
         raw_scan,
         raw_batch_scan,
         raw_put,
@@ -41,8 +43,6 @@ make_static_metric! {
         mvcc_get_by_start_ts,
         split_region,
         read_index,
-        batch_kv_get,
-        batch_raw_get,
     }
     pub struct GrpcMsgHistogramVec: Histogram {
         "type" => GrpcTypeKind,

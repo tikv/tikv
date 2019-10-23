@@ -321,11 +321,11 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
             output += 1;
             match id.cf {
                 Some(cf) => {
-                    let f = future_batch_async_raw_get(storage, tx, reqs, cf, commands);
+                    let f = future_raw_batch_get_command(storage, tx, reqs, cf, commands);
                     poll_future_notify(f);
                 }
                 None => {
-                    let f = future_batch_async_get(storage, tx, reqs, commands);
+                    let f = future_batch_get_command(storage, tx, reqs, commands);
                     poll_future_notify(f);
                 }
             }
@@ -1867,14 +1867,16 @@ fn future_get<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_batch_async_get<E: Engine, L: LockMgr>(
+fn future_batch_get_command<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
     requests: Vec<u64>,
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
-    let timer = GRPC_MSG_HISTOGRAM_VEC.batch_kv_get.start_coarse_timer();
-    storage.batch_async_get(commands).then(move |v| {
+    let timer = GRPC_MSG_HISTOGRAM_VEC
+        .kv_batch_get_command
+        .start_coarse_timer();
+    storage.async_batch_get_command(commands).then(move |v| {
         match v {
             Ok(v) => {
                 if requests.len() != v.len() {
@@ -2349,57 +2351,61 @@ fn future_raw_get<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_batch_async_raw_get<E: Engine, L: LockMgr>(
+fn future_raw_batch_get_command<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
     requests: Vec<u64>,
     cf: String,
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
-    let timer = GRPC_MSG_HISTOGRAM_VEC.batch_raw_get.start_coarse_timer();
-    storage.batch_async_raw_get(cf, commands).then(move |v| {
-        match v {
-            Ok(v) => {
-                if requests.len() != v.len() {
-                    error!("KvService batch response size mismatch");
-                }
-                for (req, v) in requests.into_iter().zip(v.into_iter()) {
-                    let mut resp = RawGetResponse::default();
-                    if let Some(err) = extract_region_error(&v) {
-                        resp.set_region_error(err);
-                    } else {
-                        match v {
-                            Ok(Some(val)) => resp.set_value(val),
-                            Ok(None) => resp.set_not_found(true),
-                            Err(e) => resp.set_error(format!("{}", e)),
+    let timer = GRPC_MSG_HISTOGRAM_VEC
+        .raw_batch_get_command
+        .start_coarse_timer();
+    storage
+        .async_raw_batch_get_command(cf, commands)
+        .then(move |v| {
+            match v {
+                Ok(v) => {
+                    if requests.len() != v.len() {
+                        error!("KvService batch response size mismatch");
+                    }
+                    for (req, v) in requests.into_iter().zip(v.into_iter()) {
+                        let mut resp = RawGetResponse::default();
+                        if let Some(err) = extract_region_error(&v) {
+                            resp.set_region_error(err);
+                        } else {
+                            match v {
+                                Ok(Some(val)) => resp.set_value(val),
+                                Ok(None) => resp.set_not_found(true),
+                                Err(e) => resp.set_error(format!("{}", e)),
+                            }
                         }
+                        let mut res = batch_commands_response::Response::default();
+                        res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                        if tx.send_and_notify((req, res)).is_err() {
+                            error!("KvService response batch commands fail");
+                        }
+                    }
+                }
+                e => {
+                    let mut resp = RawGetResponse::default();
+                    if let Some(err) = extract_region_error(&e) {
+                        resp.set_region_error(err);
+                    } else if let Err(e) = e {
+                        resp.set_error(format!("{}", e));
                     }
                     let mut res = batch_commands_response::Response::default();
                     res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                    if tx.send_and_notify((req, res)).is_err() {
-                        error!("KvService response batch commands fail");
+                    for req in requests {
+                        if tx.send_and_notify((req, res.clone())).is_err() {
+                            error!("KvService response batch commands fail");
+                        }
                     }
                 }
             }
-            e => {
-                let mut resp = RawGetResponse::default();
-                if let Some(err) = extract_region_error(&e) {
-                    resp.set_region_error(err);
-                } else if let Err(e) = e {
-                    resp.set_error(format!("{}", e));
-                }
-                let mut res = batch_commands_response::Response::default();
-                res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                for req in requests {
-                    if tx.send_and_notify((req, res.clone())).is_err() {
-                        error!("KvService response batch commands fail");
-                    }
-                }
-            }
-        }
-        timer.observe_duration();
-        Ok(())
-    })
+            timer.observe_duration();
+            Ok(())
+        })
 }
 
 fn future_raw_batch_get<E: Engine, L: LockMgr>(

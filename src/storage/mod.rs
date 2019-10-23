@@ -960,11 +960,11 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Get values of a set of keys with seperate context from a snapshot, return a vector of results.
     ///
     /// Only writes that are committed before their respective `start_ts` are visible.
-    pub fn batch_async_get(
+    pub fn async_batch_get_command(
         &self,
         gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "batch_async_get";
+        const CMD: &str = "batch_get_command";
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
         let res = self.get_read_pool(priority).spawn_handle(move || {
@@ -1545,12 +1545,12 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     }
 
     /// Get the values of a set of raw keys, return a vector of results.
-    pub fn batch_async_raw_get(
+    pub fn async_raw_batch_get_command(
         &self,
         cf: String,
         gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "batch_async_raw_get";
+        const CMD: &str = "raw_batch_get_command";
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
         let res = self.get_read_pool(priority).spawn_handle(move || {
@@ -2390,7 +2390,7 @@ mod tests {
                 .wait(),
         );
         let x = storage
-            .batch_async_get(vec![
+            .async_batch_get_command(vec![
                 PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(1)),
                 PointGetCommand::from_key_ts(Key::from_raw(b"d"), Some(1)),
             ])
@@ -2698,7 +2698,7 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_async_get() {
+    fn test_async_batch_get_command() {
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
@@ -2717,7 +2717,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         let mut x = storage
-            .batch_async_get(vec![
+            .async_batch_get_command(vec![
                 PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(2)),
                 PointGetCommand::from_key_ts(Key::from_raw(b"d"), Some(2)),
             ])
@@ -2746,7 +2746,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         let x: Vec<Option<Vec<u8>>> = storage
-            .batch_async_get(vec![
+            .async_batch_get_command(vec![
                 PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(5)),
                 PointGetCommand::from_key_ts(Key::from_raw(b"x"), Some(5)),
                 PointGetCommand::from_key_ts(Key::from_raw(b"a"), Some(5)),
@@ -3384,7 +3384,7 @@ mod tests {
             .collect();
         let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
         let x: Vec<Option<Vec<u8>>> = storage
-            .batch_async_raw_get("".to_string(), cmds)
+            .async_raw_batch_get_command("".to_string(), cmds)
             .wait()
             .unwrap()
             .into_iter()
