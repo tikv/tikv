@@ -1109,11 +1109,7 @@ mod tests {
 
     #[test]
     fn test_get_file_count() {
-        let tmp_path = Builder::new()
-            .prefix("test-get-file-count")
-            .tempdir()
-            .unwrap()
-            .into_path();
+        let tmp_path = TempDir::new("test-get-file-count").unwrap().into_path();
         let count = get_file_count(tmp_path.to_str().unwrap(), "txt").unwrap();
         assert_eq!(count, 0);
         let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
@@ -1132,15 +1128,16 @@ mod tests {
         let ret = check_data_dir_empty("/sys/invalid", "txt");
         assert!(ret.is_ok());
         // test empty data_path
-        let tmp_path = Builder::new()
-            .prefix("test-get-file-count")
-            .tempdir()
+        let tmp_path = TempDir::new("test-check-data-dir-empty")
             .unwrap()
             .into_path();
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
         assert!(ret.is_ok());
         // test non-empty data_path
-        let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
+        let tmp_file = format!(
+            "{}",
+            tmp_path.join("test-check-data-dir-empty.txt").display()
+        );
         create_file(&tmp_file, b"");
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "");
         assert!(ret.is_err());
