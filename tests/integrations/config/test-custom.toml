@@ -432,3 +432,8 @@ cipher-file = "invalid path"
 [import]
 num-threads = 123
 stream-channel-window = 123
+
+[gc]
+ratio-threshold = 1.2
+batch-keys = 256
+max-write-bytes-per-sec = "10MB"
