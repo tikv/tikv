@@ -56,8 +56,22 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         let mut checksum = 0;
         let mut total_kvs = 0;
         let mut total_bytes = 0;
+        let (old_prefix, new_prefix) = if self.req.has_rule() {
+            let mut rule = self.req.get_rule().clone();
+            (rule.take_old_prefix(), rule.take_new_prefix())
+        } else {
+            (vec![], vec![])
+        };
         while let Some((k, v)) = self.scanner.next()? {
-            checksum = checksum_crc64_xor(checksum, &k, &v);
+            if !old_prefix.is_empty() && !new_prefix.is_empty() {
+                if !k.starts_with(&new_prefix) {
+                    return Err(box_err!("Wrong prefix expect: {:?}", new_prefix));
+                }
+                // undo rewrite
+                checksum = checksum_crc64_xor(checksum, &old_prefix, &k[new_prefix.len()..], &v);
+            } else {
+                checksum = checksum_crc64_xor(checksum, &[], &k, &v);
+            }
             total_kvs += 1;
             total_bytes += k.len() + v.len();
         }
@@ -78,9 +92,10 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
     }
 }
 
-fn checksum_crc64_xor(checksum: u64, k: &[u8], v: &[u8]) -> u64 {
+pub fn checksum_crc64_xor(checksum: u64, k_prefix: &[u8], k_suffix: &[u8], v: &[u8]) -> u64 {
     let mut digest = Digest::new(crc64::ECMA);
-    digest.write(k);
+    digest.write(k_prefix);
+    digest.write(k_suffix);
     digest.write(v);
     checksum ^ digest.sum64()
 }
