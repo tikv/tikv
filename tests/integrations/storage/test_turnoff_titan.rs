@@ -10,6 +10,8 @@ fn test_turnoff_titan() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.rocksdb.defaultcf.disable_auto_compactions = true;
     cluster.cfg.rocksdb.defaultcf.num_levels = 1;
+    // pd.endpoints is required for validation.
+    cluster.cfg.pd.endpoints = vec!["127.0.0.1:2333".to_owned()];
     configure_for_enable_titan(&mut cluster, ReadableSize::kb(0));
     cluster.run();
     assert_eq!(cluster.must_get(b"k1"), None);
