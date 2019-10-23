@@ -113,15 +113,15 @@ pub enum StorageCb {
     TxnStatus(Callback<(u64, u64)>),
 }
 
-pub struct ReadpoolCommand {
+pub struct PointGetCommand {
     ctx: Context,
     key: Key,
     ts: Option<u64>,
 }
 
-impl ReadpoolCommand {
+impl PointGetCommand {
     pub fn from_get(request: &mut GetRequest) -> Self {
-        ReadpoolCommand {
+        PointGetCommand {
             ctx: request.take_context(),
             key: Key::from_raw(request.get_key()),
             ts: Some(request.get_version()),
@@ -129,7 +129,7 @@ impl ReadpoolCommand {
     }
 
     pub fn from_raw_get(request: &mut RawGetRequest) -> Self {
-        ReadpoolCommand {
+        PointGetCommand {
             ctx: request.take_context(),
             key: Key::from_raw(request.get_key()),
             ts: None,
@@ -139,7 +139,7 @@ impl ReadpoolCommand {
     /// Only used in tests.
     #[cfg(test)]
     pub fn from_key_ts(key: Key, ts: Option<u64>) -> Self {
-        ReadpoolCommand {
+        PointGetCommand {
             ctx: Context::default(),
             key,
             ts,
@@ -962,7 +962,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn batch_async_get(
         &self,
-        gets: Vec<ReadpoolCommand>,
+        gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: &str = "batch_async_get";
         let ctx = gets[0].ctx.clone();
@@ -1548,7 +1548,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     pub fn batch_async_raw_get(
         &self,
         cf: String,
-        gets: Vec<ReadpoolCommand>,
+        gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: &str = "batch_async_raw_get";
         let ctx = gets[0].ctx.clone();
@@ -2391,8 +2391,8 @@ mod tests {
         );
         let x = storage
             .batch_async_get(vec![
-                ReadpoolCommand::from_key_ts(Key::from_raw(b"c"), Some(1)),
-                ReadpoolCommand::from_key_ts(Key::from_raw(b"d"), Some(1)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(1)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"d"), Some(1)),
             ])
             .wait()
             .unwrap();
@@ -2718,8 +2718,8 @@ mod tests {
         rx.recv().unwrap();
         let mut x = storage
             .batch_async_get(vec![
-                ReadpoolCommand::from_key_ts(Key::from_raw(b"c"), Some(2)),
-                ReadpoolCommand::from_key_ts(Key::from_raw(b"d"), Some(2)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(2)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"d"), Some(2)),
             ])
             .wait()
             .unwrap();
@@ -2747,10 +2747,10 @@ mod tests {
         rx.recv().unwrap();
         let x: Vec<Option<Vec<u8>>> = storage
             .batch_async_get(vec![
-                ReadpoolCommand::from_key_ts(Key::from_raw(b"c"), Some(5)),
-                ReadpoolCommand::from_key_ts(Key::from_raw(b"x"), Some(5)),
-                ReadpoolCommand::from_key_ts(Key::from_raw(b"a"), Some(5)),
-                ReadpoolCommand::from_key_ts(Key::from_raw(b"b"), Some(5)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(5)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"x"), Some(5)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"a"), Some(5)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"b"), Some(5)),
             ])
             .wait()
             .unwrap()
@@ -3380,7 +3380,7 @@ mod tests {
         // Verify pairs in a batch
         let cmds = test_data
             .iter()
-            .map(|&(ref k, _)| ReadpoolCommand::from_key_ts(Key::from_encoded(k.clone()), Some(0)))
+            .map(|&(ref k, _)| PointGetCommand::from_key_ts(Key::from_encoded(k.clone()), Some(0)))
             .collect();
         let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
         let x: Vec<Option<Vec<u8>>> = storage

@@ -57,6 +57,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // Currently load statistics is done in the thread.
     stats_pool: Option<ThreadPool>,
     grpc_thread_load: Arc<ThreadLoad>,
+    readpool_normal_concurrency: usize,
     readpool_normal_thread_load: Arc<ThreadLoad>,
     timer: Handle,
 }
@@ -79,9 +80,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .name_prefix(STATS_THREAD_PREFIX)
             .build();
         let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
-        let readpool_normal_thread_load = Arc::new(ThreadLoad::with_threshold(
-            storage.readpool_normal_concurrency() * 100,
-        ));
+        let readpool_normal_concurrency = storage.readpool_normal_concurrency();
+        let readpool_normal_thread_load =
+            Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
 
         let env = Arc::new(
             EnvBuilder::new()
@@ -150,6 +151,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             snap_worker,
             stats_pool: Some(stats_pool),
             grpc_thread_load,
+            readpool_normal_concurrency,
             readpool_normal_thread_load,
             timer: GLOBAL_TIMER_HANDLE.clone(),
         };
@@ -212,10 +214,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         };
         let mut readpool_normal_load_stats = {
             let tl = Arc::clone(&self.readpool_normal_thread_load);
-            let target = self.readpool_normal_thread_load.get_threshold() / 100;
             let mut stats =
                 ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, READPOOL_NORMAL_THREAD_PREFIX, tl);
-            stats.set_thread_target(target);
+            stats.set_thread_target(self.readpool_normal_concurrency);
             stats
         };
         self.stats_pool.as_ref().unwrap().spawn(

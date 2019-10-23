@@ -18,7 +18,7 @@ use crate::storage::kv::Error as EngineError;
 use crate::storage::lock_manager::LockMgr;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
-use crate::storage::{self, Engine, Key, Mutation, Options, ReadpoolCommand, Storage, Value};
+use crate::storage::{self, Engine, Key, Mutation, Options, PointGetCommand, Storage, Value};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
@@ -199,7 +199,7 @@ impl BatchLimiter {
     #[inline]
     fn observe_submit(&mut self, now: Instant, size: usize) {
         self.last_submit_time = now;
-        REQUEST_BATCH_SIZE_COUNTER_VEC
+        REQUEST_BATCH_SIZE_HISTOGRAM_VEC
             .with_label_values(&[self.cmd.as_str()])
             .observe(self.batch_input as f64);
         if size > 0 {
@@ -251,7 +251,7 @@ impl ReadId {
 }
 
 struct ReadBatcher {
-    router: HashMap<ReadId, (Vec<u64>, Vec<ReadpoolCommand>)>,
+    router: HashMap<ReadId, (Vec<u64>, Vec<PointGetCommand>)>,
 }
 
 impl ReadBatcher {
@@ -263,7 +263,7 @@ impl ReadBatcher {
 
     fn add_get(&mut self, request_id: u64, request: &mut GetRequest) {
         let id = ReadId::from_context_cf(request.get_context(), None);
-        let command = ReadpoolCommand::from_get(request);
+        let command = PointGetCommand::from_get(request);
         match self.router.get_mut(&id) {
             Some((reqs, commands)) => {
                 reqs.push(request_id);
@@ -278,7 +278,7 @@ impl ReadBatcher {
     fn add_raw_get(&mut self, request_id: u64, request: &mut RawGetRequest) {
         let cf = Some(request.take_cf());
         let id = ReadId::from_context_cf(request.get_context(), cf);
-        let command = ReadpoolCommand::from_raw_get(request);
+        let command = PointGetCommand::from_raw_get(request);
         match self.router.get_mut(&id) {
             Some((reqs, commands)) => {
                 reqs.push(request_id);
@@ -1871,7 +1871,7 @@ fn future_batch_async_get<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
     requests: Vec<u64>,
-    commands: Vec<ReadpoolCommand>,
+    commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
     let timer = GRPC_MSG_HISTOGRAM_VEC.batch_kv_get.start_coarse_timer();
     storage.batch_async_get(commands).then(move |v| {
@@ -2354,7 +2354,7 @@ fn future_batch_async_raw_get<E: Engine, L: LockMgr>(
     tx: Sender<(u64, batch_commands_response::Response)>,
     requests: Vec<u64>,
     cf: String,
-    commands: Vec<ReadpoolCommand>,
+    commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
     let timer = GRPC_MSG_HISTOGRAM_VEC.batch_raw_get.start_coarse_timer();
     storage.batch_async_raw_get(cf, commands).then(move |v| {
