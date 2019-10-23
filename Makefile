@@ -48,6 +48,9 @@ endif
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
 ROCKSDB_SYS_PORTABLE=0
+TEST_THREADS := --test-threads=2
+else
+TEST_THREADS := ""
 endif
 
 # Build portable binary by default unless disable explicitly
@@ -59,6 +62,11 @@ endif
 # Note this env var is also tested by scripts/check-sse4_2.sh
 ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
+endif
+
+# Update Titan to latest master before build
+ifneq ($(UPDATE_TITAN), 0)
+ENABLE_FEATURES += update_titan
 endif
 
 ifeq ($(FAIL_POINT),1)
@@ -132,6 +140,12 @@ prof_release:
 fail_release:
 	FAIL_POINT=1 make release
 
+# Build with latest Titan. Mainly used for test bot.
+# You can use environment variables `TITAN_REPO` and `TITAN_BRANCH` to update to specified Titan codeabse
+# -- https://github.com/{TITAN_REPO}/titan/tree/{TITAN_BRANCH}.
+# Default: TITAN_REPO=pingcap, TITAN_BRANCH=master
+titan_release:
+	UPDATE_TITAN=1 make release
 
 ## Distribution builds (true release builds)
 ## -------------------
@@ -176,8 +190,8 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  $(TEST_THREADS) && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \

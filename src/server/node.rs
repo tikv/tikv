@@ -17,9 +17,7 @@ use crate::raftstore::store::{
 };
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
-use crate::server::ServerRaftStoreRouter;
 use crate::storage::{Config as StorageConfig, Storage};
-use engine::rocks::DB;
 use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
@@ -37,21 +35,12 @@ pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
     read_pools: Vec<FuturePool>,
-    local_storage: Option<Arc<DB>>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
     lock_mgr: Option<LockManager>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let store = Storage::from_engine(
-        engine,
-        cfg,
-        read_pools,
-        local_storage,
-        raft_store_router,
-        lock_mgr,
-    )?;
+    let store = Storage::from_engine(engine, cfg, read_pools, lock_mgr)?;
     Ok(store)
 }
 
