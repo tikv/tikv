@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::error::Error as StdError;
 use std::sync::{self, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
