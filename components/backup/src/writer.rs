@@ -63,7 +63,7 @@ impl Writer {
         storage: &dyn ExternalStorage,
     ) -> Result<File> {
         buf.reserve(self.writer.file_size() as _);
-        self.writer.finish_into(buf).unwrap();
+        self.writer.finish_into(buf)?;
         BACKUP_RANGE_SIZE_HISTOGRAM_VEC
             .with_label_values(&[cf])
             .observe(buf.len() as _);
@@ -72,7 +72,7 @@ impl Writer {
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
         let mut contents = buf as &[u8];
         let mut limit_reader = LimitReader::new(limiter, &mut contents);
-        storage.write(&file_name, &mut limit_reader).unwrap();
+        storage.write(&file_name, &mut limit_reader)?;
         let mut file = File::new();
         file.set_name(file_name);
         file.set_sha256(sha256);
@@ -155,31 +155,25 @@ impl BackupWriter {
         let write_written = !self.write.is_empty() || !self.default.is_empty();
         if !self.default.is_empty() {
             // Save default cf contents.
-            let default = self
-                .default
-                .save_and_build_file(
-                    &self.name,
-                    CF_DEFAULT,
-                    &mut buf,
-                    self.limiter.clone(),
-                    storage,
-                )
-                .unwrap();
+            let default = self.default.save_and_build_file(
+                &self.name,
+                CF_DEFAULT,
+                &mut buf,
+                self.limiter.clone(),
+                storage,
+            )?;
             files.push(default);
             buf.clear();
         }
         if write_written {
             // Save write cf contents.
-            let write = self
-                .write
-                .save_and_build_file(
-                    &self.name,
-                    CF_WRITE,
-                    &mut buf,
-                    self.limiter.clone(),
-                    storage,
-                )
-                .unwrap();
+            let write = self.write.save_and_build_file(
+                &self.name,
+                CF_WRITE,
+                &mut buf,
+                self.limiter.clone(),
+                storage,
+            )?;
             files.push(write);
         }
         BACKUP_RANGE_HISTOGRAM_VEC
