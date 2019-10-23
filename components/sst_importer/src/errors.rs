@@ -1,12 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::error::Error as StdError;
 use std::io::Error as IoError;
 use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::result;
 
-use futures::sync::oneshot::Canceled;
 use grpcio::Error as GrpcError;
+use tokio_sync::oneshot::error::RecvError;
 use uuid::{parser::ParseError, BytesError};
 
 quick_error! {
@@ -32,15 +33,16 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Future(err: Canceled) {
+        Future(err: RecvError) {
             from()
             cause(err)
         }
+        // FIXME: Remove concrete 'rocks' type
         RocksDB(msg: String) {
             from()
             display("RocksDB {}", msg)
         }
-        Engine(err: engine::Error) {
+        EngineTraits(err: engine_traits::Error) {
             from()
             description("Engine error")
             display("Engine {:?}", err)
@@ -60,6 +62,21 @@ quick_error! {
             display("Invalid SST path {:?}", path)
         }
         InvalidChunk {}
+        Engine(err: Box<dyn StdError + Send + Sync + 'static>) {
+            display("{}", err)
+        }
+        CannotReadExternalStorage(url: String, name: String, err: IoError) {
+            cause(err)
+            display("Cannot read {}/{}", url, name)
+        }
+        WrongKeyPrefix(what: &'static str, key: Vec<u8>, prefix: Vec<u8>) {
+            display("\
+                {} has wrong prefix: key {} does not start with {}",
+                what,
+                hex::encode_upper(&key),
+                hex::encode_upper(&prefix),
+            )
+        }
     }
 }
 
