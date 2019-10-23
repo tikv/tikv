@@ -44,8 +44,12 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let peer = new_peer(store_id, node_id);
     cluster.pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
+
+    let key = b"k";
+    cluster.must_put(key, b"v0");
     for id in 2..=cluster.engines.len() as u64 {
         cluster.pd_client.must_add_peer(region_id, new_peer(id, id));
+        must_get_equal(&cluster.get_engine(id), key, b"v0");
     }
 
     // Write the initial value for a key.
@@ -346,6 +350,7 @@ fn test_read_index_when_transfer_leader_1() {
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k0", b"v0");
     cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
     cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 

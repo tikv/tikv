@@ -352,8 +352,26 @@ mod tests {
 
     #[test]
     fn test_batch_receiver() {
+        struct TestBatchReceiver<T, E, I: Fn() -> E, C: Fn(&mut E, T)> {
+            rx: BatchReceiver<T, E, I, C>,
+            polls: Arc<AtomicUsize>,
+        }
+        impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> Stream for TestBatchReceiver<T, E, I, C> {
+            type Item = <BatchReceiver<T, E, I, C> as Stream>::Item;
+            type Error = <BatchReceiver<T, E, I, C> as Stream>::Error;
+            fn poll(&mut self) -> Poll<Option<Self::Item>, ()> {
+                self.polls.fetch_add(1, Ordering::SeqCst);
+                self.rx.poll()
+            }
+        }
+
         let (tx, rx) = unbounded::<u64>(4);
+        let poll_counter = Arc::new(AtomicUsize::new(0));
         let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), |v, e| v.push(e));
+        let rx = TestBatchReceiver {
+            rx,
+            polls: Arc::clone(&poll_counter),
+        };
 
         let msg_counter = Arc::new(AtomicUsize::new(0));
         let msg_counter1 = Arc::clone(&msg_counter);
@@ -365,7 +383,16 @@ mod tests {
             Ok(())
         }))
         .forget();
-        thread::sleep(time::Duration::from_millis(10));
+
+        for i in 0..=100 {
+            thread::sleep(time::Duration::from_millis(10));
+            if poll_counter.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            if i == 100 {
+                panic!("BatchReceiver should be polled");
+            }
+        }
 
         // Send without notify, the receiver can't get batched messages.
         assert!(tx.send(0).is_ok());

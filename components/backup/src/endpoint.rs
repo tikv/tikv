@@ -1107,7 +1107,9 @@ pub mod tests {
                     let mut endpoint = endpoint.lock().unwrap();
                     endpoint.run(task);
                 }
-                endpoint.lock().unwrap().on_timeout(&mut backup_timer, ());
+                if let Ok(mut e) = endpoint.lock() {
+                    e.on_timeout(&mut backup_timer, ());
+                }
             });
             tx
         };
