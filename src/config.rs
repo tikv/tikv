@@ -32,6 +32,7 @@ use crate::raftstore::coprocessor::properties::{
 use crate::raftstore::coprocessor::Config as CopConfig;
 use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
+use crate::server::gc_worker::GCConfig;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
@@ -1291,6 +1292,7 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
     pub import: ImportConfig,
     pub pessimistic_txn: PessimisticTxnConfig,
+    pub gc: GCConfig,
 }
 
 impl Default for TiKvConfig {
@@ -1312,6 +1314,7 @@ impl Default for TiKvConfig {
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
+            gc: GCConfig::default(),
         }
     }
 }
@@ -1360,6 +1363,7 @@ impl TiKvConfig {
         self.security.validate()?;
         self.import.validate()?;
         self.pessimistic_txn.validate()?;
+        self.gc.validate()?;
         Ok(())
     }
 
