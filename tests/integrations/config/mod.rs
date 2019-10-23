@@ -188,6 +188,7 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
+        enable_transaction_db: false,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
@@ -411,6 +412,7 @@ fn test_serde_custom_tikv_config() {
             max_background_gc: 9,
             purge_obsolete_files_period: ReadableDuration::secs(1),
         },
+        transaction_db: TxnDBConfig::default(),
     };
     value.raftdb = RaftDbConfig {
         wal_recovery_mode: DBRecoveryMode::SkipAnyCorruptedRecords,

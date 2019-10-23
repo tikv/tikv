@@ -653,6 +653,42 @@ impl TitanDBConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+pub struct TxnDBConfig {
+    pub max_num_locks: i64,
+    pub num_stripes: usize,
+    pub transaction_lock_timeout: i64,
+    pub default_lock_timeout: i64,
+}
+
+impl Default for TxnDBConfig {
+    fn default() -> TxnDBConfig {
+        TxnDBConfig {
+            max_num_locks: -1,
+            num_stripes: 16,
+            transaction_lock_timeout: 1000,
+            default_lock_timeout: 1000,
+        }
+    }
+}
+
+impl TxnDBConfig {
+    fn build_opts(&self) -> TxnDBOptions {
+        let mut opts = TxnDBOptions::new();
+        opts.set_max_num_locks(self.max_num_locks);
+        opts.set_num_stripes(self.num_stripes);
+        opts.set_default_lock_timeout(self.default_lock_timeout);
+        opts.set_transaction_lock_timeout(self.transaction_lock_timeout);
+        opts
+    }
+
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
     pub wal_recovery_mode: DBRecoveryMode,
@@ -687,6 +723,7 @@ pub struct DbConfig {
     pub lockcf: LockCfConfig,
     pub raftcf: RaftCfConfig,
     pub titan: TitanDBConfig,
+    pub transaction_db: TxnDBConfig,
 }
 
 impl Default for DbConfig {
@@ -723,6 +760,7 @@ impl Default for DbConfig {
             lockcf: LockCfConfig::default(),
             raftcf: RaftCfConfig::default(),
             titan: TitanDBConfig::default(),
+            transaction_db: TxnDBConfig::default(),
         }
     }
 }
@@ -785,7 +823,7 @@ impl DbConfig {
         if !self.enable_transaction_db {
             return None;
         } else {
-            let txn = TxnDBOptions::new();
+            let txn = self.transaction_db.build_opts();
             return Some(txn);
         }
     }
