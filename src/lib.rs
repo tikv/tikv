@@ -21,7 +21,6 @@
 #![recursion_limit = "200"]
 #![feature(cell_update)]
 #![feature(proc_macro_hygiene)]
-#![feature(duration_float)]
 #![feature(specialization)]
 #![feature(const_fn)]
 #![feature(mem_take)]
@@ -38,8 +37,6 @@ extern crate prometheus;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use(slog_trace, slog_error, slog_warn, slog_info, slog_debug)]
-extern crate slog;
 #[macro_use]
 extern crate slog_derive;
 #[macro_use]

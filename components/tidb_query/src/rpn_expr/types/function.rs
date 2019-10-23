@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! People implementing RPN functions with fixed argument type and count don't necessarily
-//! understand how `Evaluator` and `RpnDef` work. There's a procedure macro called `rpn_fn`
-//! helping you create RPN functions. For example:
+//! need to understand how `Evaluator` and `RpnDef` work. There's a procedural macro called
+//! `rpn_fn` defined in `tidb_query_codegen` to help you create RPN functions. For example:
 //!
 //! ```ignore
 //! use tidb_query_codegen::rpn_fn;
@@ -13,84 +13,15 @@
 //! }
 //! ```
 //!
-//! You can still call the `foo` function as what it looks. The macro doesn't change the function
-//! itself. Instead, it creates a `foo_fn_meta()` function (simply add `_fn_meta` to the original
-//! function name) that generates an `RpnFnMeta` struct.
+//! You can still call the `foo` function directly; the macro preserves the original function
+//! It creates a `foo_fn_meta()` function (simply add `_fn_meta` to the original
+//! function name) which generates an `RpnFnMeta` struct.
 //!
-//! In case of needing other parameters like `ctx`, `output_rows`, `args` and `extra`:
-//!
-//! ```ignore
-//! // This generates `with_context_fn_meta() -> RpnFnMeta`
-//! #[rpn_fn(capture = [ctx])]
-//! fn with_context(ctx: &mut EvalContext, param: &Option<Decimal>) -> Result<Option<Int>> {
-//!     // Your RPN function logic
-//! }
-//! ```
-//!
-//! A trait whose name looks like `CamelCasedFnName_Fn` is created by the macro. If you need to
-//! customize the execution logic for specific argument type, you may implement it on your own.
-//! For example, you are going to implement an RPN function called `regex_match` taking two
-//! arguments, the regex and the string to match. You want to build the regex only once if the
-//! first argument is a scalar. The code may look like:
-//!
-//! ```ignore
-//! fn regex_match_impl(regex: &Regex, text: &Option<Bytes>) -> Result<Option<i32>> {
-//!     // match text
-//! }
-//!
-//! #[rpn_fn]
-//! fn regex_match(regex: &Option<Bytes>, text: &Option<Bytes>) -> Result<Option<i32>> {
-//!     let regex = build_regex(regex);
-//!     regex_match_impl(&regex, text)
-//! }
-//!
-//! // Pay attention that the first argument is specialized to `ScalarArg`
-//! impl<'a, Arg1> RegexMatch_Fn for Arg<ScalarArg<'a, Bytes>, Arg<Arg1, Null>>
-//! where Arg1: RpnFnArg<Type = &'a Option<Bytes>> {
-//!     fn eval(
-//!         self,
-//!         ctx: &mut EvalContext,
-//          output_rows: usize,
-//          args: &[RpnStackNode<'_>],
-//          extra: &mut RpnFnCallExtra<'_>,
-//!     ) -> Result<VectorValue> {
-//!         let (regex, arg) = self.extract(0);
-//!         let regex = build_regex(regex);
-//!         let mut result = Vec::with_capacity(output_rows);
-//!         for row in 0..output_rows {
-//!             let (text, _) = arg.extract(row);
-//!             result.push(regex_match_impl(&regex, text)?);
-//!         }
-//!         Ok(Evaluable::into_vector_value(result))
-//!     }
-//! }
-//! ```
-//!
-//! If the RPN function accepts variable number of arguments and all arguments have the same eval
-//! type, like RPN function `coalesce`, you can use `#[rpn_fn(varg)]` like:
-//!
-//! ```ignore
-//! #[rpn_fn(varg)]
-//! pub fn foo(args: &[&Option<Int>]) -> Result<Option<Real>> {
-//!     // Your RPN function logic
-//! }
-//! ```
-//!
-//! In case of variable number of arguments and eval types are not the same, like RPN function
-//! `case_when`, you can use `#[rpn_fn(raw_varg)]` instead, receiving `ScalarValueRef` as
-//! the argument:
-//!
-//! ```ignore
-//! #[rpn_fn(raw_varg)]
-//! pub fn foo(args: &[ScalarValueRef<'_>]) -> Result<Option<Real>> {
-//!     // Your RPN function logic
-//! }
-//! ```
-//!
-//! If you are curious about what code the macro will generate, check the test code
-//! in `components/tidb_query_codegen/src/rpn_function.rs`.
+//! For more information on the procedural macro, see the documentation in
+//! `components/tidb_query_codegen/src/rpn_function`.
 
 use std::convert::TryFrom;
+use std::marker::PhantomData;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, FieldType};
@@ -233,19 +164,24 @@ pub trait Evaluator {
     ) -> Result<VectorValue>;
 }
 
-pub struct ArgConstructor<E: Evaluator> {
+pub struct ArgConstructor<A: Evaluable, E: Evaluator> {
     arg_index: usize,
     inner: E,
+    _marker: PhantomData<A>,
 }
 
-impl<E: Evaluator> ArgConstructor<E> {
+impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
     #[inline]
     pub fn new(arg_index: usize, inner: E) -> Self {
-        ArgConstructor { arg_index, inner }
+        ArgConstructor {
+            arg_index,
+            inner,
+            _marker: PhantomData,
+        }
     }
 }
 
-impl<E: Evaluator> Evaluator for ArgConstructor<E> {
+impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
     fn eval(
         self,
         def: impl ArgDef,
@@ -256,34 +192,24 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
     ) -> Result<VectorValue> {
         match &args[self.arg_index] {
             RpnStackNode::Scalar { value, .. } => {
-                match_template_evaluable! {
-                    TT, match value {
-                        ScalarValue::TT(v) => {
-                            let new_def = Arg {
-                                arg: ScalarArg(v),
-                                rem: def,
-                            };
-                            self.inner.eval(new_def, ctx, output_rows, args, extra)
-                        }
-                    }
-                }
+                let v = A::borrow_scalar_value(value);
+                let new_def = Arg {
+                    arg: ScalarArg(v),
+                    rem: def,
+                };
+                self.inner.eval(new_def, ctx, output_rows, args, extra)
             }
             RpnStackNode::Vector { value, .. } => {
                 let logical_rows = value.logical_rows();
-                match_template_evaluable! {
-                    TT, match value.as_ref() {
-                        VectorValue::TT(ref v) => {
-                            let new_def = Arg {
-                                arg: VectorArg {
-                                    physical_col: v,
-                                    logical_rows,
-                                },
-                                rem: def,
-                            };
-                            self.inner.eval(new_def, ctx, output_rows, args, extra)
-                        }
-                    }
-                }
+                let v = A::borrow_vector_value(value.as_ref());
+                let new_def = Arg {
+                    arg: VectorArg {
+                        physical_col: v,
+                        logical_rows,
+                    },
+                    rem: def,
+                };
+                self.inner.eval(new_def, ctx, output_rows, args, extra)
             }
         }
     }

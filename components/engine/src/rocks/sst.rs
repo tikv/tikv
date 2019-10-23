@@ -3,9 +3,11 @@
 use std::sync::Arc;
 
 use super::util::get_fastest_supported_compression_type;
-use super::{ColumnFamilyOptions, DBCompressionType, Env, EnvOptions, ExternalSstFileInfo, DB};
+use super::{
+    ColumnFamilyOptions, DBCompressionType, DBIterator, Env, EnvOptions, ExternalSstFileInfo, DB,
+};
 use crate::{CfName, CF_DEFAULT};
-use engine_rocksdb::SstFileWriter;
+use rocksdb::{SstFileReader, SstFileWriter};
 
 /// A builder builds a SstWriter.
 pub struct SstWriterBuilder {
@@ -131,6 +133,27 @@ impl SstWriter {
         } else {
             Err("failed to read sequential file no env provided".to_owned())
         }
+    }
+}
+
+/// SstReader is used to read an SST file.
+pub struct SstReader {
+    reader: SstFileReader,
+}
+
+impl SstReader {
+    pub fn open(path: &str) -> Result<Self, String> {
+        let mut reader = SstFileReader::new(ColumnFamilyOptions::new());
+        reader.open(path)?;
+        Ok(SstReader { reader })
+    }
+
+    pub fn verify_checksum(&self) -> Result<(), String> {
+        self.reader.verify_checksum()
+    }
+
+    pub fn iter(&self) -> DBIterator<&SstFileReader> {
+        self.reader.iter()
     }
 }
 

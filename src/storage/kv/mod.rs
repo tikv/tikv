@@ -646,10 +646,22 @@ impl<I: Iterator> Cursor<I> {
     pub fn valid(&self) -> Result<bool> {
         if !self.iter.valid() {
             if let Err(e) = self.iter.status() {
-                CRITICAL_ERROR.with_label_values(&["rocksdb"]).inc();
+                CRITICAL_ERROR.with_label_values(&["rocksdb iter"]).inc();
                 if panic_when_unexpected_key_or_data() {
                     set_panic_mark();
-                    panic!("Rocksdb error: {}", e);
+                    panic!(
+                        "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
+                        e,
+                        self.min_key.as_ref().map(|k| hex::encode_upper(k)),
+                        self.max_key.as_ref().map(|k| hex::encode_upper(k))
+                    );
+                } else {
+                    error!(
+                        "failed to iterate";
+                        "min_key" => ?self.min_key.as_ref().map(|k| hex::encode_upper(k)),
+                        "max_key" => ?self.max_key.as_ref().map(|k| hex::encode_upper(k)),
+                        "error" => ?e,
+                    );
                 }
                 return Err(e);
             }
@@ -710,27 +722,46 @@ thread_local! {
 }
 
 /// Execute the closure on the thread local engine.
-pub fn with_tls_engine<E: Engine, F, R>(f: F) -> R
+///
+/// Safety: precondition: `TLS_ENGINE_ANY` is non-null.
+pub unsafe fn with_tls_engine<E: Engine, F, R>(f: F) -> R
 where
     F: FnOnce(&E) -> R,
 {
     TLS_ENGINE_ANY.with(|e| {
-        let engine = unsafe { &*(*e.get() as *const E) };
+        let engine = &*(*e.get() as *const E);
         f(engine)
     })
 }
 
 /// Set the thread local engine.
+///
+/// Postcondition: `TLS_ENGINE_ANY` is non-null.
 pub fn set_tls_engine<E: Engine>(engine: E) {
-    let engine = Box::into_raw(Box::new(engine)) as *mut ();
-    TLS_ENGINE_ANY.with(|e| unsafe { *e.get() = engine });
+    // Safety: we check that `TLS_ENGINE_ANY` is null to ensure we don't leak an existing
+    // engine; we ensure there are no other references to `engine`.
+    TLS_ENGINE_ANY.with(move |e| unsafe {
+        if (*e.get()).is_null() {
+            let engine = Box::into_raw(Box::new(engine)) as *mut ();
+            *e.get() = engine;
+        }
+    });
 }
 
 /// Destroy the thread local engine.
-pub fn destroy_tls_engine<E: Engine>() {
-    TLS_ENGINE_ANY.with(|e| unsafe {
-        drop(Box::from_raw(*e.get() as *mut E));
-        *e.get() = ptr::null_mut();
+///
+/// Safety: the current tls engine must have the same type as `E` (or at least
+/// there destructors must be compatible).
+/// Postcondition: `TLS_ENGINE_ANY` is null.
+pub unsafe fn destroy_tls_engine<E: Engine>() {
+    // Safety: we check that `TLS_ENGINE_ANY` is non-null, we must ensure that references
+    // to `TLS_ENGINE_ANY` can never be stored outside of `TLS_ENGINE_ANY`.
+    TLS_ENGINE_ANY.with(|e| {
+        let ptr = *e.get();
+        if !ptr.is_null() {
+            drop(Box::from_raw(ptr as *mut E));
+            *e.get() = ptr::null_mut();
+        }
     });
 }
 

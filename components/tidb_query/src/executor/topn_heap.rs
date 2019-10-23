@@ -179,7 +179,7 @@ mod tests {
     use crate::codec::Datum;
     use crate::executor::OriginCols;
     use crate::expr::EvalContext;
-    use tikv_util::codec::number::*;
+    use codec::prelude::NumberEncoder;
     use tikv_util::collections::HashMap;
 
     use super::*;
@@ -188,7 +188,7 @@ mod tests {
         let mut item = ByItem::default();
         let mut expr = Expr::default();
         expr.set_tp(ExprType::ColumnRef);
-        expr.mut_val().encode_i64(col_id).unwrap();
+        expr.mut_val().write_i64(col_id).unwrap();
         item.set_expr(expr);
         item.set_desc(desc);
         item

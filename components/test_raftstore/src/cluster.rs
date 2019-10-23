@@ -897,6 +897,29 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn wait_region_split(&mut self, region: &metapb::Region) {
+        let mut try_cnt = 0;
+        let split_count = self.pd_client.get_split_count();
+        loop {
+            if self.pd_client.get_split_count() > split_count {
+                match self.pd_client.get_region(region.get_start_key()) {
+                    Err(_) => {}
+                    Ok(left) => {
+                        if left.get_end_key() != region.get_end_key() {
+                            return;
+                        }
+                    }
+                };
+            }
+
+            if try_cnt > 250 {
+                panic!("region {:?} has not been split after 5000ms", region);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
     pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
         let region = self
             .pd_client
@@ -956,7 +979,7 @@ impl<T: Simulator> Cluster<T> {
 
             if try_cnt > 250 {
                 panic!(
-                    "region {} doesn't exist on store {} after {} tries: {:?}",
+                    "region {} still exists on store {} after {} tries: {:?}",
                     region_id, store_id, try_cnt, resp
                 );
             }

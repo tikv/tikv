@@ -191,7 +191,7 @@ impl RpnExpression {
         Ok(())
     }
 
-    /// Evaluates the expression into a vector. The input columns must be already decoded.
+    /// Evaluates the expression into a stack node. The input columns must be already decoded.
     ///
     /// It differs from `eval` in that `eval_decoded` needn't receive a mutable reference
     /// to `LazyBatchColumnVec`. However, since `eval_decoded` doesn't decode columns,
@@ -222,10 +222,7 @@ impl RpnExpression {
         for node in self.as_ref() {
             match node {
                 RpnExpressionNode::Constant { value, field_type } => {
-                    stack.push(RpnStackNode::Scalar {
-                        value: &value,
-                        field_type,
-                    });
+                    stack.push(RpnStackNode::Scalar { value, field_type });
                 }
                 RpnExpressionNode::ColumnRef { offset } => {
                     let field_type = &schema[*offset];
@@ -514,15 +511,15 @@ mod tests {
             let mut col = LazyBatchColumn::raw_with_capacity(3);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(-5)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(-7)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(3)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             col
@@ -717,15 +714,15 @@ mod tests {
             let mut col = LazyBatchColumn::raw_with_capacity(3);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(-5)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(-7)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
+            datum_raw.write_datum(&[Datum::I64(3)], false).unwrap();
             col.mut_raw().push(&datum_raw);
 
             col

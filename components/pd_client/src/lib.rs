@@ -7,8 +7,6 @@ extern crate lazy_static;
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
-#[macro_use(slog_error, slog_warn, slog_info, slog_debug)]
-extern crate slog;
 #[macro_use]
 extern crate slog_global;
 extern crate hex;
@@ -194,3 +192,12 @@ pub trait PdClient: Send + Sync {
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s
+
+/// Takes the peer address (for sending raft messages) from a store.
+pub fn take_peer_address(store: &mut metapb::Store) -> String {
+    if !store.get_peer_address().is_empty() {
+        store.take_peer_address()
+    } else {
+        store.take_address()
+    }
+}
