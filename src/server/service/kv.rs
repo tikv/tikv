@@ -139,7 +139,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
                 );
                 GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc();
             });
-
+        // no delay here
         ctx.spawn(future);
     }
 
