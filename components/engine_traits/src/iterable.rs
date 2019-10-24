@@ -26,8 +26,25 @@ pub trait Iterator {
     fn key(&self) -> Result<&[u8]>;
     fn value(&self) -> Result<&[u8]>;
 
+    fn kv(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+        if self.valid() {
+            let k = self.key().ok()?;
+            let v = self.value().ok()?;
+            Some((k.to_vec(), v.to_vec()))
+        } else {
+            None
+        }
+    }
+
     fn valid(&self) -> bool;
     fn status(&self) -> Result<()>;
+
+    fn as_std(&mut self) -> StdIterator<Self>
+    where
+        Self: Sized,
+    {
+        StdIterator(self)
+    }
 }
 
 pub trait Iterable {
@@ -109,4 +126,20 @@ where
     }
 
     it.status().map_err(From::from)
+}
+
+pub struct StdIterator<'a, I: Iterator>(&'a mut I);
+
+pub type Kv = (Vec<u8>, Vec<u8>);
+
+impl<'a, I: Iterator> std::iter::Iterator for StdIterator<'a, I> {
+    type Item = Kv;
+
+    fn next(&mut self) -> Option<Kv> {
+        let kv = self.0.kv();
+        if kv.is_some() {
+            I::next(&mut self.0);
+        }
+        kv
+    }
 }

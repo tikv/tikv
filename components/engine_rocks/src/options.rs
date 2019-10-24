@@ -1,9 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use rocksdb::{
-    ColumnFamilyOptions as RawCFOptions, ReadOptions as RawReadOptions,
-    WriteOptions as RawWriteOptions,
-};
+use rocksdb::{ReadOptions as RawReadOptions, WriteOptions as RawWriteOptions};
 
 pub struct RocksReadOptions(RawReadOptions);
 
@@ -71,27 +68,6 @@ impl From<engine_traits::IterOptions> for RocksReadOptions {
 
 impl From<&engine_traits::IterOptions> for RocksReadOptions {
     fn from(opts: &engine_traits::IterOptions) -> Self {
-        opts.clone().into()
-    }
-}
-
-pub struct RocksCFOptions(RawCFOptions);
-
-impl RocksCFOptions {
-    #[allow(dead_code)]
-    pub fn into_raw(self) -> RawCFOptions {
-        self.0
-    }
-}
-
-impl From<engine_traits::CFOptions> for RocksCFOptions {
-    fn from(_opts: engine_traits::CFOptions) -> Self {
-        RocksCFOptions(RawCFOptions::default())
-    }
-}
-
-impl From<&engine_traits::CFOptions> for RocksCFOptions {
-    fn from(opts: &engine_traits::CFOptions) -> Self {
         opts.clone().into()
     }
 }

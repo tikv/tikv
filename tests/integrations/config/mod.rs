@@ -16,6 +16,7 @@ use tikv::import::Config as ImportConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
+use tikv::server::gc_worker::GCConfig;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
@@ -519,6 +520,11 @@ fn test_serde_custom_tikv_config() {
         stream_channel_window: 123,
     };
     value.panic_when_unexpected_key_or_data = true;
+    value.gc = GCConfig {
+        ratio_threshold: 1.2,
+        batch_keys: 256,
+        max_write_bytes_per_sec: ReadableSize::mb(10),
+    };
 
     let custom = read_file_in_project_dir("tests/integrations/config/test-custom.toml");
     let load = toml::from_str(&custom).unwrap();
