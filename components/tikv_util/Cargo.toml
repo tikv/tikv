@@ -44,6 +44,8 @@ crossbeam = "0.7.2"
 fail = "0.3"
 fxhash = "0.2.1"
 zeroize = { version = "0.10", features = [ "alloc" ] }
+openssl = { version = "0.10" }
+hex = "0.3"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
