@@ -28,19 +28,19 @@ impl ThreadLoad {
     /// Returns true if the current load exceeds its threshold.
     #[allow(dead_code)]
     pub fn in_heavy_load(&self) -> bool {
-        self.load.load(Ordering::Acquire) > self.threshold
+        self.load.load(Ordering::Relaxed) > self.threshold
     }
 
     /// Increases when updating `load`.
     #[allow(dead_code)]
     pub fn term(&self) -> usize {
-        self.term.load(Ordering::Acquire)
+        self.term.load(Ordering::Relaxed)
     }
 
     /// Gets the current load. For example, 200 means the threads consuming 200% of the CPU resources.
     #[allow(dead_code)]
     pub fn load(&self) -> usize {
-        self.load.load(Ordering::Acquire)
+        self.load.load(Ordering::Relaxed)
     }
 }
 
