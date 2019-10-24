@@ -240,71 +240,56 @@ impl StatusServer {
         };
         info!("start cpu profiling at frequency {} per second", &frequency);
 
-        match rsperftools::PROFILER.lock() {
-            Ok(mut profiler) => match profiler.start(frequency) {
-                Ok(_) => Box::new(ok(Response::new(Body::from(
-                    "start rsperftools successfully",
-                )))),
-                Err(err) => Box::new(ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from(format!("{:?}", err)))
-                    .unwrap())),
-            },
-            Err(_) => Box::new(ok(Response::builder()
+        let mut profiler = rsperftools::PROFILER.write();
+        match profiler.start(frequency) {
+            Ok(_) => Box::new(ok(Response::new(Body::from(
+                "start rsperftools successfully",
+            )))),
+            Err(err) => Box::new(ok(Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from("fail to lock global profiler"))
+                .body(Body::from(format!("{:?}", err)))
                 .unwrap())),
         }
     }
 
     fn stop_rs_profiler() -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-        match rsperftools::PROFILER.lock() {
-            Ok(mut profiler) => match profiler.stop() {
-                Ok(_) => {
-                    info!("cpu profiler stopped");
-                    Box::new(ok(Response::new(Body::from(
-                        "stop rsperftools successfully",
-                    ))))
-                }
-                Err(err) => Box::new(ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from(format!("{:?}", err)))
-                    .unwrap())),
-            },
-            Err(_) => Box::new(ok(Response::builder()
+        let mut profiler = rsperftools::PROFILER.write();
+        match profiler.stop() {
+            Ok(_) => {
+                info!("cpu profiler stopped");
+                Box::new(ok(Response::new(Body::from(
+                    "stop rsperftools successfully",
+                ))))
+            }
+            Err(err) => Box::new(ok(Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from("fail to lock global profiler"))
+                .body(Body::from(format!("{:?}", err)))
                 .unwrap())),
         }
     }
 
     fn report_from_rs_profiler(
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-        match rsperftools::PROFILER.lock() {
-            Ok(profiler) => match profiler.report() {
-                Ok(report) => {
-                    info!("get cpu profile report successfully");
+        let profiler = rsperftools::PROFILER.read();
+        match profiler.report() {
+            Ok(report) => {
+                info!("get cpu profile report successfully");
 
-                    let mut body: Vec<u8> = Vec::new();
-                    match report.flamegraph(&mut body) {
-                        Ok(_) => {
-                            info!("write report successfully");
-                            Box::new(ok(Response::new(Body::from(body))))
-                        }
-                        Err(err) => Box::new(ok(Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(Body::from(format!("{:?}", err)))
-                            .unwrap())),
+                let mut body: Vec<u8> = Vec::new();
+                match report.flamegraph(&mut body) {
+                    Ok(_) => {
+                        info!("write report successfully");
+                        Box::new(ok(Response::new(Body::from(body))))
                     }
+                    Err(err) => Box::new(ok(Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::from(format!("{:?}", err)))
+                        .unwrap())),
                 }
-                Err(err) => Box::new(ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from(format!("{:?}", err)))
-                    .unwrap())),
-            },
-            Err(_) => Box::new(ok(Response::builder()
+            }
+            Err(err) => Box::new(ok(Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from("fail to lock global profiler"))
+                .body(Body::from(format!("{:?}", err)))
                 .unwrap())),
         }
     }
