@@ -1,7 +1,8 @@
 use crate::server::{Error, StoreAddrResolver};
 
 use kvproto::kvrpcpb::{
-    GetCommittedIndexAndTsRequest, GetCommittedIndexAndTsResponse, ReadIndexRequest,
+    GetCommittedIndexAndTsRequest, GetCommittedIndexAndTsResponse, ReadIndexRequest, 
+    TransactionWriteRequest, TransactionWriteResponse, CommitRequest
 };
 use kvproto::tikvpb;
 use kvproto::tikvpb::TikvClient;
@@ -80,6 +81,69 @@ impl<S: StoreAddrResolver + 'static, P: PdClient + 'static> tikvpb::DcProxy for 
             let mut res = GetCommittedIndexAndTsResponse::default();
             res.set_committed_index(*indexes.iter().max().unwrap());
             res.set_timestamp(ts);
+            sink.success(res).map_err(Error::from)
+        }).map_err(|_| {});
+
+        ctx.spawn(f)
+    }
+
+    fn transaction_write(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: TransactionWriteRequest,
+        sink: UnarySink<TransactionWriteResponse>,
+    ) {
+        let mut fs1 = Vec::with_capacity(req.get_pre_writes().len());
+        let mut fs2 = Vec::with_capacity(req.get_pre_writes().len());
+        let pre_writes = req.get_pre_writes().to_vec();
+        for pre_write_req in pre_writes.clone() {
+            let proxy_ctx = pre_write_req.get_context();
+            let store_id = proxy_ctx.get_peer().get_store_id();
+            let (cb, f) = paired_future_callback();
+            let res = self.store_resolver.resolve(store_id, cb);
+            let future = AndThenWith::new(res, f.map_err(Error::from))
+                .and_then(move |addr| {
+                    let addr = addr.unwrap(); // FIXME: unwrap
+                    let env = Arc::new(Environment::new(1));
+                    let channel = ChannelBuilder::new(env).connect(&addr);
+                    let client = TikvClient::new(channel);
+                    client
+                        .kv_prewrite_async(&pre_write_req)
+                        .unwrap()
+                        .map_err(Error::from)
+                })
+                .map(|resp| resp.clone());
+            fs1.push(Box::new(future));
+        }
+        let f1 = future::join_all(fs1);
+
+        for pre_write_req in pre_writes.clone() {
+            let proxy_ctx = pre_write_req.get_context();
+            let store_id = proxy_ctx.get_peer().get_store_id();
+            let (cb, f) = paired_future_callback();
+            let res = self.store_resolver.resolve(store_id, cb);
+            let commit_future = AndThenWith::new(res, f.map_err(Error::from))
+                .and_then(move |addr| {
+                    let addr = addr.unwrap(); // FIXME: unwrap
+                    let env = Arc::new(Environment::new(1));
+                    let channel = ChannelBuilder::new(env).connect(&addr);
+                    let client = TikvClient::new(channel);
+                    let commit_req = CommitRequest::default();
+                    client
+                        .kv_commit_async(&commit_req)
+                        .unwrap()
+                        .map_err(Error::from)
+                })
+                .map(|resp| resp.clone());
+            fs2.push(Box::new(commit_future));
+        }
+
+        let f2 = future::join_all(fs2);
+
+        let f = Future::join(f1, f2).and_then(|(pre_write_resps, commit_resps)| {
+            let mut res = TransactionWriteResponse::default();
+            res.set_pre_write_resps(protobuf::RepeatedField::from_vec(pre_write_resps));
+            res.set_commit_resps(protobuf::RepeatedField::from_vec(commit_resps));
             sink.success(res).map_err(Error::from)
         }).map_err(|_| {});
 
