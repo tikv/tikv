@@ -139,8 +139,12 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
                 );
                 GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc();
             });
-
-        ctx.spawn(future);
+        use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+        let delay = GLOBAL_TIMER_HANDLE
+            .clone()
+            .delay(std::time::Instant::now() + std::time::Duration::from_secs(90))
+            .then(|_| future);
+        ctx.spawn(delay);
     }
 
     fn kv_pessimistic_lock(
