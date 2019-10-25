@@ -31,6 +31,7 @@ mod tracker;
 
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
+pub use checksum::checksum_crc64_xor;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 

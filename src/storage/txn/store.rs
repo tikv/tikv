@@ -6,7 +6,7 @@ use crate::storage::metrics::*;
 use crate::storage::mvcc::EntryScanner;
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::mvcc::PointGetterBuilder;
-use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
+use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder, Write};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
@@ -106,6 +106,31 @@ pub enum TxnEntry {
     Prewrite { default: KvPair, lock: KvPair },
     Commit { default: KvPair, write: KvPair },
     // TOOD: Add more entry if needed.
+}
+
+impl TxnEntry {
+    /// This method will return a kv pair whose
+    /// content and encode are same as a kv pair
+    /// reture by ```StoreScanner::next```
+    pub fn into_kvpair(self) -> Result<(Vec<u8>, Vec<u8>)> {
+        match self {
+            TxnEntry::Commit { default, write } => {
+                if !default.0.is_empty() {
+                    let k = Key::from_encoded(default.0).truncate_ts()?;
+                    let k = k.into_raw()?;
+                    Ok((k, default.1))
+                } else {
+                    let k = Key::from_encoded(write.0).truncate_ts()?;
+                    let k = k.into_raw()?;
+                    let v = Write::parse(&write.1)?;
+                    let v = v.short_value.unwrap();
+                    Ok((k, v))
+                }
+            }
+            // Prewrite are not support
+            _ => unreachable!(),
+        }
+    }
 }
 
 /// A batch of transaction entries.
