@@ -31,7 +31,7 @@ use tikv::server::service::DebugService;
 use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv::server::{create_raft_storage, Node, RaftKv, Server};
+use tikv::server::{create_raft_storage, KvApplyObserver, Node, RaftKv, Server};
 use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
@@ -295,6 +295,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create CoprocessorHost.
     let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router);
+    let apply_ob = Box::new(KvApplyObserver::new());
+    coprocessor_host
+        .registry
+        .register_apply_observer(0, apply_ob);
+    // engine.init_apply_observer();
 
     // Create region collection.
     let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);

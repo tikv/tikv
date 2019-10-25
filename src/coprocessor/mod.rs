@@ -100,6 +100,9 @@ pub struct ReqContext {
 
     /// The transaction start_ts of the request
     pub txn_start_ts: Option<u64>,
+
+    /// Applied index.
+    pub applied_index: Option<u64>,
 }
 
 impl ReqContext {
@@ -111,6 +114,7 @@ impl ReqContext {
         peer: Option<String>,
         is_desc_scan: Option<bool>,
         txn_start_ts: Option<u64>,
+        applied_index: Option<u64>, // for multi dc improvement.
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         Self {
@@ -120,6 +124,7 @@ impl ReqContext {
             peer,
             is_desc_scan,
             txn_start_ts,
+            applied_index,
             first_range: ranges.first().cloned(),
             ranges_len: ranges.len(),
         }

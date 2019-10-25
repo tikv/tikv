@@ -12,12 +12,14 @@ use engine::Peekable;
 use engine::CF_DEFAULT;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
+use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
 
 use super::metrics::*;
+use crate::raftstore::coprocessor::{ApplyObserver, Coprocessor};
 use crate::raftstore::errors::Error as RaftServerError;
 use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use crate::raftstore::store::{RegionIterator, RegionSnapshot};
@@ -105,6 +107,25 @@ impl From<RaftServerError> for kv::Error {
 #[derive(Clone)]
 pub struct RaftKv<S: RaftStoreRouter + 'static> {
     router: S,
+}
+
+pub struct KvApplyObserver {}
+
+impl KvApplyObserver {
+    pub fn new() -> Self {
+        KvApplyObserver {}
+    }
+}
+
+impl Coprocessor for KvApplyObserver {
+    fn start(&self) {}
+    fn stop(&self) {}
+}
+
+impl ApplyObserver for KvApplyObserver {
+    fn on_applied_index_change(&self, r: &Region, applied: Option<u64>) {
+        error!("{} applied index changed to {:?}", r.get_id(), applied);
+    }
 }
 
 pub enum CmdRes {
@@ -222,6 +243,8 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             )
             .map_err(From::from)
     }
+
+    pub fn init_apply_observer(&self) {}
 }
 
 fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
@@ -357,6 +380,15 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
             e.into()
         })
+    }
+
+    fn async_snapshot_on_follower(
+        &self,
+        ctx: &Context,
+        applied_index: u64,
+        cb: Callback<Self::Snap>,
+    ) -> kv::Result<()> {
+        self.async_snapshot(ctx, cb)
     }
 }
 

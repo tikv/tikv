@@ -70,6 +70,14 @@ pub trait Engine: Send + Clone + 'static {
 
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
+    fn async_snapshot_on_follower(
+        &self,
+        ctx: &Context,
+        _applied_index: u64,
+        callback: Callback<Self::Snap>,
+    ) -> Result<()> {
+        self.async_snapshot(ctx, callback)
+    }
 
     fn write(&self, ctx: &Context, batch: Vec<Modify>) -> Result<()> {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);

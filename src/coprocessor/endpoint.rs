@@ -96,10 +96,11 @@ impl<E: Engine> Endpoint<E> {
             "unsupported tp (failpoint)"
         )));
 
-        let (context, data, ranges) = (
+        let (context, data, ranges, applied_index) = (
             req.take_context(),
             req.take_data(),
             req.take_ranges().to_vec(),
+            req.get_applied_index(),
         );
 
         let mut is = CodedInputStream::from_bytes(&data);
@@ -130,6 +131,11 @@ impl<E: Engine> Endpoint<E> {
                     peer,
                     Some(is_desc_scan),
                     Some(dag.get_start_ts()),
+                    if applied_index > 0 {
+                        Some(applied_index)
+                    } else {
+                        None
+                    },
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 let enable_batch_if_possible = self.enable_batch_if_possible;
@@ -164,6 +170,11 @@ impl<E: Engine> Endpoint<E> {
                     peer,
                     None,
                     Some(analyze.get_start_ts()),
+                    if applied_index > 0 {
+                        Some(applied_index)
+                    } else {
+                        None
+                    },
                 );
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
@@ -183,6 +194,11 @@ impl<E: Engine> Endpoint<E> {
                     peer,
                     None,
                     Some(checksum.get_start_ts()),
+                    if applied_index > 0 {
+                        Some(applied_index)
+                    } else {
+                        None
+                    },
                 );
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
@@ -208,10 +224,14 @@ impl<E: Engine> Endpoint<E> {
     #[inline]
     fn async_snapshot(
         engine: &E,
-        ctx: &kvrpcpb::Context,
+        req_ctx: &ReqContext,
     ) -> impl Future<Item = E::Snap, Error = Error> {
         let (callback, future) = tikv_util::future::paired_future_callback();
-        let val = engine.async_snapshot(ctx, callback);
+        let val = if let Some(applied_index) = req_ctx.applied_index {
+            engine.async_snapshot_on_follower(&req_ctx.context, applied_index, callback)
+        } else {
+            engine.async_snapshot(&req_ctx.context, callback)
+        };
         future::result(val)
             .and_then(|_| future.map_err(|cancel| storage::kv::Error::Other(box_err!(cancel))))
             .and_then(|(_ctx, result)| result)
@@ -236,7 +256,7 @@ impl<E: Engine> Endpoint<E> {
             // exists.
             .and_then(move |_| unsafe {
                 with_tls_engine(|engine| {
-                    Self::async_snapshot(engine, &tracker.req_ctx.context)
+                    Self::async_snapshot(engine, &tracker.req_ctx)
                         .map(|snapshot| (tracker, snapshot))
                 })
             })
@@ -333,7 +353,7 @@ impl<E: Engine> Endpoint<E> {
                     // exists.
                     unsafe {
                         with_tls_engine(|engine| {
-                            Self::async_snapshot(engine, &tracker.req_ctx.context)
+                            Self::async_snapshot(engine, &tracker.req_ctx)
                                 .map(|snapshot| (tracker, snapshot))
                         })
                     }
