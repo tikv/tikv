@@ -2,6 +2,17 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.5]
++ Fix the problem that split check is always scanning caused by updating approximate in pd-worker [#5716](https://github.com/tikv/tikv/pull/5716)
++ Update rust-rocksdb to avoid intra_L0 compaction issue [#5710](https://github.com/tikv/tikv/pull/5710)
++ Fix the bug which may break atomicity: product primary locks of pessimistic transactions from being collapsed [#5671](https://github.com/tikv/tikv/pull/5671)
++ Enable rocksdb force_consistency_checks and handle background error [#5662](https://github.com/tikv/tikv/pull/5662)
++ Fix the bug in raftstore that painic when getting value encouters an error [#5643](https://github.com/tikv/tikv/pull/5643)
++ Fix the bug that do not return the right tso when checking lock [#5634](https://github.com/tikv/tikv/pull/5634)
++ Reduce the overhead of region's heartbeat [#5620](https://github.com/tikv/tikv/pull/5620)
++ Reduce message flush in raftstore [#5617](https://github.com/tikv/tikv/pull/5617)
++ Check Lock's TTL  when doing clean up [#5589](https://github.com/tikv/tikv/pull/5589)
+  
 ## [3.0.4]
 
 + Fix the issue that the approximate keys is not correct when region is empty [#5414](https://github.com/tikv/tikv/pull/5414)
