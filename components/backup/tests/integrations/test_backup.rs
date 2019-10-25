@@ -264,8 +264,7 @@ fn test_backup_and_import() {
         let mut content = vec![];
         reader.read_to_end(&mut content).unwrap();
         let mut m = sst_meta.clone();
-        // Temporarily remove this to compile
-        // m.crc32 = f.crc32;
+        m.crc32 = f.crc32;
         m.length = content.len() as _;
         m.cf_name = name_to_cf(&f.name).to_owned();
         metas.push((m, content));

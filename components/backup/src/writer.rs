@@ -89,12 +89,11 @@ impl BackupWriter {
                     .with_label_values(&[cf])
                     .observe(contents.len() as _);
                 let name = format!("{}_{}.sst", name, cf);
-                let _checksum = tikv_util::file::calc_crc32_bytes(contents);
+                let checksum = tikv_util::file::calc_crc32_bytes(contents);
                 let mut limit_reader = LimitReader::new(limiter, &mut contents);
                 storage.write(&name, &mut limit_reader)?;
                 let mut file = File::new();
-                // Temporarily remove this to compile
-                // file.set_crc32(checksum);
+                file.set_crc32(checksum);
                 file.set_name(name);
                 Ok(file)
             };
