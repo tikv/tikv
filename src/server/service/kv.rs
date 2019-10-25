@@ -31,9 +31,10 @@ use kvproto::kvrpcpb::{self, *};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use prometheus::{Histogram, HistogramTimer};
+use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
+use tikv_util::metrics::HistogramReader;
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
@@ -48,40 +49,9 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 30;
 const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
 
-struct HistogramObserver {
-    histogram: Histogram,
-    sum: f64,
-    count: u64,
-}
-
-impl HistogramObserver {
-    fn new(histogram: Histogram) -> Self {
-        let (sum, count) = (histogram.get_sample_sum(), histogram.get_sample_count());
-        HistogramObserver {
-            histogram,
-            sum,
-            count,
-        }
-    }
-
-    fn observe(&mut self) -> f64 {
-        let (sum, count) = (
-            self.histogram.get_sample_sum(),
-            self.histogram.get_sample_count(),
-        );
-        if count == self.count {
-            return 0.0;
-        }
-        let val = (sum - self.sum) / (count - self.count) as f64;
-        self.sum = sum;
-        self.count = count;
-        val
-    }
-}
-
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
-    region: u64,
+    region_id: u64,
     conf_ver: u64,
     version: u64,
 }
@@ -90,21 +60,38 @@ impl RegionVerId {
     #[inline]
     fn from_context(ctx: &Context) -> Self {
         RegionVerId {
-            region: ctx.get_region_id(),
+            region_id: ctx.get_region_id(),
             conf_ver: ctx.get_region_epoch().get_conf_ver(),
             version: ctx.get_region_epoch().get_version(),
         }
     }
 }
 
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord)]
+enum BatchableRequestKind {
+    PointGet,
+    Prewrite,
+    Commit,
+}
+
+impl BatchableRequestKind {
+    fn as_str(&self) -> &str {
+        match self {
+            BatchableRequestKind::PointGet => &"point_get",
+            BatchableRequestKind::Prewrite => &"prewrite",
+            BatchableRequestKind::Commit => &"commit",
+        }
+    }
+}
+
 /// BatchLimiter controls submit timing of request batch.
 struct BatchLimiter {
-    cmd: String,
+    cmd: BatchableRequestKind,
     timeout: Option<Duration>,
     last_submit_time: Instant,
-    latency_observer: HistogramObserver,
+    latency_reader: HistogramReader,
     latency_estimation: f64,
-    thread_load_observer: Arc<ThreadLoad>,
+    thread_load_reader: Arc<ThreadLoad>,
     thread_load_estimation: usize,
     sample_size: usize,
     enable_batch: bool,
@@ -112,19 +99,21 @@ struct BatchLimiter {
 }
 
 impl BatchLimiter {
+    /// Construct a new `BatchLimiter` with provided timeout-duration,
+    /// and reader on latency and thread-load.
     fn new(
-        cmd: String,
+        cmd: BatchableRequestKind,
         timeout: Option<Duration>,
-        latency_observer: HistogramObserver,
-        thread_load_observer: Arc<ThreadLoad>,
+        latency_reader: HistogramReader,
+        thread_load_reader: Arc<ThreadLoad>,
     ) -> Self {
         BatchLimiter {
             cmd,
             timeout,
             last_submit_time: Instant::now(),
-            latency_observer,
+            latency_reader,
             latency_estimation: 0.0,
-            thread_load_observer,
+            thread_load_reader,
             thread_load_estimation: 100,
             sample_size: 0,
             enable_batch: false,
@@ -132,6 +121,7 @@ impl BatchLimiter {
         }
     }
 
+    /// Whether this batch limiter is disabled.
     #[inline]
     fn disabled(&self) -> bool {
         self.timeout.is_none()
@@ -139,7 +129,7 @@ impl BatchLimiter {
 
     /// Whether the batch is timely due to be submitted.
     #[inline]
-    fn due(&self, now: Instant) -> bool {
+    fn is_due(&self, now: Instant) -> bool {
         if let Some(timeout) = self.timeout {
             now - self.last_submit_time >= timeout
         } else {
@@ -162,7 +152,7 @@ impl BatchLimiter {
         self.sample_size += 1;
         if self.enable_batch {
             // check if thread load is too low, which means busy hour has passed.
-            if self.thread_load_observer.load()
+            if self.thread_load_reader.load()
                 < (self.thread_load_estimation as f32 * REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO)
                     as usize
             {
@@ -170,8 +160,8 @@ impl BatchLimiter {
             }
         } else if self.sample_size > REQUEST_BATCH_LIMITER_SAMPLE_WINDOW {
             self.sample_size = 0;
-            let latency = self.latency_observer.observe() * 1000.0;
-            let load = self.thread_load_observer.load();
+            let latency = self.latency_reader.read() * 1000.0;
+            let load = self.thread_load_reader.load();
             self.latency_estimation = (self.latency_estimation + latency) / 2.0;
             if load > 70 {
                 // thread load is less sensitive to workload,
@@ -211,6 +201,7 @@ impl BatchLimiter {
     }
 }
 
+/// Batcher buffers specific requests in one stream of `batch_commands` in a batch for bulk submit.
 trait Batcher<E: Engine, L: LockMgr> {
     /// Try to batch single batch_command request, returns whether the request is stashed.
     /// One batcher must only process requests from one unique command stream.
@@ -228,13 +219,13 @@ trait Batcher<E: Engine, L: LockMgr> {
         storage: &Storage<E, L>,
     ) -> usize;
 
+    /// Whether this batcher is empty of buffered requests.
     fn is_empty(&self) -> bool;
 }
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct ReadId {
     region: RegionVerId,
-    priority: u8,
     // None in this field stands for txn read.
     cf: Option<String>,
 }
@@ -244,12 +235,12 @@ impl ReadId {
     fn from_context_cf(ctx: &Context, cf: Option<String>) -> Self {
         ReadId {
             region: RegionVerId::from_context(ctx),
-            priority: storage::get_priority_code(ctx.get_priority()),
             cf,
         }
     }
 }
 
+/// ReadBatcher batches normal-priority `raw_get` and `get` requests to the same region.
 struct ReadBatcher {
     router: HashMap<ReadId, (Vec<u64>, Vec<PointGetCommand>)>,
 }
@@ -298,11 +289,15 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
         request: &mut batch_commands_request::request::Cmd,
     ) -> bool {
         match request {
-            batch_commands_request::request::Cmd::Get(req) => {
+            batch_commands_request::request::Cmd::Get(req)
+                if storage::is_normal_priority(req.get_context().get_priority()) =>
+            {
                 self.add_get(request_id, req);
                 true
             }
-            batch_commands_request::request::Cmd::RawGet(req) => {
+            batch_commands_request::request::Cmd::RawGet(req)
+                if storage::is_normal_priority(req.get_context().get_priority()) =>
+            {
                 self.add_raw_get(request_id, req);
                 true
             }
@@ -339,29 +334,30 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
     }
 }
 
-type ReqBatcherInner<E, L> = (BatchLimiter, Box<dyn Batcher<E, L>>);
+type ReqBatcherInner<E, L> = (BatchLimiter, Box<dyn Batcher<E, L> + Send>);
 
+/// ReqBatcher manages multiple `Batcher`s which batch requests from one unique stream of `batch_commands`
+// and controls the submit timing of those batchers based on respective `BatchLimiter`.
 struct ReqBatcher<E: Engine, L: LockMgr> {
-    inners: BTreeMap<String, ReqBatcherInner<E, L>>,
+    inners: BTreeMap<BatchableRequestKind, ReqBatcherInner<E, L>>,
     tx: Sender<(u64, batch_commands_response::Response)>,
 }
 
-unsafe impl<E: Engine, L: LockMgr> Send for ReqBatcher<E, L> {}
-
 impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
+    /// Constructs a new `ReqBatcher` which provides batching of one request stream with specific response channel.
     pub fn new(
         tx: Sender<(u64, batch_commands_response::Response)>,
         timeout: Option<Duration>,
         readpool_thread_load: Arc<ThreadLoad>,
     ) -> Self {
-        let mut inners = BTreeMap::<String, ReqBatcherInner<E, L>>::default();
+        let mut inners = BTreeMap::<BatchableRequestKind, ReqBatcherInner<E, L>>::default();
         inners.insert(
-            "get".to_string(),
+            BatchableRequestKind::PointGet,
             (
                 BatchLimiter::new(
-                    "get".to_string(),
+                    BatchableRequestKind::PointGet,
                     timeout,
-                    HistogramObserver::new(GRPC_MSG_HISTOGRAM_VEC.kv_get.clone()),
+                    HistogramReader::new(GRPC_MSG_HISTOGRAM_VEC.kv_get.clone()),
                     readpool_thread_load,
                 ),
                 Box::new(ReadBatcher::new()),
@@ -370,6 +366,8 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         ReqBatcher { inners, tx }
     }
 
+    /// Try to batch single batch_command request, returns whether the request is stashed.
+    /// One batcher can only accept requests from one unique command stream.
     pub fn filter(
         &mut self,
         request_id: u64,
@@ -378,11 +376,15 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         if let Some(ref mut cmd) = request.cmd {
             if let Some((limiter, batcher)) = match cmd {
                 batch_commands_request::request::Cmd::Prewrite(_) => {
-                    self.inners.get_mut("prewrite")
+                    self.inners.get_mut(&BatchableRequestKind::Prewrite)
                 }
-                batch_commands_request::request::Cmd::Commit(_) => self.inners.get_mut("commit"),
+                batch_commands_request::request::Cmd::Commit(_) => {
+                    self.inners.get_mut(&BatchableRequestKind::Commit)
+                }
                 batch_commands_request::request::Cmd::Get(_)
-                | batch_commands_request::request::Cmd::RawGet(_) => self.inners.get_mut("get"),
+                | batch_commands_request::request::Cmd::RawGet(_) => {
+                    self.inners.get_mut(&BatchableRequestKind::PointGet)
+                }
                 _ => None,
             } {
                 // in normal mode, batch requests inside one `batch_commands`.
@@ -418,12 +420,13 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         let now = Instant::now();
         for (limiter, batcher) in self.inners.values_mut() {
             limiter.observe_tick();
-            if limiter.due(now) {
+            if limiter.is_due(now) {
                 limiter.observe_submit(now, batcher.submit(&self.tx, storage));
             }
         }
     }
 
+    /// Whether or not every batcher is empty of buffered requests.
     #[inline]
     pub fn is_empty(&self) -> bool {
         for (_, batcher) in self.inners.values() {

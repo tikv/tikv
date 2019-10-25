@@ -481,6 +481,13 @@ pub fn get_priority_code(priority: CommandPri) -> u8 {
     }
 }
 
+pub fn is_normal_priority(priority: CommandPri) -> bool {
+    match priority {
+        CommandPri::Normal => true,
+        _ => false,
+    }
+}
+
 impl Command {
     pub fn readonly(&self) -> bool {
         match *self {
