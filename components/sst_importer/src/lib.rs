@@ -21,8 +21,6 @@ pub mod service;
 pub mod import_mode;
 pub mod sst_importer;
 
-pub mod test_helpers;
-
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
 pub use self::sst_importer::SSTImporter;

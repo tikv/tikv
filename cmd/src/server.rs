@@ -191,7 +191,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         engine.clone(),
         Some(engines.kv.clone()),
         Some(raft_router.clone()),
-        cfg.storage.gc_ratio_threshold,
+        cfg.gc.clone(),
     );
     gc_worker
         .start()

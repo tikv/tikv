@@ -2221,7 +2221,7 @@ mod batch_commands_request {
 mod tests {
     use std::thread;
 
-    use futures::sync::oneshot;
+    use tokio_sync::oneshot;
 
     use super::*;
     use crate::storage;

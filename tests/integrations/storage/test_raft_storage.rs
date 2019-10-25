@@ -8,8 +8,7 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
-use tikv::server::gc_worker::AutoGCConfig;
-use tikv::storage::config::Config;
+use tikv::server::gc_worker::{AutoGCConfig, GCConfig};
 use tikv::storage::{self, Engine, Key, Mutation};
 use tikv::storage::{kv, mvcc, txn};
 use tikv_util::collections::HashMap;
@@ -261,11 +260,11 @@ fn test_auto_gc() {
         .storages
         .iter()
         .map(|(id, engine)| {
-            let mut config = Config::default();
+            let mut config = GCConfig::default();
             // Do not skip GC
-            config.gc_ratio_threshold = 0.9;
+            config.ratio_threshold = 0.9;
             let storage = SyncTestStorageBuilder::from_engine(engine.clone())
-                .config(config)
+                .gc_config(config)
                 .build()
                 .unwrap();
 
