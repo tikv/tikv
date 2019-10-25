@@ -21,10 +21,13 @@ struct RowSlice<'a> {
 }
 
 impl RowSlice<'_> {
+    /// # Panics
+    ///
+    /// Panics if the value of first byte is not 128(v2 version code)
     fn from_bytes(mut data: &[u8]) -> Result<RowSlice> {
         assert_eq!(data.read_u8()?, super::CODEC_VERSION);
         let mut row = RowSlice::default();
-        row.is_big = data.read_u8()? == super::BIG_ID_FLAG;
+        row.is_big = data.read_u8()? == super::Flags::BIG.bits();
 
         // read ids count
         let non_null_cnt = data.read_u16_le()? as usize;
@@ -45,6 +48,9 @@ impl RowSlice<'_> {
     /// Search `id` in non-null ids
     ///
     /// Returns the `start` position and `offset` in `values` field if found, otherwise returns `None`
+    ///
+    /// # Errors
+    /// If the id is found with no offset, `Error::ColumnOffset` will be returned.
     fn search_in_non_null_ids(&self, id: i64) -> Result<Option<(usize, usize)>> {
         if !self.id_valid(id) {
             return Ok(None);
@@ -112,7 +118,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::encoder;
+    use super::super::encoder::RowEncoder;
     use super::{read_ints_le, RowSlice};
     use crate::codec::Datum;
     use codec::prelude::NumberEncoder;
@@ -139,13 +145,17 @@ mod tests {
     fn encoded_data_big() -> Vec<u8> {
         let ids: Vec<i64> = vec![1, 356, 33, 3];
         let values = vec![Datum::I64(1000), Datum::I64(2), Datum::Null, Datum::U64(3)];
-        encoder::encode(values, &ids).unwrap()
+        let mut buf = vec![];
+        buf.write_row(values, &ids).unwrap();
+        buf
     }
 
     fn encoded_data() -> Vec<u8> {
         let ids: Vec<i64> = vec![1, 33, 3];
         let values = vec![Datum::I64(1000), Datum::Null, Datum::U64(3)];
-        encoder::encode(values, &ids).unwrap()
+        let mut buf = vec![];
+        buf.write_row(values, &ids).unwrap();
+        buf
     }
 
     #[test]
@@ -190,7 +200,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use super::super::encoder;
+    use super::super::encoder::RowEncoder;
     use super::RowSlice;
     use crate::codec::Datum;
     use test::black_box;
@@ -206,7 +216,9 @@ mod benches {
                 datums.push(Datum::I64(i));
             }
         }
-        encoder::encode(datums, &ids).unwrap()
+        let mut buf = vec![];
+        buf.write_row(datums, &ids).unwrap();
+        buf
     }
 
     #[bench]
