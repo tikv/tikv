@@ -215,31 +215,33 @@ impl StatusServer {
         seconds: u64,
         frequency: i32,
     ) -> Box<dyn Future<Item = rsperftools::Report, Error = rsperftools::Error> + Send> {
-        let guard = rsperftools::PROFILER
-            .write()
-            .start_with_guard(frequency)
-            .unwrap();
-        info!(
-            "start profiling {} seconds with frequency {} /s",
-            seconds, frequency
-        );
+        match rsperftools::ProfilerGuard::new(frequency) {
+            Ok(guard) => {
+                info!(
+                    "start profiling {} seconds with frequency {} /s",
+                    seconds, frequency
+                );
 
-        let timer = GLOBAL_TIMER_HANDLE.clone();
-        Box::new(
-            timer
-                .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
-                .then(
-                    move |_| -> Box<
-                        dyn Future<Item = rsperftools::Report, Error = rsperftools::Error> + Send,
-                    > {
-                        let _ = guard;
-                        Box::new(match rsperftools::PROFILER.read().report() {
-                            Ok(report) => ok(report),
-                            Err(e) => err(e),
-                        })
-                    },
-                ),
-        )
+                let timer = GLOBAL_TIMER_HANDLE.clone();
+                Box::new(
+                    timer
+                        .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
+                        .then(
+                            move |_| -> Box<
+                                dyn Future<Item = rsperftools::Report, Error = rsperftools::Error>
+                                    + Send,
+                            > {
+                                let _ = guard;
+                                Box::new(match guard.report() {
+                                    Ok(report) => ok(report),
+                                    Err(e) => err(e),
+                                })
+                            },
+                        ),
+                )
+            }
+            Err(e) => Box::new(err(e)),
+        }
     }
 
     pub fn dump_rsperf_to_resp(
@@ -337,9 +339,9 @@ impl StatusServer {
                         match (method, path.as_ref()) {
                             (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
-                            (Method::GET, "/pprof/profile") => Self::dump_prof_to_resp(req),
+                            (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
                             (Method::GET, "/config") => Self::config_handler(config.clone()),
-                            (Method::GET, "/rsperf/profile") => Self::dump_rsperf_to_resp(req),
+                            (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
                             _ => Box::new(ok(Response::builder()
                                 .status(StatusCode::NOT_FOUND)
                                 .body(Body::empty())

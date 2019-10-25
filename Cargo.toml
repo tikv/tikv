@@ -112,7 +112,7 @@ vlog = "0.1.4"
 mime = "0.3.13"
 farmhash = "1.1.5"
 failure = "0.1"
-rsperftools = { version = "0.1.4", features = ["flamegraph"] }
+rsperftools = { version = "0.2.0", features = ["flamegraph"] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
