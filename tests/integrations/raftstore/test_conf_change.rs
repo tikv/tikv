@@ -113,6 +113,8 @@ fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // add peer (2, 4) to region 1.
     pd_client.must_add_peer(r1, new_peer(2, 4));
+    cluster.must_put(b"add_2_4", b"add_2_4");
+    must_get_equal(&engine_2, b"add_2_4", b"add_2_4");
 
     // Remove peer (3, 3) from region 1.
     pd_client.must_remove_peer(r1, new_peer(3, 3));
