@@ -211,7 +211,38 @@ impl StatusServer {
         Box::new(ok(res))
     }
 
-    fn start_rs_profiler(
+    pub fn dump_rsprof(
+        seconds: u64,
+        frequency: i32,
+    ) -> Box<dyn Future<Item = rsperftools::Report, Error = rsperftools::Error> + Send> {
+        let guard = rsperftools::PROFILER
+            .write()
+            .start_with_guard(frequency)
+            .unwrap();
+        info!(
+            "start profiling {} seconds with frequency {} /s",
+            seconds, frequency
+        );
+
+        let timer = GLOBAL_TIMER_HANDLE.clone();
+        Box::new(
+            timer
+                .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
+                .then(
+                    move |_| -> Box<
+                        dyn Future<Item = rsperftools::Report, Error = rsperftools::Error> + Send,
+                    > {
+                        let _ = guard;
+                        Box::new(match rsperftools::PROFILER.read().report() {
+                            Ok(report) => ok(report),
+                            Err(e) => err(e),
+                        })
+                    },
+                ),
+        )
+    }
+
+    pub fn dump_rsperf_to_resp(
         req: Request<Body>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
         let query = match req.uri().query() {
@@ -225,6 +256,20 @@ impl StatusServer {
             }
         };
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
+        let seconds: u64 = match query_pairs.get("seconds") {
+            Some(val) => match val.parse() {
+                Ok(val) => val,
+                Err(_) => {
+                    let response = Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::empty())
+                        .unwrap();
+                    return Box::new(ok(response));
+                }
+            },
+            None => 10,
+        };
+
         let frequency: i32 = match query_pairs.get("frequency") {
             Some(val) => match val.parse() {
                 Ok(val) => val,
@@ -236,62 +281,32 @@ impl StatusServer {
                     return Box::new(ok(response));
                 }
             },
-            None => 100,
+            None => 10,
         };
-        info!("start cpu profiling at frequency {} per second", &frequency);
 
-        let mut profiler = rsperftools::PROFILER.write();
-        match profiler.start(frequency) {
-            Ok(_) => Box::new(ok(Response::new(Body::from(
-                "start rsperftools successfully",
-            )))),
-            Err(err) => Box::new(ok(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from(format!("{:?}", err)))
-                .unwrap())),
-        }
-    }
-
-    fn stop_rs_profiler() -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-        let mut profiler = rsperftools::PROFILER.write();
-        match profiler.stop() {
-            Ok(_) => {
-                info!("cpu profiler stopped");
-                Box::new(ok(Response::new(Body::from(
-                    "stop rsperftools successfully",
-                ))))
-            }
-            Err(err) => Box::new(ok(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from(format!("{:?}", err)))
-                .unwrap())),
-        }
-    }
-
-    fn report_from_rs_profiler(
-    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-        let profiler = rsperftools::PROFILER.read();
-        match profiler.report() {
-            Ok(report) => {
-                info!("get cpu profile report successfully");
-
-                let mut body: Vec<u8> = Vec::new();
-                match report.flamegraph(&mut body) {
-                    Ok(_) => {
-                        info!("write report successfully");
-                        Box::new(ok(Response::new(Body::from(body))))
+        Box::new(
+            Self::dump_rsprof(seconds, frequency)
+                .and_then(|report| {
+                    let mut body: Vec<u8> = Vec::new();
+                    match report.flamegraph(&mut body) {
+                        Ok(_) => {
+                            info!("write report successfully");
+                            Box::new(ok(Response::new(Body::from(body))))
+                        }
+                        Err(err) => Box::new(ok(Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::from(format!("{:?}", err)))
+                            .unwrap())),
                     }
-                    Err(err) => Box::new(ok(Response::builder()
+                })
+                .or_else(|err| {
+                    let response = Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Body::from(format!("{:?}", err)))
-                        .unwrap())),
-                }
-            }
-            Err(err) => Box::new(ok(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from(format!("{:?}", err)))
-                .unwrap())),
-        }
+                        .body(Body::from(err.to_string()))
+                        .unwrap();
+                    ok(response)
+                }),
+        )
     }
 
     pub fn start(&mut self, status_addr: String) -> Result<()> {
@@ -324,9 +339,7 @@ impl StatusServer {
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
                             (Method::GET, "/pprof/profile") => Self::dump_prof_to_resp(req),
                             (Method::GET, "/config") => Self::config_handler(config.clone()),
-                            (Method::GET, "/rsperf/start") => Self::start_rs_profiler(req),
-                            (Method::GET, "/rsperf/stop") => Self::stop_rs_profiler(),
-                            (Method::GET, "/rsperf/report") => Self::report_from_rs_profiler(),
+                            (Method::GET, "/rsperf/profile") => Self::dump_rsperf_to_resp(req),
                             _ => Box::new(ok(Response::builder()
                                 .status(StatusCode::NOT_FOUND)
                                 .body(Body::empty())
