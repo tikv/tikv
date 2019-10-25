@@ -76,7 +76,9 @@ impl RotatingFileLogger {
                 }
                 .into())
             } else {
-                Ok(())
+                let mut buf = PathBuf::new();
+                buf.push("rotated_file");
+                Ok(buf)
             }
         });
         // Note: renaming files while they're open only works on Linux and macOS.
@@ -141,7 +143,7 @@ mod tests {
     use tempfile::TempDir;
     use utime;
 
-    use super::{rotation_file_path_with_timestamp, RotatingFileLogger};
+    use super::RotatingFileLogger;
 
     fn file_exists(file: impl AsRef<Path>) -> bool {
         let path = file.as_ref();

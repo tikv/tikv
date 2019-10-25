@@ -136,7 +136,6 @@ pub fn new_store_cfg() -> Config {
         clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
         merge_check_tick_interval: ReadableDuration::millis(100),
-        hibernate_regions: false,
         ..Config::default()
     }
 }
