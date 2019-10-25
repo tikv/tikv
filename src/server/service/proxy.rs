@@ -10,6 +10,7 @@ use kvproto::tikvpb::TikvClient;
 use grpcio::{ChannelBuilder, Environment, RpcContext, UnarySink};
 
 use futures::future;
+use futures::future::Either;
 use futures::prelude::*;
 use std::sync::Arc;
 
@@ -65,8 +66,7 @@ impl<S: StoreAddrResolver + 'static, P: PdClient + 'static> tikvpb::DcProxy for 
                         .read_index_async(&read_index_req)
                         .unwrap()
                         .map_err(Error::from)
-                })
-                .map(|res| res.get_read_index());
+                });
             fs.push(Box::new(f));
         }
 
@@ -79,7 +79,10 @@ impl<S: StoreAddrResolver + 'static, P: PdClient + 'static> tikvpb::DcProxy for 
 
         let f = Future::join(f1, f2).and_then(|(indexes, ts)| {
             let mut res = GetCommittedIndexAndTsResponse::default();
-            res.set_committed_index(*indexes.iter().max().unwrap());
+            for index_res in indexes.into_iter() {
+                res.mut_committed_indices().push(index_res.get_read_index());
+                res.mut_region_errors().push(index_res.get_region_error().clone());
+            }
             res.set_timestamp(ts);
             sink.success(res).map_err(Error::from)
         }).map_err(|_| {});

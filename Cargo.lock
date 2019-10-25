@@ -122,7 +122,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "lazy_static",
  "prometheus",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -375,7 +375,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "libc",
  "log",
  "nix",
@@ -703,7 +703,7 @@ version = "0.0.1"
 dependencies = [
  "crc",
  "hex",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "lazy_static",
  "prometheus",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -730,7 +730,7 @@ dependencies = [
  "engine",
  "engine_traits",
  "hex",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "lazy_static",
  "prometheus",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1317,7 +1317,7 @@ dependencies = [
  "derive_more",
  "failure",
  "hex",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "panic_hook",
  "tikv_alloc",
  "tikv_util",
@@ -1326,7 +1326,19 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/TennyZhuang/kvproto.git#b7f953136a273236dae0d8a8c1e4dec3b9a29ca6"
+source = "git+https://github.com/TennyZhuang/kvproto.git#f03250334d314d36eb882c51534754c10d3c551e"
+dependencies = [
+ "futures",
+ "grpcio",
+ "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "protobuf-build",
+ "raft-proto 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "kvproto"
+version = "0.0.2"
+source = "git+https://github.com/pingcap/kvproto.git#62abb760d9b125e2cfbc15a8d50b038861854e8d"
 dependencies = [
  "futures",
  "grpcio",
@@ -1457,7 +1469,7 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "slog",
  "slog-term",
  "tikv_alloc",
@@ -1866,7 +1878,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "lazy_static",
  "log",
  "prometheus",
@@ -2707,7 +2719,7 @@ dependencies = [
  "grpcio",
  "hex",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "lazy_static",
  "prometheus",
  "quick-error",
@@ -2896,7 +2908,7 @@ name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
  "futures",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "test_storage",
  "tidb_query",
@@ -2913,7 +2925,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "pd_client",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2936,7 +2948,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/pingcap/kvproto.git)",
  "uuid",
 ]
 
@@ -2945,7 +2957,7 @@ name = "test_storage"
 version = "0.0.1"
 dependencies = [
  "futures",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "test_raftstore",
  "tikv",
  "tikv_util",
@@ -2998,7 +3010,7 @@ dependencies = [
  "flate2",
  "hex",
  "indexmap",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "lazy_static",
  "match_template",
  "nom 5.0.1",
@@ -3082,7 +3094,7 @@ dependencies = [
  "hex",
  "hyper",
  "keys",
- "kvproto",
+ "kvproto 0.0.2 (git+https://github.com/TennyZhuang/kvproto.git)",
  "lazy_static",
  "libc",
  "log",
