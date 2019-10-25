@@ -8,6 +8,7 @@ publish = false
 jemalloc = ["rocksdb/jemalloc"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
+update_titan = ["rocksdb/update_titan"]
 
 [dependencies]
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
@@ -26,6 +27,7 @@ serde_derive = "1.0"
 toml = "0.4"
 hex = "0.3"
 tikv_util = { path = "../tikv_util" }
+engine = { path = "../engine" }
 engine_traits = { path = "../engine_traits" }
 
 [dependencies.prometheus]
@@ -39,4 +41,3 @@ package = "rocksdb"
 
 [dev-dependencies]
 tempfile = "3.0"
-engine = { path = "../engine" }

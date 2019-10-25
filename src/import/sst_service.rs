@@ -14,6 +14,7 @@ use kvproto::raft_cmdpb::*;
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
+use engine_rocks::Rocks;
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
@@ -76,8 +77,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             }
 
             match req.get_mode() {
-                SwitchMode::Normal => switcher.enter_normal_mode(&self.engine, mf),
-                SwitchMode::Import => switcher.enter_import_mode(&self.engine, mf),
+                SwitchMode::Normal => {
+                    switcher.enter_normal_mode(AsRef::<Rocks>::as_ref(&self.engine), mf)
+                }
+                SwitchMode::Import => {
+                    switcher.enter_import_mode(AsRef::<Rocks>::as_ref(&self.engine), mf)
+                }
             }
         };
         match res {
@@ -141,6 +146,41 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                     .then(move |res| send_rpc_response!(res, sink, label, timer)),
             ),
         )
+    }
+
+    /// Downloads the file and performs key-rewrite for later ingesting.
+    fn download(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: DownloadRequest,
+        sink: UnarySink<DownloadResponse>,
+    ) {
+        let label = "download";
+        let timer = Instant::now_coarse();
+        let importer = Arc::clone(&self.importer);
+
+        ctx.spawn(self.threads.spawn_fn(move || {
+            let res = importer.download(
+                req.get_sst(),
+                req.get_url(),
+                req.get_name(),
+                req.get_rewrite_rule(),
+                req.get_speed_limit(),
+            );
+
+            future::result(res)
+                .map_err(Error::from)
+                .map(|range| {
+                    let mut resp = DownloadResponse::default();
+                    if let Some(r) = range {
+                        resp.set_range(r);
+                    } else {
+                        resp.set_is_empty(true);
+                    }
+                    resp
+                })
+                .then(move |res| send_rpc_response!(res, sink, label, timer))
+        }));
     }
 
     /// Ingest the file by sending a raft command to raftstore.
@@ -235,7 +275,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             }
 
             future::result(res)
-                .map_err(Error::from)
+                .map_err(|e| Error::Engine(box_err!(e)))
                 .map(|_| CompactResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer))
         }))
