@@ -308,7 +308,7 @@
 
 ## Represents the maximum number of threads that will concurrently perform a sub-compaction job by
 ## breaking it into multiple, smaller ones running simultaneously.
-# max-sub-compactions = 1
+# max-sub-compactions = 3
 
 ## Number of open files that can be used by the DB.
 ## Value -1 means files opened are always kept open and RocksDB will prefetch index and filter
