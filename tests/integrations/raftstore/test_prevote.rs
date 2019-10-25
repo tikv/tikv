@@ -43,6 +43,7 @@ fn test_prevote<T: Simulator>(
     detect_during_recovery: impl Into<Option<(u64, bool)>>,
 ) {
     cluster.cfg.raft_store.prevote = true;
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 60;
 
     let leader_id = 1;
     let detect_during_failure = detect_during_failure.into();
