@@ -168,7 +168,6 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
 
     fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
         if self.point_getter_cache.is_none() {
-            // Only reuse point getter when keys are given in ascending order.
             self.point_getter_cache = Some(
                 PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
                     .fill_cache(self.fill_cache)
