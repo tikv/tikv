@@ -1392,7 +1392,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#7e1ef5a8cd430a2882ae43bf3297618e5145e170"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#87bc40ec941486509a6339b6fc0b82de0a8210ba"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1409,7 +1409,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#7e1ef5a8cd430a2882ae43bf3297618e5145e170"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#87bc40ec941486509a6339b6fc0b82de0a8210ba"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2395,7 +2395,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#7e1ef5a8cd430a2882ae43bf3297618e5145e170"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#87bc40ec941486509a6339b6fc0b82de0a8210ba"
 dependencies = [
  "crc",
  "libc",

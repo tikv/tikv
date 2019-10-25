@@ -143,9 +143,15 @@ impl<T: Simulator> Cluster<T> {
             let cache = self.cfg.storage.block_cache.build_shared_cache();
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
+            let txn_opt = self.cfg.rocksdb.build_txn_opts();
             let engine = Arc::new(
-                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
-                    .unwrap(),
+                rocks::util::create_rocksdb_engine(
+                    kv_path.to_str().unwrap(),
+                    kv_db_opt,
+                    txn_opt,
+                    kv_cfs_opt,
+                )
+                .unwrap(),
             );
             let raft_path = dir.path().join("raft");
             let raft_engine = Arc::new(

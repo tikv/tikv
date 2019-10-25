@@ -17,7 +17,7 @@ use std::usize;
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
-    TitanDBOptions, TxnDBOptions,
+    TitanDBOptions, TransactionWritePolicy, TxnDBOptions,
 };
 use slog;
 use sys_info;
@@ -656,6 +656,7 @@ impl TitanDBConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TxnDBConfig {
+    pub enabled: bool,
     pub max_num_locks: i64,
     pub num_stripes: usize,
     pub transaction_lock_timeout: i64,
@@ -665,6 +666,7 @@ pub struct TxnDBConfig {
 impl Default for TxnDBConfig {
     fn default() -> TxnDBConfig {
         TxnDBConfig {
+            enabled: true,
             max_num_locks: -1,
             num_stripes: 16,
             transaction_lock_timeout: 1000,
@@ -674,12 +676,17 @@ impl Default for TxnDBConfig {
 }
 
 impl TxnDBConfig {
-    fn build_opts(&self) -> TxnDBOptions {
+    fn build_opts(&self, unordered_write: bool) -> TxnDBOptions {
         let mut opts = TxnDBOptions::new();
         opts.set_max_num_locks(self.max_num_locks);
         opts.set_num_stripes(self.num_stripes);
         opts.set_default_lock_timeout(self.default_lock_timeout);
         opts.set_transaction_lock_timeout(self.transaction_lock_timeout);
+        if unordered_write {
+            opts.set_write_policy(TransactionWritePolicy::WritePrepared);
+        } else {
+            opts.set_write_policy(TransactionWritePolicy::WriteCommitted);
+        }
         opts
     }
 }
@@ -715,7 +722,7 @@ pub struct DbConfig {
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
-    pub enable_transaction_db: bool,
+    pub enable_unordered_write: bool,
     pub defaultcf: DefaultCfConfig,
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
@@ -752,7 +759,7 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
-            enable_transaction_db: true,
+            enable_unordered_write: true,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -808,7 +815,13 @@ impl DbConfig {
         opts.set_use_direct_io_for_flush_and_compaction(
             self.use_direct_io_for_flush_and_compaction,
         );
-        opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.enable_pipelined_write(
+            self.enable_pipelined_write
+                && !self.enable_unordered_write
+                && !self.transaction_db.enabled,
+        );
+        opts.enable_unordered_write(self.enable_unordered_write);
+        opts.enable_two_write_queue(self.enable_unordered_write);
         opts.add_event_listener(EventListener::new("kv"));
 
         if self.titan.enabled {
@@ -818,10 +831,10 @@ impl DbConfig {
     }
 
     pub fn build_txn_opts(&self) -> Option<TxnDBOptions> {
-        if !self.enable_transaction_db {
+        if !self.transaction_db.enabled {
             None
         } else {
-            let txn = self.transaction_db.build_opts();
+            let txn = self.transaction_db.build_opts(self.enable_unordered_write);
             Some(txn)
         }
     }
@@ -851,6 +864,9 @@ impl DbConfig {
         self.writecf.validate()?;
         self.raftcf.validate()?;
         self.titan.validate()?;
+        if !self.transaction_db.enabled && self.enable_unordered_write {
+            return Err(format!("only transaction db support unodered_write").into());
+        }
         Ok(())
     }
 
@@ -1565,11 +1581,11 @@ impl TiKvConfig {
             ));
         }
 
-        if last_cfg.rocksdb.enable_transaction_db != self.rocksdb.enable_transaction_db {
+        if last_cfg.rocksdb.transaction_db.enabled != self.rocksdb.transaction_db.enabled {
             return Err(format!(
                 "rocksdb type have been changed, it was '{}', \
                  current raft dir is '{}', please check if it is expected.",
-                last_cfg.rocksdb.enable_transaction_db, self.rocksdb.enable_transaction_db
+                last_cfg.rocksdb.transaction_db.enabled, self.rocksdb.transaction_db.enabled
             ));
         }
 
