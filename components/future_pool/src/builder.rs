@@ -31,6 +31,7 @@ pub struct Builder {
     on_tick: Option<Box<dyn Fn() + Send + Sync>>,
     after_start_func: Arc<dyn Fn() + Send + Sync + 'static>,
     max_tasks: usize,
+    workers: usize,
 }
 
 impl Builder {
@@ -41,6 +42,7 @@ impl Builder {
             on_tick: None,
             after_start_func: Arc::new(|| {}),
             max_tasks: std::usize::MAX,
+            workers: num_cpus::get_physical(),
         }
     }
 
@@ -54,7 +56,7 @@ impl Builder {
     }
 
     pub fn pool_size(&mut self, val: usize) -> &mut Self {
-        self.inner_builder.pool_size(val);
+        self.workers = val;
         self
     }
 
@@ -111,7 +113,7 @@ impl Builder {
             metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
         });
         // let pool = TokioPool::new(self.inner_builder.build());
-        let pool = TexnPool::new(num_cpus::get_physical(), self.after_start_func.clone());
+        let pool = TexnPool::new(self.workers, self.after_start_func.clone());
         super::FuturePool {
             pool,
             env,
