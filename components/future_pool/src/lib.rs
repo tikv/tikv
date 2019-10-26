@@ -259,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tick() {
+    fn test_tick_single() {
         let tick_sequence = Arc::new(AtomicUsize::new(0));
 
         let tick_sequence2 = tick_sequence.clone();
@@ -269,7 +269,7 @@ mod tests {
             .pool_size(1)
             .on_tick(move || {
                 let seq = tick_sequence2.fetch_add(1, Ordering::SeqCst);
-                tx.send(seq).unwrap();
+                tx.send(seq).ok();
             })
             .build();
 
@@ -325,7 +325,7 @@ mod tests {
             .pool_size(2)
             .on_tick(move || {
                 let seq = tick_sequence2.fetch_add(1, Ordering::SeqCst);
-                tx.send(seq).unwrap();
+                tx.send(seq).ok();
             })
             .build();
 
