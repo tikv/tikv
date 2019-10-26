@@ -4,6 +4,9 @@ mod storage_impl;
 
 pub use self::storage_impl::TiKVStorage;
 
+use async_trait::async_trait;
+use futures03::future::BoxFuture;
+use futures03::prelude::*;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query::storage::IntervalRange;
@@ -69,9 +72,10 @@ impl DAGHandler {
     }
 }
 
+#[async_trait]
 impl RequestHandler for DAGHandler {
-    fn handle_request(&mut self) -> Result<Response> {
-        handle_qe_response(self.0.handle_request())
+    async fn handle_request(&mut self) -> Result<Response> {
+        handle_qe_response(self.0.handle_request().await)
     }
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
@@ -103,9 +107,10 @@ impl BatchDAGHandler {
     }
 }
 
+#[async_trait]
 impl RequestHandler for BatchDAGHandler {
-    fn handle_request(&mut self) -> Result<Response> {
-        handle_qe_response(self.0.handle_request())
+    async fn handle_request(&mut self) -> Result<Response> {
+        handle_qe_response(self.0.handle_request().await)
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {

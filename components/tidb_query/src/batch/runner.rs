@@ -1,6 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use kvproto::coprocessor::KeyRange;
 use tipb::{self, ExecType, ExecutorExecutionSummary};
@@ -300,6 +304,23 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
     Ok(executor)
 }
 
+struct PendingOnce {
+    is_ready: bool,
+}
+
+impl Future for PendingOnce {
+    type Output = ();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.is_ready {
+            Poll::Ready(())
+        } else {
+            self.is_ready = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}
+
 impl<SS: 'static> BatchExecutorsRunner<SS> {
     pub fn from_request<S: Storage<Statistics = SS> + 'static>(
         mut req: DagRequest,
@@ -358,13 +379,20 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         })
     }
 
-    pub fn handle_request(&mut self) -> Result<SelectResponse> {
+    pub async fn handle_request(&mut self) -> Result<SelectResponse> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
+        let mut last_pending = Instant::now();
+        const YIELD_DUR: Duration = Duration::from_millis(1);
 
         loop {
             self.deadline.check()?;
+
+            if last_pending.elapsed() > YIELD_DUR {
+                PendingOnce { is_ready: false }.await;
+                last_pending = Instant::now();
+            }
 
             let mut result = self.out_most_executor.next_batch(batch_size);
 
