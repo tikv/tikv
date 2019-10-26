@@ -236,28 +236,43 @@ impl<E: Engine> Endpoint<E> {
                     .map(|handler| (tracker, handler))
             })
             .and_then(|(mut tracker, mut handler)| {
-                tracker.on_begin_all_items();
-                tracker.on_begin_item();
+                futures03::compat::Compat::new(Box::pin(async move {
+                    tracker.on_begin_all_items();
+                    tracker.on_begin_item();
+                    // There might be errors when handling requests. In this case, we still need its
+                    // execution metrics.
+                    let result = handler.handle_request().await;
+                    Ok(match result {
+                        Ok(mut resp) => {
+                            let mut storage_stats = Statistics::default();
+                            handler.collect_scan_statistics(&mut storage_stats);
 
-                // There might be errors when handling requests. In this case, we still need its
-                // execution metrics.
-                let result = handler.handle_request();
+                            tracker.on_finish_item(Some(storage_stats));
+                            let exec_details = tracker.get_item_exec_details();
 
-                let mut storage_stats = Statistics::default();
-                handler.collect_scan_statistics(&mut storage_stats);
-
-                tracker.on_finish_item(Some(storage_stats));
-                let exec_details = tracker.get_item_exec_details();
-
-                tracker.on_finish_all_items();
-
-                future::result(result)
-                    .or_else(|e| Ok::<_, Error>(make_error_response(e)))
-                    .map(|mut resp| {
-                        COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
-                        resp.set_exec_details(exec_details);
-                        resp
+                            tracker.on_finish_all_items();
+                            COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
+                            resp.set_exec_details(exec_details);
+                            resp
+                        }
+                        Err(e) => make_error_response(e),
                     })
+                }))
+
+                // futures03::compat::Compat::new(result)
+                //     .or_else(|e| Ok::<_, Error>())
+                //     .map(|mut resp| {
+                //         let mut storage_stats = Statistics::default();
+                //         handler.collect_scan_statistics(&mut storage_stats);
+
+                //         tracker.on_finish_item(Some(storage_stats));
+                //         let exec_details = tracker.get_item_exec_details();
+
+                //         tracker.on_finish_all_items();
+                //         COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
+                //         resp.set_exec_details(exec_details);
+                //         resp
+                //     })
             })
     }
 

@@ -5,6 +5,7 @@ use std::mem;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
 
+use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query::codec::datum;
@@ -97,8 +98,9 @@ impl<S: Snapshot> AnalyzeContext<S> {
     }
 }
 
+#[async_trait]
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
-    fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();

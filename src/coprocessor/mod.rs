@@ -35,6 +35,8 @@ pub use checksum::checksum_crc64_xor;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
+use async_trait::async_trait;
+use futures03::future::BoxFuture;
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 
@@ -47,9 +49,10 @@ pub const REQ_TYPE_CHECKSUM: i64 = 105;
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
 /// An interface for all kind of Coprocessor request handlers.
+#[async_trait]
 pub trait RequestHandler: Send {
     /// Processes current request and produces a response.
-    fn handle_request(&mut self) -> Result<coppb::Response> {
+    async fn handle_request(&mut self) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
     }
 

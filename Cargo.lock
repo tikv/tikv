@@ -83,6 +83,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb8ec7d9f89dbeb8ed1d4568254281c2a65cc38e904b0448b4a6ddd785706f4e"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -409,7 +420,7 @@ dependencies = [
  "slog-global",
  "tikv",
  "tikv_util",
- "toml",
+ "toml 0.4.10",
  "url 2.1.0",
  "vlog",
 ]
@@ -738,7 +749,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time",
- "toml",
+ "toml 0.4.10",
 ]
 
 [[package]]
@@ -765,7 +776,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time",
- "toml",
+ "toml 0.4.10",
 ]
 
 [[package]]
@@ -3128,14 +3139,17 @@ dependencies = [
 [[package]]
 name = "texn"
 version = "0.1.0"
-source = "git+https://gitlab.com/waynexia/texn#b83dc7e3b07498bfab831bd6026e5050895dbc3d"
+source = "git+https://gitlab.com/waynexia/texn#041047305c29d840e58a4d22ae9505a1020d5e35"
 dependencies = [
  "adaptive-spawn",
  "chashmap",
  "crossbeam",
  "futures-preview",
+ "lazy_static",
  "lru_time_cache",
  "num_cpus",
+ "serde",
+ "toml 0.5.3",
 ]
 
 [[package]]
@@ -3234,6 +3248,7 @@ version = "4.0.0-alpha"
 dependencies = [
  "adaptive-spawn",
  "arrow",
+ "async-trait",
  "backtrace",
  "bitflags",
  "byteorder",
@@ -3255,6 +3270,7 @@ dependencies = [
  "futures",
  "futures-cpupool",
  "futures-locks",
+ "futures-preview",
  "grpcio",
  "hex",
  "hyper",
@@ -3311,7 +3327,7 @@ dependencies = [
  "tokio-sync",
  "tokio-threadpool",
  "tokio-timer",
- "toml",
+ "toml 0.4.10",
  "url 2.1.0",
  "utime",
  "uuid",
@@ -3377,7 +3393,7 @@ dependencies = [
  "tokio-sync",
  "tokio-threadpool",
  "tokio-timer",
- "toml",
+ "toml 0.4.10",
  "url 2.1.0",
  "utime",
  "zeroize",
@@ -3639,6 +3655,15 @@ name = "toml"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "758664fc71a3a69038656bee8b6be6477d2a6c315a6b81f7081f591bffa4111f"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "toml"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7aabe75941d914b72bf3e5d3932ed92ce0664d49d8432305a8b547c37227724"
 dependencies = [
  "serde",
 ]

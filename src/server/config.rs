@@ -26,7 +26,7 @@ const DEFAULT_ENDPOINT_BATCH_ROW_LIMIT: usize = 64;
 
 // If a request has been handled for more than 60 seconds, the client should
 // be timeout already, so it can be safely aborted.
-const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
+const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 600;
 
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
