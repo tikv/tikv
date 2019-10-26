@@ -722,9 +722,7 @@ pub struct Storage<E: Engine, L: LockMgr> {
     sched: TxnScheduler<E, L>,
 
     /// The thread pool used to run most read operations.
-    read_pool_low: FuturePool,
-    read_pool_normal: FuturePool,
-    read_pool_high: FuturePool,
+    read_pool: FuturePool,
 
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
@@ -749,9 +747,7 @@ impl<E: Engine, L: LockMgr> Clone for Storage<E, L> {
         Self {
             engine: self.engine.clone(),
             sched: self.sched.clone(),
-            read_pool_low: self.read_pool_low.clone(),
-            read_pool_normal: self.read_pool_normal.clone(),
-            read_pool_high: self.read_pool_high.clone(),
+            read_pool: self.read_pool.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
             pessimistic_txn_enabled: self.pessimistic_txn_enabled,
@@ -781,7 +777,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     pub fn from_engine(
         engine: E,
         config: &Config,
-        mut read_pool: Vec<FuturePool>,
+        read_pool: FuturePool,
         lock_mgr: Option<L>,
     ) -> Result<Self> {
         let pessimistic_txn_enabled = lock_mgr.is_some();
@@ -793,18 +789,12 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             config.scheduler_pending_write_threshold.0 as usize,
         );
 
-        let read_pool_high = read_pool.remove(2);
-        let read_pool_normal = read_pool.remove(1);
-        let read_pool_low = read_pool.remove(0);
-
         info!("Storage started.");
 
         Ok(Storage {
             engine,
             sched,
-            read_pool_low,
-            read_pool_normal,
-            read_pool_high,
+            read_pool,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
             pessimistic_txn_enabled,
@@ -839,11 +829,12 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     }
 
     fn get_read_pool(&self, priority: CommandPriority) -> &FuturePool {
-        match priority {
-            CommandPriority::high => &self.read_pool_high,
-            CommandPriority::normal => &self.read_pool_normal,
-            CommandPriority::low => &self.read_pool_low,
-        }
+        // match priority {
+        //     CommandPriority::high => &self.read_pool_high,
+        //     CommandPriority::normal => &self.read_pool_normal,
+        //     CommandPriority::low => &self.read_pool_low,
+        // }
+        &self.read_pool
     }
 
     #[inline]

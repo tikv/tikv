@@ -20,6 +20,7 @@ use futures::compat::Future01CompatExt;
 use futures::prelude::*;
 use prometheus::{IntCounter, IntGauge};
 use rand::prelude::*;
+use texn::ThreadPool as TexnPool;
 use tokio_threadpool::ThreadPool;
 
 use tikv_util::time::Instant;
@@ -69,7 +70,8 @@ impl AdaptiveSpawn for TokioPool {
 #[derive(Clone)]
 pub struct FuturePool {
     // pool: Arc<ThreadPool>,
-    pool: TokioPool,
+    // pool: TokioPool,
+    pool: TexnPool,
     env: Arc<Env>,
     max_tasks: usize,
 }

@@ -34,13 +34,13 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
-    read_pools: Vec<FuturePool>,
+    read_pool: FuturePool,
     lock_mgr: Option<LockManager>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let store = Storage::from_engine(engine, cfg, read_pools, lock_mgr)?;
+    let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr)?;
     Ok(store)
 }
 

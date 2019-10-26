@@ -75,24 +75,25 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
 pub fn build_read_pool_for_test<E: Engine>(
     config: &StorageReadPoolConfig,
     engine: E,
-) -> Vec<FuturePool> {
-    let configs: Vec<Config> = config.to_future_pool_configs();
-    assert_eq!(configs.len(), 3);
+) -> FuturePool {
+    // let configs: Vec<Config> = config.to_future_pool_configs();
+    // assert_eq!(configs.len(), 3);
 
-    configs
-        .into_iter()
-        .map(|config| {
-            let engine = Arc::new(Mutex::new(engine.clone()));
-            Builder::from_config(config)
-                .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                // Safety: we call `set_` and `destroy_` with the same engine type.
-                .before_stop(|| unsafe { destroy_tls_engine::<E>() })
-                .build()
-        })
-        .collect()
+    // configs
+    //     .into_iter()
+    //     .map(|config| {
+    let engine = Arc::new(Mutex::new(engine.clone()));
+    // Builder::from_config(config)
+    Builder::new()
+        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+        // Safety: we call `set_` and `destroy_` with the same engine type.
+        // .before_stop(|| unsafe { destroy_tls_engine::<E>() })
+        .build()
+    // })
+    // .collect()
 }
 
-fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
+pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         // Flush Prometheus metrics

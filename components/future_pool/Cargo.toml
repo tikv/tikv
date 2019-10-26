@@ -14,6 +14,8 @@ tokio-threadpool = "0.1"
 lazy_static = "1"
 fail = "0.3"
 rand = "0.7"
+num_cpus = "1"
+texn = { git = "https://gitlab.com/waynexia/texn" }
 
 tikv_util = { path = "../tikv_util" }
 
