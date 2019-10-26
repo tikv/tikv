@@ -390,7 +390,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             self.deadline.check()?;
 
             if last_pending.elapsed() > YIELD_DUR {
-                PendingOnce { is_ready: false }.await;
+                // PendingOnce { is_ready: false }.await;
+                futures_timer::Delay::new(std::time::Duration::from_nanos(1)).await;
                 last_pending = Instant::now();
             }
 
