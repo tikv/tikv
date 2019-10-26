@@ -25,9 +25,7 @@ use crate::coprocessor::*;
 /// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
-    read_pool_high: FuturePool,
-    read_pool_normal: FuturePool,
-    read_pool_low: FuturePool,
+    read_pool: FuturePool,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     recursion_limit: u32,
@@ -46,9 +44,7 @@ pub struct Endpoint<E: Engine> {
 impl<E: Engine> Clone for Endpoint<E> {
     fn clone(&self) -> Self {
         Self {
-            read_pool_high: self.read_pool_high.clone(),
-            read_pool_normal: self.read_pool_normal.clone(),
-            read_pool_low: self.read_pool_low.clone(),
+            read_pool: self.read_pool.clone(),
             ..*self
         }
     }
@@ -57,15 +53,9 @@ impl<E: Engine> Clone for Endpoint<E> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
-    pub fn new(cfg: &Config, mut read_pool: Vec<FuturePool>) -> Self {
-        let read_pool_high = read_pool.remove(2);
-        let read_pool_normal = read_pool.remove(1);
-        let read_pool_low = read_pool.remove(0);
-
+    pub fn new(cfg: &Config, read_pool: FuturePool) -> Self {
         Self {
-            read_pool_high,
-            read_pool_normal,
-            read_pool_low,
+            read_pool,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             enable_batch_if_possible: cfg.end_point_enable_batch_if_possible,
@@ -77,11 +67,7 @@ impl<E: Engine> Endpoint<E> {
     }
 
     fn get_read_pool(&self, priority: kvrpcpb::CommandPri) -> &FuturePool {
-        match priority {
-            kvrpcpb::CommandPri::High => &self.read_pool_high,
-            kvrpcpb::CommandPri::Normal => &self.read_pool_normal,
-            kvrpcpb::CommandPri::Low => &self.read_pool_low,
-        }
+        &self.read_pool
     }
 
     /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
@@ -285,13 +271,16 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<impl Future<Item = coppb::Response, Error = Error>> {
         let read_pool = self.get_read_pool(req_ctx.context.get_priority());
+        let options = adaptive_spawn::Options {
+            token: req_ctx.context.task_token,
+            nice: 128,
+        };
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
-
         read_pool
             .spawn_handle(
                 move || Self::handle_unary_request_impl(tracker, handler_builder),
-                future_pool::unique_options(),
+                options,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)
     }

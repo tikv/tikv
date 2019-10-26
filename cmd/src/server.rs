@@ -7,6 +7,7 @@ use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
+use future_pool::Builder;
 use kvproto::backup::create_backup;
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::create_debug;
@@ -175,11 +176,29 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let engine = RaftKv::new(raft_router.clone());
 
-    let storage_read_pool = storage::readpool_impl::build_read_pool(
-        &cfg.readpool.storage,
-        pd_sender.clone(),
-        engine.clone(),
-    );
+    let reporter = pd_sender.clone();
+    let reporter2 = pd_sender.clone();
+    let engine2 = Arc::new(Mutex::new(engine.clone()));
+    let read_pool = Builder::new()
+        .on_tick(move || {
+            storage::readpool_impl::tls_flush(&reporter);
+            coprocessor::readpool_impl::tls_flush(&reporter);
+        })
+        .after_start(move || tikv::storage::kv::set_tls_engine(engine2.lock().unwrap().clone()))
+        // .before_stop(move || {
+        //     // Safety: we call `set_` and `destroy_` with the same engine type.
+        //     unsafe {
+        //         destroy_tls_engine::<E>();
+        //     }
+        //     tls_flush(&reporter2)
+        // })
+        .build();
+
+    // let storage_read_pool = storage::readpool_impl::build_read_pool(
+    //     &cfg.readpool.storage,
+    //     pd_sender.clone(),
+    //     engine.clone(),
+    // );
 
     let mut lock_mgr = if cfg.pessimistic_txn.enabled {
         Some(LockManager::new())
@@ -200,7 +219,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let storage = create_raft_storage(
         engine.clone(),
         &cfg.storage,
-        storage_read_pool,
+        read_pool.clone(),
         lock_mgr.clone(),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
@@ -217,12 +236,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let server_cfg = Arc::new(cfg.server.clone());
 
     // Create coprocessor endpoint.
-    let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
-        &cfg.readpool.coprocessor,
-        pd_sender.clone(),
-        engine.clone(),
-    );
-    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
+    // let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
+    //     &cfg.readpool.coprocessor,
+    //     pd_sender.clone(),
+    //     engine.clone(),
+    // );
+    let cop = coprocessor::Endpoint::new(&server_cfg, read_pool);
 
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
     let import_service = ImportSSTService::new(

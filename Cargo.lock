@@ -305,6 +305,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b486ce3ccf7ffd79fdeb678eac06a9e6c09fc88d33836340becb8fffe87c5e33"
 
 [[package]]
+name = "chashmap"
+version = "2.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff41a3c2c1e39921b9003de14bf0439c7b63a9039637c291e1a64925d8ddfa45"
+dependencies = [
+ "owning_ref 0.3.3",
+ "parking_lot 0.4.8",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -380,6 +390,7 @@ dependencies = [
  "engine",
  "fail",
  "fs2",
+ "future_pool",
  "futures",
  "grpcio",
  "hex",
@@ -922,8 +933,10 @@ dependencies = [
  "futures",
  "futures-preview",
  "lazy_static",
+ "num_cpus",
  "prometheus",
  "rand 0.7.2",
+ "texn",
  "tikv_util",
  "tokio-threadpool",
 ]
@@ -1531,7 +1544,7 @@ version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62ebf1391f6acad60e5c8b43706dde4582df75c06698ab44511d15016bc2442c"
 dependencies = [
- "owning_ref",
+ "owning_ref 0.4.0",
  "scopeguard 0.3.3",
 ]
 
@@ -1554,6 +1567,12 @@ dependencies = [
  "slog-term",
  "tikv_alloc",
 ]
+
+[[package]]
+name = "lru_time_cache"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab44e08e5b5110188be64dc8f0865635206ad7386fe672903bef195df3cc8960"
 
 [[package]]
 name = "lz4-sys"
@@ -1908,6 +1927,15 @@ dependencies = [
 
 [[package]]
 name = "owning_ref"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdf84f41639e037b484f93433aa3897863b561ed65c6e59c7073d7c561710f37"
+dependencies = [
+ "stable_deref_trait",
+]
+
+[[package]]
+name = "owning_ref"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49a4b8ea2179e6a2e27411d3bca09ca6dd630821cf6894c6c7c8467a8ee7ef13"
@@ -1921,12 +1949,34 @@ version = "0.0.1"
 
 [[package]]
 name = "parking_lot"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "149d8f5b97f3c1133e3cfcd8886449959e856b557ff281e292b733d7c69e005e"
+dependencies = [
+ "owning_ref 0.3.3",
+ "parking_lot_core 0.2.14",
+]
+
+[[package]]
+name = "parking_lot"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab41b4aed082705d1056416ae4468b6ea99d52599ecf3169b00088d43113e337"
 dependencies = [
  "lock_api",
- "parking_lot_core",
+ "parking_lot_core 0.4.0",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.2.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4db1a8ccf734a7bce794cc19b3df06ed87ab2f3907036b693c68f56b4d4537fa"
+dependencies = [
+ "libc",
+ "rand 0.4.6",
+ "smallvec",
+ "winapi 0.3.8",
 ]
 
 [[package]]
@@ -2214,6 +2264,19 @@ version = "0.6.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8892d0cb5e5f3b7d213ab9c7de44217d52b2751982654c69cdfbfa393940a42a"
 replace = "raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)"
+
+[[package]]
+name = "rand"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "552840b97013b1a26992c11eac34bdd778e464601a4c2054b5f0bff7c6761293"
+dependencies = [
+ "fuchsia-cprng",
+ "libc",
+ "rand_core 0.3.1",
+ "rdrand",
+ "winapi 0.3.8",
+]
 
 [[package]]
 name = "rand"
@@ -3063,6 +3126,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "texn"
+version = "0.1.0"
+source = "git+https://gitlab.com/waynexia/texn#65676b73ef8a88494ddecbf7c052f334014bedaf"
+dependencies = [
+ "adaptive-spawn",
+ "chashmap",
+ "crossbeam",
+ "futures-preview",
+ "lru_time_cache",
+ "num_cpus",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3465,7 +3541,7 @@ dependencies = [
  "log",
  "mio",
  "num_cpus",
- "parking_lot",
+ "parking_lot 0.7.1",
  "slab",
  "tokio-executor",
  "tokio-io",
