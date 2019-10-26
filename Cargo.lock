@@ -1031,6 +1031,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86f148ef6b69f75bb610d4f9a2336d4fc88c4b5b67129d1a340dd0fd362efeec"
 
 [[package]]
+name = "futures-timer"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2879f3aa8fd2f60d17ede13349e11d0c132d0daa1b44e061f133f8928ddfaeea"
+dependencies = [
+ "futures-core-preview",
+ "futures-util-preview",
+ "pin-utils",
+]
+
+[[package]]
 name = "futures-util-preview"
 version = "0.3.0-alpha.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3139,7 +3150,7 @@ dependencies = [
 [[package]]
 name = "texn"
 version = "0.1.0"
-source = "git+https://gitlab.com/waynexia/texn#041047305c29d840e58a4d22ae9505a1020d5e35"
+source = "git+https://gitlab.com/waynexia/texn#cfeb800156f91e0d5a107868f49b7cb962f3fde2"
 dependencies = [
  "adaptive-spawn",
  "chashmap",
@@ -3185,6 +3196,7 @@ dependencies = [
  "derive_more",
  "failure",
  "flate2",
+ "futures-timer",
  "hex",
  "indexmap",
  "kvproto",

@@ -26,6 +26,7 @@ ordered-float = "1.0"
 nom = "5.0.0-beta1"
 servo_arc = "0.1.1"
 bitfield = "0.13.2"
+futures-timer = "1"
 protobuf = "2"
 openssl = { version = "0.10" }
 crc = "1.8"
