@@ -38,7 +38,6 @@ pub mod collections;
 pub mod config;
 pub mod file;
 pub mod future;
-pub mod future_pool;
 #[macro_use]
 pub mod macros;
 pub mod deadline;

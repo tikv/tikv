@@ -4,10 +4,10 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use future_pool::Builder as FuturePoolBuilder;
+use future_pool::FuturePool;
 use prometheus::local::*;
 use tikv_util::collections::HashMap;
-use tikv_util::future_pool::Builder as FuturePoolBuilder;
-use tikv_util::future_pool::FuturePool;
 
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::metrics::*;

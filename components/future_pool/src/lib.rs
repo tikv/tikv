@@ -3,6 +3,9 @@
 //! This mod implemented a wrapped future pool that supports `on_tick()` which
 //! is invoked no less than the specific interval.
 
+#[macro_use]
+extern crate fail;
+
 mod builder;
 mod metrics;
 
@@ -12,11 +15,15 @@ use std::cell::Cell;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::{lazy, Future};
+use adaptive_spawn::{AdaptiveSpawn, Options};
+use futures::compat::Future01CompatExt;
+use futures::prelude::*;
 use prometheus::{IntCounter, IntGauge};
-use tokio_threadpool::{SpawnHandle, ThreadPool};
+use rand::prelude::*;
+use tokio_threadpool::ThreadPool;
 
-use crate::time::Instant;
+use tikv_util::time::Instant;
+use tikv_util::{AssertSend, AssertSync};
 
 const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -30,9 +37,39 @@ struct Env {
     metrics_handled_task_count: IntCounter,
 }
 
+pub fn unique_options() -> Options {
+    Options {
+        token: thread_rng().next_u64(),
+        nice: 128,
+    }
+}
+
+#[derive(Clone)]
+pub struct TokioPool {
+    inner: Arc<ThreadPool>,
+}
+
+impl TokioPool {
+    pub fn new(inner: ThreadPool) -> Self {
+        TokioPool {
+            inner: Arc::new(inner),
+        }
+    }
+}
+
+impl AdaptiveSpawn for TokioPool {
+    fn spawn_opt<Fut>(&self, f: Fut, _: adaptive_spawn::Options)
+    where
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.inner.spawn(f.unit_error().boxed().compat());
+    }
+}
+
 #[derive(Clone)]
 pub struct FuturePool {
-    pool: Arc<ThreadPool>,
+    // pool: Arc<ThreadPool>,
+    pool: TokioPool,
     env: Arc<Env>,
     max_tasks: usize,
 }
@@ -78,39 +115,41 @@ impl FuturePool {
 
     /// Wraps a user provided future to support features of the `FuturePool`.
     /// The wrapped future will be spawned in the future thread pool.
-    fn wrap_user_future<F, R>(&self, future_fn: F) -> impl Future<Item = R::Item, Error = R::Error>
+    fn wrap_user_future<F, R>(
+        &self,
+        future_fn: F,
+    ) -> impl futures01::Future<Item = R::Item, Error = R::Error>
     where
         F: FnOnce() -> R + Send + 'static,
-        R: Future + Send + 'static,
+        R: futures01::Future + Send + 'static,
         R::Item: Send + 'static,
         R::Error: Send + 'static,
     {
         let env = self.env.clone();
         env.metrics_running_task_count.inc();
 
-        let func = move || {
+        futures01::future::lazy(move || {
             future_fn().then(move |r| {
                 env.metrics_handled_task_count.inc();
                 env.metrics_running_task_count.dec();
                 try_tick_thread(&env);
                 r
             })
-        };
-        lazy(func)
+        })
     }
 
     /// Spawns a future in the pool.
-    pub fn spawn<F, R>(&self, future_fn: F) -> Result<(), Full>
+    pub fn spawn<F, R>(&self, future_fn: F, opt: Options) -> Result<(), Full>
     where
         F: FnOnce() -> R + Send + 'static,
-        R: Future + Send + 'static,
+        R: futures01::Future + Send + 'static,
         R::Item: Send + 'static,
         R::Error: Send + 'static,
     {
         self.gate_spawn()?;
 
         let future = self.wrap_user_future(future_fn);
-        self.pool.spawn(future.then(|_| Ok(())));
+        self.pool.spawn_opt(future.compat().map(|_| ()), opt);
         Ok(())
     }
 
@@ -118,17 +157,31 @@ impl FuturePool {
     ///
     /// The future will not be executed if the handle is not polled.
     #[must_use]
-    pub fn spawn_handle<F, R>(&self, future_fn: F) -> Result<SpawnHandle<R::Item, R::Error>, Full>
+    pub fn spawn_handle<F, R>(
+        &self,
+        future_fn: F,
+        opt: Options,
+    ) -> Result<impl futures01::Future<Item = R::Item, Error = R::Error>, Full>
     where
         F: FnOnce() -> R + Send + 'static,
-        R: Future + Send + 'static,
+        R: futures01::Future + Send + 'static,
         R::Item: Send + 'static,
         R::Error: Send + 'static,
     {
         self.gate_spawn()?;
 
-        let future = self.wrap_user_future(future_fn);
-        Ok(self.pool.spawn_handle(future))
+        let fut = self.wrap_user_future(future_fn);
+        use futures01::prelude::*;
+        let pool = self.pool.clone();
+        Ok(futures01::future::lazy(move || {
+            let (tx, rx) = futures01::sync::oneshot::channel();
+            let wrap_handle = fut.then(move |res| {
+                tx.send(res).ok();
+                Ok::<_, ()>(())
+            });
+            pool.spawn_opt(wrap_handle.compat().map(|_| ()), opt);
+            rx.then(|res| res.expect("spawn handle sender closed"))
+        }))
     }
 }
 
@@ -177,23 +230,29 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
 
-    use futures::future;
+    use futures01::{future, Future};
 
     fn spawn_future_and_wait(pool: &FuturePool, duration: Duration) {
-        pool.spawn_handle(move || {
-            thread::sleep(duration);
-            future::ok::<_, ()>(())
-        })
+        pool.spawn_handle(
+            move || {
+                thread::sleep(duration);
+                future::ok::<_, ()>(())
+            },
+            unique_options(),
+        )
         .unwrap()
         .wait()
         .unwrap();
     }
 
     fn spawn_future_without_wait(pool: &FuturePool, duration: Duration) {
-        pool.spawn(move || {
-            thread::sleep(duration);
-            future::ok::<_, ()>(())
-        })
+        pool.spawn(
+            move || {
+                thread::sleep(duration);
+                future::ok::<_, ()>(())
+            },
+            unique_options(),
+        )
         .unwrap();
     }
 
@@ -300,19 +359,25 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel(10);
 
         let tx2 = tx.clone();
-        pool.spawn(move || {
-            thread::sleep(Duration::from_millis(200));
-            tx2.send(11).unwrap();
-            future::ok::<_, ()>(())
-        })
+        pool.spawn(
+            move || {
+                thread::sleep(Duration::from_millis(200));
+                tx2.send(11).unwrap();
+                future::ok::<_, ()>(())
+            },
+            unique_options(),
+        )
         .unwrap();
 
         let tx2 = tx.clone();
         drop(
-            pool.spawn_handle(move || {
-                tx2.send(7).unwrap();
-                future::ok::<_, ()>(())
-            })
+            pool.spawn_handle(
+                move || {
+                    tx2.send(7).unwrap();
+                    future::ok::<_, ()>(())
+                },
+                unique_options(),
+            )
             .unwrap(),
         );
 
@@ -326,7 +391,7 @@ mod tests {
     fn test_handle_result() {
         let pool = Builder::new().pool_size(1).build();
 
-        let handle = pool.spawn_handle(move || future::ok::<_, ()>(42));
+        let handle = pool.spawn_handle(move || future::ok::<_, ()>(42), unique_options());
 
         assert_eq!(handle.unwrap().wait().unwrap(), 42);
     }
@@ -363,11 +428,14 @@ mod tests {
         pool: &FuturePool,
         id: u64,
         future_duration_ms: u64,
-    ) -> Result<SpawnHandle<u64, ()>, Full> {
-        pool.spawn_handle(move || {
-            thread::sleep(Duration::from_millis(future_duration_ms));
-            future::ok::<u64, ()>(id)
-        })
+    ) -> Result<impl Future<Item = u64, Error = ()>, Full> {
+        pool.spawn_handle(
+            move || {
+                thread::sleep(Duration::from_millis(future_duration_ms));
+                future::ok::<u64, ()>(id)
+            },
+            unique_options(),
+        )
     }
 
     fn wait_on_new_thread<F>(

@@ -15,7 +15,7 @@ use tipb::{DagRequest, ExecType};
 use crate::server::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::{self, Engine, SnapshotStore};
-use tikv_util::future_pool::FuturePool;
+use future_pool::FuturePool;
 use tikv_util::Either;
 
 use crate::coprocessor::metrics::*;
@@ -289,7 +289,10 @@ impl<E: Engine> Endpoint<E> {
         let tracker = Box::new(Tracker::new(req_ctx));
 
         read_pool
-            .spawn_handle(move || Self::handle_unary_request_impl(tracker, handler_builder))
+            .spawn_handle(
+                move || Self::handle_unary_request_impl(tracker, handler_builder),
+                future_pool::unique_options(),
+            )
             .map_err(|_| Error::MaxPendingTasksExceeded)
     }
 
@@ -424,11 +427,14 @@ impl<E: Engine> Endpoint<E> {
         let tracker = Box::new(Tracker::new(req_ctx));
 
         read_pool
-            .spawn(move || {
-                Self::handle_stream_request_impl(tracker, handler_builder) // Stream<Resp, Error>
-                    .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
-                    .forward(tx)
-            })
+            .spawn(
+                move || {
+                    Self::handle_stream_request_impl(tracker, handler_builder) // Stream<Resp, Error>
+                        .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
+                        .forward(tx)
+                },
+                future_pool::unique_options(),
+            )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
         Ok(rx.then(|r| r.unwrap()))
     }
@@ -742,8 +748,8 @@ mod tests {
     #[test]
     fn test_full() {
         use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
+        use future_pool::Builder;
         use std::sync::Mutex;
-        use tikv_util::future_pool::Builder;
 
         let engine = TestEngineBuilder::new().build().unwrap();
 

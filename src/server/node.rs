@@ -20,10 +20,10 @@ use crate::server::Config as ServerConfig;
 use crate::storage::{Config as StorageConfig, Storage};
 use engine::Engines;
 use engine::Peekable;
+use future_pool::FuturePool;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
-use tikv_util::future_pool::FuturePool;
 use tikv_util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;

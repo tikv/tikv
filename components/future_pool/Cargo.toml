@@ -1,0 +1,23 @@
+[package]
+name = "future_pool"
+version = "0.1.0"
+authors = ["Yilin Chen <sticnarf@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+adaptive-spawn = { git = "https://gitlab.com/sticnarf/adaptive-thread-pool.git" }
+futures-preview = { version = "=0.3.0-alpha.19", features = ["compat"] }
+futures01 = { package = "futures", version = "0.1" }
+tokio-threadpool = "0.1"
+lazy_static = "1"
+fail = "0.3"
+rand = "0.7"
+
+tikv_util = { path = "../tikv_util" }
+
+[dependencies.prometheus]
+git = "https://github.com/pingcap/rust-prometheus.git"
+rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
+features = ["nightly", "push", "process"]
