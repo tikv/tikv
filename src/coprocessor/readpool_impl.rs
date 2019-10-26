@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use crate::config::CoprReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::{Engine, FlowStatistics, FlowStatsReporter, Statistics};
+use future_pool::{Builder, Config, FuturePool};
 use tikv_util::collections::HashMap;
-use tikv_util::future_pool::{Builder, Config, FuturePool};
 
 use super::metrics::*;
 use prometheus::local::*;

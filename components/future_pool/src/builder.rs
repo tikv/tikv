@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use super::TokioPool;
 use tokio_threadpool::Builder as TokioBuilder;
 
 use super::metrics::*;
@@ -106,7 +107,7 @@ impl Builder {
             metrics_running_task_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name]),
             metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
         });
-        let pool = Arc::new(self.inner_builder.build());
+        let pool = TokioPool::new(self.inner_builder.build());
         super::FuturePool {
             pool,
             env,

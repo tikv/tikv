@@ -56,7 +56,7 @@ pub const TXN_SIZE_PREFIX: u8 = b't';
 pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
-use tikv_util::future_pool::FuturePool;
+use future_pool::FuturePool;
 
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
@@ -867,42 +867,45 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         const CMD: &str = "get";
         let priority = get_priority_tag(ctx.get_priority());
 
-        let res = self.get_read_pool(priority).spawn_handle(move || {
-            tls_collect_command_count(CMD, priority);
-            let command_duration = tikv_util::time::Instant::now_coarse();
+        let res = self.get_read_pool(priority).spawn_handle(
+            move || {
+                tls_collect_command_count(CMD, priority);
+                let command_duration = tikv_util::time::Instant::now_coarse();
 
-            Self::with_tls_engine(|engine| {
-                Self::async_snapshot(engine, &ctx)
-                    .and_then(move |snapshot: E::Snap| {
-                        tls_processing_read_observe_duration(CMD, || {
-                            let mut statistics = Statistics::default();
-                            let snap_store = SnapshotStore::new(
-                                snapshot,
-                                start_ts,
-                                ctx.get_isolation_level(),
-                                !ctx.get_not_fill_cache(),
-                            );
-                            let result = snap_store
-                                .get(&key, &mut statistics)
-                                // map storage::txn::Error -> storage::Error
-                                .map_err(Error::from)
-                                .map(|r| {
-                                    tls_collect_key_reads(CMD, 1);
-                                    r
-                                });
+                Self::with_tls_engine(|engine| {
+                    Self::async_snapshot(engine, &ctx)
+                        .and_then(move |snapshot: E::Snap| {
+                            tls_processing_read_observe_duration(CMD, || {
+                                let mut statistics = Statistics::default();
+                                let snap_store = SnapshotStore::new(
+                                    snapshot,
+                                    start_ts,
+                                    ctx.get_isolation_level(),
+                                    !ctx.get_not_fill_cache(),
+                                );
+                                let result = snap_store
+                                    .get(&key, &mut statistics)
+                                    // map storage::txn::Error -> storage::Error
+                                    .map_err(Error::from)
+                                    .map(|r| {
+                                        tls_collect_key_reads(CMD, 1);
+                                        r
+                                    });
 
-                            tls_collect_scan_details(CMD, &statistics);
-                            tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                                tls_collect_scan_details(CMD, &statistics);
+                                tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
-                            result
+                                result
+                            })
                         })
-                    })
-                    .then(move |r| {
-                        tls_collect_command_duration(CMD, command_duration.elapsed());
-                        r
-                    })
-            })
-        });
+                        .then(move |r| {
+                            tls_collect_command_duration(CMD, command_duration.elapsed());
+                            r
+                        })
+                })
+            },
+            future_pool::unique_options(),
+        );
 
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
@@ -921,53 +924,56 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         const CMD: &str = "batch_get";
         let priority = get_priority_tag(ctx.get_priority());
 
-        let res = self.get_read_pool(priority).spawn_handle(move || {
-            tls_collect_command_count(CMD, priority);
-            let command_duration = tikv_util::time::Instant::now_coarse();
+        let res = self.get_read_pool(priority).spawn_handle(
+            move || {
+                tls_collect_command_count(CMD, priority);
+                let command_duration = tikv_util::time::Instant::now_coarse();
 
-            Self::with_tls_engine(|engine| {
-                Self::async_snapshot(engine, &ctx)
-                    .and_then(move |snapshot: E::Snap| {
-                        tls_processing_read_observe_duration(CMD, || {
-                            let mut statistics = Statistics::default();
-                            let snap_store = SnapshotStore::new(
-                                snapshot,
-                                start_ts,
-                                ctx.get_isolation_level(),
-                                !ctx.get_not_fill_cache(),
-                            );
-                            let result = snap_store
-                                .batch_get(&keys, &mut statistics)
-                                .map_err(Error::from)
-                                .map(|v| {
-                                    let kv_pairs: Vec<_> = v
-                                        .into_iter()
-                                        .zip(keys)
-                                        .filter(|&(ref v, ref _k)| {
-                                            !(v.is_ok() && v.as_ref().unwrap().is_none())
-                                        })
-                                        .map(|(v, k)| match v {
-                                            Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
-                                            Err(e) => Err(Error::from(e)),
-                                            _ => unreachable!(),
-                                        })
-                                        .collect();
-                                    tls_collect_key_reads(CMD, kv_pairs.len());
-                                    kv_pairs
-                                });
+                Self::with_tls_engine(|engine| {
+                    Self::async_snapshot(engine, &ctx)
+                        .and_then(move |snapshot: E::Snap| {
+                            tls_processing_read_observe_duration(CMD, || {
+                                let mut statistics = Statistics::default();
+                                let snap_store = SnapshotStore::new(
+                                    snapshot,
+                                    start_ts,
+                                    ctx.get_isolation_level(),
+                                    !ctx.get_not_fill_cache(),
+                                );
+                                let result = snap_store
+                                    .batch_get(&keys, &mut statistics)
+                                    .map_err(Error::from)
+                                    .map(|v| {
+                                        let kv_pairs: Vec<_> = v
+                                            .into_iter()
+                                            .zip(keys)
+                                            .filter(|&(ref v, ref _k)| {
+                                                !(v.is_ok() && v.as_ref().unwrap().is_none())
+                                            })
+                                            .map(|(v, k)| match v {
+                                                Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
+                                                Err(e) => Err(Error::from(e)),
+                                                _ => unreachable!(),
+                                            })
+                                            .collect();
+                                        tls_collect_key_reads(CMD, kv_pairs.len());
+                                        kv_pairs
+                                    });
 
-                            tls_collect_scan_details(CMD, &statistics);
-                            tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                                tls_collect_scan_details(CMD, &statistics);
+                                tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
-                            result
+                                result
+                            })
                         })
-                    })
-                    .then(move |r| {
-                        tls_collect_command_duration(CMD, command_duration.elapsed());
-                        r
-                    })
-            })
-        });
+                        .then(move |r| {
+                            tls_collect_command_duration(CMD, command_duration.elapsed());
+                            r
+                        })
+                })
+            },
+            future_pool::unique_options(),
+        );
 
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
@@ -991,58 +997,61 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         const CMD: &str = "scan";
         let priority = get_priority_tag(ctx.get_priority());
 
-        let res = self.get_read_pool(priority).spawn_handle(move || {
-            tls_collect_command_count(CMD, priority);
-            let command_duration = tikv_util::time::Instant::now_coarse();
+        let res = self.get_read_pool(priority).spawn_handle(
+            move || {
+                tls_collect_command_count(CMD, priority);
+                let command_duration = tikv_util::time::Instant::now_coarse();
 
-            Self::with_tls_engine(|engine| {
-                Self::async_snapshot(engine, &ctx)
-                    .and_then(move |snapshot: E::Snap| {
-                        tls_processing_read_observe_duration(CMD, || {
-                            let snap_store = SnapshotStore::new(
-                                snapshot,
-                                start_ts,
-                                ctx.get_isolation_level(),
-                                !ctx.get_not_fill_cache(),
-                            );
+                Self::with_tls_engine(|engine| {
+                    Self::async_snapshot(engine, &ctx)
+                        .and_then(move |snapshot: E::Snap| {
+                            tls_processing_read_observe_duration(CMD, || {
+                                let snap_store = SnapshotStore::new(
+                                    snapshot,
+                                    start_ts,
+                                    ctx.get_isolation_level(),
+                                    !ctx.get_not_fill_cache(),
+                                );
 
-                            let mut scanner;
-                            if !options.reverse_scan {
-                                scanner = snap_store.scanner(
-                                    false,
-                                    options.key_only,
-                                    Some(start_key),
-                                    end_key,
-                                )?;
-                            } else {
-                                scanner = snap_store.scanner(
-                                    true,
-                                    options.key_only,
-                                    end_key,
-                                    Some(start_key),
-                                )?;
-                            };
-                            let res = scanner.scan(limit);
+                                let mut scanner;
+                                if !options.reverse_scan {
+                                    scanner = snap_store.scanner(
+                                        false,
+                                        options.key_only,
+                                        Some(start_key),
+                                        end_key,
+                                    )?;
+                                } else {
+                                    scanner = snap_store.scanner(
+                                        true,
+                                        options.key_only,
+                                        end_key,
+                                        Some(start_key),
+                                    )?;
+                                };
+                                let res = scanner.scan(limit);
 
-                            let statistics = scanner.take_statistics();
-                            tls_collect_scan_details(CMD, &statistics);
-                            tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                                let statistics = scanner.take_statistics();
+                                tls_collect_scan_details(CMD, &statistics);
+                                tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
-                            res.map_err(Error::from).map(|results| {
-                                tls_collect_key_reads(CMD, results.len());
-                                results
-                                    .into_iter()
-                                    .map(|x| x.map_err(Error::from))
-                                    .collect()
+                                res.map_err(Error::from).map(|results| {
+                                    tls_collect_key_reads(CMD, results.len());
+                                    results
+                                        .into_iter()
+                                        .map(|x| x.map_err(Error::from))
+                                        .collect()
+                                })
                             })
                         })
-                    })
-                    .then(move |r| {
-                        tls_collect_command_duration(CMD, command_duration.elapsed());
-                        r
-                    })
-            })
-        });
+                        .then(move |r| {
+                            tls_collect_command_duration(CMD, command_duration.elapsed());
+                            r
+                        })
+                })
+            },
+            future_pool::unique_options(),
+        );
 
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
@@ -1402,44 +1411,48 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         const CMD: &str = "raw_get";
         let priority = get_priority_tag(ctx.get_priority());
 
-        let res = self.get_read_pool(priority).spawn_handle(move || {
-            tls_collect_command_count(CMD, priority);
-            let command_duration = tikv_util::time::Instant::now_coarse();
+        let res = self.get_read_pool(priority).spawn_handle(
+            move || {
+                tls_collect_command_count(CMD, priority);
+                let command_duration = tikv_util::time::Instant::now_coarse();
 
-            Self::with_tls_engine(|engine| {
-                Self::async_snapshot(engine, &ctx)
-                    .and_then(move |snapshot: E::Snap| {
-                        tls_processing_read_observe_duration(CMD, || {
-                            let cf = match Self::rawkv_cf(&cf) {
-                                Ok(x) => x,
-                                Err(e) => return future::err(e),
-                            };
-                            // no scan_count for this kind of op.
+                Self::with_tls_engine(|engine| {
+                    Self::async_snapshot(engine, &ctx)
+                        .and_then(move |snapshot: E::Snap| {
+                            tls_processing_read_observe_duration(CMD, || {
+                                let cf = match Self::rawkv_cf(&cf) {
+                                    Ok(x) => x,
+                                    Err(e) => return future::err(e),
+                                };
+                                // no scan_count for this kind of op.
 
-                            let key_len = key.len();
-                            let result = snapshot
-                                .get_cf(cf, &Key::from_encoded(key))
-                                // map storage::engine::Error -> storage::Error
-                                .map_err(Error::from)
-                                .map(|r| {
-                                    if let Some(ref value) = r {
-                                        let mut stats = Statistics::default();
-                                        stats.data.flow_stats.read_keys = 1;
-                                        stats.data.flow_stats.read_bytes = key_len + value.len();
-                                        tls_collect_read_flow(ctx.get_region_id(), &stats);
-                                        tls_collect_key_reads(CMD, 1);
-                                    }
-                                    r
-                                });
-                            future::result(result)
+                                let key_len = key.len();
+                                let result = snapshot
+                                    .get_cf(cf, &Key::from_encoded(key))
+                                    // map storage::engine::Error -> storage::Error
+                                    .map_err(Error::from)
+                                    .map(|r| {
+                                        if let Some(ref value) = r {
+                                            let mut stats = Statistics::default();
+                                            stats.data.flow_stats.read_keys = 1;
+                                            stats.data.flow_stats.read_bytes =
+                                                key_len + value.len();
+                                            tls_collect_read_flow(ctx.get_region_id(), &stats);
+                                            tls_collect_key_reads(CMD, 1);
+                                        }
+                                        r
+                                    });
+                                future::result(result)
+                            })
                         })
-                    })
-                    .then(move |r| {
-                        tls_collect_command_duration(CMD, command_duration.elapsed());
-                        r
-                    })
-            })
-        });
+                        .then(move |r| {
+                            tls_collect_command_duration(CMD, command_duration.elapsed());
+                            r
+                        })
+                })
+            },
+            future_pool::unique_options(),
+        );
 
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
@@ -1456,51 +1469,60 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         const CMD: &str = "raw_batch_get";
         let priority = get_priority_tag(ctx.get_priority());
 
-        let res = self.get_read_pool(priority).spawn_handle(move || {
-            tls_collect_command_count(CMD, priority);
-            let command_duration = tikv_util::time::Instant::now_coarse();
+        let res = self.get_read_pool(priority).spawn_handle(
+            move || {
+                tls_collect_command_count(CMD, priority);
+                let command_duration = tikv_util::time::Instant::now_coarse();
 
-            Self::with_tls_engine(|engine| {
-                Self::async_snapshot(engine, &ctx)
-                    .and_then(move |snapshot: E::Snap| {
-                        tls_processing_read_observe_duration(CMD, || {
-                            let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
-                            let cf = match Self::rawkv_cf(&cf) {
-                                Ok(x) => x,
-                                Err(e) => return future::err(e),
-                            };
-                            // no scan_count for this kind of op.
-                            let mut stats = Statistics::default();
-                            let result: Vec<Result<KvPair>> = keys
-                                .into_iter()
-                                .map(|k| {
-                                    let v = snapshot.get_cf(cf, &k);
-                                    (k, v)
-                                })
-                                .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
-                                .map(|(k, v)| match v {
-                                    Ok(Some(v)) => {
-                                        stats.data.flow_stats.read_keys += 1;
-                                        stats.data.flow_stats.read_bytes +=
-                                            k.as_encoded().len() + v.len();
-                                        Ok((k.into_encoded(), v))
-                                    }
-                                    Err(e) => Err(Error::from(e)),
-                                    _ => unreachable!(),
-                                })
-                                .collect();
+                Self::with_tls_engine(|engine| {
+                    Self::async_snapshot(engine, &ctx)
+                        .and_then(move |snapshot: E::Snap| {
+                            tls_processing_read_observe_duration(CMD, || {
+                                let keys: Vec<Key> =
+                                    keys.into_iter().map(Key::from_encoded).collect();
+                                let cf = match Self::rawkv_cf(&cf) {
+                                    Ok(x) => x,
+                                    Err(e) => return future::err(e),
+                                };
+                                // no scan_count for this kind of op.
+                                let mut stats = Statistics::default();
+                                let result: Vec<Result<KvPair>> = keys
+                                    .into_iter()
+                                    .map(|k| {
+                                        let v = snapshot.get_cf(cf, &k);
+                                        (k, v)
+                                    })
+                                    .filter(|&(_, ref v)| {
+                                        !(v.is_ok() && v.as_ref().unwrap().is_none())
+                                    })
+                                    .map(|(k, v)| match v {
+                                        Ok(Some(v)) => {
+                                            stats.data.flow_stats.read_keys += 1;
+                                            stats.data.flow_stats.read_bytes +=
+                                                k.as_encoded().len() + v.len();
+                                            Ok((k.into_encoded(), v))
+                                        }
+                                        Err(e) => Err(Error::from(e)),
+                                        _ => unreachable!(),
+                                    })
+                                    .collect();
 
-                            tls_collect_key_reads(CMD, stats.data.flow_stats.read_keys as usize);
-                            tls_collect_read_flow(ctx.get_region_id(), &stats);
-                            future::ok(result)
+                                tls_collect_key_reads(
+                                    CMD,
+                                    stats.data.flow_stats.read_keys as usize,
+                                );
+                                tls_collect_read_flow(ctx.get_region_id(), &stats);
+                                future::ok(result)
+                            })
                         })
-                    })
-                    .then(move |r| {
-                        tls_collect_command_duration(CMD, command_duration.elapsed());
-                        r
-                    })
-            })
-        });
+                        .then(move |r| {
+                            tls_collect_command_duration(CMD, command_duration.elapsed());
+                            r
+                        })
+                })
+            },
+            future_pool::unique_options(),
+        );
 
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
@@ -1739,56 +1761,59 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         const CMD: &str = "raw_scan";
         let priority = get_priority_tag(ctx.get_priority());
 
-        let res = self.get_read_pool(priority).spawn_handle(move || {
-            tls_collect_command_count(CMD, priority);
-            let command_duration = tikv_util::time::Instant::now_coarse();
+        let res = self.get_read_pool(priority).spawn_handle(
+            move || {
+                tls_collect_command_count(CMD, priority);
+                let command_duration = tikv_util::time::Instant::now_coarse();
 
-            Self::with_tls_engine(|engine| {
-                Self::async_snapshot(engine, &ctx)
-                    .and_then(move |snapshot: E::Snap| {
-                        tls_processing_read_observe_duration(CMD, || {
-                            let end_key = end_key.map(Key::from_encoded);
+                Self::with_tls_engine(|engine| {
+                    Self::async_snapshot(engine, &ctx)
+                        .and_then(move |snapshot: E::Snap| {
+                            tls_processing_read_observe_duration(CMD, || {
+                                let end_key = end_key.map(Key::from_encoded);
 
-                            let mut statistics = Statistics::default();
-                            let result = if reverse {
-                                Self::reverse_raw_scan(
-                                    &snapshot,
-                                    &cf,
-                                    &Key::from_encoded(key),
-                                    end_key,
-                                    limit,
-                                    &mut statistics,
-                                    key_only,
-                                )
-                                .map_err(Error::from)
-                            } else {
-                                Self::raw_scan(
-                                    &snapshot,
-                                    &cf,
-                                    &Key::from_encoded(key),
-                                    end_key,
-                                    limit,
-                                    &mut statistics,
-                                    key_only,
-                                )
-                                .map_err(Error::from)
-                            };
+                                let mut statistics = Statistics::default();
+                                let result = if reverse {
+                                    Self::reverse_raw_scan(
+                                        &snapshot,
+                                        &cf,
+                                        &Key::from_encoded(key),
+                                        end_key,
+                                        limit,
+                                        &mut statistics,
+                                        key_only,
+                                    )
+                                    .map_err(Error::from)
+                                } else {
+                                    Self::raw_scan(
+                                        &snapshot,
+                                        &cf,
+                                        &Key::from_encoded(key),
+                                        end_key,
+                                        limit,
+                                        &mut statistics,
+                                        key_only,
+                                    )
+                                    .map_err(Error::from)
+                                };
 
-                            tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                            tls_collect_key_reads(
-                                CMD,
-                                statistics.write.flow_stats.read_keys as usize,
-                            );
-                            tls_collect_scan_details(CMD, &statistics);
-                            future::result(result)
+                                tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                                tls_collect_key_reads(
+                                    CMD,
+                                    statistics.write.flow_stats.read_keys as usize,
+                                );
+                                tls_collect_scan_details(CMD, &statistics);
+                                future::result(result)
+                            })
                         })
-                    })
-                    .then(move |r| {
-                        tls_collect_command_duration(CMD, command_duration.elapsed());
-                        r
-                    })
-            })
-        });
+                        .then(move |r| {
+                            tls_collect_command_duration(CMD, command_duration.elapsed());
+                            r
+                        })
+                })
+            },
+            future_pool::unique_options(),
+        );
 
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
@@ -1844,77 +1869,82 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         const CMD: &str = "raw_batch_scan";
         let priority = get_priority_tag(ctx.get_priority());
 
-        let res = self.get_read_pool(priority).spawn_handle(move || {
-            tls_collect_command_count(CMD, priority);
-            let command_duration = tikv_util::time::Instant::now_coarse();
+        let res = self.get_read_pool(priority).spawn_handle(
+            move || {
+                tls_collect_command_count(CMD, priority);
+                let command_duration = tikv_util::time::Instant::now_coarse();
 
-            Self::with_tls_engine(|engine| {
-                Self::async_snapshot(engine, &ctx)
-                    .and_then(move |snapshot: E::Snap| {
-                        tls_processing_read_observe_duration(CMD, || {
-                            let mut statistics = Statistics::default();
-                            if !Self::check_key_ranges(&ranges, reverse) {
-                                return future::result(Err(box_err!("Invalid KeyRanges")));
-                            };
-                            let mut result = Vec::new();
-                            let ranges_len = ranges.len();
-                            for i in 0..ranges_len {
-                                let start_key = Key::from_encoded(ranges[i].take_start_key());
-                                let end_key = ranges[i].take_end_key();
-                                let end_key = if end_key.is_empty() {
-                                    if i + 1 == ranges_len {
-                                        None
+                Self::with_tls_engine(|engine| {
+                    Self::async_snapshot(engine, &ctx)
+                        .and_then(move |snapshot: E::Snap| {
+                            tls_processing_read_observe_duration(CMD, || {
+                                let mut statistics = Statistics::default();
+                                if !Self::check_key_ranges(&ranges, reverse) {
+                                    return future::result(Err(box_err!("Invalid KeyRanges")));
+                                };
+                                let mut result = Vec::new();
+                                let ranges_len = ranges.len();
+                                for i in 0..ranges_len {
+                                    let start_key = Key::from_encoded(ranges[i].take_start_key());
+                                    let end_key = ranges[i].take_end_key();
+                                    let end_key = if end_key.is_empty() {
+                                        if i + 1 == ranges_len {
+                                            None
+                                        } else {
+                                            Some(Key::from_encoded_slice(
+                                                ranges[i + 1].get_start_key(),
+                                            ))
+                                        }
                                     } else {
-                                        Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
-                                    }
-                                } else {
-                                    Some(Key::from_encoded(end_key))
-                                };
-                                let pairs = if reverse {
-                                    match Self::reverse_raw_scan(
-                                        &snapshot,
-                                        &cf,
-                                        &start_key,
-                                        end_key,
-                                        each_limit,
-                                        &mut statistics,
-                                        key_only,
-                                    ) {
-                                        Ok(x) => x,
-                                        Err(e) => return future::err(e),
-                                    }
-                                } else {
-                                    match Self::raw_scan(
-                                        &snapshot,
-                                        &cf,
-                                        &start_key,
-                                        end_key,
-                                        each_limit,
-                                        &mut statistics,
-                                        key_only,
-                                    ) {
-                                        Ok(x) => x,
-                                        Err(e) => return future::err(e),
-                                    }
-                                };
-                                result.extend(pairs.into_iter());
-                            }
+                                        Some(Key::from_encoded(end_key))
+                                    };
+                                    let pairs = if reverse {
+                                        match Self::reverse_raw_scan(
+                                            &snapshot,
+                                            &cf,
+                                            &start_key,
+                                            end_key,
+                                            each_limit,
+                                            &mut statistics,
+                                            key_only,
+                                        ) {
+                                            Ok(x) => x,
+                                            Err(e) => return future::err(e),
+                                        }
+                                    } else {
+                                        match Self::raw_scan(
+                                            &snapshot,
+                                            &cf,
+                                            &start_key,
+                                            end_key,
+                                            each_limit,
+                                            &mut statistics,
+                                            key_only,
+                                        ) {
+                                            Ok(x) => x,
+                                            Err(e) => return future::err(e),
+                                        }
+                                    };
+                                    result.extend(pairs.into_iter());
+                                }
 
-                            tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                            tls_collect_key_reads(
-                                CMD,
-                                statistics.write.flow_stats.read_keys as usize,
-                            );
-                            tls_collect_scan_details(CMD, &statistics);
-                            future::ok(result)
+                                tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                                tls_collect_key_reads(
+                                    CMD,
+                                    statistics.write.flow_stats.read_keys as usize,
+                                );
+                                tls_collect_scan_details(CMD, &statistics);
+                                future::ok(result)
+                            })
                         })
-                    })
-                    .then(move |r| {
-                        tls_collect_command_duration(CMD, command_duration.elapsed());
-                        r
-                    })
-            })
-        });
+                        .then(move |r| {
+                            tls_collect_command_duration(CMD, command_duration.elapsed());
+                            r
+                        })
+                })
+            },
+            future_pool::unique_options(),
+        );
 
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)

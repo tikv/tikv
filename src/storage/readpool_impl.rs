@@ -10,8 +10,8 @@ use prometheus::local::*;
 use crate::config::StorageReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::{FlowStatistics, FlowStatsReporter, Statistics};
+use future_pool::{Builder, Config, FuturePool};
 use tikv_util::collections::HashMap;
-use tikv_util::future_pool::{Builder, Config, FuturePool};
 
 use super::metrics::*;
 use super::Engine;
