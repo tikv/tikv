@@ -158,12 +158,7 @@ impl<S: StoreAddrResolver + 'static, P: PdClient + 'static> tikvpb::DcProxy for 
         let h = self.pool.spawn_handle(f);
         ctx.spawn(h.and_then(|resp| {
             sink.success(resp)
-                .map_err(|e| {
-                    warn!("GetCommittedIndexAndTs sends response fail: {:?}", e);
-                })
-                .map(|_| {
-                    info!("GetCommittedIndexAndTs sends response success");
-                })
+                .map_err(|e| warn!("GetCommittedIndexAndTs sends response fail: {:?}", e))
         }));
     }
 

@@ -103,17 +103,79 @@ impl From<RaftServerError> for kv::Error {
     }
 }
 
+use engine::DB;
+use std::cmp;
+use std::collections::{BinaryHeap, HashMap};
+use std::sync::{Arc, Mutex, RwLock};
+
 /// `RaftKv` is a storage engine base on `RaftStore`.
 #[derive(Clone)]
 pub struct RaftKv<S: RaftStoreRouter + 'static> {
     router: S,
+    apply_observer: Arc<RwLock<Option<KvApplyObserver>>>,
 }
 
-pub struct KvApplyObserver {}
+struct PendingFollowerRead {
+    ctx: Context,
+    applied_index: u64,
+    cb: Callback<RegionSnapshot>,
+}
+
+impl Eq for PendingFollowerRead {}
+impl PartialEq for PendingFollowerRead {
+    fn eq(&self, other: &PendingFollowerRead) -> bool {
+        self.applied_index == other.applied_index
+    }
+}
+
+impl Ord for PendingFollowerRead {
+    fn cmp(&self, other: &PendingFollowerRead) -> cmp::Ordering {
+        other.applied_index.cmp(&self.applied_index)
+    }
+}
+
+impl PartialOrd for PendingFollowerRead {
+    fn partial_cmp(&self, other: &PendingFollowerRead) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Default)]
+struct CurrentAndPending {
+    applied_index: u64,
+    region: Region,
+    pendings: BinaryHeap<PendingFollowerRead>,
+}
+
+#[derive(Clone)]
+struct ReadQueue(Arc<Mutex<CurrentAndPending>>);
+
+#[derive(Clone)]
+pub struct KvApplyObserver {
+    db: Arc<DB>,
+    pending_reads: Arc<RwLock<HashMap<u64, ReadQueue>>>,
+}
 
 impl KvApplyObserver {
-    pub fn new() -> Self {
-        KvApplyObserver {}
+    pub fn new(db: Arc<DB>) -> Self {
+        KvApplyObserver {
+            db,
+            pending_reads: Arc::new(RwLock::new(HashMap::default())),
+        }
+    }
+
+    fn get_quque(&self, rid: u64) -> ReadQueue {
+        let pending_reads = self.pending_reads.read().unwrap();
+        if let Some(q) = pending_reads.get(&rid) {
+            return q.clone();
+        }
+        drop(pending_reads);
+
+        let mut pending_reads = self.pending_reads.write().unwrap();
+        let q = ReadQueue(Arc::new(Mutex::new(CurrentAndPending::default())));
+        let t = pending_reads.insert(rid, q.clone());
+        assert!(t.is_none());
+        q
     }
 }
 
@@ -124,7 +186,37 @@ impl Coprocessor for KvApplyObserver {
 
 impl ApplyObserver for KvApplyObserver {
     fn on_applied_index_change(&self, r: &Region, applied: Option<u64>) {
-        error!("{} applied index changed to {:?}", r.get_id(), applied);
+        let rid = r.get_id();
+        let applied = applied.unwrap();
+        info!("{} applied index changed to {}", rid, applied);
+
+        let rq = self.get_quque(rid);
+        let mut rq_locked = rq.0.lock().unwrap();
+        while let Some(req) = rq_locked.pendings.pop() {
+            if req.applied_index <= applied {
+                // TODO: term in ctx?
+                let cb_ctx = CbContext::new();
+                let req_epoch = req.ctx.get_region_epoch();
+                if req_epoch.get_version() != r.get_region_epoch().get_version() {
+                    let mut e = errorpb::Error::new();
+                    e.mut_epoch_not_match()
+                        .mut_current_regions()
+                        .push(r.clone());
+                    let e = crate::storage::kv::Error::Request(e);
+                    (req.cb)((cb_ctx, Err(e)));
+                } else {
+                    let s = RegionSnapshot::from_raw(self.db.clone(), r.clone());
+                    (req.cb)((cb_ctx, Ok(s)));
+                }
+            } else {
+                rq_locked.pendings.push(req);
+                break;
+            }
+        }
+        rq_locked.applied_index = applied;
+        if rq_locked.region.get_region_epoch() != r.get_region_epoch() {
+            rq_locked.region = r.clone();
+        }
     }
 }
 
@@ -179,7 +271,10 @@ fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Re
 impl<S: RaftStoreRouter> RaftKv<S> {
     /// Create a RaftKv using specified configuration.
     pub fn new(router: S) -> RaftKv<S> {
-        RaftKv { router }
+        RaftKv {
+            router,
+            apply_observer: Arc::new(RwLock::new(None)),
+        }
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -244,7 +339,10 @@ impl<S: RaftStoreRouter> RaftKv<S> {
             .map_err(From::from)
     }
 
-    pub fn init_apply_observer(&self) {}
+    pub fn attach_apply_observer(&self, apply_observer: KvApplyObserver) {
+        let mut ptr = self.apply_observer.write().unwrap();
+        *ptr = Some(apply_observer);
+    }
 }
 
 fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
@@ -388,7 +486,37 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         applied_index: u64,
         cb: Callback<Self::Snap>,
     ) -> kv::Result<()> {
-        self.async_snapshot(ctx, cb)
+        error!(
+            "async_snapshot_on_follower, region: {}, epoch: {:?}",
+            ctx.get_region_id(),
+            ctx.get_region_epoch(),
+        );
+        let apply_observer = self.apply_observer.read().unwrap();
+        let apply_observer = apply_observer.as_ref().unwrap();
+        let pending_reads = apply_observer.pending_reads.read().unwrap();
+        match pending_reads.get(&ctx.get_region_id()) {
+            None => {
+                let mut e = errorpb::Error::new();
+                e.mut_region_not_found().set_region_id(ctx.get_region_id());
+                let e = crate::storage::kv::Error::Request(e);
+                cb((CbContext::new(), Err(e)));
+            }
+            Some(queue) => {
+                let mut q = queue.0.lock().unwrap();
+                if q.applied_index >= applied_index {
+                    let db = apply_observer.db.clone();
+                    let s = RegionSnapshot::from_raw(db, q.region.clone());
+                    cb((CbContext::new(), Ok(s)));
+                } else {
+                    q.pendings.push(PendingFollowerRead {
+                        ctx: ctx.clone(),
+                        applied_index,
+                        cb,
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 }
 

@@ -295,11 +295,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create CoprocessorHost.
     let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router);
-    let apply_ob = Box::new(KvApplyObserver::new());
+    let apply_ob = KvApplyObserver::new(engines.kv.clone());
     coprocessor_host
         .registry
-        .register_apply_observer(0, apply_ob);
-    // engine.init_apply_observer();
+        .register_apply_observer(0, Box::new(apply_ob.clone()));
+    engine.attach_apply_observer(apply_ob);
 
     // Create region collection.
     let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
