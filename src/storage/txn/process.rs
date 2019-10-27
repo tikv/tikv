@@ -154,7 +154,13 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
     }
 
     /// Start the execution of the task.
-    pub fn execute(mut self, cb_ctx: CbContext, snapshot: EngineResult<E::Snap>, task: Task) {
+    pub fn execute(
+        mut self,
+        cb_ctx: CbContext,
+        snapshot: EngineResult<E::Snap>,
+        task: Task,
+        nice: u8,
+    ) {
         debug!(
             "receive snapshot finish msg";
             "cid" => task.cid, "cb_ctx" => ?cb_ctx
@@ -170,6 +176,8 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_err.inc();
 
                 info!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
+                let mut opt = future_pool::unique_options();
+                opt.nice = nice;
                 self.take_pool()
                     .pool
                     .spawn(
@@ -184,7 +192,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                             );
                             future::ok::<_, ()>(())
                         },
-                        future_pool::unique_options(),
+                        opt,
                     )
                     .unwrap();
             }
