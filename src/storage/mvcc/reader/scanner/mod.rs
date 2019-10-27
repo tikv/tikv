@@ -117,7 +117,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
         )?)
     }
 
-    pub fn build_delta(mut self, begin_ts: u64) -> Result<DeltaScanner<S>> {
+    pub fn build_delta(mut self, begin_ts: u64, err_lock_exist: bool) -> Result<DeltaScanner<S>> {
         let lock_cursor = if self.0.isolation_level == IsolationLevel::Si {
             Some(self.create_cf_cursor(CF_LOCK)?)
         } else {
@@ -130,6 +130,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
             lock_cursor,
             write_cursor,
             begin_ts,
+            err_lock_exist,
         ))
     }
 }
