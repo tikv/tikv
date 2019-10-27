@@ -286,9 +286,14 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<impl Future<Item = coppb::Response, Error = Error>> {
         let read_pool = self.get_read_pool(req_ctx.context.get_priority());
+        let nice = if req_ctx.context.get_priority() == kvproto::kvrpcpb::CommandPri::High {
+            0
+        } else {
+            128
+        };
         let options = adaptive_spawn::Options {
             token: req_ctx.context.task_token,
-            nice: 128,
+            nice,
         };
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));

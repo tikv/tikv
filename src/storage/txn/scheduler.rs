@@ -346,9 +346,14 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         let tag = task.tag;
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
+        let nice = if task.priority() == kvproto::kvrpcpb::CommandPri::High {
+            0
+        } else {
+            8
+        };
 
         let cb = Box::new(move |(cb_ctx, snapshot)| {
-            executor.execute(cb_ctx, snapshot, task);
+            executor.execute(cb_ctx, snapshot, task, nice);
         });
 
         let f = |engine: &E| {
