@@ -115,8 +115,8 @@ mime = "0.3.13"
 farmhash = "1.1.5"
 failure = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://gitlab.com/sticnarf/kvproto", branch = "hackathon" }
-adaptive-spawn = { git = "https://gitlab.com/sticnarf/adaptive-thread-pool.git" }
+kvproto = { git = "https://github.com/sticnarf/kvproto", branch = "hackathon" }
+adaptive-spawn = { git = "https://github.com/sticnarf/adaptive-thread-pool.git" }
 
 tikv_alloc = { path = "components/tikv_alloc", default-features = false }
 tikv_util = { path = "components/tikv_util" }

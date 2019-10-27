@@ -3,7 +3,7 @@
 [[package]]
 name = "adaptive-spawn"
 version = "0.1.0"
-source = "git+https://gitlab.com/sticnarf/adaptive-thread-pool.git#2249ff4e68b2d7afd953a0370579eff0cfda4b42"
+source = "git+https://github.com/sticnarf/adaptive-thread-pool.git#0f6be2f84a3d7e1651712989bbef7c7d3ca14eb0"
 dependencies = [
  "futures-preview",
 ]
@@ -1453,7 +1453,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://gitlab.com/sticnarf/kvproto?branch=hackathon#4c0582efc199125e9d80e46b87b3f44769c5af96"
+source = "git+https://github.com/sticnarf/kvproto?branch=hackathon#766744ae26bcbdf9480d4964c6d72dd421c7f047"
 dependencies = [
  "futures",
  "grpcio",
@@ -3150,7 +3150,7 @@ dependencies = [
 [[package]]
 name = "texn"
 version = "0.1.0"
-source = "git+https://gitlab.com/waynexia/texn#7fcac3e8a6e6e301ac50d68d6ccdff499b1255f9"
+source = "git+https://github.com/waynexia/texn#58f3a9df48354854803470923e43a116932aa48b"
 dependencies = [
  "adaptive-spawn",
  "chashmap",
