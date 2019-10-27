@@ -785,7 +785,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             engine.clone(),
             lock_mgr,
             config.scheduler_concurrency,
-            config.scheduler_worker_pool_size,
+            read_pool.clone(),
             config.scheduler_pending_write_threshold.0 as usize,
         );
 

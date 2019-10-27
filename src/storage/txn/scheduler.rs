@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
+use future_pool::FuturePool;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::{collections::HashMap, time::SlowTimer};
@@ -149,10 +150,7 @@ struct SchedulerInner<L: LockMgr> {
     sched_pending_write_threshold: usize,
 
     // worker pool
-    worker_pool: SchedPool,
-
-    // high priority commands and system commands will be delivered to this pool
-    high_priority_pool: SchedPool,
+    pool: SchedPool,
 
     // used to control write flow
     running_write_bytes: AtomicUsize,
@@ -246,7 +244,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         engine: E,
         lock_mgr: Option<L>,
         concurrency: usize,
-        worker_pool_size: usize,
+        pool: FuturePool,
         sched_pending_write_threshold: usize,
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
@@ -263,12 +261,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
             latches: Latches::new(concurrency),
             running_write_bytes: AtomicUsize::new(0),
             sched_pending_write_threshold,
-            worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
-            high_priority_pool: SchedPool::new(
-                engine.clone(),
-                std::cmp::max(1, worker_pool_size / 2),
-                "sched-high-pri-pool",
-            ),
+            pool: SchedPool::new(pool),
             lock_mgr,
         });
 
@@ -286,11 +279,12 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
 
 impl<E: Engine, L: LockMgr> Scheduler<E, L> {
     fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, Self, L> {
-        let pool = if priority == CommandPri::High || is_sys_cmd {
-            self.inner.high_priority_pool.clone()
-        } else {
-            self.inner.worker_pool.clone()
-        };
+        // let pool = if priority == CommandPri::High || is_sys_cmd {
+        //     self.inner.high_priority_pool.clone()
+        // } else {
+        //     self.inner.worker_pool.clone()
+        // };
+        let pool = self.inner.pool.clone();
         let scheduler = Scheduler {
             engine: None,
             inner: Arc::clone(&self.inner),
