@@ -48,7 +48,7 @@ grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
 raft = "0.6.0-alpha"
 hex = "0.3"
 vlog = "0.1.4"
-kvproto = { git = "https://gitlab.com/sticnarf/kvproto", branch = "hackathon" }
+kvproto = { git = "https://github.com/sticnarf/kvproto", branch = "hackathon" }
 tikv_util = { path = "../components/tikv_util" }
 future_pool = { path = "../components/future_pool" }
 engine = { path = "../components/engine" }
