@@ -6,8 +6,8 @@ use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::{
-    AutoGCConfig, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options, RegionInfoProvider,
-    Result, Storage, Value,
+    gc_worker::GCConfig, AutoGCConfig, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options,
+    RegionInfoProvider, Result, Storage, Value,
 };
 use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
 use tikv_util::collections::HashMap;
@@ -18,6 +18,7 @@ use tikv_util::collections::HashMap;
 pub struct SyncTestStorageBuilder<E: Engine> {
     engine: E,
     config: Option<Config>,
+    gc_config: Option<GCConfig>,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
@@ -25,6 +26,7 @@ impl SyncTestStorageBuilder<RocksEngine> {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: None,
+            gc_config: None,
         }
     }
 }
@@ -34,6 +36,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         Self {
             engine,
             config: None,
+            gc_config: None,
         }
     }
 
@@ -42,10 +45,18 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         self
     }
 
+    pub fn gc_config(mut self, gc_config: GCConfig) -> Self {
+        self.gc_config = Some(gc_config);
+        self
+    }
+
     pub fn build(mut self) -> Result<SyncTestStorage<E>> {
         let mut builder = TestStorageBuilder::from_engine(self.engine);
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
+        }
+        if let Some(gc_config) = self.gc_config.take() {
+            builder = builder.gc_config(gc_config);
         }
         Ok(SyncTestStorage {
             store: builder.build()?,
