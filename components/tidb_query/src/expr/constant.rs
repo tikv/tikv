@@ -48,7 +48,7 @@ impl Datum {
     pub fn as_time(&self) -> Result<Option<Cow<'_, Time>>> {
         match *self {
             Datum::Null => Ok(None),
-            Datum::Time(t) => Ok(Some(Cow::Borrowed(t))),
+            Datum::Time(t) => Ok(Some(Cow::Owned(t))),
             _ => Err(box_err!("Can't eval_time from Datum")),
         }
     }
