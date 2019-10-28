@@ -2,6 +2,8 @@
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
+#[macro_use]
+extern crate tikv_util;
 
 mod db;
 pub use self::db::*;
@@ -11,8 +13,15 @@ mod writebatch;
 pub use self::writebatch::WriteBatch;
 mod iterator;
 pub use self::iterator::Iterator;
+mod db_options;
 mod options;
 mod util;
+pub use db_options::*;
+mod cf_handle;
+pub use cf_handle::*;
+mod cf_options;
+pub use cf_options::*;
+mod import;
 
 #[cfg(test)]
 mod tests {

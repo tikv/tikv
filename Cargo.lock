@@ -135,6 +135,7 @@ dependencies = [
  "tempfile",
  "test_raftstore",
  "test_util",
+ "tidb_query",
  "tikv",
  "tikv_alloc",
  "tikv_util",
@@ -225,7 +226,7 @@ dependencies = [
 [[package]]
 name = "bzip2-sys"
 version = "0.1.7"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#02096d6f16e6b78cde379ce2305e08d2933e23b7"
+source = "git+https://github.com/alexcrichton/bzip2-rs.git#93c465c7a6991668ca8062f454431f65545f4d96"
 dependencies = [
  "cc",
  "libc",
@@ -1325,7 +1326,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#7a367e846b9f04a59a6d8cee4112de37851074dc"
+source = "git+https://github.com/pingcap/kvproto.git#f37afb7e2ae728baa93476d353b3b89c6438aec4"
 dependencies = [
  "futures",
  "grpcio",
@@ -1380,9 +1381,9 @@ dependencies = [
 
 [[package]]
 name = "libpapi_sys"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5941a57eb66cca3599174981c3cc970dc84bbf5d13f37d247f660a4a6517c8d9"
+checksum = "4c3f846784b520347048f40a690435de31ae27b64fd413a096834124e9de356c"
 dependencies = [
  "bindgen",
  "num_cpus",
@@ -1391,7 +1392,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1408,7 +1409,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2394,7 +2395,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#3cd18c44d160a3cdba586d6502d51b7cc67efc59"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
 dependencies = [
  "crc",
  "libc",
@@ -2701,8 +2702,11 @@ version = "0.1.0"
 dependencies = [
  "crc",
  "engine",
+ "engine_traits",
+ "external_storage",
  "futures",
  "grpcio",
+ "hex",
  "keys",
  "kvproto",
  "lazy_static",
@@ -2713,7 +2717,9 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_sst_importer",
  "tikv_alloc",
+ "tokio-sync",
  "uuid",
 ]
 
@@ -2923,6 +2929,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_sst_importer"
+version = "0.1.0"
+dependencies = [
+ "crc",
+ "engine",
+ "engine_rocks",
+ "engine_traits",
+ "keys",
+ "kvproto",
+ "uuid",
+]
+
+[[package]]
 name = "test_storage"
 version = "0.0.1"
 dependencies = [
@@ -3099,6 +3118,7 @@ dependencies = [
  "tempfile",
  "test_coprocessor",
  "test_raftstore",
+ "test_sst_importer",
  "test_storage",
  "test_util",
  "tidb_query",
@@ -3112,6 +3132,7 @@ dependencies = [
  "tokio-executor",
  "tokio-fs",
  "tokio-io",
+ "tokio-sync",
  "tokio-threadpool",
  "tokio-timer",
  "toml",
@@ -3150,9 +3171,11 @@ dependencies = [
  "futures-cpupool",
  "fxhash",
  "grpcio",
+ "hex",
  "lazy_static",
  "libc",
  "log",
+ "openssl",
  "panic_hook",
  "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs)",
  "prometheus",
@@ -3174,6 +3197,7 @@ dependencies = [
  "time",
  "tokio-core",
  "tokio-executor",
+ "tokio-sync",
  "tokio-threadpool",
  "tokio-timer",
  "toml",
@@ -3206,7 +3230,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#018b2fadf4145fbb7d6acd78b8a4b7e66d7d205d"
+source = "git+https://github.com/pingcap/tipb.git#a2e8c3fa634b92b3594cf0bf50ec979c4564f414"
 dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf-build",
@@ -3349,9 +3373,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-sync"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2162248ff317e2bc713b261f242b69dbb838b85248ed20bb21df56d60ea4cae7"
+checksum = "d06554cce1ae4a50f42fba8023918afa931413aded705b560e29600ccf7c6d76"
 dependencies = [
  "fnv",
  "futures",
@@ -3745,8 +3769,8 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.13+zstd.1.4.3"
-source = "git+https://github.com/gyscos/zstd-rs.git#64f9263ae02ca52babfd6f5b3888fcf0c6fad413"
+version = "1.4.14+zstd.1.4.3"
+source = "git+https://github.com/gyscos/zstd-rs.git#8656e6baedb61f71abba458ecd88f363ff6458f5"
 dependencies = [
  "cc",
  "glob",

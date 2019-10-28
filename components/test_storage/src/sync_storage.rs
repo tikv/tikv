@@ -3,12 +3,12 @@
 use futures::Future;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
+use tikv::server::gc_worker::{AutoGCConfig, GCConfig, GCSafePointProvider, GCWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockMgr;
 use tikv::storage::{
-    AutoGCConfig, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options, RegionInfoProvider,
-    Result, Storage, Value,
+    Engine, Key, KvPair, Mutation, Options, RegionInfoProvider, Result, Storage, Value,
 };
 use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
 use tikv_util::collections::HashMap;
@@ -19,6 +19,7 @@ use tikv_util::collections::HashMap;
 pub struct SyncTestStorageBuilder<E: Engine> {
     engine: E,
     config: Option<Config>,
+    gc_config: Option<GCConfig>,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
@@ -26,6 +27,7 @@ impl SyncTestStorageBuilder<RocksEngine> {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: None,
+            gc_config: None,
         }
     }
 }
@@ -35,6 +37,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         Self {
             engine,
             config: None,
+            gc_config: None,
         }
     }
 
@@ -43,13 +46,23 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         self
     }
 
+    pub fn gc_config(mut self, gc_config: GCConfig) -> Self {
+        self.gc_config = Some(gc_config);
+        self
+    }
+
     pub fn build(mut self) -> Result<SyncTestStorage<E>> {
-        let mut builder = TestStorageBuilder::from_engine(self.engine);
+        let mut builder = TestStorageBuilder::from_engine(self.engine.clone());
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
+        let mut gc_worker =
+            GCWorker::new(self.engine, None, None, self.gc_config.unwrap_or_default());
+        gc_worker.start()?;
+
         Ok(SyncTestStorage {
             store: builder.build()?,
+            gc_worker,
         })
     }
 }
@@ -59,6 +72,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
+    gc_worker: GCWorker<E>,
     store: Storage<E, DummyLockMgr>,
 }
 
@@ -67,7 +81,7 @@ impl<E: Engine> SyncTestStorage<E> {
         &mut self,
         cfg: AutoGCConfig<S, R>,
     ) {
-        self.store.start_auto_gc(cfg).unwrap();
+        self.gc_worker.start_auto_gc(cfg).unwrap();
     }
 
     pub fn get_storage(&self) -> Storage<E, DummyLockMgr> {
@@ -197,7 +211,7 @@ impl<E: Engine> SyncTestStorage<E> {
     }
 
     pub fn gc(&self, ctx: Context, safe_point: u64) -> Result<()> {
-        wait_op!(|cb| self.store.async_gc(ctx, safe_point, cb)).unwrap()
+        wait_op!(|cb| self.gc_worker.async_gc(ctx, safe_point, cb)).unwrap()
     }
 
     pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
