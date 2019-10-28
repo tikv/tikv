@@ -827,7 +827,6 @@ impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
 
 impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Get concurrency of normal readpool.
-    #[inline]
     pub fn readpool_normal_concurrency(&self) -> usize {
         self.read_pool_normal.get_pool_size()
     }
@@ -964,7 +963,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             .flatten()
     }
 
-    /// Get values of a set of keys with seperate context from a snapshot, return a vector of results.
+    /// Get values of a set of keys with seperate context from a snapshot, return a list of `Result`s.
     ///
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn async_batch_get_command(
@@ -1551,7 +1550,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             .flatten()
     }
 
-    /// Get the values of a set of raw keys, return a vector of results.
+    /// Get the values of a set of raw keys, return a list of `Result`s.
     pub fn async_raw_batch_get_command(
         &self,
         cf: String,

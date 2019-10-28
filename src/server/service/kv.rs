@@ -226,7 +226,7 @@ trait Batcher<E: Engine, L: LockMgr> {
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct ReadId {
     region: RegionVerId,
-    // None in this field stands for txn read.
+    // None in this field stands for transactional read.
     cf: Option<String>,
 }
 
@@ -328,7 +328,6 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
         output
     }
 
-    #[inline]
     fn is_empty(&self) -> bool {
         self.router.is_empty()
     }
@@ -452,15 +451,15 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
 
-    grpc_thread_load: Arc<ThreadLoad>,
-
-    readpool_normal_thread_load: Arc<ThreadLoad>,
-
     enable_req_batch: bool,
 
     req_batch_wait_duration: Option<Duration>,
 
     timer_pool: Arc<Mutex<ThreadPool>>,
+
+    grpc_thread_load: Arc<ThreadLoad>,
+
+    readpool_normal_thread_load: Arc<ThreadLoad>,
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
