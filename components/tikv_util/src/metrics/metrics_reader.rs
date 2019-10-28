@@ -1,7 +1,10 @@
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use prometheus::*;
 
 pub struct HistogramReader {
     histogram: Histogram,
+    // histogram value at last read.
     sum: f64,
     count: u64,
 }
