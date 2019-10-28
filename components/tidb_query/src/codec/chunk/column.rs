@@ -116,7 +116,7 @@ impl Column {
             Datum::Bytes(ref v) => self.append_bytes(v),
             Datum::Dec(ref v) => self.append_decimal(v),
             Datum::Dur(v) => self.append_duration(*v),
-            Datum::Time(ref v) => self.append_time(*v),
+            Datum::Time(v) => self.append_time(v),
             Datum::Json(ref v) => self.append_json(v),
             _ => Err(box_err!("unsupported datum {:?}", data)),
         }

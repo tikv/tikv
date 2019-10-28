@@ -61,7 +61,7 @@ impl Display for Datum {
             Datum::Dur(ref d) => write!(f, "Dur({})", d),
             Datum::Bytes(ref bs) => write!(f, "Bytes(\"{}\")", escape(bs)),
             Datum::Dec(ref d) => write!(f, "Dec({})", d),
-            Datum::Time(ref t) => write!(f, "Time({})", t),
+            Datum::Time(t) => write!(f, "Time({})", t),
             Datum::Json(ref j) => write!(f, "Json({})", j.to_string()),
             Datum::Min => write!(f, "MIN"),
             Datum::Max => write!(f, "MAX"),
@@ -124,7 +124,7 @@ impl Datum {
             Datum::Bytes(ref bs) => self.cmp_bytes(ctx, bs),
             Datum::Dur(d) => self.cmp_dur(ctx, d),
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
-            Datum::Time(ref t) => self.cmp_time(ctx, *t),
+            Datum::Time(t) => self.cmp_time(ctx, t),
             Datum::Json(ref j) => self.cmp_json(ctx, j),
         }
     }
@@ -167,7 +167,7 @@ impl Datum {
             Datum::Bytes(ref bs) => cmp_f64(bs.convert(ctx)?, f),
             Datum::Dec(ref d) => cmp_f64(d.convert(ctx)?, f),
             Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
-            Datum::Time(ref t) => cmp_f64(t.convert(ctx)?, f),
+            Datum::Time(t) => cmp_f64(t.convert(ctx)?, f),
             Datum::Json(_) => Ok(Ordering::Less),
         }
     }
@@ -182,7 +182,7 @@ impl Datum {
                 let d2 = s.parse()?;
                 Ok(d.cmp(&d2))
             }
-            Datum::Time(ref t) => {
+            Datum::Time(t) => {
                 let s = str::from_utf8(bs)?;
                 // FIXME: requires FieldType info here.
                 let t2 = Time::parse_datetime(ctx, s, DEFAULT_FSP, true)?;
@@ -233,7 +233,7 @@ impl Datum {
                 let t = Time::parse_datetime(ctx, s, DEFAULT_FSP, true)?;
                 Ok(t.cmp(&time))
             }
-            Datum::Time(ref t) => Ok(t.cmp(&time)),
+            Datum::Time(t) => Ok(t.cmp(&time)),
             _ => {
                 let f: Decimal = time.convert(ctx)?;
                 let f: f64 = f.convert(ctx)?;
@@ -291,7 +291,7 @@ impl Datum {
             Datum::U64(u) => format!("{}", u),
             Datum::F64(f) => format!("{}", f),
             Datum::Bytes(ref bs) => String::from_utf8(bs.to_vec())?,
-            Datum::Time(ref t) => format!("{}", t),
+            Datum::Time(t) => format!("{}", t),
             Datum::Dur(ref d) => format!("{}", d),
             Datum::Dec(ref d) => format!("{}", d),
             Datum::Json(ref d) => d.to_string(),
@@ -885,7 +885,7 @@ pub trait DatumEncoder:
                     find_min = true;
                 }
                 Datum::Max => self.write_u8(MAX_FLAG)?,
-                Datum::Time(ref t) => {
+                Datum::Time(t) => {
                     self.write_u8(UINT_FLAG)?;
                     self.write_u64(t.to_packed_u64(ctx)?)?;
                 }
