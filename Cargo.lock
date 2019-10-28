@@ -3150,7 +3150,7 @@ dependencies = [
 [[package]]
 name = "texn"
 version = "0.1.0"
-source = "git+https://github.com/waynexia/texn#63db6d13f63757b9955640e7d51f39caf4f502aa"
+source = "git+https://github.com/sticnarf/texn?branch=default-config#3aef896a20bd2f37783b3b5c903fcf4d53bff70e"
 dependencies = [
  "adaptive-spawn",
  "chashmap",
