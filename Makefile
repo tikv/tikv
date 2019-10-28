@@ -65,7 +65,7 @@ ENABLE_FEATURES += sse
 endif
 
 # Update Titan to latest master before build
-ifneq ($(UPDATE_TITAN), 0)
+ifeq ($(UPDATE_TITAN),1)
 ENABLE_FEATURES += update_titan
 endif
 
