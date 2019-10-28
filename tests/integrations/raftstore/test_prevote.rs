@@ -43,7 +43,9 @@ fn test_prevote<T: Simulator>(
     detect_during_recovery: impl Into<Option<(u64, bool)>>,
 ) {
     cluster.cfg.raft_store.prevote = true;
-    cluster.cfg.raft_store.raft_election_timeout_ticks = 60;
+    // To stable the test, we use a large election timeout to make
+    // leader's readiness get handle within an election timeout
+    configure_for_lease_read(cluster, Some(10), Some(70));
 
     let leader_id = 1;
     let detect_during_failure = detect_during_failure.into();
@@ -75,7 +77,7 @@ fn test_prevote<T: Simulator>(
 
     if let (Some(rx), Some((_, should_detect))) = (rx, detect_during_failure) {
         // Once we see a response on the wire we know a prevote round is happening.
-        let received = rx.recv_timeout(Duration::from_secs(5));
+        let received = rx.recv_timeout(Duration::from_secs(7));
         debug!("Done with failure prevote notifier, got {:?}", received);
         assert_eq!(
             received.is_ok(),
@@ -112,7 +114,7 @@ fn test_prevote<T: Simulator>(
 
     // Once we see a response on the wire we know a prevote round is happening.
     if let (Some(rx), Some((_, should_detect))) = (rx, detect_during_failure) {
-        let received = rx.recv_timeout(Duration::from_secs(5));
+        let received = rx.recv_timeout(Duration::from_secs(7));
         debug!("Done with recovery prevote notifier, got {:?}", received);
 
         assert_eq!(
