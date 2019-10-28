@@ -17,7 +17,7 @@ use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::{BlockCacheConfig, Config as StorageConfig};
+use tikv::storage::{gc_worker::GCConfig, BlockCacheConfig, Config as StorageConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
@@ -524,6 +524,11 @@ fn test_serde_custom_tikv_config() {
         max_open_engines: 2,
         upload_speed_limit: ReadableSize::mb(456),
         min_available_ratio: 0.05,
+    };
+    value.gc = GCConfig {
+        ratio_threshold: 1.2,
+        batch_keys: 256,
+        max_write_bytes_per_sec: ReadableSize::mb(10),
     };
     value.panic_when_unexpected_key_or_data = true;
 

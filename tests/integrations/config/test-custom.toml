@@ -439,3 +439,8 @@ region-split-size = "123MB"
 stream-channel-window = 123
 max-open-engines = 2
 upload-speed-limit = "456MB"
+
+[gc]
+ratio-threshold = 1.2
+batch-keys = 256
+max-write-bytes-per-sec = "10MB"

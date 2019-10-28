@@ -9,6 +9,7 @@ use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
+use engine::rocks::util::io_limiter::IOLimiter;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -27,11 +28,9 @@ use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
+use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
-
-// TODO: make it configurable.
-pub const GC_BATCH_SIZE: usize = 512;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -51,6 +50,40 @@ const BEGIN_KEY: &[u8] = b"";
 
 const PROCESS_TYPE_GC: &str = "gc";
 const PROCESS_TYPE_SCAN: &str = "scan";
+
+const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
+pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
+// No limit
+const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "kebab-case")]
+pub struct GCConfig {
+    pub ratio_threshold: f64,
+    pub batch_keys: usize,
+    pub max_write_bytes_per_sec: ReadableSize,
+}
+
+impl Default for GCConfig {
+    fn default() -> GCConfig {
+        GCConfig {
+            ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
+            batch_keys: DEFAULT_GC_BATCH_KEYS,
+            max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
+        }
+    }
+}
+
+impl GCConfig {
+    pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        if self.batch_keys == 0 {
+            return Err(("gc.batch_keys should not be 0.").into());
+        }
+        Ok(())
+    }
+}
 
 /// Provides safe point.
 /// TODO: Give it a better name?
@@ -132,7 +165,10 @@ struct GCRunner<E: Engine> {
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
 
-    ratio_threshold: f64,
+    /// Used to limit the write flow of GC.
+    limiter: Option<IOLimiter>,
+
+    cfg: GCConfig,
 
     stats: StatisticsSummary,
 }
@@ -142,13 +178,19 @@ impl<E: Engine> GCRunner<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        ratio_threshold: f64,
+        cfg: GCConfig,
     ) -> Self {
+        let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
+            Some(IOLimiter::new(cfg.max_write_bytes_per_sec.0))
+        } else {
+            None
+        };
         Self {
             engine,
             local_storage,
             raft_store_router,
-            ratio_threshold,
+            limiter,
+            cfg,
             stats: StatisticsSummary::default(),
         }
     }
@@ -190,7 +232,7 @@ impl<E: Engine> GCRunner<E> {
 
         // range start gc with from == None, and this is an optimization to
         // skip gc before scanning all data.
-        let skip_gc = is_range_start && !reader.need_gc(safe_point, self.ratio_threshold);
+        let skip_gc = is_range_start && !reader.need_gc(safe_point, self.cfg.ratio_threshold);
         let res = if skip_gc {
             KV_GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
@@ -251,8 +293,12 @@ impl<E: Engine> GCRunner<E> {
         }
         self.stats.add_statistics(&txn.take_statistics());
 
+        let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
+            if let Some(limiter) = &self.limiter {
+                limiter.request(write_size as i64);
+            }
             self.engine.write(ctx, modifies)?;
         }
         Ok(next_scan_key)
@@ -267,9 +313,9 @@ impl<E: Engine> GCRunner<E> {
 
         let mut next_key = None;
         loop {
-            // Scans at most `GC_BATCH_SIZE` keys
+            // Scans at most `GCConfig.batch_keys` keys
             let (keys, next) = self
-                .scan_keys(ctx, safe_point, next_key, GC_BATCH_SIZE)
+                .scan_keys(ctx, safe_point, next_key, self.cfg.batch_keys)
                 .map_err(|e| {
                     warn!("gc scan_keys failed"; "region_id" => ctx.get_region_id(), "safe_point" => safe_point, "err" => ?e);
                     e
@@ -610,6 +656,7 @@ fn make_context(mut region: metapb::Region, peer: metapb::Peer) -> Context {
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.take_region_epoch());
     ctx.set_peer(peer);
+    ctx.set_not_fill_cache(true);
     ctx
 }
 
@@ -1057,7 +1104,7 @@ pub struct GCWorker<E: Engine> {
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
     raft_store_router: Option<ServerRaftStoreRouter>,
 
-    ratio_threshold: f64,
+    cfg: Option<GCConfig>,
 
     worker: Arc<Mutex<Worker<GCTask>>>,
     worker_scheduler: worker::Scheduler<GCTask>,
@@ -1070,7 +1117,7 @@ impl<E: Engine> GCWorker<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        ratio_threshold: f64,
+        cfg: GCConfig,
     ) -> GCWorker<E> {
         let worker = Arc::new(Mutex::new(
             WorkerBuilder::new("gc-worker")
@@ -1082,7 +1129,7 @@ impl<E: Engine> GCWorker<E> {
             engine,
             local_storage,
             raft_store_router,
-            ratio_threshold,
+            cfg: Some(cfg),
             worker,
             worker_scheduler,
             gc_manager_handle: Arc::new(Mutex::new(None)),
@@ -1105,7 +1152,7 @@ impl<E: Engine> GCWorker<E> {
             self.engine.clone(),
             self.local_storage.take(),
             self.raft_store_router.take(),
-            self.ratio_threshold,
+            self.cfg.take().unwrap(),
         );
         self.worker
             .lock()
@@ -1672,5 +1719,15 @@ mod tests {
             b"key1\x00",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_gc_config_validate() {
+        let cfg = GCConfig::default();
+        cfg.validate().unwrap();
+
+        let mut invalid_cfg = GCConfig::default();
+        invalid_cfg.batch_keys = 0;
+        assert!(invalid_cfg.validate().is_err());
     }
 }
