@@ -108,7 +108,7 @@ mod tests {
     pub fn build_fmsketch(values: &[Datum], max_size: usize) -> Result<FmSketch> {
         let mut s = FmSketch::new(max_size);
         for value in values {
-            let bytes = datum::encode_value(from_ref(value), &mut EvalContext::default())?;
+            let bytes = datum::encode_value(&mut EvalContext::default(), from_ref(value))?;
             s.insert(&bytes);
         }
         Ok(s)

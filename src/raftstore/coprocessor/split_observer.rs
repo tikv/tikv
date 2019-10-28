@@ -203,7 +203,7 @@ mod tests {
         let mut key = table::encode_index_seek_key(
             table_id,
             idx_id,
-            &datum::encode_key(datums, &mut EvalContext::default()).unwrap(),
+            &datum::encode_key(&mut EvalContext::default(), datums).unwrap(),
         );
         key = encode_bytes(&key);
         key.write_u64::<BigEndian>(version_id).unwrap();

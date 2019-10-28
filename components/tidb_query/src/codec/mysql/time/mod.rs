@@ -323,9 +323,9 @@ mod parser {
         }
     }
 
-    /// return an array that stores `[year, month, day, hour, minute, second]`
-    fn parse_whole(input: &[u8]) -> Option<[u32; 6]> {
-        let mut parts = [0u32; 6];
+    /// return an array that stores `[year, month, day, hour, minute, second, 0]`
+    fn parse_whole(input: &[u8]) -> Option<[u32; 7]> {
+        let mut parts = [0u32; 7];
 
         let year_digits = match input.len() {
             14 | 8 => 4,
@@ -344,14 +344,6 @@ mod parser {
         }
 
         Some(parts)
-    }
-
-    fn concat_components(components: Vec<&[u32]>) -> Vec<u32> {
-        components
-            .into_iter()
-            .flatten()
-            .copied()
-            .collect::<Vec<_>>()
     }
 
     fn parse_frac(input: &[u8], fsp: u8, round: bool) -> Option<(bool, u32)> {
@@ -386,7 +378,7 @@ mod parser {
         let components = split_components(trimmed)?;
         match components.len() {
             1 | 2 => {
-                let whole = parse_whole(components[0])?;
+                let mut whole = parse_whole(components[0])?;
 
                 let (carry, frac) = if let Some(frac) = components.get(1) {
                     // If we have a fractional part,
@@ -398,7 +390,8 @@ mod parser {
                     (false, 0)
                 };
 
-                let mut parts = concat_components(vec![&whole, &[frac]]);
+                whole[6] = frac;
+                let mut parts = whole;
                 if carry {
                     round_components(&mut parts)?;
                 }
@@ -1652,6 +1645,7 @@ mod tests {
             ("2019-09-16 10:11:00", "1909161011", 0, false),
             ("2019-09-16 10:01:00", "190916101", 0, false),
             ("1909-12-10 00:00:00", "19091210", 0, false),
+            ("2020-02-29 10:00:00", "20200229100000", 0, false),
             ("2019-09-16 01:00:00", "1909161", 0, false),
             ("2019-09-16 00:00:00", "190916", 0, false),
             ("2019-09-01 00:00:00", "19091", 0, false),

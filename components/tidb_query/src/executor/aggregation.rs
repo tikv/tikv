@@ -173,11 +173,11 @@ impl<Src: Executor> HashAggExecutor<Src> {
         if group_by_cols.is_empty() {
             let single_group = Datum::Bytes(SINGLE_GROUP.to_vec());
             return Ok(box_try!(datum::encode_value(
+                &mut self.inner.ctx,
                 &[single_group],
-                &mut self.inner.ctx
             )));
         }
-        let res = box_try!(datum::encode_value(&group_by_cols, &mut self.inner.ctx));
+        let res = box_try!(datum::encode_value(&mut self.inner.ctx, &group_by_cols,));
         Ok(res)
     }
 
@@ -450,12 +450,12 @@ mod tests {
         let mut v: Vec<_> = idx_vals
             .iter()
             .map(|&(ref cid, ref value)| {
-                expect_row.insert(*cid, datum::encode_key(&[value.clone()], &mut ctx).unwrap());
+                expect_row.insert(*cid, datum::encode_key(&mut ctx, &[value.clone()]).unwrap());
                 value.clone()
             })
             .collect();
         v.push(Datum::I64(handle));
-        let encoded = datum::encode_key(&v, &mut ctx).unwrap();
+        let encoded = datum::encode_key(&mut ctx, &v).unwrap();
         let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
         (expect_row, idx_key)
     }

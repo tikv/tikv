@@ -110,7 +110,7 @@ mod tests {
         for _ in 0..total {
             let val = gen.sample(&mut rng) as u64;
             let bytes =
-                datum::encode_value(from_ref(&Datum::U64(val)), &mut EvalContext::default())
+                datum::encode_value(&mut EvalContext::default(), from_ref(&Datum::U64(val)))
                     .unwrap();
             c.insert(&bytes);
             let counter = map.entry(val).or_insert(0);
@@ -119,7 +119,7 @@ mod tests {
         let mut total = 0u64;
         for (val, num) in &map {
             let bytes =
-                datum::encode_value(from_ref(&Datum::U64(*val)), &mut EvalContext::default())
+                datum::encode_value(&mut EvalContext::default(), from_ref(&Datum::U64(*val)))
                     .unwrap();
             let estimate = c.query(&bytes);
             let err = if *num > estimate {

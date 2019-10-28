@@ -932,7 +932,7 @@ mod tests {
         // bytes generated from TiKV
         // datum(0)
         let mut ctx = EvalContext::default();
-        let bytes = datum::encode_value(&[Datum::I64(0)], &mut ctx).unwrap();
+        let bytes = datum::encode_value(&mut ctx, &[Datum::I64(0)]).unwrap();
         let mut expr = build_expr();
         expr.set_val(bytes);
         let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
@@ -946,7 +946,7 @@ mod tests {
         }
 
         // datum(1)
-        let bytes = datum::encode_value(&[Datum::I64(1)], &mut ctx).unwrap();
+        let bytes = datum::encode_value(&mut ctx, &[Datum::I64(1)]).unwrap();
         let mut expr = build_expr();
         expr.set_val(bytes);
         let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
@@ -994,7 +994,7 @@ mod tests {
             Datum::Json(Json::Boolean(false)),
             Datum::Dur(Duration::from_nanos(10000, 3).unwrap()),
         ];
-        let bytes = datum::encode_value(&datums, &mut ctx).unwrap();
+        let bytes = datum::encode_value(&mut ctx, &datums).unwrap();
         let mut expr = build_expr();
         expr.set_val(bytes);
         let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)

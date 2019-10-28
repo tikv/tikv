@@ -313,7 +313,7 @@ mod tests {
         let cases = vec![Datum::I64(1), Datum::Null, Datum::I64(2), Datum::I64(5)];
 
         for data in cases {
-            sample.collect(datum::encode_value(&[data], &mut EvalContext::default()).unwrap());
+            sample.collect(datum::encode_value(&mut EvalContext::default(), &[data]).unwrap());
         }
         assert_eq!(sample.samples.len(), max_sample_size);
         assert_eq!(sample.null_count, 1);

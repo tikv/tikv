@@ -99,7 +99,7 @@ impl AggCols {
     pub fn get_binary(&self, ctx: &mut EvalContext) -> Result<Vec<u8>> {
         let mut value =
             Vec::with_capacity(self.suffix.len() + datum::approximate_size(&self.value, false));
-        box_try!(value.write_datum(&self.value, ctx, false));
+        box_try!(value.write_datum(ctx, &self.value, false));
         if !self.suffix.is_empty() {
             value.extend_from_slice(&self.suffix);
         }
@@ -150,7 +150,7 @@ impl OriginCols {
         for col in self.cols.iter() {
             if col.get_pk_handle() {
                 let v = util::get_pk(col, self.handle);
-                let bt = box_try!(datum::encode_value(&[v], ctx));
+                let bt = box_try!(datum::encode_value(ctx, &[v],));
                 res.push(bt);
                 continue;
             }
@@ -164,7 +164,7 @@ impl OriginCols {
                         self.handle
                     ));
                 }
-                None => box_try!(datum::encode_value(&[Datum::Null], ctx)),
+                None => box_try!(datum::encode_value(ctx, &[Datum::Null],)),
                 Some(bs) => bs.to_vec(),
             };
             res.push(value);
@@ -182,7 +182,7 @@ impl OriginCols {
                 Some(value) => values.extend_from_slice(value),
                 None if col.get_pk_handle() => {
                     let pk = util::get_pk(col, self.handle);
-                    box_try!(values.write_datum(&[pk], ctx, false));
+                    box_try!(values.write_datum(ctx, &[pk], false));
                 }
                 None if col.has_default_val() => {
                     values.extend_from_slice(col.get_default_val());
@@ -195,7 +195,7 @@ impl OriginCols {
                     ));
                 }
                 None => {
-                    box_try!(values.write_datum(&[Datum::Null], ctx, false));
+                    box_try!(values.write_datum(ctx, &[Datum::Null], false));
                 }
             }
         }
@@ -449,7 +449,7 @@ pub mod tests {
                     .iter()
                     .map(|(cid, v)| {
                         let f = table::flatten(&mut ctx, v.clone()).unwrap();
-                        let value = datum::encode_value(&[f], &mut ctx).unwrap();
+                        let value = datum::encode_value(&mut ctx, &[f]).unwrap();
                         expect_row.insert(*cid, value);
                         v.clone()
                     })

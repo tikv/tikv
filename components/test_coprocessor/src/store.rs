@@ -54,7 +54,7 @@ impl<'a, E: Engine> Insert<'a, E> {
         for (&id, idxs) in &self.table.idxs {
             let mut v: Vec<_> = idxs.iter().map(|id| self.values[id].clone()).collect();
             v.push(handle.clone());
-            let encoded = datum::encode_key(&v, &mut EvalContext::default()).unwrap();
+            let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
             let idx_key = table::encode_index_seek_key(self.table.id, id, &encoded);
             kvs.push((idx_key, vec![0]));
         }
@@ -91,7 +91,7 @@ impl<'a, E: Engine> Delete<'a, E> {
         for (&idx_id, idx_cols) in &self.table.idxs {
             let mut v: Vec<_> = idx_cols.iter().map(|id| values[id].clone()).collect();
             v.push(Datum::I64(id));
-            let encoded = datum::encode_key(&v, &mut EvalContext::default()).unwrap();
+            let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
             let idx_key = table::encode_index_seek_key(self.table.id, idx_id, &encoded);
             keys.push(idx_key);
         }

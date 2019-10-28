@@ -114,7 +114,7 @@ pub fn encode_row(ctx: &mut EvalContext, row: Vec<Datum>, col_ids: &[i64]) -> Re
     if values.is_empty() {
         values.push(Datum::Null);
     }
-    datum::encode_value(&values, ctx)
+    datum::encode_value(ctx, &values)
 }
 
 /// `encode_row_key` encodes the table id and record handle into a byte array.
@@ -451,7 +451,7 @@ mod tests {
             duration_col,
         ];
         let mut ctx = EvalContext::default();
-        let buf = datum::encode_key(&tests, &mut ctx).unwrap();
+        let buf = datum::encode_key(&mut ctx, &tests).unwrap();
         let encoded = encode_index_seek_key(1, 2, &buf);
         assert_eq!(tests, decode_index_key(&mut ctx, &encoded, &types).unwrap());
     }
@@ -511,7 +511,7 @@ mod tests {
             .iter()
             .map(|(k, v)| {
                 let f = super::flatten(&mut ctx, v.clone()).unwrap();
-                (*k, datum::encode_value(&[f], &mut ctx).unwrap())
+                (*k, datum::encode_value(&mut ctx, &[f]).unwrap())
             })
             .collect();
         let mut col_id_set: HashSet<_> = col_ids.iter().cloned().collect();
@@ -586,12 +586,12 @@ mod tests {
             .zip(&col_values)
             .map(|((id, t), v)| {
                 let unflattened = super::unflatten(&mut ctx, v.clone(), t).unwrap();
-                let encoded = datum::encode_key(&[unflattened], &mut ctx).unwrap();
+                let encoded = datum::encode_key(&mut ctx, &[unflattened]).unwrap();
                 (*id, encoded)
             })
             .collect();
 
-        let key = datum::encode_key(&col_values, &mut ctx).unwrap();
+        let key = datum::encode_key(&mut ctx, &col_values).unwrap();
         let bs = encode_index_seek_key(1, 1, &key);
         assert!(!bs.is_empty());
         let mut ctx = EvalContext::default();

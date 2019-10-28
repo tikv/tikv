@@ -59,7 +59,7 @@ impl InnerExecutor for IndexInnerExecutor {
             } else {
                 datum::Datum::I64(handle)
             };
-            let mut bytes = box_try!(datum::encode_key(&[handle_datum], ctx));
+            let mut bytes = box_try!(datum::encode_key(ctx, &[handle_datum]));
             values.append(pk_col.get_column_id(), &mut bytes);
         }
         Ok(Some(Row::origin(handle, values, columns)))
@@ -169,7 +169,7 @@ pub mod tests {
             .map(|&(ref cid, ref value)| {
                 expect_row.insert(
                     *cid,
-                    datum::encode_key(&[value.clone()], &mut EvalContext::default()).unwrap(),
+                    datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),
                 );
                 value.clone()
             })
@@ -177,7 +177,7 @@ pub mod tests {
         if !unique {
             v.push(Datum::I64(handle));
         }
-        let encoded = datum::encode_key(&v, &mut EvalContext::default()).unwrap();
+        let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
         let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
         (expect_row, idx_key)
     }
@@ -454,7 +454,7 @@ pub mod tests {
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];
             let handle_datum = datum::Datum::I64(handle as i64);
-            let pk = datum::encode_key(&[handle_datum], &mut EvalContext::default()).unwrap();
+            let pk = datum::encode_key(&mut EvalContext::default(), &[handle_datum]).unwrap();
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();

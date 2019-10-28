@@ -46,11 +46,11 @@ fn test_select() {
     for (row, (id, name, cnt)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
-            &[Datum::I64(id), name_datum, cnt.into()],
             &mut EvalContext::default(),
+            &[Datum::I64(id), name_datum, cnt.into()],
         )
         .unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
     }
 }
@@ -81,11 +81,11 @@ fn test_batch_row_limit() {
     for (row, (id, name, cnt)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
-            &[Datum::I64(id), name_datum, cnt.into()],
             &mut EvalContext::default(),
+            &[Datum::I64(id), name_datum, cnt.into()],
         )
         .unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
     }
 }
@@ -148,11 +148,11 @@ fn test_stream_batch_row_limit() {
         for (row, &(id, name, cnt)) in spliter.zip(cur_data) {
             let name_datum = name.map(|s| s.as_bytes()).into();
             let expected_encoded = datum::encode_value(
-                &[Datum::I64(id), name_datum, cnt.into()],
                 &mut EvalContext::default(),
+                &[Datum::I64(id), name_datum, cnt.into()],
             )
             .unwrap();
-            let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
             assert_eq!(result_encoded, &*expected_encoded);
         }
     }
@@ -180,11 +180,11 @@ fn test_select_after_lease() {
     for (row, (id, name, cnt)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
-            &[Datum::I64(id), name_datum, cnt.into()],
             &mut EvalContext::default(),
+            &[Datum::I64(id), name_datum, cnt.into()],
         )
         .unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
     }
 }
@@ -247,9 +247,9 @@ fn test_group_by() {
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
     for (row, name) in spliter.zip(&[b"name:0", b"name:2", b"name:1"]) {
         let expected_encoded =
-            datum::encode_value(&[Datum::Bytes(name.to_vec())], &mut EvalContext::default())
+            datum::encode_value(&mut EvalContext::default(), &[Datum::Bytes(name.to_vec())])
                 .unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -288,8 +288,8 @@ fn test_aggr_count() {
     for (row, (name, cnt)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), name];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -316,8 +316,8 @@ fn test_aggr_count() {
         let mut expected_datum = vec![Datum::U64(cnt)];
         expected_datum.extend_from_slice(gk_data.as_slice());
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -361,8 +361,8 @@ fn test_aggr_first() {
     for (row, (name, id)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::I64(id), name];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -389,8 +389,8 @@ fn test_aggr_first() {
     for (row, (count, name)) in spliter.zip(exp) {
         let expected_datum = vec![name, Datum::I64(count)];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -439,8 +439,8 @@ fn test_aggr_avg() {
     for (row, (name, (sum, cnt))) in spliter.zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), sum, name];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -479,8 +479,8 @@ fn test_aggr_sum() {
     for (row, (name, cnt)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::Dec(cnt.into()), name];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -545,8 +545,8 @@ fn test_aggr_extre() {
     for (row, (name, max, min)) in spliter.zip(exp) {
         let expected_datum = vec![max, min, name];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -620,8 +620,8 @@ fn test_aggr_bit_ops() {
     for (row, (name, bitand, bitor, bitxor)) in spliter.zip(exp) {
         let expected_datum = vec![bitand, bitor, bitxor, name];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -662,11 +662,11 @@ fn test_order_by_column() {
     for (row, (id, name, cnt)) in spliter.zip(exp) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
-            &[i64::from(id).into(), name_datum, i64::from(cnt).into()],
             &mut EvalContext::default(),
+            &[i64::from(id).into(), name_datum, i64::from(cnt).into()],
         )
         .unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -699,11 +699,11 @@ fn test_order_by_pk_with_select_from_index() {
     for (row, (id, name, cnt)) in spliter.zip(expect) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
-            &[name_datum, (cnt as i64).into(), (id as i64).into()],
             &mut EvalContext::default(),
+            &[name_datum, (cnt as i64).into(), (id as i64).into()],
         )
         .unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -732,11 +732,11 @@ fn test_limit() {
     for (row, (id, name, cnt)) in spliter.zip(expect) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
-            &[id.into(), name_datum, cnt.into()],
             &mut EvalContext::default(),
+            &[id.into(), name_datum, cnt.into()],
         )
         .unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -769,11 +769,11 @@ fn test_reverse() {
     for (row, (id, name, cnt)) in spliter.zip(expect) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
-            &[id.into(), name_datum, cnt.into()],
             &mut EvalContext::default(),
+            &[id.into(), name_datum, cnt.into()],
         )
         .unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -800,8 +800,8 @@ fn test_index() {
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
     for (row, (id, _, _)) in spliter.zip(data) {
         let expected_encoded =
-            datum::encode_value(&[id.into()], &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -834,8 +834,8 @@ fn test_index_reverse_limit() {
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
     for (row, (id, _, _)) in spliter.zip(expect) {
         let expected_encoded =
-            datum::encode_value(&[id.into()], &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -864,8 +864,8 @@ fn test_limit_oom() {
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
     for (row, (id, _, _)) in spliter.zip(data) {
         let expected_encoded =
-            datum::encode_value(&[id.into()], &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &[id.into()]).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -926,9 +926,9 @@ fn test_index_group_by() {
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
     for (row, name) in spliter.zip(&[b"name:0", b"name:1", b"name:2"]) {
         let expected_encoded =
-            datum::encode_value(&[Datum::Bytes(name.to_vec())], &mut EvalContext::default())
+            datum::encode_value(&mut EvalContext::default(), &[Datum::Bytes(name.to_vec())])
                 .unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -955,14 +955,14 @@ fn test_index_aggr_count() {
     let mut resp = handle_select(&endpoint, req);
     let mut spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 1);
     let expected_encoded = datum::encode_value(
-        &[Datum::U64(data.len() as u64)],
         &mut EvalContext::default(),
+        &[Datum::U64(data.len() as u64)],
     )
     .unwrap();
     let ret_data = spliter.next();
     assert_eq!(ret_data.is_some(), true);
     let result_encoded =
-        datum::encode_value(&ret_data.unwrap(), &mut EvalContext::default()).unwrap();
+        datum::encode_value(&mut EvalContext::default(), &ret_data.unwrap()).unwrap();
     assert_eq!(&*result_encoded, &*expected_encoded);
     assert_eq!(spliter.next().is_none(), true);
 
@@ -984,8 +984,8 @@ fn test_index_aggr_count() {
     for (row, (name, cnt)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), name];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1010,8 +1010,8 @@ fn test_index_aggr_count() {
         let mut expected_datum = vec![Datum::U64(cnt)];
         expected_datum.extend_from_slice(gk_data.as_slice());
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1050,8 +1050,8 @@ fn test_index_aggr_first() {
     for (row, (name, id)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::I64(id), name];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1100,8 +1100,8 @@ fn test_index_aggr_avg() {
     for (row, (name, (sum, cnt))) in spliter.zip(exp) {
         let expected_datum = vec![Datum::U64(cnt), sum, name];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1140,8 +1140,8 @@ fn test_index_aggr_sum() {
     for (row, (name, cnt)) in spliter.zip(exp) {
         let expected_datum = vec![Datum::Dec(cnt.into()), name];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1205,8 +1205,8 @@ fn test_index_aggr_extre() {
     for (row, (name, max, min)) in spliter.zip(exp) {
         let expected_datum = vec![max, min, name];
         let expected_encoded =
-            datum::encode_value(&expected_datum, &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &expected_datum).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1271,11 +1271,11 @@ fn test_where() {
     let (id, name, cnt) = data[2];
     let name_datum = name.map(|s| s.as_bytes()).into();
     let expected_encoded = datum::encode_value(
-        &[Datum::I64(id), name_datum, cnt.into()],
         &mut EvalContext::default(),
+        &[Datum::I64(id), name_datum, cnt.into()],
     )
     .unwrap();
-    let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+    let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
     assert_eq!(&*result_encoded, &*expected_encoded);
     assert_eq!(spliter.next().is_none(), true);
 }
@@ -1379,11 +1379,11 @@ fn test_handle_truncate() {
         let (id, name, cnt) = data[2];
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
-            &[Datum::I64(id), name_datum, cnt.into()],
             &mut EvalContext::default(),
+            &[Datum::I64(id), name_datum, cnt.into()],
         )
         .unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         assert_eq!(spliter.next().is_none(), true);
 
@@ -1428,11 +1428,11 @@ fn test_default_val() {
     for (row, (id, name, cnt)) in spliter.zip(expect) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded = datum::encode_value(
-            &[id.into(), name_datum, cnt.into(), Datum::I64(3)],
             &mut EvalContext::default(),
+            &[id.into(), name_datum, cnt.into(), Datum::I64(3)],
         )
         .unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
         row_count += 1;
     }
@@ -1459,8 +1459,8 @@ fn test_output_offsets() {
     for (row, (_, name, _)) in spliter.zip(data) {
         let name_datum = name.map(|s| s.as_bytes()).into();
         let expected_encoded =
-            datum::encode_value(&[name_datum], &mut EvalContext::default()).unwrap();
-        let result_encoded = datum::encode_value(&row, &mut EvalContext::default()).unwrap();
+            datum::encode_value(&mut EvalContext::default(), &[name_datum]).unwrap();
+        let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
         assert_eq!(&*result_encoded, &*expected_encoded);
     }
 }

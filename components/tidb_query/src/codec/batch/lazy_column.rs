@@ -276,19 +276,19 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut datum_raw_1 = Vec::new();
         datum_raw_1
-            .write_datum(&[Datum::U64(32)], &mut ctx, false)
+            .write_datum(&mut ctx, &[Datum::U64(32)], false)
             .unwrap();
         col.mut_raw().push(&datum_raw_1);
 
         let mut datum_raw_2 = Vec::new();
         datum_raw_2
-            .write_datum(&[Datum::U64(7)], &mut ctx, true)
+            .write_datum(&mut ctx, &[Datum::U64(7)], true)
             .unwrap();
         col.mut_raw().push(&datum_raw_2);
 
         let mut datum_raw_3 = Vec::new();
         datum_raw_3
-            .write_datum(&[Datum::U64(10)], &mut ctx, true)
+            .write_datum(&mut ctx, &[Datum::U64(10)], true)
             .unwrap();
         col.mut_raw().push(&datum_raw_3);
 
@@ -369,7 +369,7 @@ mod benches {
         let mut ctx = EvalContext::default();
         let mut datum_raw: Vec<u8> = Vec::new();
         datum_raw
-            .write_datum(&[Datum::U64(0xDEADBEEF)], &mut ctx, true)
+            .write_datum(&mut ctx, &[Datum::U64(0xDEADBEEF)], true)
             .unwrap();
 
         for _ in 0..1000 {
@@ -399,7 +399,7 @@ mod benches {
 
         let mut datum_raw: Vec<u8> = Vec::new();
         datum_raw
-            .write_datum(&[Datum::U64(0xDEADBEEF)], &mut ctx, true)
+            .write_datum(&mut ctx, &[Datum::U64(0xDEADBEEF)], true)
             .unwrap();
 
         for _ in 0..1000 {
@@ -433,7 +433,7 @@ mod benches {
         let mut ctx = EvalContext::default();
         let mut datum_raw: Vec<u8> = Vec::new();
         datum_raw
-            .write_datum(&[Datum::U64(0xDEADBEEF)], &mut ctx, true)
+            .write_datum(&mut ctx, &[Datum::U64(0xDEADBEEF)], true)
             .unwrap();
 
         for _ in 0..1000 {

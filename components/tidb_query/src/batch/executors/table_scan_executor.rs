@@ -411,7 +411,7 @@ mod tests {
                     let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                     ci.set_column_id(4);
-                    ci.set_default_val(datum::encode_value(&[Datum::F64(4.5)], &mut ctx).unwrap());
+                    ci.set_default_val(datum::encode_value(&mut ctx, &[Datum::F64(4.5)]).unwrap());
                     ci
                 },
             ];
@@ -759,7 +759,7 @@ mod tests {
         {
             // row 4, which is totally corrupted due to missing datum for column value
             let key = table::encode_row_key(TABLE_ID, 4);
-            let value = datum::encode_value(&[Datum::I64(2)], &mut ctx).unwrap(); // col_id = 2
+            let value = datum::encode_value(&mut ctx, &[Datum::I64(2)]).unwrap(); // col_id = 2
             kv.push((key, value));
         }
 

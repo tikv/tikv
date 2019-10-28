@@ -54,8 +54,8 @@ impl Column {
     /// Get the datum of one row with the specified type.
     pub fn get_datum(
         &self,
-        idx: usize,
         ctx: &mut EvalContext,
+        idx: usize,
         field_type: &dyn FieldTypeAccessor,
     ) -> Result<Datum> {
         if self.is_null(idx) {
@@ -444,7 +444,7 @@ mod tests {
             }
 
             for (id, expect) in data.iter().enumerate() {
-                let get = column.get_datum(id, &mut ctx, field).unwrap();
+                let get = column.get_datum(&mut ctx, id, field).unwrap();
                 assert_eq!(&get, expect);
             }
         }
@@ -480,7 +480,7 @@ mod tests {
                 column.append_datum(v).unwrap();
             }
             for (id, expect) in data.iter().enumerate() {
-                let get = column.get_datum(id, &mut ctx, field).unwrap();
+                let get = column.get_datum(&mut ctx, id, field).unwrap();
                 assert_eq!(&get, expect);
             }
         }

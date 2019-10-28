@@ -288,7 +288,7 @@ mod tests {
             let kv: Vec<_> = data
                 .iter()
                 .map(|datums| {
-                    let index_data = datum::encode_key(datums, &mut ctx).unwrap();
+                    let index_data = datum::encode_key(&mut ctx, datums).unwrap();
                     let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
                     let value = vec![];
                     (key, value)
@@ -302,10 +302,10 @@ mod tests {
 
             let key_ranges = vec![{
                 let mut range = KeyRange::default();
-                let start_data = datum::encode_key(&[Datum::Min], &mut ctx).unwrap();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::Min]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
-                let end_data = datum::encode_key(&[Datum::Max], &mut ctx).unwrap();
+                let end_data = datum::encode_key(&mut ctx, &[Datum::Max]).unwrap();
                 let end_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &end_data);
                 range.set_end(end_key);
                 range
@@ -352,10 +352,10 @@ mod tests {
 
             let key_ranges = vec![{
                 let mut range = KeyRange::default();
-                let start_data = datum::encode_key(&[Datum::I64(2)], &mut ctx).unwrap();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::I64(2)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
-                let end_data = datum::encode_key(&[Datum::I64(6)], &mut ctx).unwrap();
+                let end_data = datum::encode_key(&mut ctx, &[Datum::I64(6)]).unwrap();
                 let end_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &end_data);
                 range.set_end(end_key);
                 range
@@ -410,7 +410,7 @@ mod tests {
             let kv: Vec<_> = data
                 .iter()
                 .map(|datums| {
-                    let index_data = datum::encode_key(&datums[0..2], &mut ctx).unwrap();
+                    let index_data = datum::encode_key(&mut ctx, &datums[0..2]).unwrap();
                     let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
                     // PK handle in the value
                     let mut value = vec![];
@@ -428,7 +428,7 @@ mod tests {
 
             let key_ranges = vec![{
                 let mut range = KeyRange::default();
-                let start_data = datum::encode_key(&[Datum::I64(5)], &mut ctx).unwrap();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::I64(5)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
                 range.set_end(range.get_start().to_vec());
@@ -483,7 +483,7 @@ mod tests {
             let key_ranges = vec![{
                 let mut range = KeyRange::default();
                 let start_data =
-                    datum::encode_key(&[Datum::I64(5), Datum::F64(5.1)], &mut ctx).unwrap();
+                    datum::encode_key(&mut ctx, &[Datum::I64(5), Datum::F64(5.1)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
                 range.set_end(range.get_start().to_vec());

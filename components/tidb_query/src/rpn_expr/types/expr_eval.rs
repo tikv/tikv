@@ -507,19 +507,19 @@ mod tests {
 
             let mut datum_raw = Vec::new();
             datum_raw
-                .write_datum(&[Datum::I64(-5)], &mut ctx, false)
+                .write_datum(&mut ctx, &[Datum::I64(-5)], false)
                 .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             datum_raw
-                .write_datum(&[Datum::I64(-7)], &mut ctx, false)
+                .write_datum(&mut ctx, &[Datum::I64(-7)], false)
                 .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             datum_raw
-                .write_datum(&[Datum::I64(3)], &mut ctx, false)
+                .write_datum(&mut ctx, &[Datum::I64(3)], false)
                 .unwrap();
             col.mut_raw().push(&datum_raw);
 
@@ -717,19 +717,19 @@ mod tests {
 
             let mut datum_raw = Vec::new();
             datum_raw
-                .write_datum(&[Datum::I64(-5)], &mut ctx, false)
+                .write_datum(&mut ctx, &[Datum::I64(-5)], false)
                 .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             datum_raw
-                .write_datum(&[Datum::I64(-7)], &mut ctx, false)
+                .write_datum(&mut ctx, &[Datum::I64(-7)], false)
                 .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             datum_raw
-                .write_datum(&[Datum::I64(3)], &mut ctx, false)
+                .write_datum(&mut ctx, &[Datum::I64(3)], false)
                 .unwrap();
             col.mut_raw().push(&datum_raw);
 

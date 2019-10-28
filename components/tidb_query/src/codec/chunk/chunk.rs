@@ -258,7 +258,7 @@ impl<'a> Row<'a> {
         fp: &FieldType,
         ctx: &mut EvalContext,
     ) -> Result<Datum> {
-        self.c.columns[col_idx].get_datum(self.idx, ctx, fp)
+        self.c.columns[col_idx].get_datum(ctx, self.idx, fp)
     }
 }
 
