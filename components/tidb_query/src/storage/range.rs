@@ -58,6 +58,17 @@ impl std::fmt::Debug for IntervalRange {
     }
 }
 
+impl Into<KeyRange> for IntervalRange {
+    // TODO: make clear if we need extra checking
+    fn into(self) -> KeyRange {
+        let mut range = KeyRange::new();
+        // TODO: reverse it?
+        range.start = self.lower_inclusive;
+        range.end = self.upper_exclusive;
+        range
+    }
+}
+
 impl From<(Vec<u8>, Vec<u8>)> for IntervalRange {
     fn from((lower, upper): (Vec<u8>, Vec<u8>)) -> Self {
         IntervalRange {

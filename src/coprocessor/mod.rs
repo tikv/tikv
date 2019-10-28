@@ -44,7 +44,7 @@ pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_CHECKSUM: i64 = 105;
 
-type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
+type HandlerStreamStepResult = (Result<(Option<coppb::Response>, bool)>, coppb::KeyRange);
 
 /// An interface for all kind of Coprocessor request handlers.
 pub trait RequestHandler: Send {

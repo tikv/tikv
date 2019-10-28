@@ -276,12 +276,11 @@ impl<SS: 'static> ExecutorsRunner<SS> {
         }
     }
 
-    // TODO: IntervalRange should be placed inside `StreamResponse`.
-    pub fn handle_streaming_request(
-        &mut self,
-    ) -> Result<(Option<(StreamResponse, IntervalRange)>, bool)> {
+    // TODO: may be ugly, I may find out a place to figure it (Because I don't think it's ok to )
+    fn handle_streaming_request_impl(&mut self) -> Result<(Option<StreamResponse>, bool)> {
         let (mut record_cnt, mut finished) = (0, false);
         let mut chunk = Chunk::default();
+
         while record_cnt < self.batch_row_limit {
             match self.executor.next()? {
                 Some(row) => {
@@ -297,12 +296,20 @@ impl<SS: 'static> ExecutorsRunner<SS> {
             }
         }
         if record_cnt > 0 {
-            let range = self.executor.take_scanned_range();
             return self
                 .make_stream_response(chunk)
-                .map(|r| (Some((r, range)), finished));
+                .map(|r| (Some(r), finished));
         }
         Ok((None, true))
+    }
+
+    pub fn handle_streaming_request(
+        &mut self,
+    ) -> (Result<(Option<StreamResponse>, bool)>, IntervalRange) {
+        (
+            self.handle_streaming_request_impl(),
+            self.executor.take_scanned_range(),
+        )
     }
 
     pub fn collect_storage_stats(&mut self, dest: &mut SS) {

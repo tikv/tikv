@@ -266,7 +266,7 @@ impl<E: Engine> Endpoint<E> {
                 tracker.on_finish_all_items();
 
                 future::result(result)
-                    .or_else(|e| Ok::<_, Error>(make_error_response(e)))
+                    .or_else(|e| Ok::<_, Error>(make_error_response(e, None)))
                     .map(|mut resp| {
                         COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
                         resp.set_exec_details(exec_details);
@@ -310,7 +310,7 @@ impl<E: Engine> Endpoint<E> {
 
         future::result(result_of_future)
             .flatten()
-            .or_else(|e| Ok(make_error_response(e)))
+            .or_else(|e| Ok(make_error_response(e, None)))
     }
 
     /// The real implementation of handling a stream request.
@@ -370,7 +370,7 @@ impl<E: Engine> Endpoint<E> {
                             // There are future items
                             tracker.on_begin_item();
 
-                            let result = handler.handle_streaming_request();
+                            let (result, range) = handler.handle_streaming_request();
                             let mut storage_stats = Statistics::default();
                             handler.collect_scan_statistics(&mut storage_stats);
 
@@ -378,7 +378,7 @@ impl<E: Engine> Endpoint<E> {
                             let exec_details = tracker.get_item_exec_details();
 
                             let (mut resp, finished) = match result {
-                                Err(e) => (make_error_response(e), true),
+                                Err(e) => (make_error_response(e, Some(range)), true),
                                 Ok((None, _)) => {
                                     let yielded = Either::Right(tracker);
                                     let next_state = None;
@@ -450,7 +450,7 @@ impl<E: Engine> Endpoint<E> {
 
         stream::once(result_of_stream) // Stream<Stream<Resp, Error>, Error>
             .flatten() // Stream<Resp, Error>
-            .or_else(|e| Ok(make_error_response(e))) // Stream<Resp, ()>
+            .or_else(|e| Ok(make_error_response(e, None))) // Stream<Resp, ()>
     }
 }
 
@@ -462,13 +462,16 @@ fn make_tag(is_table_scan: bool) -> &'static str {
     }
 }
 
-fn make_error_response(e: Error) -> coppb::Response {
+fn make_error_response(e: Error, r: Option<coppb::KeyRange>) -> coppb::Response {
     warn!(
         "error-response";
         "err" => %e
     );
     let mut resp = coppb::Response::default();
     let tag;
+    if let Some(range) = r {
+        resp.set_range(range);
+    }
     match e {
         Error::Region(e) => {
             tag = storage::get_tag_from_header(&e);
@@ -583,7 +586,8 @@ mod tests {
     }
 
     impl RequestHandler for StreamFixture {
-        fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
+        // TODO: Make this KeyRange to real KeyRange
+        fn handle_streaming_request(&mut self) -> (Result<(Option<coppb::Response>, bool)>, coppb::KeyRange) {
             let is_finished = if self.result_len == 0 {
                 true
             } else {
@@ -592,14 +596,14 @@ mod tests {
             let ret = match self.result_iter.next() {
                 None => {
                     assert!(is_finished);
-                    Ok((None, is_finished))
+                    (Ok((None, is_finished)), coppb::KeyRange::default())
                 }
                 Some(val) => {
                     let handle_duration_ms = self.handle_durations_millis.next().unwrap();
                     thread::sleep(Duration::from_millis(handle_duration_ms));
                     match val {
-                        Ok(resp) => Ok((Some(resp), is_finished)),
-                        Err(e) => Err(e),
+                        Ok(resp) => (Ok((Some(resp), is_finished)) , coppb::KeyRange::default()),
+                        Err(e) => (Err(e), coppb::KeyRange::default()),
                     }
                 }
             };
@@ -628,10 +632,11 @@ mod tests {
     }
 
     impl RequestHandler for StreamFromClosure {
-        fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
-            let result = (self.result_generator)(self.nth);
+        // TODO: ditto, make this KeyRange to real KeyRange
+        fn handle_streaming_request(&mut self) -> (Result<(Option<coppb::Response>, bool)>, coppb::KeyRange) {
+            let (result, _) = (self.result_generator)(self.nth);
             self.nth += 1;
-            result
+            (result, coppb::KeyRange::default())
         }
     }
 
@@ -898,12 +903,12 @@ mod tests {
             0 => {
                 let mut resp = coppb::Response::default();
                 resp.set_data(vec![1, 2, 7]);
-                Ok((Some(resp), true))
+                (Ok((Some(resp), true)), coppb::KeyRange::default())
             }
             _ => {
                 // we cannot use `unreachable!()` here because CpuPool catches panic.
                 counter_clone.store(1, atomic::Ordering::SeqCst);
-                Err(box_err!("unreachable"))
+                (Err(box_err!("unreachable")), coppb::KeyRange::default())
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
@@ -924,12 +929,12 @@ mod tests {
             0 => {
                 let mut resp = coppb::Response::default();
                 resp.set_data(vec![1, 2, 13]);
-                Ok((Some(resp), false))
+                (Ok((Some(resp), false)), coppb::KeyRange::default())
             }
-            1 => Ok((None, false)),
+            1 => (Ok((None, false)) , coppb::KeyRange::default()),
             _ => {
                 counter_clone.store(1, atomic::Ordering::SeqCst);
-                Err(box_err!("unreachable"))
+                (Err(box_err!("unreachable")), coppb::KeyRange::default())
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
@@ -950,12 +955,12 @@ mod tests {
             0 => {
                 let mut resp = coppb::Response::default();
                 resp.set_data(vec![1, 2, 23]);
-                Ok((Some(resp), false))
+                (Ok((Some(resp), false)), coppb::KeyRange::default())
             }
-            1 => Err(box_err!("foo")),
+            1 => (Err(box_err!("foo")) , coppb::KeyRange::default()),
             _ => {
                 counter_clone.store(1, atomic::Ordering::SeqCst);
-                Err(box_err!("unreachable"))
+                (Err(box_err!("unreachable")), coppb::KeyRange::default())
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
@@ -990,7 +995,7 @@ mod tests {
             let mut resp = coppb::Response::default();
             resp.set_data(vec![1, 2, nth as u8]);
             counter_clone.fetch_add(1, atomic::Ordering::SeqCst);
-            Ok((Some(resp), false))
+            (Ok((Some(resp), false)), coppb::KeyRange::default())
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = cop

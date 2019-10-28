@@ -74,8 +74,9 @@ impl RequestHandler for DAGHandler {
         handle_qe_response(self.0.handle_request())
     }
 
-    fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
-        handle_qe_stream_response(self.0.handle_streaming_request())
+    fn handle_streaming_request(&mut self) -> (Result<(Option<Response>, bool)>, KeyRange) {
+        let (resp, range) = self.0.handle_streaming_request();
+        (handle_qe_stream_response(resp, range.clone()), range.into())
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
@@ -137,12 +138,13 @@ fn handle_qe_response(result: tidb_query::Result<SelectResponse>) -> Result<Resp
 }
 
 fn handle_qe_stream_response(
-    result: tidb_query::Result<(Option<(StreamResponse, IntervalRange)>, bool)>,
+    result: tidb_query::Result<(Option<(StreamResponse)>, bool)>,
+    range: IntervalRange,
 ) -> Result<(Option<Response>, bool)> {
     use tidb_query::error::ErrorInner;
 
     match result {
-        Ok((Some((s_resp, range)), finished)) => {
+        Ok((Some(s_resp), finished)) => {
             let mut resp = Response::default();
             resp.set_data(box_try!(s_resp.write_to_bytes()));
             resp.mut_range().set_start(range.lower_inclusive);
@@ -154,9 +156,14 @@ fn handle_qe_stream_response(
             ErrorInner::Storage(err) => Err(err.into()),
             ErrorInner::Evaluate(err) => {
                 let mut resp = Response::default();
+                // Why do we have it so early
                 let mut s_resp = StreamResponse::default();
+
+                resp.mut_range().set_start(range.lower_inclusive);
+                resp.mut_range().set_end(range.upper_exclusive);
                 s_resp.mut_error().set_code(err.code());
                 s_resp.mut_error().set_msg(err.to_string());
+
                 resp.set_data(box_try!(s_resp.write_to_bytes()));
                 Ok((Some(resp), true))
             }
