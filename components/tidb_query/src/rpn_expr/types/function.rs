@@ -52,6 +52,7 @@ pub struct RpnFnMeta {
         args: &[RpnStackNode<'_>],
         // Uncommon arguments are grouped together
         extra: &mut RpnFnCallExtra<'_>,
+        data: &(dyn Any + Send),
     ) -> Result<VectorValue>,
 }
 

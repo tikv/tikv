@@ -309,6 +309,10 @@ where
 
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
+    let data = func_meta
+        .data_initializer_ptr
+        .map(|f| f(&tree_node))
+        .unwrap_or(Box::new(()));
 
     // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
     let datums = datum::decode(&mut tree_node.get_val())?;
@@ -336,7 +340,7 @@ where
         args_len,
         field_type: tree_node.take_field_type(),
         implicit_args,
-        data: Box::new(()), // TODO: Init with meta
+        data,
     });
     Ok(())
 }

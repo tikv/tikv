@@ -70,6 +70,7 @@
 //! * `output_rows: usize`
 //! * `args: &[rpn_expr::RpnStackNode<'_>]`
 //! * `extra: &mut rpn_expr::RpnFnCallExtra<'_>`
+//! * `data: &T` (where T is your data type)
 //!
 //! ```ignore
 //! // This generates `with_context_fn_meta() -> RpnFnMeta`
@@ -211,6 +212,9 @@ struct RpnFnAttr {
     /// Extra validator.
     extra_validator: Option<TokenStream>,
 
+    /// Data initializer.
+    data_initializer: Option<TokenStream>,
+
     /// Special variables captured when calling the function.
     captures: Vec<Expr>,
 }
@@ -221,6 +225,7 @@ impl parse::Parse for RpnFnAttr {
         let mut is_raw_varg = false;
         let mut min_args = None;
         let mut extra_validator = None;
+        let mut data_initializer = None;
         let mut captures = Vec::new();
 
         let config_items = Punctuated::<Expr, Token![,]>::parse_terminated(input).unwrap();
@@ -247,6 +252,9 @@ impl parse::Parse for RpnFnAttr {
                         }
                         "extra_validator" => {
                             extra_validator = Some((&**right).into_token_stream());
+                        }
+                        "data_initializer" => {
+                            data_initializer = Some((&**right).into_token_stream());
                         }
                         _ => {
                             return Err(Error::new_spanned(
@@ -299,6 +307,7 @@ impl parse::Parse for RpnFnAttr {
             is_raw_varg,
             min_args,
             extra_validator,
+            data_initializer,
             captures,
         })
     }
@@ -481,6 +490,7 @@ struct VargsRpnFn {
     captures: Vec<Expr>,
     min_args: Option<usize>,
     extra_validator: Option<TokenStream>,
+    data_initializer: Option<TokenStream>,
     item_fn: ItemFn,
     arg_type: TypePath,
     ret_type: TypePath,
@@ -514,6 +524,7 @@ impl VargsRpnFn {
             captures: attr.captures,
             min_args: attr.min_args,
             extra_validator: attr.extra_validator,
+            data_initializer: attr.data_initializer,
             item_fn,
             arg_type: arg_type.eval_type,
             ret_type: ret_type.eval_type,
@@ -597,6 +608,7 @@ struct RawVargsRpnFn {
     captures: Vec<Expr>,
     min_args: Option<usize>,
     extra_validator: Option<TokenStream>,
+    data_initializer: Option<TokenStream>,
     item_fn: ItemFn,
     ret_type: TypePath,
 }
@@ -623,6 +635,7 @@ impl RawVargsRpnFn {
             captures: attr.captures,
             min_args: attr.min_args,
             extra_validator: attr.extra_validator,
+            data_initializer: attr.data_initializer,
             item_fn,
             ret_type: ret_type.eval_type,
         })
@@ -703,6 +716,7 @@ impl RawVargsRpnFn {
 struct NormalRpnFn {
     captures: Vec<Expr>,
     extra_validator: Option<TokenStream>,
+    data_initializer: Option<TokenStream>,
     item_fn: ItemFn,
     fn_trait_ident: Ident,
     evaluator_ident: Ident,
@@ -735,6 +749,7 @@ impl NormalRpnFn {
         Ok(Self {
             captures: attr.captures,
             extra_validator: attr.extra_validator,
+            data_initializer: attr.data_initializer,
             item_fn,
             fn_trait_ident,
             evaluator_ident,
@@ -1262,6 +1277,7 @@ mod tests_normal {
                 is_raw_varg: false,
                 min_args: None,
                 extra_validator: None,
+                data_initializer: None,
                 captures: vec![parse_str("ctx").unwrap()],
             },
             item_fn,
