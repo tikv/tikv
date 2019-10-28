@@ -241,6 +241,7 @@ impl RpnExpression {
                     args_len,
                     field_type: ret_field_type,
                     implicit_args,
+                    data,
                 } => {
                     // Suppose that we have function call `Foo(A, B, C)`, the RPN nodes looks like
                     // `[A, B, C, Foo]`.

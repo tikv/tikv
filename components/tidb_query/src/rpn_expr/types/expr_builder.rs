@@ -14,7 +14,7 @@ use crate::codec::{datum, Datum};
 use crate::Result;
 
 /// Helper to build an `RpnExpression`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 
 impl RpnExpressionBuilder {
@@ -128,6 +128,7 @@ impl RpnExpressionBuilder {
             args_len,
             field_type: return_field_type.into(),
             implicit_args: vec![],
+            data: Box::new(()),
         };
         self.0.push(node);
         self
@@ -146,6 +147,7 @@ impl RpnExpressionBuilder {
             args_len,
             field_type: return_field_type.into(),
             implicit_args,
+            data: Box::new(()),
         };
         self.0.push(node);
         self
@@ -334,6 +336,7 @@ where
         args_len,
         field_type: tree_node.take_field_type(),
         implicit_args,
+        data: Box::new(()), // TODO: Init with meta
     });
     Ok(())
 }

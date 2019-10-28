@@ -20,6 +20,7 @@
 //! For more information on the procedural macro, see the documentation in
 //! `components/tidb_query_codegen/src/rpn_function`.
 
+use std::any::Any;
 use std::convert::TryFrom;
 use std::marker::PhantomData;
 
@@ -39,6 +40,8 @@ pub struct RpnFnMeta {
 
     /// Validator against input expression tree.
     pub validator_ptr: fn(expr: &Expr) -> Result<()>,
+
+    pub data_initializer_ptr: Option<fn(expr: &Expr) -> Box<dyn Any + Send>>,
 
     #[allow(clippy::type_complexity)]
     /// The RPN function.
