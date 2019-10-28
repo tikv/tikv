@@ -905,6 +905,7 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 #[cfg(test)]
 mod tests {
     use crate::storage::lock_manager::{gen_key_hash, gen_key_hashes, Lock};
+    use crate::storage::tests::{expect_ok_callback, expect_value_callback};
     use crate::storage::txn::ProcessResult;
     use crate::storage::*;
     use kvproto::kvrpcpb::Context;
@@ -995,127 +996,6 @@ mod tests {
         }
     }
 
-    fn expect_ok_callback<T>(done: Sender<()>) -> Callback<T> {
-        Box::new(move |x: Result<T>| {
-            x.unwrap();
-            done.send(()).unwrap();
-        })
-    }
-
-    fn expect_no_key_hashes(msg: Msg) {
-        match msg {
-            Msg::WakeUp { hashes, .. } => assert_eq!(hashes, None),
-            _ => panic!("unexpected msg"),
-        }
-    }
-
-    #[test]
-    fn test_no_key_hash_when_no_waiter() {
-        let (msg_tx, msg_rx) = channel();
-        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
-            .lock_mgr(ProxyLockMgr::new(msg_tx))
-            .build()
-            .unwrap();
-
-        let key = Key::from_raw(b"a");
-        let (tx, rx) = channel();
-        storage
-            .async_prewrite(
-                Context::default(),
-                vec![Mutation::Put((key.clone(), b"v".to_vec()))],
-                key.to_raw().unwrap(),
-                10,
-                Options::default(),
-                expect_ok_callback(tx.clone()),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .async_commit(
-                Context::default(),
-                vec![key.clone()],
-                10,
-                20,
-                expect_ok_callback(tx.clone()),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        expect_no_key_hashes(msg_rx.try_recv().unwrap());
-
-        storage
-            .async_cleanup(
-                Context::default(),
-                key.clone(),
-                20,
-                0,
-                expect_ok_callback(tx.clone()),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        expect_no_key_hashes(msg_rx.try_recv().unwrap());
-
-        storage
-            .async_rollback(
-                Context::default(),
-                vec![key.clone()],
-                30,
-                expect_ok_callback(tx.clone()),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        expect_no_key_hashes(msg_rx.try_recv().unwrap());
-
-        storage
-            .async_pessimistic_rollback(
-                Context::default(),
-                vec![key.clone()],
-                40,
-                40,
-                expect_ok_callback(tx.clone()),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        expect_no_key_hashes(msg_rx.try_recv().unwrap());
-
-        storage
-            .async_prewrite(
-                Context::default(),
-                vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
-                ],
-                b"a".to_vec(),
-                50,
-                Options::default(),
-                expect_ok_callback(tx.clone()),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        storage
-            .async_resolve_lock_lite(
-                Context::default(),
-                50,
-                0,
-                vec![Key::from_raw(b"b")],
-                expect_ok_callback(tx.clone()),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        expect_no_key_hashes(msg_rx.try_recv().unwrap());
-        let mut txn_status = HashMap::default();
-        txn_status.insert(50, 0);
-        storage
-            .async_resolve_lock(
-                Context::default(),
-                txn_status,
-                expect_ok_callback(tx.clone()),
-            )
-            .unwrap();
-        rx.recv().unwrap();
-        expect_no_key_hashes(msg_rx.try_recv().unwrap());
-    }
-
     #[test]
     fn test_wait_for_validation() {
         let (msg_tx, msg_rx) = channel();
@@ -1133,7 +1013,7 @@ mod tests {
                 key.to_raw().unwrap(),
                 10,
                 Options::default(),
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1149,7 +1029,7 @@ mod tests {
                 key.to_raw().unwrap(),
                 20,
                 options,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
         // The transaction should be waiting for lock released so cb won't be called.
@@ -1187,6 +1067,134 @@ mod tests {
 
             _ => panic!("unexpected msg"),
         }
+    }
+
+    fn expect_no_key_hashes(msg: Msg) {
+        match msg {
+            Msg::WakeUp { hashes, .. } => assert_eq!(hashes, None),
+            _ => panic!("unexpected msg"),
+        }
+    }
+
+    #[test]
+    fn test_no_key_hash_when_no_waiter() {
+        let (msg_tx, msg_rx) = channel();
+        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
+            .lock_mgr(ProxyLockMgr::new(msg_tx))
+            .build()
+            .unwrap();
+
+        let key = Key::from_raw(b"a");
+        let (tx, rx) = channel();
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                key.to_raw().unwrap(),
+                10,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_commit(
+                Context::default(),
+                vec![key.clone()],
+                10,
+                20,
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+
+        storage
+            .async_cleanup(
+                Context::default(),
+                key.clone(),
+                20,
+                0,
+                expect_ok_callback(tx.clone(), 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+
+        storage
+            .async_rollback(
+                Context::default(),
+                vec![key.clone()],
+                30,
+                expect_ok_callback(tx.clone(), 3),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+
+        storage
+            .async_pessimistic_rollback(
+                Context::default(),
+                vec![key.clone()],
+                40,
+                40,
+                expect_ok_callback(tx.clone(), 4),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                ],
+                b"a".to_vec(),
+                50,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 5),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_resolve_lock_lite(
+                Context::default(),
+                50,
+                0,
+                vec![Key::from_raw(b"b")],
+                expect_ok_callback(tx.clone(), 6),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+        let mut txn_status = HashMap::default();
+        txn_status.insert(50, 0);
+        storage
+            .async_resolve_lock(
+                Context::default(),
+                txn_status,
+                expect_ok_callback(tx.clone(), 7),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
+
+        let (tx, rx) = channel();
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                key.clone(),
+                60,
+                70,
+                80,
+                expect_value_callback(tx.clone(), 8, (0, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
     }
 
     fn expected_wake_up_msg(
@@ -1240,7 +1248,7 @@ mod tests {
                 keys[0].to_raw().unwrap(),
                 10,
                 Options::default(),
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1250,7 +1258,7 @@ mod tests {
                 keys.clone(),
                 10,
                 20,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1263,7 +1271,7 @@ mod tests {
                 keys[0].clone(),
                 30,
                 0,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 2),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1275,7 +1283,7 @@ mod tests {
                 Context::default(),
                 keys.clone(),
                 40,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 3),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1288,7 +1296,7 @@ mod tests {
                 keys.clone(),
                 50,
                 50,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 4),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1301,13 +1309,14 @@ mod tests {
                 60,
                 0,
                 keys.clone(),
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 5),
             )
             .unwrap();
         rx.recv().unwrap();
         let msg = msg_rx.try_recv().unwrap();
         expected_wake_up_msg(msg, 60, Some(gen_key_hashes(&keys)), 0, false);
 
+        // Write a lock with ts 70
         storage
             .async_prewrite(
                 Context::default(),
@@ -1315,10 +1324,11 @@ mod tests {
                 keys[0].to_raw().unwrap(),
                 70,
                 Options::default(),
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 6),
             )
             .unwrap();
         rx.recv().unwrap();
+        // Write a pessimistic lock with ts 80
         let mut options = Options::default();
         options.for_update_ts = 80;
         storage
@@ -1328,11 +1338,11 @@ mod tests {
                 keys[1].to_raw().unwrap(),
                 80,
                 options,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 7),
             )
             .unwrap();
         rx.recv().unwrap();
-        // Commit txn-70 and rollback txn-80
+        // Commit txn 70 and rollback txn 80
         let mut txn_status = HashMap::default();
         txn_status.insert(70, 71);
         txn_status.insert(80, 0);
@@ -1340,7 +1350,7 @@ mod tests {
             .async_resolve_lock(
                 Context::default(),
                 txn_status,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 8),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1367,11 +1377,73 @@ mod tests {
                 keys[0].clone(),
                 30,
                 0,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 9),
             )
             .unwrap();
         rx.recv().unwrap();
         let msg = msg_rx.try_recv().unwrap();
         expect_no_key_hashes(msg);
+    }
+
+    #[test]
+    fn test_process_check_txn_status() {
+        use crate::storage::mvcc::compose_ts;
+
+        let (msg_tx, msg_rx) = channel();
+        let mut lock_mgr = ProxyLockMgr::new(msg_tx);
+        lock_mgr.set_has_waiter(true);
+
+        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
+            .lock_mgr(lock_mgr.clone())
+            .build()
+            .unwrap();
+        let key = Key::from_raw(b"a");
+
+        // Write a lock with ttl 100
+        let (tx, rx) = channel();
+        let mut options = Options::default();
+        options.lock_ttl = 100;
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                key.to_raw().unwrap(),
+                compose_ts(10, 0),
+                options,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Lock is not expired, so no wake-up msg.
+        let (tx, rx) = channel();
+        let start_ts = compose_ts(10, 0);
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                key.clone(),
+                start_ts,
+                compose_ts(20, 0),
+                compose_ts(30, 0),
+                expect_value_callback(tx.clone(), 8, (100, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(msg_rx.try_recv().is_err());
+
+        // Lock is expired.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                key.clone(),
+                start_ts,
+                compose_ts(20, 0),
+                compose_ts(120, 0),
+                expect_value_callback(tx.clone(), 8, (0, 0)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let msg = msg_rx.try_recv().unwrap();
+        expected_wake_up_msg(msg, start_ts, Some(vec![gen_key_hash(&key)]), 0, false);
     }
 }

@@ -2113,7 +2113,7 @@ mod tests {
         }
     }
 
-    fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
+    pub fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             x.unwrap();
             done.send(id).unwrap();
@@ -2143,7 +2143,7 @@ mod tests {
         })
     }
 
-    fn expect_value_callback<T: PartialEq + Debug + Send + 'static>(
+    pub fn expect_value_callback<T: PartialEq + Debug + Send + 'static>(
         done: Sender<i32>,
         id: i32,
         value: T,
@@ -4591,7 +4591,7 @@ mod tests {
     }
 
     // The logic of pessimistic transaction is tested in storage/mvcc/txn.rs.
-    // It tests whether Storage uses functions properly.
+    // It tests whether Storage uses functions rightly.
     #[test]
     fn test_pessimistic_txn() {
         let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
@@ -4720,7 +4720,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        // Should set for_update_ts of prewrite properly.
+        // Should set for_update_ts of prewrite rightly.
         let key = Key::from_raw(b"c");
         storage
             .async_acquire_pessimistic_lock(
