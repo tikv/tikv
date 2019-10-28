@@ -1,21 +1,25 @@
 ---
-name: "✈️ Performance Challenge Program"
-about: PCP Season1 Program
-title: 'PCP: '
-labels: ''
-assignees: ''
+name: "✈️ Performance Challenge Program (PingCAP Internal)"
+title: 'PCP-X: '
 
 ---
 
-## PCP Issue
-
-- difficult: medium
-- score: 150
-- min score required: 100
-- expired: 7d
-- Recommended Skills:
-- Mentor(s):
-
 ## Description
 
-<!-- Add issue description here -->
+To be filled
+
+## Difficulty
+
+* To be filled
+
+## Score 
+
+* To be filled
+
+## Mentor(s)
+
+* To be filled
+
+## Recommended Skills
+
+* To be filled
