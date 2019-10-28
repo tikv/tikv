@@ -27,6 +27,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ahash"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f00e10d4814aa20900e7948174384f79f1317f24f0ba7494e735111653fc330"
+dependencies = [
+ "const-random",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -441,6 +450,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-random"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b641a8c9867e341f3295564203b1c250eb8ce6cb6126e007941f78c4d2ed7fe"
+dependencies = [
+ "const-random-macro",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "const-random-macro"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c750ec12b83377637110d5a57f5ae08e895b06c4b16e2bdbf1a94ef717428c59"
+dependencies = [
+ "proc-macro-hack",
+ "rand 0.7.2",
+]
+
+[[package]]
 name = "cookie"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -679,6 +708,22 @@ dependencies = [
  "darling_core",
  "quote 1.0.2",
  "syn 1.0.5",
+]
+
+[[package]]
+name = "dashmap"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bd9c4c8b5298324a6d032e34d57f8914625cc00ea3067a1278a1f7a7d79a0c1"
+dependencies = [
+ "ahash",
+ "futures-preview",
+ "hashbrown 0.6.2",
+ "num_cpus",
+ "owning_ref 0.4.0",
+ "parking_lot 0.9.0",
+ "slab",
+ "stable_deref_trait",
 ]
 
 [[package]]
@@ -1216,6 +1261,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1de41fb8dba9714efd92241565cdff73f78508c95697dd56787d3cba27e2353"
 
 [[package]]
+name = "hashbrown"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cd9867f119b19fecb08cd5c326ad4488d7a1da4bf75b4d95d71db742525aaab"
+dependencies = [
+ "ahash",
+ "autocfg",
+]
+
+[[package]]
 name = "heck"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1568,6 +1623,16 @@ checksum = "62ebf1391f6acad60e5c8b43706dde4582df75c06698ab44511d15016bc2442c"
 dependencies = [
  "owning_ref 0.4.0",
  "scopeguard 0.3.3",
+]
+
+[[package]]
+name = "lock_api"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8912e782533a93a167888781b836336a6ca5da6175c05944c86cf28c31104dc"
+dependencies = [
+ "owning_ref 0.4.0",
+ "scopeguard 1.0.0",
 ]
 
 [[package]]
@@ -1985,8 +2050,19 @@ version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab41b4aed082705d1056416ae4468b6ea99d52599ecf3169b00088d43113e337"
 dependencies = [
- "lock_api",
+ "lock_api 0.1.5",
  "parking_lot_core 0.4.0",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f842b1982eb6c2fe34036a4fbfb06dd185a3f5c8edfaacdf7d1ea10b07de6252"
+dependencies = [
+ "lock_api 0.3.1",
+ "parking_lot_core 0.6.2",
+ "rustc_version",
 ]
 
 [[package]]
@@ -2009,6 +2085,21 @@ checksum = "94c8c7923936b28d546dfd14d4472eaf34c99b14e1c973a32b3e6d4eb04298c9"
 dependencies = [
  "libc",
  "rand 0.6.5",
+ "rustc_version",
+ "smallvec",
+ "winapi 0.3.8",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b876b1b9e7ac6e1a74a6da34d25c42e17e8862aa409cbbbdcfc8d86c6f3bc62b"
+dependencies = [
+ "cfg-if",
+ "cloudabi",
+ "libc",
+ "redox_syscall",
  "rustc_version",
  "smallvec",
  "winapi 0.3.8",
@@ -2084,6 +2175,17 @@ name = "ppv-lite86"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3cbf9f658cdb5000fcf6f362b8ea2ba154b9f146a61c7a20d647034c6b6561b"
+
+[[package]]
+name = "proc-macro-hack"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecd45702f76d6d3c75a80564378ae228a85f0b59d2f3ed43c91b4a69eb2ebfc5"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
+]
 
 [[package]]
 name = "proc-macro2"
@@ -2252,7 +2354,7 @@ version = "0.6.0-alpha"
 source = "git+https://github.com/pingcap/raft-rs#243278168c5488d94f2fd45cda9efd121c7ecb2a"
 dependencies = [
  "getset",
- "hashbrown",
+ "hashbrown 0.5.0",
  "log",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
@@ -3150,11 +3252,12 @@ dependencies = [
 [[package]]
 name = "texn"
 version = "0.1.0"
-source = "git+https://github.com/sticnarf/texn?branch=default-config#3aef896a20bd2f37783b3b5c903fcf4d53bff70e"
+source = "git+https://github.com/waynexia/texn#cd463fbadee0390f50b715c1bf3d1de6c0962d73"
 dependencies = [
  "adaptive-spawn",
  "chashmap",
  "crossbeam",
+ "dashmap",
  "futures-preview",
  "lazy_static",
  "lru_time_cache",
