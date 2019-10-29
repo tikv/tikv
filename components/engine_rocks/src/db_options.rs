@@ -1,12 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::db::Rocks;
+use crate::engine::RocksEngine;
 use engine_traits::DBOptions;
 use engine_traits::DBOptionsExt;
 use engine_traits::Result;
 use rocksdb::DBOptions as RawDBOptions;
 
-impl DBOptionsExt for Rocks {
+impl DBOptionsExt for RocksEngine {
     type DBOptions = RocksDBOptions;
 
     fn get_db_options(&self) -> Self::DBOptions {

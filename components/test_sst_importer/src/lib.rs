@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use crc::crc32::{self, Hasher32};
-use engine_rocks::Rocks;
+use engine_rocks::RocksEngine;
 use engine_traits::KvEngine;
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
@@ -13,9 +13,9 @@ use engine::rocks::util::new_engine;
 use engine::rocks::SstWriterBuilder;
 use std::sync::Arc;
 
-pub fn new_test_engine(path: &str, cfs: &[&str]) -> Rocks {
+pub fn new_test_engine(path: &str, cfs: &[&str]) -> RocksEngine {
     let db = new_engine(path, None, cfs, None).expect("rocks test engine");
-    Rocks::from_db(Arc::new(db))
+    RocksEngine::from_db(Arc::new(db))
 }
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
