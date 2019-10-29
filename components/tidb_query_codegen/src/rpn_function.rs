@@ -87,7 +87,7 @@
 //! This includes `varg` and `raw_varg`.
 //!
 //! The supplied function is preserved and a constructor function is generated
-//! with a `_fn_meta` suffix, e.g., `#[rpb_fn] fn foo ...` will preserve `foo` and
+//! with a `_fn_meta` suffix, e.g., `#[rpn_fn] fn foo ...` will preserve `foo` and
 //! generate `foo_fn_meta`. The constructor function returns an `rpn_expr::RpnFnMeta`
 //! value.
 //!
@@ -134,9 +134,10 @@
 //!     fn eval(
 //!         self,
 //!         ctx: &mut EvalContext,
-//!          output_rows: usize,
-//!          args: &[RpnStackNode<'_>],
-//!          extra: &mut RpnFnCallExtra<'_>,
+//!         output_rows: usize,
+//!         args: &[RpnStackNode<'_>],
+//!         extra: &mut RpnFnCallExtra<'_>,
+//!         data: &(dyn Any + Send),
 //!     ) -> Result<VectorValue> {
 //!         let (regex, arg) = self.extract(0);
 //!         let regex = build_regex(regex);
@@ -484,6 +485,16 @@ impl ValidatorFnGenerator {
     }
 }
 
+fn generate_init_data_fn(data_initializer: &Option<TokenStream>) -> TokenStream {
+    let drop_fn = &quote! {drop};
+    let init_data_fn = data_initializer.as_ref().unwrap_or(drop_fn);
+    quote! {
+        fn init_data(expr: &::tipb::Expr) -> Box<dyn std::any::Any + Send> {
+            Box::new(#init_data_fn(expr))
+        }
+    }
+}
+
 /// Generates a `varg` RPN fn.
 #[derive(Debug)]
 struct VargsRpnFn {
@@ -550,6 +561,13 @@ impl VargsRpnFn {
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
         let arg_type = &self.arg_type;
+        let init_data_fn = generate_init_data_fn(&self.data_initializer);
+        let downcast_data = self.data_initializer.as_ref().map(|_| {
+            quote! {
+                let data = std::any::Any::downcast_ref(data).expect("downcast data error");
+            }
+        });
+        let captures = &self.captures;
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
@@ -569,7 +587,9 @@ impl VargsRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> #where_clause {
+                    #downcast_data
                     crate::rpn_expr::function::VARG_PARAM_BUF.with(|vargs_buf| {
                         use crate::codec::data_type::Evaluable;
                         let mut vargs_buf = vargs_buf.borrow_mut();
@@ -582,7 +602,7 @@ impl VargsRpnFn {
                                 let arg: &Option<#arg_type> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
                                 vargs_buf[arg_index] = arg as *const _ as usize;
                             }
-                            result.push(#fn_ident(unsafe {
+                            result.push(#fn_ident( #(#captures,)* unsafe {
                                 &*(vargs_buf.as_slice() as *const _ as *const [&Option<#arg_type>])
                             })?);
                         }
@@ -590,10 +610,13 @@ impl VargsRpnFn {
                     })
                 }
 
+                #init_data_fn
+
                 #validator_fn
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
+                    init_data_fn: init_data,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -659,6 +682,13 @@ impl RawVargsRpnFn {
         let ty_generics_turbofish = ty_generics.as_turbofish();
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
+        let init_data_fn = generate_init_data_fn(&self.data_initializer);
+        let downcast_data = self.data_initializer.as_ref().map(|_| {
+            quote! {
+                let data = std::any::Any::downcast_ref(data).expect("downcast data error");
+            }
+        });
+        let captures = &self.captures;
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
@@ -677,7 +707,9 @@ impl RawVargsRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> #where_clause {
+                    #downcast_data
                     crate::rpn_expr::function::RAW_VARG_PARAM_BUF.with(|mut vargs_buf| {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
@@ -693,16 +725,19 @@ impl RawVargsRpnFn {
                                 };
                                 vargs_buf.push(scalar_arg);
                             }
-                            result.push(#fn_ident #ty_generics_turbofish(vargs_buf.as_slice())?);
+                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* vargs_buf.as_slice())?);
                         }
                         Ok(Evaluable::into_vector_value(result))
                     })
                 }
 
+                #init_data_fn
+
                 #validator_fn
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
+                    init_data_fn: init_data,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -782,6 +817,7 @@ impl NormalRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue>;
             }
         }
@@ -804,6 +840,7 @@ impl NormalRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     unreachable!()
                 }
@@ -836,6 +873,11 @@ impl NormalRpnFn {
             (0..self.arg_types.len()).map(|i| Ident::new(&format!("arg{}", i), Span::call_site()));
         let call_arg = extract.clone();
         let ty_generics_turbofish = ty_generics.as_turbofish();
+        let downcast_data = self.data_initializer.as_ref().map(|_| {
+            quote! {
+                let data = std::any::Any::downcast_ref(data).expect("downcast data error");
+            }
+        });
 
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp #where_clause {
@@ -845,7 +887,9 @@ impl NormalRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
+                    #downcast_data
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row in 0..output_rows {
@@ -881,8 +925,9 @@ impl NormalRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    #fn_trait_ident #ty_generics_turbofish::eval(def, ctx, output_rows, args, extra)
+                    #fn_trait_ident #ty_generics_turbofish::eval(def, ctx, output_rows, args, extra, data)
                 }
             }
         }
@@ -902,6 +947,7 @@ impl NormalRpnFn {
             evaluator = quote! { <ArgConstructor<#arg_type, _>>::new(#arg_index, #evaluator) };
         }
         let fn_name = self.item_fn.sig.ident.to_string();
+        let init_data_fn = generate_init_data_fn(&self.data_initializer);
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
@@ -920,15 +966,19 @@ impl NormalRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> #where_clause {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
-                    #evaluator.eval(Null, ctx, output_rows, args, extra)
+                    #evaluator.eval(Null, ctx, output_rows, args, extra, data)
                 }
+
+                #init_data_fn
 
                 #validator_fn
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
+                    init_data_fn: init_data,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -965,6 +1015,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue>;
             }
         };
@@ -982,6 +1033,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     unreachable!()
                 }
@@ -1014,6 +1066,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
@@ -1047,6 +1100,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     Foo_Fn::eval(def, ctx, output_rows, args, extra)
                 }
@@ -1066,6 +1120,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
                     <ArgConstructor<Real, _>>::new(
@@ -1122,6 +1177,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue>;
             }
         };
@@ -1142,6 +1198,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     unreachable!()
                 }
@@ -1172,6 +1229,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
@@ -1209,8 +1267,9 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    Foo_Fn::<A, B>::eval(def, ctx, output_rows, args, extra)
+                    Foo_Fn::<A, B>::eval(def, ctx, output_rows, args, extra, data)
                 }
             }
         };
@@ -1231,6 +1290,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue>
                 where
                     B: N<A>
@@ -1306,6 +1366,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    data: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);

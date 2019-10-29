@@ -41,7 +41,7 @@ pub struct RpnFnMeta {
     /// Validator against input expression tree.
     pub validator_ptr: fn(expr: &Expr) -> Result<()>,
 
-    pub data_initializer_ptr: Option<fn(expr: &Expr) -> Box<dyn Any + Send>>,
+    pub init_data_fn: fn(expr: &Expr) -> Box<dyn Any + Send>,
 
     #[allow(clippy::type_complexity)]
     /// The RPN function.
@@ -165,6 +165,7 @@ pub trait Evaluator {
         output_rows: usize,
         args: &[RpnStackNode<'_>],
         extra: &mut RpnFnCallExtra<'_>,
+        data: &(dyn Any + Send),
     ) -> Result<VectorValue>;
 }
 
@@ -193,6 +194,7 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
         output_rows: usize,
         args: &[RpnStackNode<'_>],
         extra: &mut RpnFnCallExtra<'_>,
+        data: &(dyn Any + Send),
     ) -> Result<VectorValue> {
         match &args[self.arg_index] {
             RpnStackNode::Scalar { value, .. } => {
@@ -201,7 +203,8 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
                     arg: ScalarArg(v),
                     rem: def,
                 };
-                self.inner.eval(new_def, ctx, output_rows, args, extra)
+                self.inner
+                    .eval(new_def, ctx, output_rows, args, extra, data)
             }
             RpnStackNode::Vector { value, .. } => {
                 let logical_rows = value.logical_rows();
@@ -213,7 +216,8 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
                     },
                     rem: def,
                 };
-                self.inner.eval(new_def, ctx, output_rows, args, extra)
+                self.inner
+                    .eval(new_def, ctx, output_rows, args, extra, data)
             }
         }
     }
