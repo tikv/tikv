@@ -46,6 +46,9 @@ snap-max-total-size = "10GB"
 stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
+enable-request-batch = false
+request-batch-enable-cross-command = false
+request-batch-wait-duration = "10ms"
 
 [server.labels]
 a = "b"

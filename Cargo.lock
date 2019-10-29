@@ -1326,7 +1326,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#f37afb7e2ae728baa93476d353b3b89c6438aec4"
+source = "git+https://github.com/pingcap/kvproto.git#62abb760d9b125e2cfbc15a8d50b038861854e8d"
 dependencies = [
  "futures",
  "grpcio",
@@ -1970,7 +1970,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/pingcap/rust-prometheus.git?rev=7dd3d42f0c21384950afe6a46ed85352acf71625#7dd3d42f0c21384950afe6a46ed85352acf71625"
+source = "git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be#b668f3911d6569de2e1e8b2672fccec1cc8298be"
 dependencies = [
  "cfg-if",
  "fnv",
@@ -1986,7 +1986,7 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-prometheus.git?rev=7dd3d42f0c21384950afe6a46ed85352acf71625#7dd3d42f0c21384950afe6a46ed85352acf71625"
+source = "git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be#b668f3911d6569de2e1e8b2672fccec1cc8298be"
 dependencies = [
  "lazy_static",
  "proc-macro2 0.4.30",
