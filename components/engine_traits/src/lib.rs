@@ -61,7 +61,7 @@ extern crate tikv_alloc;
 // they are required by KvEngine or are an associated type of KvEngine. It is
 // recommended that engines follow the same module layout.
 //
-// Many of these define "extension" traits, that end in `Ex`.
+// Many of these define "extension" traits, that end in `Ext`.
 
 mod cf_handle;
 pub use crate::cf_handle::*;

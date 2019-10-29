@@ -5,7 +5,7 @@
 //! This is a work-in-progress attempt to abstract all the features needed by
 //! TiKV to persist its data.
 //!
-//! The module structure here mirrrors that in engine_traits where possible.
+//! The module structure here mirrors that in engine_traits where possible.
 //!
 //! Because there are so many similarly named types across the TiKV codebase,
 //! and so much "import renaming", this crate consistently explicitly names type
