@@ -54,6 +54,7 @@ struct RegionVerId {
     region_id: u64,
     conf_ver: u64,
     version: u64,
+    term: u64,
 }
 
 impl RegionVerId {
@@ -63,6 +64,7 @@ impl RegionVerId {
             region_id: ctx.get_region_id(),
             conf_ver: ctx.get_region_epoch().get_conf_ver(),
             version: ctx.get_region_epoch().get_version(),
+            term: ctx.get_term(),
         }
     }
 }
@@ -252,6 +254,10 @@ impl ReadBatcher {
         }
     }
 
+    fn is_batchable_context(ctx: &Context) -> bool {
+        storage::is_normal_priority(ctx.get_priority()) && !ctx.get_replica_read()
+    }
+
     fn add_get(&mut self, request_id: u64, request: &mut GetRequest) {
         let id = ReadId::from_context_cf(request.get_context(), None);
         let command = PointGetCommand::from_get(request);
@@ -290,13 +296,13 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
     ) -> bool {
         match request {
             batch_commands_request::request::Cmd::Get(req)
-                if storage::is_normal_priority(req.get_context().get_priority()) =>
+                if Self::is_batchable_context(req.get_context()) =>
             {
                 self.add_get(request_id, req);
                 true
             }
             batch_commands_request::request::Cmd::RawGet(req)
-                if storage::is_normal_priority(req.get_context().get_priority()) =>
+                if Self::is_batchable_context(req.get_context()) =>
             {
                 self.add_raw_get(request_id, req);
                 true
