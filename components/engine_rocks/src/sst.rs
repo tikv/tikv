@@ -5,19 +5,25 @@ use engine_traits::{SeekMode, SeekKey, Iterator};
 use engine_traits::IterOptions;
 use crate::engine::RocksEngine;
 use rocksdb::{SstFileReader, ColumnFamilyOptions};
+use rocksdb::DBIterator;
+use std::rc::Rc;
 
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;
 }
 
+// FIXME: like in RocksEngineIterator and elsewhere, here we are using
+// Rc to avoid putting references in an associated type, which
+// requires generic associated types.
 pub struct RocksSstReader {
-    reader: SstFileReader,
+    reader: Rc<SstFileReader>,
 }
 
 impl SstReader for RocksSstReader {
     fn open(path: &str) -> Result<Self> {
         let mut reader = SstFileReader::new(ColumnFamilyOptions::new());
         reader.open(path)?;
+        let reader = Rc::new(reader);
         Ok(RocksSstReader { reader })
     }
     fn verify_checksum(&self) -> Result<()> {
@@ -41,7 +47,7 @@ impl Iterable for RocksSstReader {
     }
 }
 
-pub struct RocksSstIterator;
+pub struct RocksSstIterator(DBIterator<Rc<SstFileReader>>);
 
 impl Iterator for RocksSstIterator {
     fn seek(&mut self, key: SeekKey) -> bool {

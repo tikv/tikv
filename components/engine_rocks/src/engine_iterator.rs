@@ -5,7 +5,8 @@ use std::sync::Arc;
 use engine_traits::{self, Error, Result};
 use rocksdb::{DBIterator, SeekKey as RawSeekKey, DB};
 
-// TODO: use &DB
+// FIXME: Would prefer using &DB instead of Arc<DB>.  As elsewhere in
+// this crate, it would require generic associated types.
 pub struct RocksEngineIterator(DBIterator<Arc<DB>>);
 
 impl RocksEngineIterator {
