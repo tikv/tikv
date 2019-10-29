@@ -586,8 +586,8 @@ impl Command {
             Command::ResolveLock { .. }
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
-            | Command::MvccByKey { .. } => 0,
-            Command::Batch { .. } => unreachable!(),
+            | Command::MvccByKey { .. }
+            | Command::Batch { .. } => 0,
         }
     }
 
@@ -608,7 +608,14 @@ impl Command {
             | Command::Pause { ref ctx, .. }
             | Command::MvccByKey { ref ctx, .. }
             | Command::MvccByStartTs { ref ctx, .. } => ctx,
-            Command::Batch { .. } => unreachable!(),
+            // requests in a batch is represented by first command.
+            Command::Batch { ref commands, .. } => {
+                if commands.is_empty() {
+                    unreachable!()
+                } else {
+                    commands[0].get_context()
+                }
+            }
         }
     }
 
@@ -629,7 +636,15 @@ impl Command {
             | Command::Pause { ref mut ctx, .. }
             | Command::MvccByKey { ref mut ctx, .. }
             | Command::MvccByStartTs { ref mut ctx, .. } => ctx,
-            Command::Batch { .. } => unreachable!(),
+            Command::Batch {
+                ref mut commands, ..
+            } => {
+                if commands.is_empty() {
+                    unreachable!()
+                } else {
+                    commands[0].mut_context()
+                }
+            }
         }
     }
 
@@ -1255,20 +1270,26 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             ref commands,
         } = command
         {
-            let len = commands.len();
-            for i in 0..len {
-                if let Command::Prewrite { ref mutations, .. } = commands[i] {
-                    for m in mutations {
-                        let key_size = m.key().as_encoded().len();
-                        if key_size > self.max_key_size {
-                            callback(vec![(
-                                ids[i].take().unwrap(),
-                                Err(Error::KeyTooLarge(key_size, self.max_key_size)),
-                            )]);
-                            break;
+            let results: Vec<(u64, _)> = ids
+                .iter_mut()
+                .zip(commands.iter())
+                .filter_map(|(id, command)| {
+                    if let Command::Prewrite { ref mutations, .. } = command {
+                        for m in mutations {
+                            let key_size = m.key().as_encoded().len();
+                            if key_size > self.max_key_size {
+                                return Some((
+                                    id.take().unwrap(),
+                                    Err(Error::KeyTooLarge(key_size, self.max_key_size)),
+                                ));
+                            }
                         }
                     }
-                }
+                    None
+                })
+                .collect();
+            if !results.is_empty() {
+                callback(results);
             }
         }
         self.schedule(command, StorageCb::BatchBooleans(callback))?;

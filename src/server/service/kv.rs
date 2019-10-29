@@ -265,12 +265,12 @@ impl BatchLimiter {
         }
         if self.enable_batch {
             if self.estimator.in_light_load() {
+                self.estimator.clear();
                 self.enable_batch = false;
             }
         } else {
             self.estimator.collect();
             if self.estimator.in_heavy_load() {
-                self.estimator.clear();
                 self.enable_batch = true;
             }
         }
@@ -437,7 +437,20 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
     }
 }
 
-type WriteId = RegionVerId;
+#[derive(Hash, PartialEq, Eq, Debug)]
+struct WriteId {
+    region_id: RegionVerId,
+    sync_log: bool,
+}
+
+impl WriteId {
+    fn from_context(ctx: &Context) -> Self {
+        WriteId {
+            region_id: RegionVerId::from_context(ctx),
+            sync_log: ctx.get_sync_log(),
+        }
+    }
+}
 
 struct WriteBatchMeta {
     idx: usize,
@@ -470,7 +483,7 @@ impl WriteBatcher {
     }
 
     fn is_batchable_context(ctx: &Context) -> bool {
-        ctx.get_sync_log()
+        storage::is_normal_priority(ctx.get_priority())
     }
 
     fn is_batchable_prewrite(req: &PrewriteRequest) -> bool {
@@ -485,6 +498,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
         request_id: u64,
         request: &mut batch_commands_request::request::Cmd,
     ) -> bool {
+        // TODO(tabokie): lazy initialization of keys
         let (ver, keys): (_, Vec<Key>) = match request {
             batch_commands_request::request::Cmd::Prewrite(req)
                 if self.cmd == BatchableRequestKind::Prewrite
@@ -593,6 +607,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
         storage: &Storage<E, L>,
     ) -> usize {
         let commands = mem::replace(&mut self.commands, vec![]);
+        self.router.clear();
         let output = commands.len();
         match self.cmd {
             BatchableRequestKind::Prewrite => {
@@ -656,7 +671,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
 
     #[inline]
     fn is_empty(&self) -> bool {
-        self.router.is_empty()
+        self.commands.is_empty()
     }
 }
 

@@ -100,6 +100,14 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
 
 pub fn execute_batch_callback(callback: &mut StorageCb, pr: Vec<(u64, ProcessResult)>) {
     match callback {
+        StorageCb::BatchBoolean(cb) => cb(pr
+            .into_iter()
+            .map(|(id, r)| match r {
+                ProcessResult::Res => (id, Ok(())),
+                ProcessResult::Failed { err } => (id, Err(err)),
+                _ => panic!("process result mismatch"),
+            })
+            .collect()),
         StorageCb::BatchBooleans(cb) => cb(pr
             .into_iter()
             .map(|(id, r)| match r {
@@ -969,6 +977,7 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
             Command::Commit { ref ctx, .. } => ctx,
             _ => unreachable!(),
         };
+        let multi_res = tag == CommandKind::prewrite;
         let mut txn = BatchMvccTxn::new(snapshot)?;
         // check conflict
         let results = match tag {
@@ -1031,7 +1040,11 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                             *id,
                             Msg::WriteFinished {
                                 cid,
-                                pr: ProcessResult::MultiRes { results: vec![] },
+                                pr: if multi_res {
+                                    ProcessResult::MultiRes { results: vec![] }
+                                } else {
+                                    ProcessResult::Res
+                                },
                                 result: Ok(()),
                                 tag,
                             },
@@ -1060,7 +1073,11 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                                             *id,
                                             Msg::WriteFinished {
                                                 cid,
-                                                pr: ProcessResult::MultiRes { results: vec![] },
+                                                pr: if multi_res {
+                                                    ProcessResult::MultiRes { results: vec![] }
+                                                } else {
+                                                    ProcessResult::Res
+                                                },
                                                 result: if let EngineResult::Err(e) = &res {
                                                     Err(e.maybe_clone().unwrap())
                                                 } else {
