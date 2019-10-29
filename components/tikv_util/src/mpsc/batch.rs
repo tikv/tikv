@@ -304,7 +304,7 @@ mod tests {
     use std::{thread, time};
 
     use futures::executor::{self, Notify, Spawn};
-    use futures::{future, stream, Async, Future};
+    use futures::{stream, Async, Future};
     use futures_cpupool::CpuPool;
 
     use super::*;
