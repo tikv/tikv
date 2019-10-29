@@ -87,6 +87,10 @@ quick_error! {
             description("write cf corresponding value not found in default cf")
             display("default not found: key:{}, write:{:?}, maybe read truncated/dropped table data?", hex::encode_upper(key), write)
         }
+        CommitTsExpired { start_ts: u64, commit_ts: u64, key: Vec<u8>, min_commit_ts: u64 } {
+            description("commit_ts less than lock's min_commit_ts")
+            display("try to commit key {} with commit_ts {} but min_commit_ts is {}", hex::encode_upper(key), commit_ts, min_commit_ts)
+        }
         KeyVersion { description("bad format key(version)") }
         PessimisticLockNotFound { start_ts: u64, key: Vec<u8> } {
             description("pessimistic lock not found when prewrite")
@@ -155,6 +159,17 @@ impl Error {
             Error::DefaultNotFound { key, write } => Some(Error::DefaultNotFound {
                 key: key.to_owned(),
                 write: write.clone(),
+            }),
+            Error::CommitTsExpired {
+                start_ts,
+                commit_ts,
+                key,
+                min_commit_ts,
+            } => Some(Error::CommitTsExpired {
+                start_ts: *start_ts,
+                commit_ts: *commit_ts,
+                key: key.clone(),
+                min_commit_ts: *min_commit_ts,
             }),
             Error::KeyVersion => Some(Error::KeyVersion),
             Error::Committed { commit_ts } => Some(Error::Committed {
@@ -309,6 +324,22 @@ pub mod tests {
     ) {
         let mut options = Options::default();
         options.for_update_ts = for_update_ts;
+        must_prewrite_put_impl(engine, key, value, pk, ts, is_pessimistic_lock, options);
+    }
+
+    pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+        lock_ttl: u64,
+    ) {
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        options.lock_ttl = lock_ttl;
         must_prewrite_put_impl(engine, key, value, pk, ts, is_pessimistic_lock, options);
     }
 
@@ -491,8 +522,20 @@ pub mod tests {
         start_ts: u64,
         for_update_ts: u64,
     ) {
+        must_acquire_pessimistic_lock_with_ttl(engine, key, pk, start_ts, for_update_ts, 0);
+    }
+
+    pub fn must_acquire_pessimistic_lock_with_ttl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+        ttl: u64,
+    ) {
         let mut options = Options::default();
         options.for_update_ts = for_update_ts;
+        options.lock_ttl = ttl;
         must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, options);
     }
 
@@ -504,10 +547,7 @@ pub mod tests {
         for_update_ts: u64,
         lock_ttl: u64,
     ) {
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts;
-        options.lock_ttl = lock_ttl;
-        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, options);
+        must_acquire_pessimistic_lock_with_ttl(engine, key, pk, start_ts, for_update_ts, lock_ttl);
     }
 
     pub fn must_acquire_pessimistic_lock_err<E: Engine>(
@@ -663,6 +703,15 @@ pub mod tests {
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
         assert_ne!(lock.lock_type, LockType::Pessimistic);
+    }
+
+    pub fn must_locked_with_ttl<E: Engine>(engine: &E, key: &[u8], start_ts: u64, ttl: u64) {
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::Si);
+        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        assert_eq!(lock.ts, start_ts);
+        assert_ne!(lock.lock_type, LockType::Pessimistic);
+        assert_eq!(lock.ttl, ttl);
     }
 
     pub fn must_large_txn_locked<E: Engine>(
