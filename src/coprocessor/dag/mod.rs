@@ -76,6 +76,7 @@ impl RequestHandler for DAGHandler {
 
     fn handle_streaming_request(&mut self) -> (Result<(Option<Response>, bool)>, KeyRange) {
         let (resp, range) = self.0.handle_streaming_request();
+        // TODO: make it pass by inner
         (handle_qe_stream_response(resp, range.clone()), range.into())
     }
 

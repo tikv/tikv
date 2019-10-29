@@ -587,7 +587,9 @@ mod tests {
 
     impl RequestHandler for StreamFixture {
         // TODO: Make this KeyRange to real KeyRange
-        fn handle_streaming_request(&mut self) -> (Result<(Option<coppb::Response>, bool)>, coppb::KeyRange) {
+        fn handle_streaming_request(
+            &mut self,
+        ) -> (Result<(Option<coppb::Response>, bool)>, coppb::KeyRange) {
             let is_finished = if self.result_len == 0 {
                 true
             } else {
@@ -602,7 +604,7 @@ mod tests {
                     let handle_duration_ms = self.handle_durations_millis.next().unwrap();
                     thread::sleep(Duration::from_millis(handle_duration_ms));
                     match val {
-                        Ok(resp) => (Ok((Some(resp), is_finished)) , coppb::KeyRange::default()),
+                        Ok(resp) => (Ok((Some(resp), is_finished)), coppb::KeyRange::default()),
                         Err(e) => (Err(e), coppb::KeyRange::default()),
                     }
                 }
@@ -633,7 +635,9 @@ mod tests {
 
     impl RequestHandler for StreamFromClosure {
         // TODO: ditto, make this KeyRange to real KeyRange
-        fn handle_streaming_request(&mut self) -> (Result<(Option<coppb::Response>, bool)>, coppb::KeyRange) {
+        fn handle_streaming_request(
+            &mut self,
+        ) -> (Result<(Option<coppb::Response>, bool)>, coppb::KeyRange) {
             let (result, _) = (self.result_generator)(self.nth);
             self.nth += 1;
             (result, coppb::KeyRange::default())
@@ -931,7 +935,7 @@ mod tests {
                 resp.set_data(vec![1, 2, 13]);
                 (Ok((Some(resp), false)), coppb::KeyRange::default())
             }
-            1 => (Ok((None, false)) , coppb::KeyRange::default()),
+            1 => (Ok((None, false)), coppb::KeyRange::default()),
             _ => {
                 counter_clone.store(1, atomic::Ordering::SeqCst);
                 (Err(box_err!("unreachable")), coppb::KeyRange::default())
@@ -957,7 +961,7 @@ mod tests {
                 resp.set_data(vec![1, 2, 23]);
                 (Ok((Some(resp), false)), coppb::KeyRange::default())
             }
-            1 => (Err(box_err!("foo")) , coppb::KeyRange::default()),
+            1 => (Err(box_err!("foo")), coppb::KeyRange::default()),
             _ => {
                 counter_clone.store(1, atomic::Ordering::SeqCst);
                 (Err(box_err!("unreachable")), coppb::KeyRange::default())

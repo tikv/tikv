@@ -59,12 +59,11 @@ impl std::fmt::Debug for IntervalRange {
 }
 
 impl Into<KeyRange> for IntervalRange {
-    // TODO: make clear if we need extra checking
+    // We don't need extra checkings here.
     fn into(self) -> KeyRange {
-        let mut range = KeyRange::new();
-        // TODO: reverse it?
-        range.start = self.lower_inclusive;
-        range.end = self.upper_exclusive;
+        let mut range = KeyRange::default();
+        range.start = self.upper_exclusive;
+        range.end = self.lower_inclusive;
         range
     }
 }
