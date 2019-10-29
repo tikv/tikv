@@ -64,11 +64,6 @@ ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
 
-# Update Titan to latest master before build
-ifeq ($(UPDATE_TITAN),1)
-ENABLE_FEATURES += update_titan
-endif
-
 ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
@@ -145,7 +140,7 @@ fail_release:
 # -- https://github.com/{TITAN_REPO}/titan/tree/{TITAN_BRANCH}.
 # Default: TITAN_REPO=pingcap, TITAN_BRANCH=master
 titan_release:
-	UPDATE_TITAN=1 make release
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES} update_titan"
 
 ## Distribution builds (true release builds)
 ## -------------------
