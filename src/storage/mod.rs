@@ -47,6 +47,8 @@ pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
+pub type BatchResults<T> = Vec<(u64, Result<T>)>;
+pub type BatchCallback<T> = Box<dyn Fn(BatchResults<T>) + Send>;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
@@ -106,7 +108,9 @@ impl Mutation {
 
 pub enum StorageCb {
     Boolean(Callback<()>),
+    BatchBoolean(BatchCallback<()>),
     Booleans(Callback<Vec<Result<()>>>),
+    BatchBooleans(BatchCallback<Vec<Result<()>>>),
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
@@ -315,6 +319,10 @@ pub enum Command {
     MvccByKey { ctx: Context, key: Key },
     /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
     MvccByStartTs { ctx: Context, start_ts: u64 },
+    Batch {
+        ids: Vec<Option<u64>>,
+        commands: Vec<Command>,
+    },
 }
 
 impl Display for Command {
@@ -452,6 +460,10 @@ impl Display for Command {
                 ref ctx,
                 ref start_ts,
             } => write!(f, "kv::command::mvccbystartts {:?} | {:?}", start_ts, ctx),
+            Command::Batch {
+                ref ids,
+                ref commands,
+            } => write!(f, "kv::command::batch {:?} | {:?}", ids, commands),
         }
     }
 }
@@ -499,6 +511,7 @@ impl Command {
             Command::MvccByKey { .. } |
             Command::MvccByStartTs { .. } => true,
             Command::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
+            Command::Batch { ref commands, .. } => if commands.is_empty() { unreachable!() } else { commands[0].readonly() },
             _ => false,
         }
     }
@@ -512,6 +525,13 @@ impl Command {
             Command::ScanLock { .. }
             | Command::ResolveLock { .. }
             | Command::ResolveLockLite { .. } => true,
+            Command::Batch { ref commands, .. } => {
+                if commands.is_empty() {
+                    unreachable!()
+                } else {
+                    commands[0].is_sys_cmd()
+                }
+            }
             _ => false,
         }
     }
@@ -541,6 +561,13 @@ impl Command {
             Command::Pause { .. } => CommandKind::pause,
             Command::MvccByKey { .. } => CommandKind::key_mvcc,
             Command::MvccByStartTs { .. } => CommandKind::start_ts_mvcc,
+            Command::Batch { ref commands, .. } => {
+                if commands.is_empty() {
+                    unreachable!()
+                } else {
+                    commands[0].tag()
+                }
+            }
         }
     }
 
@@ -560,6 +587,7 @@ impl Command {
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
             | Command::MvccByKey { .. } => 0,
+            Command::Batch { .. } => unreachable!(),
         }
     }
 
@@ -580,6 +608,7 @@ impl Command {
             | Command::Pause { ref ctx, .. }
             | Command::MvccByKey { ref ctx, .. }
             | Command::MvccByStartTs { ref ctx, .. } => ctx,
+            Command::Batch { .. } => unreachable!(),
         }
     }
 
@@ -600,6 +629,7 @@ impl Command {
             | Command::Pause { ref mut ctx, .. }
             | Command::MvccByKey { ref mut ctx, .. }
             | Command::MvccByStartTs { ref mut ctx, .. } => ctx,
+            Command::Batch { .. } => unreachable!(),
         }
     }
 
@@ -657,6 +687,11 @@ impl Command {
                 ref primary_key, ..
             } => {
                 bytes += primary_key.as_encoded().len();
+            }
+            Command::Batch { ref commands, .. } => {
+                for cmd in commands {
+                    bytes += cmd.write_bytes();
+                }
             }
             _ => {}
         }
@@ -829,6 +864,11 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Get concurrency of normal readpool.
     pub fn readpool_normal_concurrency(&self) -> usize {
         self.read_pool_normal.get_pool_size()
+    }
+
+    /// Get concurrency of scheduler pool.
+    pub fn sched_pool_concurrency(&self) -> usize {
+        self.sched.get_pool_size()
     }
 
     /// Create a `Storage` from given engine.
@@ -1205,6 +1245,38 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         Ok(())
     }
 
+    pub fn async_batch_prewrite_command(
+        &self,
+        mut command: Command,
+        callback: BatchCallback<Vec<Result<()>>>,
+    ) -> Result<()> {
+        if let Command::Batch {
+            ref mut ids,
+            ref commands,
+        } = command
+        {
+            let len = commands.len();
+            for i in 0..len {
+                if let Command::Prewrite { ref mutations, .. } = commands[i] {
+                    for m in mutations {
+                        let key_size = m.key().as_encoded().len();
+                        if key_size > self.max_key_size {
+                            callback(vec![(
+                                ids[i].take().unwrap(),
+                                Err(Error::KeyTooLarge(key_size, self.max_key_size)),
+                            )]);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        self.schedule(command, StorageCb::BatchBooleans(callback))?;
+        // TODO(tabokie): batch_prewrite metrics
+        KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
+        Ok(())
+    }
+
     /// Acquire a Pessimistic lock on the keys.
     /// Schedules a [`Command::AcquirePessimisticLock`].
     pub fn async_acquire_pessimistic_lock(
@@ -1259,6 +1331,15 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
+        Ok(())
+    }
+
+    pub fn async_batch_commit_command(
+        &self,
+        command: Command,
+        callback: BatchCallback<()>,
+    ) -> Result<()> {
+        self.schedule(command, StorageCb::BatchBoolean(callback))?;
         Ok(())
     }
 

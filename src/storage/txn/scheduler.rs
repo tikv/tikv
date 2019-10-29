@@ -33,7 +33,9 @@ use tikv_util::{collections::HashMap, time::SlowTimer};
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockMgr};
 use crate::storage::txn::latch::{Latches, Lock};
-use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
+use crate::storage::txn::process::{
+    execute_batch_callback, execute_callback, Executor, MsgScheduler, ProcessResult, Task,
+};
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
@@ -173,6 +175,10 @@ impl<L: LockMgr> SchedulerInner<L> {
         id + 1
     }
 
+    fn peek_task_mutex(&self, cid: u64) -> &Mutex<HashMap<u64, TaskContext>> {
+        &self.task_contexts[id_index(cid)]
+    }
+
     fn dequeue_task(&self, cid: u64) -> Task {
         let mut tasks = self.task_contexts[id_index(cid)].lock();
         let task = tasks.get_mut(&cid).unwrap().task.take().unwrap();
@@ -279,6 +285,10 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         }
     }
 
+    pub fn get_pool_size(&self) -> usize {
+        self.inner.worker_pool.pool.get_pool_size()
+    }
+
     pub fn run_cmd(&self, cmd: Command, callback: StorageCb) {
         self.on_receive_new_cmd(cmd, callback);
     }
@@ -330,16 +340,32 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         }
     }
 
-    fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCb) {
+    fn on_receive_new_cmd(&self, cmd: Command, mut callback: StorageCb) {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
-            execute_callback(
-                callback,
-                ProcessResult::Failed {
-                    err: StorageError::SchedTooBusy,
-                },
-            );
+            if let Command::Batch { ids, .. } = cmd {
+                execute_batch_callback(
+                    &mut callback,
+                    ids.into_iter()
+                        .map(|id| {
+                            (
+                                id.unwrap(),
+                                ProcessResult::Failed {
+                                    err: StorageError::SchedTooBusy,
+                                },
+                            )
+                        })
+                        .collect(),
+                )
+            } else {
+                execute_callback(
+                    callback,
+                    ProcessResult::Failed {
+                        err: StorageError::SchedTooBusy,
+                    },
+                );
+            }
             return;
         }
         self.schedule_command(cmd, callback);
@@ -352,6 +378,11 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         let tag = task.tag;
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
+        let ids = if let Command::Batch { ids, .. } = task.cmd() {
+            Some(ids.clone())
+        } else {
+            None
+        };
 
         let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
@@ -362,7 +393,29 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
-                self.finish_with_err(cid, e.into());
+                if let Some(ids) = ids {
+                    self.on_batch_finish(
+                        cid,
+                        ids.into_iter()
+                            .filter_map(move |id| {
+                                if let Some(id) = id {
+                                    // TODO(tabokie): unsafe unwrap
+                                    Some((
+                                        id,
+                                        ProcessResult::Failed {
+                                            err: e.maybe_clone().unwrap().into(),
+                                        },
+                                    ))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    );
+                    self.batch_cleanup(cid);
+                } else {
+                    self.finish_with_err(cid, e.into());
+                }
             } else {
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
             }
@@ -458,6 +511,18 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
             .wait_for(start_ts, tctx.cb, pr, lock, is_first_lock);
         self.release_lock(&tctx.lock, cid);
     }
+
+    fn on_batch_finish(&self, cid: u64, results: Vec<(u64, ProcessResult)>) {
+        let mut tasks = self.inner.peek_task_mutex(cid).lock();
+        let tctx = tasks.get_mut(&cid).unwrap();
+        execute_batch_callback(&mut tctx.cb, results);
+    }
+
+    // Only called when all commands in batch are finished.
+    fn batch_cleanup(&self, cid: u64) {
+        let tctx = self.inner.dequeue_task_context(cid);
+        self.release_lock(&tctx.lock, cid);
+    }
 }
 
 impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
@@ -480,6 +545,46 @@ impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
             } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock),
             _ => unreachable!(),
         }
+    }
+
+    fn on_batch_msg(&self, tasks: Vec<(u64, Msg)>) {
+        if tasks.is_empty() {
+            return;
+        }
+        let cid = match tasks[0].1 {
+            Msg::ReadFinished { cid, .. } => cid,
+            Msg::WriteFinished { cid, .. } => cid,
+            Msg::FinishedWithErr { cid, .. } => cid,
+            _ => panic!("msg type mismatch"),
+        };
+        self.on_batch_finish(
+            cid,
+            tasks
+                .into_iter()
+                .map(|(id, msg)| {
+                    (
+                        id,
+                        match msg {
+                            Msg::ReadFinished { pr, .. } => pr,
+                            Msg::WriteFinished { pr, result, .. } => match result {
+                                Ok(()) => pr,
+                                Err(e) => ProcessResult::Failed {
+                                    err: StorageError::from(e),
+                                },
+                            },
+                            Msg::FinishedWithErr { err, .. } => ProcessResult::Failed {
+                                err: StorageError::from(err),
+                            },
+                            _ => unreachable!(),
+                        },
+                    )
+                })
+                .collect(),
+        );
+    }
+
+    fn on_batch_finished(&self, cid: u64) {
+        self.batch_cleanup(cid);
     }
 }
 
@@ -517,6 +622,17 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         | Command::DeleteRange { .. }
         | Command::MvccByKey { .. }
         | Command::MvccByStartTs { .. } => Lock::new(vec![]),
+        Command::Batch { ref commands, .. } => {
+            let mut k: Vec<&Key> = vec![];
+            for cmd in commands {
+                if let Command::Prewrite { ref mutations, .. } = cmd {
+                    k.append(&mut mutations.iter().map(|x| x.key()).collect());
+                } else if let Command::Commit { ref keys, .. } = cmd {
+                    k.append(&mut keys.iter().collect());
+                }
+            }
+            latches.gen_lock(&k)
+        }
     }
 }
 
