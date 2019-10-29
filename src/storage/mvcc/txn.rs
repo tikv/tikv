@@ -490,6 +490,22 @@ impl<S: Snapshot> MvccTxn<S> {
                         pessimistic: true,
                     });
                 }
+                // A lock with larger min_commit_ts than current commit_ts can't be committed
+                if commit_ts < lock.min_commit_ts {
+                    info!(
+                        "trying to commit with smaller commit_ts than min_commit_ts";
+                        "key" => %key,
+                        "start_ts" => self.start_ts,
+                        "commit_ts" => commit_ts,
+                        "min_commit_ts" => lock.min_commit_ts,
+                    );
+                    return Err(Error::CommitTsExpired {
+                        start_ts: self.start_ts,
+                        commit_ts,
+                        key: key.into_raw()?,
+                        min_commit_ts: lock.min_commit_ts,
+                    });
+                }
                 (
                     lock.lock_type,
                     lock.short_value.take(),
@@ -1139,6 +1155,25 @@ mod tests {
 
         let long_value = "v".repeat(SHORT_VALUE_MAX_LEN + 1).into_bytes();
         test_mvcc_txn_commit_err_imp(b"k2", &long_value);
+    }
+
+    #[test]
+    fn test_min_commit_ts() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (k, v) = (b"k", b"v");
+        let ts = super::super::compose_ts;
+
+        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(10, 0), 100, 0);
+        must_check_txn_status(&engine, k, ts(10, 0), ts(20, 0), ts(20, 0), 100, 0);
+        // The the min_commit_ts should be ts(20, 1)
+        must_commit_err(&engine, k, ts(10, 0), ts(15, 0));
+        must_commit_err(&engine, k, ts(10, 0), ts(20, 0));
+        must_commit(&engine, k, ts(10, 0), ts(20, 1));
+
+        must_prewrite_put_for_large_txn(&engine, k, v, k, ts(30, 0), 100, 0);
+        must_check_txn_status(&engine, k, ts(30, 0), ts(40, 0), ts(40, 0), 100, 0);
+        must_commit(&engine, k, ts(30, 0), ts(50, 0));
     }
 
     #[test]
