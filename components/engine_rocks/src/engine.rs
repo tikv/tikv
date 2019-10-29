@@ -279,7 +279,7 @@ mod tests {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
         })
-            .unwrap();
+        .unwrap();
 
         assert_eq!(data.len(), 2);
     }
