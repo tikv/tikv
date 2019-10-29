@@ -70,8 +70,8 @@ impl AdaptiveSpawn for TokioPool {
 #[derive(Clone)]
 pub struct FuturePool {
     // pool: Arc<ThreadPool>,
-    // pool: TokioPool,
-    pool: TexnPool,
+    pool: TokioPool,
+    // pool: TexnPool,
     env: Arc<Env>,
     max_tasks: usize,
 }
