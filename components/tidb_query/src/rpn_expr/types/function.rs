@@ -41,7 +41,8 @@ pub struct RpnFnMeta {
     /// Validator against input expression tree.
     pub validator_ptr: fn(expr: &Expr) -> Result<()>,
 
-    pub init_data_fn: fn(expr: &Expr) -> Box<dyn Any + Send>,
+    /// Initializer of the attached data of the RPN function.
+    pub data_initializer_ptr: fn(expr: &Expr) -> Box<dyn Any + Send>,
 
     #[allow(clippy::type_complexity)]
     /// The RPN function.

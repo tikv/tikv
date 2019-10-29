@@ -58,6 +58,13 @@
 //! validated. The validator function should have the signature `&tipb::Expr -> Result<()>`.
 //! E.g., `#[rpn_fn(raw_varg, extra_validator = json_object_validator)]`
 //!
+//! ### `data_initializer`
+//!
+//! A function name for custom code to initialize attached data from its tree node in the
+//! expression tree. After setting this argument, `data` is available in the `capture` array.
+//! The initializer function should have the signature `&tipb::Expr -> `T`.
+//! E.g., `#[rpn_fn(varg, capture = [data], data_initializer = helper_initializer)]`
+//!
 //! ### `capture`
 //!
 //! An array of argument names which are passed from the caller to the expanded
@@ -70,7 +77,7 @@
 //! * `output_rows: usize`
 //! * `args: &[rpn_expr::RpnStackNode<'_>]`
 //! * `extra: &mut rpn_expr::RpnFnCallExtra<'_>`
-//! * `data: &T` (where T is your data type)
+//! * `data: &T` (where T is the type returned by your data initializer)
 //!
 //! ```ignore
 //! // This generates `with_context_fn_meta() -> RpnFnMeta`
@@ -622,7 +629,7 @@ impl VargsRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    init_data_fn: init_data #ty_generics_turbofish,
+                    data_initializer_ptr: init_data #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -744,7 +751,7 @@ impl RawVargsRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    init_data_fn: init_data #ty_generics_turbofish,
+                    data_initializer_ptr: init_data #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -986,7 +993,7 @@ impl NormalRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    init_data_fn: init_data #ty_generics_turbofish,
+                    data_initializer_ptr: init_data #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }

@@ -255,8 +255,13 @@ impl RpnExpression {
                         ret_field_type,
                         implicit_args,
                     };
-                    let ret =
-                        (func_meta.fn_ptr)(ctx, output_rows, stack_slice, &mut call_extra, data)?;
+                    let ret = (func_meta.fn_ptr)(
+                        ctx,
+                        output_rows,
+                        stack_slice,
+                        &mut call_extra,
+                        &**data,
+                    )?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Generated {
@@ -1039,6 +1044,55 @@ mod tests {
         assert_eq!(
             val.vector_value().unwrap().as_ref().as_int_slice(),
             [Some(574), Some(-13)]
+        );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+    }
+
+    #[test]
+    fn test_rpn_fn_data() {
+        use tipb::{Expr, ScalarFuncSig};
+
+        #[rpn_fn(capture = [data], data_initializer = prepare_a)]
+        fn fn_a(data: &i64, v: &Option<Int>) -> Result<Option<Int>> {
+            Ok(v.map(|v| v + *data))
+        }
+
+        fn prepare_a(_expr: &Expr) -> i64 {
+            42
+        }
+
+        fn fn_mapper(expr: &Expr) -> Result<RpnFnMeta> {
+            // fn_a: CastIntAsInt
+            Ok(match expr.get_sig() {
+                ScalarFuncSig::CastIntAsInt => fn_a_fn_meta(),
+                _ => unreachable!(),
+            })
+        }
+
+        let node = ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsInt, FieldTypeTp::LongLong)
+            .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+            .build();
+
+        // Build RPN expression from this expression tree.
+        let exp =
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 1).unwrap();
+
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(2, EvalType::Int);
+            col.mut_decoded().push_int(Some(1)); // row 1
+            col.mut_decoded().push_int(None); // row 0
+            col
+        }]);
+        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
+
+        let mut ctx = EvalContext::default();
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[1, 0], 2);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().as_int_slice(),
+            [None, Some(43)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);

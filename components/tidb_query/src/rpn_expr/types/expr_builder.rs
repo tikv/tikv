@@ -309,7 +309,7 @@ where
 
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
-    let data = (func_meta.init_data_fn)(&tree_node);
+    let data = (func_meta.data_initializer_ptr)(&tree_node);
 
     // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
     let datums = datum::decode(&mut tree_node.get_val())?;
