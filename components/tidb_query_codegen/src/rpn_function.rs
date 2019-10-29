@@ -485,11 +485,16 @@ impl ValidatorFnGenerator {
     }
 }
 
-fn generate_init_data_fn(data_initializer: &Option<TokenStream>) -> TokenStream {
+fn generate_init_data_fn(
+    data_initializer: &Option<TokenStream>,
+    impl_generics: &ImplGenerics<'_>,
+    where_clause: Option<&WhereClause>,
+) -> TokenStream {
     let drop_fn = &quote! {drop};
     let init_data_fn = data_initializer.as_ref().unwrap_or(drop_fn);
     quote! {
-        fn init_data(expr: &::tipb::Expr) -> Box<dyn std::any::Any + Send> {
+        fn init_data #impl_generics (expr: &::tipb::Expr)
+            -> Box<dyn std::any::Any + Send> #where_clause {
             Box::new(#init_data_fn(expr))
         }
     }
@@ -561,7 +566,8 @@ impl VargsRpnFn {
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
         let arg_type = &self.arg_type;
-        let init_data_fn = generate_init_data_fn(&self.data_initializer);
+        let init_data_fn =
+            generate_init_data_fn(&self.data_initializer, &impl_generics, where_clause);
         let downcast_data = self.data_initializer.as_ref().map(|_| {
             quote! {
                 let data = std::any::Any::downcast_ref(data).expect("downcast data error");
@@ -616,7 +622,7 @@ impl VargsRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    init_data_fn: init_data,
+                    init_data_fn: init_data #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -682,7 +688,8 @@ impl RawVargsRpnFn {
         let ty_generics_turbofish = ty_generics.as_turbofish();
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
-        let init_data_fn = generate_init_data_fn(&self.data_initializer);
+        let init_data_fn =
+            generate_init_data_fn(&self.data_initializer, &impl_generics, where_clause);
         let downcast_data = self.data_initializer.as_ref().map(|_| {
             quote! {
                 let data = std::any::Any::downcast_ref(data).expect("downcast data error");
@@ -737,7 +744,7 @@ impl RawVargsRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    init_data_fn: init_data,
+                    init_data_fn: init_data #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -947,7 +954,8 @@ impl NormalRpnFn {
             evaluator = quote! { <ArgConstructor<#arg_type, _>>::new(#arg_index, #evaluator) };
         }
         let fn_name = self.item_fn.sig.ident.to_string();
-        let init_data_fn = generate_init_data_fn(&self.data_initializer);
+        let init_data_fn =
+            generate_init_data_fn(&self.data_initializer, &impl_generics, where_clause);
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
@@ -978,7 +986,7 @@ impl NormalRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    init_data_fn: init_data,
+                    init_data_fn: init_data #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }

@@ -1,8 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
+use std::hash::Hash;
 
 use tidb_query_codegen::rpn_fn;
+use tipb::Expr;
 
 use crate::codec::data_type::*;
 use crate::Result;
@@ -231,6 +234,39 @@ pub fn compare_in<T: Evaluable + Eq>(args: &[&Option<T>]) -> Result<Option<Int>>
             Ok(default_ret)
         }
     }
+}
+
+#[rpn_fn(varg, capture = [data], min_args = 1, data_initializer = init_compare_in_data::<T>)]
+#[inline]
+pub fn fast_compare_in<T: Evaluable + Hash + Eq>(
+    data: &HashSet<T>,
+    args: &[&Option<T>],
+) -> Result<Option<Int>> {
+    assert!(!args.is_empty());
+    let base_val = args[0];
+    match base_val {
+        None => Ok(None),
+        Some(base_val) => {
+            let mut default_ret = Some(0);
+            for arg in &args[1..] {
+                match arg {
+                    None => {
+                        default_ret = None;
+                    }
+                    Some(v) => {
+                        if v == base_val {
+                            return Ok(Some(1));
+                        }
+                    }
+                }
+            }
+            Ok(default_ret)
+        }
+    }
+}
+
+fn init_compare_in_data<T: Evaluable + Hash + Eq>(expr: &Expr) -> HashSet<T> {
+    HashSet::new()
 }
 
 #[cfg(test)]
