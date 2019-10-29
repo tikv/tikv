@@ -142,8 +142,7 @@ impl Simulator for ServerCluster {
 
         let engine = RaftKv::new(sim_router.clone());
 
-        let mut gc_worker =
-            GCWorker::new(engine.clone(), None, None, cfg.storage.gc_ratio_threshold);
+        let mut gc_worker = GCWorker::new(engine.clone(), None, None, cfg.gc.clone());
         gc_worker.start().unwrap();
 
         let store = create_raft_storage(engine, &cfg.storage, storage_read_pool, None)?;
