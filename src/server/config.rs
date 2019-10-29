@@ -83,9 +83,9 @@ pub struct Config {
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
     pub enable_request_batch: bool,
-    // Whether to collect batch across commands under heavy workload. When disabled, wait duration is ignored.
+    // Whether to collect batch across commands under heavy workload.
     pub request_batch_enable_cross_command: bool,
-    // Wait duration before each mini-batch is processed.
+    // Wait duration before each request batch is processed.
     pub request_batch_wait_duration: ReadableDuration,
 
     // Server labels to specify some attributes about this server.

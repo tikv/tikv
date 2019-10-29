@@ -160,7 +160,7 @@ impl BatchLimiter {
             }
         } else if self.sample_size > REQUEST_BATCH_LIMITER_SAMPLE_WINDOW {
             self.sample_size = 0;
-            let latency = self.latency_reader.read() * 1000.0;
+            let latency = self.latency_reader.read_latest_avg() * 1000.0;
             let load = self.thread_load_reader.load();
             self.latency_estimation = (self.latency_estimation + latency) / 2.0;
             if load > 70 {

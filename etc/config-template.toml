@@ -113,10 +113,12 @@
 ## Whether to enable request batch.
 # enable-request-batch = true
 
-## Whether to collect batch across commands. When disabled, wait duration is ignored.
+## Whether to collect batch across commands.
+## When disabled, wait duration is ignored. When enabled, collect batch for specified duration
+## when load is high.
 # request-batch-enable-cross-command = true
 
-## Wait duration before each mini-batch is processed.
+## Wait duration before each request batch is processed.
 # request-batch-wait-duration = "1ms"
 
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
