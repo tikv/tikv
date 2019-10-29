@@ -75,7 +75,11 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .fill_cache(self.fill_cache)
             .prefix_seek(!self.multi)
-            .scan_mode(ScanMode::Mixed)
+            .scan_mode(if self.multi {
+                ScanMode::Mixed
+            } else {
+                ScanMode::Forward
+            })
             .build()?;
 
         Ok(PointGetter {
