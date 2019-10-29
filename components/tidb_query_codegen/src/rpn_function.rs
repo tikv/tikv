@@ -1312,7 +1312,13 @@ mod tests_normal {
                 {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
                     <ArgConstructor<A::X, _>>::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData))
-                                .eval(Null, ctx, output_rows, args, extra)
+                                .eval(Null, ctx, output_rows, args, extra, data)
+                }
+                fn init_data <A: M, B> (expr: &::tipb::Expr)-> Box<dyn std::any::Any + Send>
+                where
+                    B: N<A>
+                {
+                    Box::new(drop(expr))
                 }
                 fn validate<A: M, B>(expr: &tipb::Expr) -> crate::Result<()>
                 where
@@ -1328,6 +1334,7 @@ mod tests_normal {
                 }
                 crate::rpn_expr::RpnFnMeta {
                     name: "foo",
+                    data_initializer_ptr: init_data::<A, B>,
                     validator_ptr: validate::<A, B>,
                     fn_ptr: run::<A, B>,
                 }
