@@ -500,7 +500,10 @@ fn test_node_merge_brain_split() {
 
     cluster.clear_send_filters();
 
-    cluster.must_transfer_leader(1, new_peer(3, 3));
+    // Wait until store 3 get data after merging
+    must_get_equal(&cluster.get_engine(3), b"k40", b"v4");
+    let right_peer_3 = find_peer(&right, 3).cloned().unwrap();
+    cluster.must_transfer_leader(right.get_id(), right_peer_3);
     cluster.must_put(b"k40", b"v5");
 
     // Make sure the two regions are already merged on store 3.
