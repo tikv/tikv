@@ -39,6 +39,3 @@ pub use crate::engine_iterator::*;
 
 mod options;
 mod util;
-
-#[cfg(test)]
-mod tests;
