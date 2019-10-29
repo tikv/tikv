@@ -6,7 +6,7 @@ use codec::prelude::*;
 use num_traits::PrimInt;
 use tikv_util::codec::read_slice;
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct RowSlice<'a> {
     is_big: bool,
     non_null_ids: &'a [u8],
@@ -26,23 +26,36 @@ impl RowSlice<'_> {
     /// Panics if the value of first byte is not 128(v2 version code)
     fn from_bytes(mut data: &[u8]) -> Result<RowSlice> {
         assert_eq!(data.read_u8()?, super::CODEC_VERSION);
-        let mut row = RowSlice::default();
-        row.is_big = data.read_u8()? == super::Flags::BIG.bits();
+        let is_big = super::Flags::from_bits_truncate(data.read_u8()?) == super::Flags::BIG;
+        let mut non_null_ids: &[u8] = &[];
+        let mut null_ids: &[u8] = &[];
+        let mut offsets: &[u16] = &[];
+        let mut non_null_ids_big: &[u32] = &[];
+        let mut null_ids_big: &[u32] = &[];
+        let mut offsets_big: &[u32] = &[];
 
         // read ids count
         let non_null_cnt = data.read_u16_le()? as usize;
         let null_cnt = data.read_u16_le()? as usize;
-        if row.is_big {
-            row.non_null_ids_big = read_ints_le(&mut data, non_null_cnt)?;
-            row.null_ids_big = read_ints_le(&mut data, null_cnt)?;
-            row.offsets_big = read_ints_le(&mut data, non_null_cnt)?;
+        if is_big {
+            non_null_ids_big = read_ints_le(&mut data, non_null_cnt)?;
+            null_ids_big = read_ints_le(&mut data, null_cnt)?;
+            offsets_big = read_ints_le(&mut data, non_null_cnt)?;
         } else {
-            row.non_null_ids = read_ints_le(&mut data, non_null_cnt)?;
-            row.null_ids = read_ints_le(&mut data, null_cnt)?;
-            row.offsets = read_ints_le(&mut data, non_null_cnt)?;
+            non_null_ids = read_ints_le(&mut data, non_null_cnt)?;
+            null_ids = read_ints_le(&mut data, null_cnt)?;
+            offsets = read_ints_le(&mut data, non_null_cnt)?;
         }
-        row.values = data;
-        Ok(row)
+        Ok(RowSlice {
+            is_big,
+            non_null_ids,
+            null_ids,
+            offsets,
+            non_null_ids_big,
+            null_ids_big,
+            offsets_big,
+            values: data,
+        })
     }
 
     /// Search `id` in non-null ids
@@ -118,9 +131,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::encoder::RowEncoder;
+    use super::super::encoder::{Column, RowEncoder};
     use super::{read_ints_le, RowSlice};
-    use crate::codec::Datum;
+    use crate::codec::data_type::ScalarValue;
     use codec::prelude::NumberEncoder;
     use std::u16;
 
@@ -143,18 +156,25 @@ mod tests {
     }
 
     fn encoded_data_big() -> Vec<u8> {
-        let ids: Vec<i64> = vec![1, 356, 33, 3];
-        let values = vec![Datum::I64(1000), Datum::I64(2), Datum::Null, Datum::U64(3)];
+        let cols = vec![
+            Column::new(1, 1000),
+            Column::new(356, 2),
+            Column::new(33, ScalarValue::Int(None)),
+            Column::new(3, 3),
+        ];
         let mut buf = vec![];
-        buf.write_row(values, &ids).unwrap();
+        buf.write_row(cols).unwrap();
         buf
     }
 
     fn encoded_data() -> Vec<u8> {
-        let ids: Vec<i64> = vec![1, 33, 3];
-        let values = vec![Datum::I64(1000), Datum::Null, Datum::U64(3)];
+        let cols = vec![
+            Column::new(1, 1000),
+            Column::new(33, ScalarValue::Int(None)),
+            Column::new(3, 3),
+        ];
         let mut buf = vec![];
-        buf.write_row(values, &ids).unwrap();
+        buf.write_row(cols).unwrap();
         buf
     }
 
@@ -200,24 +220,22 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use super::super::encoder::RowEncoder;
+    use super::super::encoder::{Column, RowEncoder};
     use super::RowSlice;
-    use crate::codec::Datum;
+    use crate::codec::data_type::ScalarValue;
     use test::black_box;
 
     fn encoded_data(len: usize) -> Vec<u8> {
-        let mut ids = Vec::with_capacity(len);
-        let mut datums = Vec::with_capacity(len);
+        let mut cols = vec![];
         for i in 0..(len as i64) {
-            ids.push(i);
             if i % 10 == 0 {
-                datums.push(Datum::Null)
+                cols.push(Column::new(i, ScalarValue::Int(None)))
             } else {
-                datums.push(Datum::I64(i));
+                cols.push(Column::new(i, i))
             }
         }
         let mut buf = vec![];
-        buf.write_row(datums, &ids).unwrap();
+        buf.write_row(cols).unwrap();
         buf
     }
 

@@ -15,9 +15,14 @@
 //! non-null values offset: when big, offset is 4 bytes, otherwise 2 bytes
 
 use crate::codec::{
+    data_type::ScalarValue,
     mysql::{decimal::DecimalEncoder, json::JsonEncoder},
-    Datum, Error, Result,
+    Error, Result,
 };
+
+use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag};
+use tipb::FieldType;
+
 use codec::prelude::*;
 use std::{i16, i32, i8, u16, u32, u8};
 
@@ -32,34 +37,59 @@ const MAX_U8: u64 = u8::MAX as u64;
 const MAX_U16: u64 = u16::MAX as u64;
 const MAX_U32: u64 = u32::MAX as u64;
 
-pub trait RowEncoder: NumberEncoder {
-    fn write_row(&mut self, datums: Vec<Datum>, ids: &[i64]) -> Result<()> {
-        let mut is_big = false;
-        let mut null_ids = Vec::with_capacity(ids.len());
-        let mut non_null_ids = Vec::with_capacity(ids.len());
-        let mut non_null_cols = Vec::with_capacity(ids.len());
+pub struct Column {
+    id: i64,
+    value: ScalarValue,
+    ft: FieldType,
+}
 
-        for (datum, id) in datums.into_iter().zip(ids) {
-            if *id > 255 {
+impl Column {
+    pub fn new(id: i64, value: impl Into<ScalarValue>) -> Self {
+        Column {
+            id,
+            ft: FieldType::default(),
+            value: value.into(),
+        }
+    }
+    pub fn new_unsigned(id: i64, value: impl Into<ScalarValue>) -> Self {
+        let mut ft = FieldType::default();
+        ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
+        Column {
+            id,
+            ft,
+            value: value.into(),
+        }
+    }
+}
+
+pub trait RowEncoder: NumberEncoder {
+    fn write_row(&mut self, columns: Vec<Column>) -> Result<()> {
+        let mut is_big = false;
+        let mut null_ids = Vec::with_capacity(columns.len());
+        let mut non_null_ids = Vec::with_capacity(columns.len());
+        let mut non_null_cols = Vec::with_capacity(columns.len());
+
+        for col in columns {
+            if col.id > 255 {
                 is_big = true;
             }
 
-            if datum == Datum::Null {
-                null_ids.push(*id);
+            if col.value.is_none() {
+                null_ids.push(col.id);
             } else {
-                non_null_cols.push((datum, *id));
+                non_null_cols.push(col);
             }
         }
-        non_null_cols.sort_by_key(|(_, id)| *id);
+        non_null_cols.sort_by_key(|c| c.id);
         null_ids.sort();
 
         let mut offset_wtr = vec![];
         let mut value_wtr = vec![];
         let mut offsets = vec![];
 
-        for (datum, id) in non_null_cols {
-            value_wtr.write_datum(datum)?;
-            non_null_ids.push(id);
+        for col in non_null_cols {
+            non_null_ids.push(col.id);
+            value_wtr.write_value(col)?;
             offsets.push(value_wtr.len());
 
             if value_wtr.len() > (u16::MAX as usize) {
@@ -92,9 +122,9 @@ pub trait RowEncoder: NumberEncoder {
         let flag = if is_big {
             super::Flags::BIG
         } else {
-            super::Flags::SMALL
+            super::Flags::default()
         };
-        self.write_u8(flag.bits())
+        self.write_u8(flag.bits)
     }
 
     #[inline]
@@ -120,23 +150,25 @@ impl<T: BufferWriter> RowEncoder for T {}
 
 trait DatumEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
     #[inline]
-    fn write_datum(&mut self, datum: Datum) -> Result<()> {
-        match datum {
-            Datum::I64(i) => self.encode_i64(i).map_err(Error::from),
-            Datum::U64(u) => self.encode_u64(u).map_err(Error::from),
-            Datum::Bytes(b) => self.write_bytes(&b).map_err(Error::from),
-            Datum::Dec(d) => {
-                let (prec, frac) = d.prec_and_frac();
-                self.write_decimal(&d, prec, frac)?;
+    fn write_value(&mut self, col: Column) -> Result<()> {
+        match col.value {
+            ScalarValue::Int(Some(v)) if col.ft.is_unsigned() => {
+                self.encode_u64(v as u64).map_err(Error::from)
+            }
+            ScalarValue::Int(Some(v)) => self.encode_i64(v).map_err(Error::from),
+            ScalarValue::Decimal(Some(v)) => {
+                let (prec, frac) = v.prec_and_frac();
+                self.write_decimal(&v, prec, frac)?;
                 Ok(())
             }
-            Datum::Json(j) => self.write_json(&j),
-
-            Datum::F64(f) => self.encode_u64(f.to_bits()).map_err(Error::from),
-            Datum::Time(t) => self.encode_u64(t.to_packed_u64()).map_err(Error::from),
-            Datum::Dur(d) => self.encode_i64(d.to_nanos()).map_err(Error::from),
-            Datum::Min | Datum::Max => unimplemented!("not supported yet"),
-            Datum::Null => unreachable!(),
+            ScalarValue::Real(Some(v)) => self.encode_u64(v.to_bits()).map_err(Error::from),
+            ScalarValue::Bytes(Some(v)) => self.write_bytes(&v).map_err(Error::from),
+            ScalarValue::DateTime(Some(v)) => {
+                self.encode_u64(v.to_packed_u64()).map_err(Error::from)
+            }
+            ScalarValue::Duration(Some(v)) => self.encode_i64(v.to_nanos()).map_err(Error::from),
+            ScalarValue::Json(Some(v)) => self.write_json(&v),
+            _ => unreachable!(),
         }
     }
 
@@ -166,30 +198,47 @@ impl<T: BufferWriter> DatumEncoder for T {}
 
 #[cfg(test)]
 mod tests {
-    use crate::codec::row::v2::encoder::RowEncoder;
+    use super::{Column, RowEncoder};
     use crate::codec::{
-        mysql::{duration::NANOS_PER_SEC, Duration, Json, Time},
-        Datum,
+        data_type::ScalarValue,
+        mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
     };
     use std::str::FromStr;
 
     #[test]
-    fn test_encode() {
-        let datums = vec![
-            Datum::I64(1000),
-            Datum::I64(2),
-            Datum::Null,
-            Datum::U64(3),
-            Datum::I64(32767),
-            Datum::Bytes(b"abc".to_vec()),
-            Datum::F64(1.8),
-            Datum::F64(-1.8),
-            Datum::Time(Time::parse_utc_datetime("2018-01-19 03:14:07", 0).unwrap()),
-            Datum::Dec(1i64.into()),
-            Datum::Json(Json::from_str(r#"{"key":"value"}"#).unwrap()),
-            Datum::Dur(Duration::from_nanos(NANOS_PER_SEC, 0).unwrap()),
+    fn test_encode_unsigned() {
+        let cols = vec![
+            Column::new_unsigned(1, std::u64::MAX as i64),
+            Column::new(2, -1),
         ];
-        let ids = vec![1, 12, 33, 3, 8, 7, 9, 6, 13, 14, 15, 16];
+        let exp: Vec<u8> = vec![
+            128, 0, 2, 0, 0, 0, 1, 2, 8, 0, 9, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        ];
+        let mut buf = vec![];
+        buf.write_row(cols).unwrap();
+
+        assert_eq!(buf, exp);
+    }
+
+    #[test]
+    fn test_encode() {
+        let cols = vec![
+            Column::new(1, 1000),
+            Column::new(12, 2),
+            Column::new(33, ScalarValue::Int(None)),
+            Column::new_unsigned(3, 3),
+            Column::new(8, 32767),
+            Column::new(7, b"abc".to_vec()),
+            Column::new(9, 1.8),
+            Column::new(6, -1.8),
+            Column::new(
+                13,
+                Time::parse_utc_datetime("2018-01-19 03:14:07", 0).unwrap(),
+            ),
+            Column::new(14, Decimal::from(1i64)),
+            Column::new(15, Json::from_str(r#"{"key":"value"}"#).unwrap()),
+            Column::new(16, Duration::from_nanos(NANOS_PER_SEC, 0).unwrap()),
+        ];
 
         let exp = vec![
             128, 0, 11, 0, 1, 0, 1, 3, 6, 7, 8, 9, 12, 13, 14, 15, 16, 33, 2, 0, 3, 0, 11, 0, 14,
@@ -199,27 +248,26 @@ mod tests {
             22, 0, 0, 0, 107, 101, 121, 5, 118, 97, 108, 117, 101, 0, 202, 154, 59,
         ];
         let mut buf = vec![];
-        buf.write_row(datums, &ids).unwrap();
+        buf.write_row(cols).unwrap();
 
         assert_eq!(buf, exp);
     }
 
     #[test]
     fn test_encode_big() {
-        let datums = vec![
-            Datum::I64(1000),
-            Datum::I64(2),
-            Datum::Null,
-            Datum::I64(3),
-            Datum::I64(32767),
+        let cols = vec![
+            Column::new(1, 1000),
+            Column::new(12, 2),
+            Column::new(335, ScalarValue::Int(None)),
+            Column::new(3, 3),
+            Column::new(8, 32767),
         ];
-        let ids = vec![1, 12, 335, 3, 8];
         let exp = vec![
             128, 1, 4, 0, 1, 0, 1, 0, 0, 0, 3, 0, 0, 0, 8, 0, 0, 0, 12, 0, 0, 0, 79, 1, 0, 0, 2, 0,
             0, 0, 3, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 232, 3, 3, 255, 127, 2,
         ];
         let mut buf = vec![];
-        buf.write_row(datums, &ids).unwrap();
+        buf.write_row(cols).unwrap();
 
         assert_eq!(exp, buf);
     }
