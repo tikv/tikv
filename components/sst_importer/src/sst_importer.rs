@@ -11,8 +11,8 @@ use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
 use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
-use engine::rocks::util::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
-use engine::rocks::{IngestExternalFileOptions, SeekKey, SstReader, SstWriterBuilder, DB};
+use engine::rocks::{SeekKey, SstReader, SstWriterBuilder};
+use engine_traits::{IngestExternalFileOptions, KvEngine};
 use external_storage::create_storage;
 
 use super::{Error, Result};
@@ -55,8 +55,8 @@ impl SSTImporter {
         }
     }
 
-    pub fn ingest(&self, meta: &SstMeta, db: &DB) -> Result<()> {
-        match self.dir.ingest(meta, db) {
+    pub fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
+        match self.dir.ingest(meta, engine) {
             Ok(_) => {
                 info!("ingest"; "meta" => ?meta);
                 Ok(())
@@ -354,23 +354,23 @@ impl ImportDir {
         Ok(path)
     }
 
-    fn ingest(&self, meta: &SstMeta, db: &DB) -> Result<()> {
+    fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
-        prepare_sst_for_ingestion(&path.save, &path.clone)?;
+        let cf = engine.get_cf_handle(cf).expect("bad cf name");
+        engine.prepare_sst_for_ingestion(&path.save, &path.clone)?;
         let length = meta.get_length();
         let crc32 = meta.get_crc32();
         if length != 0 || crc32 != 0 {
             // we only validate if the length and CRC32 are explicitly provided.
-            validate_sst_for_ingestion(db, cf, &path.clone, length, crc32)?;
+            engine.validate_sst_for_ingestion(cf, &path.clone, length, crc32)?;
         } else {
             debug!("skipping SST validation since length and crc32 are both 0");
         }
 
-        let handle = get_cf_handle(db, cf)?;
-        let mut opts = IngestExternalFileOptions::new();
+        let mut opts = E::IngestExternalFileOptions::new();
         opts.move_files(true);
-        db.ingest_external_file_cf(handle, &opts, &[path.clone.to_str().unwrap()])?;
+        engine.ingest_external_file_cf(cf, &opts, &[path.clone.to_str().unwrap()])?;
         Ok(())
     }
 
@@ -535,10 +535,11 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SstMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::*;
+    use test_sst_importer::*;
 
-    use engine::rocks::util::new_engine;
+    use engine_traits::{Iterable, Iterator, SeekKey as TSeekKey};
     use tempfile::Builder;
+    use test_sst_importer::new_test_engine;
 
     #[test]
     fn test_import_dir() {
@@ -574,7 +575,7 @@ mod tests {
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let db = new_engine(db_path.to_str().unwrap(), None, &["default"], None).unwrap();
+        let db = new_test_engine(db_path.to_str().unwrap(), &["default"]);
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 
@@ -816,23 +817,17 @@ mod tests {
 
         // performs the ingest
         let ingest_dir = tempfile::tempdir().unwrap();
-        let db = new_engine(
-            ingest_dir.path().to_str().unwrap(),
-            None,
-            &["default"],
-            None,
-        )
-        .unwrap();
+        let db = new_test_engine(ingest_dir.path().to_str().unwrap(), &["default"]);
 
         meta.set_length(0); // disable validation.
         meta.set_crc32(0);
         importer.ingest(&meta, &db).unwrap();
 
         // verifies the DB content is correct.
-        let mut iter = db.iter();
-        iter.seek(SeekKey::Start);
+        let mut iter = db.iterator().unwrap();
+        iter.seek(TSeekKey::Start);
         assert_eq!(
-            iter.collect::<Vec<_>>(),
+            iter.as_std().collect::<Vec<_>>(),
             vec![
                 (b"zt9102_r01".to_vec(), b"abc".to_vec()),
                 (b"zt9102_r04".to_vec(), b"xyz".to_vec()),

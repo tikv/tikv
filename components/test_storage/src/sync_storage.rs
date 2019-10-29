@@ -3,7 +3,7 @@
 use futures::Future;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::server::gc_worker::{AutoGCConfig, GCSafePointProvider, GCWorker};
+use tikv::server::gc_worker::{AutoGCConfig, GCConfig, GCSafePointProvider, GCWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockMgr;
@@ -19,6 +19,7 @@ use tikv_util::collections::HashMap;
 pub struct SyncTestStorageBuilder<E: Engine> {
     engine: E,
     config: Option<Config>,
+    gc_config: Option<GCConfig>,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
@@ -26,6 +27,7 @@ impl SyncTestStorageBuilder<RocksEngine> {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: None,
+            gc_config: None,
         }
     }
 }
@@ -35,6 +37,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         Self {
             engine,
             config: None,
+            gc_config: None,
         }
     }
 
@@ -43,14 +46,18 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         self
     }
 
+    pub fn gc_config(mut self, gc_config: GCConfig) -> Self {
+        self.gc_config = Some(gc_config);
+        self
+    }
+
     pub fn build(mut self) -> Result<SyncTestStorage<E>> {
         let mut builder = TestStorageBuilder::from_engine(self.engine.clone());
-        let mut ratio: f64 = 1.1;
         if let Some(config) = self.config.take() {
-            ratio = config.gc_ratio_threshold;
             builder = builder.config(config);
         }
-        let mut gc_worker = GCWorker::new(self.engine, None, None, ratio);
+        let mut gc_worker =
+            GCWorker::new(self.engine, None, None, self.gc_config.unwrap_or_default());
         gc_worker.start()?;
 
         Ok(SyncTestStorage {

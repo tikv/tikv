@@ -618,7 +618,7 @@ impl Debugger {
     pub fn recreate_region(&self, region: Region) -> Result<()> {
         let region_id = region.get_id();
         let kv = self.engines.kv.as_ref();
-        let raft = self.engines.raft.as_ref();
+        let raft: &DB = self.engines.raft.as_ref();
 
         let kv_wb = WriteBatch::default();
         let raft_wb = WriteBatch::default();
@@ -1498,6 +1498,8 @@ mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::Mutable;
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_rocks::RocksEngine;
+    use engine_traits::CFHandleExt;
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
@@ -2048,13 +2050,13 @@ mod tests {
     #[test]
     fn test_recreate_region() {
         let debugger = new_debugger();
-        let engine = debugger.engines.kv.as_ref();
+        let engine = RocksEngine::from_ref(&debugger.engines.kv);
 
         let metadata = vec![("", "g"), ("g", "m"), ("m", "")];
 
         for (region_id, (start, end)) in metadata.into_iter().enumerate() {
             let region_id = region_id as u64;
-            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
+            let cf_raft = engine.get_cf_handle(CF_RAFT).unwrap();
             let mut region = Region::default();
             region.set_id(region_id);
             region.set_start_key(start.to_owned().into_bytes());
@@ -2064,13 +2066,19 @@ mod tests {
             region_state.set_state(PeerState::Normal);
             region_state.set_region(region);
             let key = keys::region_state_key(region_id);
-            engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
+            engine
+                .as_inner()
+                .put_msg_cf(cf_raft.as_inner(), &key, &region_state)
+                .unwrap();
         }
 
         let remove_region_state = |region_id: u64| {
             let key = keys::region_state_key(region_id);
-            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
-            engine.delete_cf(cf_raft, &key).unwrap();
+            let cf_raft = engine.get_cf_handle(CF_RAFT).unwrap();
+            engine
+                .as_inner()
+                .delete_cf(cf_raft.as_inner(), &key)
+                .unwrap();
         };
 
         let mut region = Region::default();
@@ -2083,7 +2091,10 @@ mod tests {
         remove_region_state(1);
         remove_region_state(2);
         assert!(debugger.recreate_region(region.clone()).is_ok());
-        assert_eq!(get_region_state(engine, 100).get_region(), &region);
+        assert_eq!(
+            get_region_state(engine.as_inner(), 100).get_region(),
+            &region
+        );
 
         region.set_start_key(b"z".to_vec());
         region.set_end_key(b"".to_vec());

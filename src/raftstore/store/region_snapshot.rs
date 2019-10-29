@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
+use engine_traits::util::check_key_in_range;
 use keys::{PhysicalKeySlice, RaftPhysicalKey, RaftPhysicalKeySlice, ToPhysicalKeySlice};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
@@ -140,12 +141,13 @@ impl Peekable for RegionSnapshot {
     ) -> EngineResult<Option<DBVector>> {
         let pk_slice = key.to_physical_slice_container();
         let lk_slice = pk_slice.as_logical_slice();
-        engine::util::check_key_in_range(
+        check_key_in_range(
             lk_slice.as_std_slice(),
             self.region.get_id(),
             self.region.get_start_key(),
             self.region.get_end_key(),
-        )?;
+        )
+        .map_err(|e| EngineError::Other(box_err!(e)))?;
         self.snap.get_value(&*pk_slice).map_err(|e| {
             CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
             if panic_when_unexpected_key_or_data() {
@@ -175,12 +177,13 @@ impl Peekable for RegionSnapshot {
     ) -> EngineResult<Option<DBVector>> {
         let pk_slice = key.to_physical_slice_container();
         let lk_slice = pk_slice.as_logical_slice();
-        engine::util::check_key_in_range(
+        check_key_in_range(
             lk_slice.as_std_slice(),
             self.region.get_id(),
             self.region.get_start_key(),
             self.region.get_end_key(),
-        )?;
+        )
+        .map_err(|e| EngineError::Other(box_err!(e)))?;
         self.snap.get_value_cf(cf, &*pk_slice).map_err(|e| {
             CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
             if panic_when_unexpected_key_or_data() {

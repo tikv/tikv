@@ -1329,7 +1329,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#199062ebc51c64d90f8241b6a51c38c1b9d052da"
+source = "git+https://github.com/pingcap/kvproto.git#62abb760d9b125e2cfbc15a8d50b038861854e8d"
 dependencies = [
  "futures",
  "grpcio",
@@ -1395,7 +1395,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#123e9edf2a447425dcc0942a83bbe4ae411963b3"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1412,7 +1412,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#123e9edf2a447425dcc0942a83bbe4ae411963b3"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1973,7 +1973,7 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/pingcap/rust-prometheus.git?rev=7dd3d42f0c21384950afe6a46ed85352acf71625#7dd3d42f0c21384950afe6a46ed85352acf71625"
+source = "git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be#b668f3911d6569de2e1e8b2672fccec1cc8298be"
 dependencies = [
  "cfg-if",
  "fnv",
@@ -1989,7 +1989,7 @@ dependencies = [
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-prometheus.git?rev=7dd3d42f0c21384950afe6a46ed85352acf71625#7dd3d42f0c21384950afe6a46ed85352acf71625"
+source = "git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be#b668f3911d6569de2e1e8b2672fccec1cc8298be"
 dependencies = [
  "lazy_static",
  "proc-macro2 0.4.30",
@@ -2398,7 +2398,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#123e9edf2a447425dcc0942a83bbe4ae411963b3"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
 dependencies = [
  "crc",
  "libc",
@@ -2705,6 +2705,7 @@ version = "0.1.0"
 dependencies = [
  "crc",
  "engine",
+ "engine_traits",
  "external_storage",
  "futures",
  "grpcio",
@@ -2719,7 +2720,9 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_sst_importer",
  "tikv_alloc",
+ "tokio-sync",
  "uuid",
 ]
 
@@ -2929,6 +2932,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_sst_importer"
+version = "0.1.0"
+dependencies = [
+ "crc",
+ "engine",
+ "engine_rocks",
+ "engine_traits",
+ "keys",
+ "kvproto",
+ "uuid",
+]
+
+[[package]]
 name = "test_storage"
 version = "0.0.1"
 dependencies = [
@@ -3105,6 +3121,7 @@ dependencies = [
  "tempfile",
  "test_coprocessor",
  "test_raftstore",
+ "test_sst_importer",
  "test_storage",
  "test_util",
  "tidb_query",
@@ -3118,6 +3135,7 @@ dependencies = [
  "tokio-executor",
  "tokio-fs",
  "tokio-io",
+ "tokio-sync",
  "tokio-threadpool",
  "tokio-timer",
  "toml",
@@ -3156,9 +3174,11 @@ dependencies = [
  "futures-cpupool",
  "fxhash",
  "grpcio",
+ "hex",
  "lazy_static",
  "libc",
  "log",
+ "openssl",
  "panic_hook",
  "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs)",
  "prometheus",
@@ -3180,6 +3200,7 @@ dependencies = [
  "time",
  "tokio-core",
  "tokio-executor",
+ "tokio-sync",
  "tokio-threadpool",
  "tokio-timer",
  "toml",
@@ -3212,7 +3233,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#018b2fadf4145fbb7d6acd78b8a4b7e66d7d205d"
+source = "git+https://github.com/pingcap/tipb.git#a2e8c3fa634b92b3594cf0bf50ec979c4564f414"
 dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf-build",
@@ -3355,9 +3376,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-sync"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2162248ff317e2bc713b261f242b69dbb838b85248ed20bb21df56d60ea4cae7"
+checksum = "d06554cce1ae4a50f42fba8023918afa931413aded705b560e29600ccf7c6d76"
 dependencies = [
  "fnv",
  "futures",
