@@ -11,5 +11,6 @@ pub trait SstExt {
 pub trait SstReader: Iterable + Sized {
     fn open(path: &str) -> Result<Self>;
     fn verify_checksum(&self) -> Result<()>;
+    // FIXME: Shouldn't this me a method on Iterable?
     fn iter(&self) -> Self::Iterator;
 }
