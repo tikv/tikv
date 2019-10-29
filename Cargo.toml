@@ -21,7 +21,6 @@ sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 profiling = ["profiler/profiling"]
 failpoints = ["fail/failpoints"]
-update_titan = ["engine/update_titan", "engine_rocks/update_titan"]
 
 [lib]
 name = "tikv"
