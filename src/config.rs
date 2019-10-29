@@ -865,7 +865,7 @@ impl DbConfig {
         self.raftcf.validate()?;
         self.titan.validate()?;
         if !self.transaction_db.enabled && self.enable_unordered_write {
-            return Err(format!("only transaction db support unodered_write").into());
+            return Err("only transaction db support unodered_write".into());
         }
         Ok(())
     }

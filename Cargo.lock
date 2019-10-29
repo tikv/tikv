@@ -226,7 +226,7 @@ dependencies = [
 [[package]]
 name = "bzip2-sys"
 version = "0.1.7"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#93c465c7a6991668ca8062f454431f65545f4d96"
+source = "git+https://github.com/alexcrichton/bzip2-rs.git#96cc4909a1a180a62ca8e3716785dc6f7a7f9ac0"
 dependencies = [
  "cc",
  "libc",
@@ -1392,7 +1392,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#87bc40ec941486509a6339b6fc0b82de0a8210ba"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#4d1cbe9cc746282a1e66bf7aa765cabe409c783f"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1409,7 +1409,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#87bc40ec941486509a6339b6fc0b82de0a8210ba"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#4d1cbe9cc746282a1e66bf7aa765cabe409c783f"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1465,8 +1465,8 @@ dependencies = [
 
 [[package]]
 name = "lz4-sys"
-version = "1.8.0"
-source = "git+https://github.com/busyjay/lz4-rs.git?branch=adjust-build#41509fea212e9ca55c1f6c53d4fd1ddf28cdf689"
+version = "1.8.3"
+source = "git+https://github.com/busyjay/lz4-rs.git?branch=adjust-build#5a8afe4010c67899fc7af876a58d67fd6269bf81"
 dependencies = [
  "cc",
  "libc",
@@ -2395,7 +2395,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#87bc40ec941486509a6339b6fc0b82de0a8210ba"
+source = "git+https://github.com/Little-Wallace/rust-rocksdb.git?branch=transaction_db#4d1cbe9cc746282a1e66bf7aa765cabe409c783f"
 dependencies = [
  "crc",
  "libc",
