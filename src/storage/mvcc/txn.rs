@@ -98,13 +98,14 @@ impl<S: Snapshot> MvccTxn<S> {
         lock_type: LockType,
         primary: Vec<u8>,
         short_value: Option<Value>,
+        lock_ttl: u64,
         options: &Options,
     ) {
         let lock = Lock::new(
             lock_type,
             primary,
             self.start_ts,
-            options.lock_ttl,
+            lock_ttl,
             short_value,
             options.for_update_ts,
             options.txn_size,
@@ -151,21 +152,22 @@ impl<S: Snapshot> MvccTxn<S> {
         lock_type: LockType,
         primary: Vec<u8>,
         value: Option<Value>,
+        lock_ttl: u64,
         options: &Options,
     ) {
         if let Some(value) = value {
             if is_short_value(&value) {
                 // If the value is short, embed it in Lock.
-                self.lock_key(key, lock_type, primary, Some(value), options);
+                self.lock_key(key, lock_type, primary, Some(value), lock_ttl, options);
             } else {
                 // value is long
                 let ts = self.start_ts;
                 self.put_value(key.clone(), ts, value);
 
-                self.lock_key(key, lock_type, primary, None, options);
+                self.lock_key(key, lock_type, primary, None, lock_ttl, options);
             }
         } else {
-            self.lock_key(key, lock_type, primary, None, options);
+            self.lock_key(key, lock_type, primary, None, lock_ttl, options);
         }
     }
 
@@ -252,7 +254,14 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             // Overwrite the lock with small for_update_ts
             if for_update_ts > lock.for_update_ts {
-                self.lock_key(key, LockType::Pessimistic, primary.to_vec(), None, options);
+                self.lock_key(
+                    key,
+                    LockType::Pessimistic,
+                    primary.to_vec(),
+                    None,
+                    options.lock_ttl,
+                    options,
+                );
             } else {
                 MVCC_DUPLICATE_CMD_COUNTER_VEC
                     .acquire_pessimistic_lock
@@ -308,7 +317,14 @@ impl<S: Snapshot> MvccTxn<S> {
             self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
         }
 
-        self.lock_key(key, LockType::Pessimistic, primary.to_vec(), None, options);
+        self.lock_key(
+            key,
+            LockType::Pessimistic,
+            primary.to_vec(),
+            None,
+            options.lock_ttl,
+            options,
+        );
 
         Ok(())
     }
@@ -327,6 +343,7 @@ impl<S: Snapshot> MvccTxn<S> {
             Mutation::Lock(key) => (key, None),
             Mutation::Insert((key, value)) => (key, Some(value)),
         };
+        let mut last_lock_ttl = 0;
 
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
@@ -352,6 +369,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     return Ok(());
                 }
                 // The lock is pessimistic and owned by this txn, go through to overwrite it.
+                last_lock_ttl = lock.ttl;
             }
         } else if is_pessimistic_lock {
             // Pessimistic lock does not exist, the transaction should be aborted.
@@ -368,7 +386,14 @@ impl<S: Snapshot> MvccTxn<S> {
         }
 
         // No need to check data constraint, it's resolved by pessimistic locks.
-        self.prewrite_key_value(key, lock_type, primary.to_vec(), value, options);
+        self.prewrite_key_value(
+            key,
+            lock_type,
+            primary.to_vec(),
+            value,
+            ::std::cmp::max(last_lock_ttl, options.lock_ttl),
+            options,
+        );
         Ok(())
     }
 
@@ -425,7 +450,14 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
 
-        self.prewrite_key_value(key, lock_type, primary.to_vec(), value, options);
+        self.prewrite_key_value(
+            key,
+            lock_type,
+            primary.to_vec(),
+            value,
+            options.lock_ttl,
+            options,
+        );
         Ok(())
     }
 
@@ -1626,6 +1658,29 @@ mod tests {
         must_get_commit_ts(&engine, k, 50, 100);
         must_get_commit_ts(&engine, k, 60, 110);
         must_get_rollback_ts(&engine, k, 70);
+    }
+
+    #[test]
+    fn test_pessimistic_txn_ttl() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (k, v) = (b"k", b"v");
+
+        // Pessimistic prewrite keeps the larger TTL of the prewrite request and the original
+        // pessimisitic lock.
+        must_acquire_pessimistic_lock_with_ttl(&engine, k, k, 10, 10, 100);
+        must_pessimistic_locked(&engine, k, 10, 10);
+        must_pessimistic_prewrite_put_with_ttl(&engine, k, v, k, 10, 10, true, 110);
+        must_locked_with_ttl(&engine, k, 10, 110);
+
+        must_rollback(&engine, k, 10);
+
+        // TTL not changed if the pessimistic lock's TTL is larger than that provided in the
+        // prewrite request.
+        must_acquire_pessimistic_lock_with_ttl(&engine, k, k, 20, 20, 100);
+        must_pessimistic_locked(&engine, k, 20, 20);
+        must_pessimistic_prewrite_put_with_ttl(&engine, k, v, k, 20, 20, true, 90);
+        must_locked_with_ttl(&engine, k, 20, 100);
     }
 
     #[test]
