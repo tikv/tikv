@@ -6,15 +6,15 @@ use engine_traits::{self, Error, Result};
 use rocksdb::{DBIterator, SeekKey as RawSeekKey, DB};
 
 // TODO: use &DB
-pub struct Iterator(DBIterator<Arc<DB>>);
+pub struct RocksEngineIterator(DBIterator<Arc<DB>>);
 
-impl Iterator {
-    pub fn from_raw(iter: DBIterator<Arc<DB>>) -> Iterator {
-        Iterator(iter)
+impl RocksEngineIterator {
+    pub fn from_raw(iter: DBIterator<Arc<DB>>) -> RocksEngineIterator {
+        RocksEngineIterator(iter)
     }
 }
 
-impl engine_traits::Iterator for Iterator {
+impl engine_traits::Iterator for RocksEngineIterator {
     fn seek(&mut self, key: engine_traits::SeekKey) -> bool {
         let k: RocksSeekKey = key.into();
         self.0.seek(k.into_raw())

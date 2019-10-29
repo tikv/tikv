@@ -327,6 +327,22 @@ pub mod tests {
         must_prewrite_put_impl(engine, key, value, pk, ts, is_pessimistic_lock, options);
     }
 
+    pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+        is_pessimistic_lock: bool,
+        lock_ttl: u64,
+    ) {
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        options.lock_ttl = lock_ttl;
+        must_prewrite_put_impl(engine, key, value, pk, ts, is_pessimistic_lock, options);
+    }
+
     pub fn must_prewrite_put_for_large_txn<E: Engine>(
         engine: &E,
         key: &[u8],
@@ -506,8 +522,20 @@ pub mod tests {
         start_ts: u64,
         for_update_ts: u64,
     ) {
+        must_acquire_pessimistic_lock_with_ttl(engine, key, pk, start_ts, for_update_ts, 0);
+    }
+
+    pub fn must_acquire_pessimistic_lock_with_ttl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+        ttl: u64,
+    ) {
         let mut options = Options::default();
         options.for_update_ts = for_update_ts;
+        options.lock_ttl = ttl;
         must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, options);
     }
 
@@ -519,10 +547,7 @@ pub mod tests {
         for_update_ts: u64,
         lock_ttl: u64,
     ) {
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts;
-        options.lock_ttl = lock_ttl;
-        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, options);
+        must_acquire_pessimistic_lock_with_ttl(engine, key, pk, start_ts, for_update_ts, lock_ttl);
     }
 
     pub fn must_acquire_pessimistic_lock_err<E: Engine>(
@@ -678,6 +703,15 @@ pub mod tests {
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
         assert_ne!(lock.lock_type, LockType::Pessimistic);
+    }
+
+    pub fn must_locked_with_ttl<E: Engine>(engine: &E, key: &[u8], start_ts: u64, ttl: u64) {
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::Si);
+        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        assert_eq!(lock.ts, start_ts);
+        assert_ne!(lock.lock_type, LockType::Pessimistic);
+        assert_eq!(lock.ttl, ttl);
     }
 
     pub fn must_large_txn_locked<E: Engine>(
