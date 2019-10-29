@@ -10,7 +10,7 @@ use rocksdb::{DBIterator, DB};
 
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
-use crate::Iterator;
+use crate::RocksEngineIterator;
 
 pub struct Snapshot {
     // TODO: use &DB.
@@ -61,25 +61,28 @@ impl Drop for Snapshot {
 }
 
 impl Iterable for Snapshot {
-    type Iter = Iterator;
+    type Iterator = RocksEngineIterator;
 
-    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iter> {
+    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        Ok(Iterator::from_raw(DBIterator::new(self.db.clone(), opt)))
+        Ok(RocksEngineIterator::from_raw(DBIterator::new(
+            self.db.clone(),
+            opt,
+        )))
     }
 
-    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iter> {
+    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
-        Ok(Iterator::from_raw(DBIterator::new_cf(
+        Ok(RocksEngineIterator::from_raw(DBIterator::new_cf(
             self.db.clone(),
             handle,
             opt,
