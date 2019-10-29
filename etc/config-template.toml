@@ -118,7 +118,8 @@
 ## when load is high.
 # request-batch-enable-cross-command = true
 
-## Wait duration before each request batch is processed.
+## Wait duration before each request batch is processed. Wait is triggered when cross-command
+## option is enabled and system load is high.
 # request-batch-wait-duration = "1ms"
 
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
