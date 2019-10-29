@@ -367,7 +367,8 @@ impl Snapshot for RegionSnapshot {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
             "injected error for get"
         )));
-        let v = box_try!(self.get_value(key.as_encoded()));
+        // TODO: Accept PhysicalKeySlice instead of Key
+        let v = box_try!(self.get_value(key));
         Ok(v.map(|v| v.to_vec()))
     }
 
@@ -375,7 +376,8 @@ impl Snapshot for RegionSnapshot {
         fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
             "injected error for get_cf"
         )));
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        // TODO: Accept PhysicalKeySlice instead of Key
+        let v = box_try!(self.get_value_cf(cf, key));
         Ok(v.map(|v| v.to_vec()))
     }
 

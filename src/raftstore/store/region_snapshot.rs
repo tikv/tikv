@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
+use keys::{PhysicalKeySlice, RaftPhysicalKey, RaftPhysicalKeySlice, ToPhysicalKeySlice};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -131,28 +132,34 @@ impl Clone for RegionSnapshot {
 }
 
 impl Peekable for RegionSnapshot {
-    fn get_value(&self, key: &[u8]) -> EngineResult<Option<DBVector>> {
+    type Key = RaftPhysicalKey;
+
+    fn get_value(
+        &self,
+        key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+    ) -> EngineResult<Option<DBVector>> {
+        let pk_slice = key.to_physical_slice_container();
+        let lk_slice = pk_slice.as_logical_slice();
         engine::util::check_key_in_range(
-            key,
+            lk_slice.as_std_slice(),
             self.region.get_id(),
             self.region.get_start_key(),
             self.region.get_end_key(),
         )?;
-        let data_key = keys::data_key(key);
-        self.snap.get_value(&data_key).map_err(|e| {
+        self.snap.get_value(&*pk_slice).map_err(|e| {
             CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
             if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
                 panic!(
                     "failed to get value of key {} in region {}: {:?}",
-                    hex::encode_upper(&key),
+                    lk_slice,
                     self.region.get_id(),
                     e,
                 );
             } else {
                 error!(
                     "failed to get value of key";
-                    "key" => hex::encode_upper(&key),
+                    "key" => ?lk_slice,
                     "region" => self.region.get_id(),
                     "error" => ?e,
                 );
@@ -161,28 +168,33 @@ impl Peekable for RegionSnapshot {
         })
     }
 
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
+    fn get_value_cf(
+        &self,
+        cf: &str,
+        key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+    ) -> EngineResult<Option<DBVector>> {
+        let pk_slice = key.to_physical_slice_container();
+        let lk_slice = pk_slice.as_logical_slice();
         engine::util::check_key_in_range(
-            key,
+            lk_slice.as_std_slice(),
             self.region.get_id(),
             self.region.get_start_key(),
             self.region.get_end_key(),
         )?;
-        let data_key = keys::data_key(key);
-        self.snap.get_value_cf(cf, &data_key).map_err(|e| {
+        self.snap.get_value_cf(cf, &*pk_slice).map_err(|e| {
             CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
             if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
                 panic!(
                     "failed to get value of key {} in region {}: {:?}",
-                    hex::encode_upper(&key),
+                    lk_slice,
                     self.region.get_id(),
                     e,
                 );
             } else {
                 error!(
                     "failed to get value of key in cf";
-                    "key" => hex::encode_upper(&key),
+                    "key" => ?lk_slice,
                     "region" => self.region.get_id(),
                     "cf" => cf,
                     "error" => ?e,
@@ -516,13 +528,17 @@ mod tests {
         engines.kv.put_msg(&data_key(key3), &r).expect("");
 
         let snap = RegionSnapshot::new(&store);
-        let v3 = snap.get_msg(key3).expect("");
+        let v3 = snap
+            .get_msg(RaftPhysicalKey::alloc_from_logical_std_slice(key3))
+            .expect("");
         assert_eq!(v3, Some(r));
 
-        let v0 = snap.get_value(b"key0").expect("");
+        let v0 = snap
+            .get_value(RaftPhysicalKey::alloc_from_logical_std_slice(b"key0"))
+            .expect("");
         assert!(v0.is_none());
 
-        let v4 = snap.get_value(b"key5");
+        let v4 = snap.get_value(RaftPhysicalKey::alloc_from_logical_std_slice(b"key5"));
         assert!(v4.is_err());
     }
 

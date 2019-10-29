@@ -4,16 +4,28 @@ use std::option::Option;
 
 use super::{util, DBIterator, DBVector, WriteBatch, DB};
 use crate::{IterOption, Iterable, Mutable, Peekable, Result};
+use keys::{BasicPhysicalKey, BasicPhysicalKeySlice, PhysicalKeySlice, ToPhysicalKeySlice};
 
 impl Peekable for DB {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        let v = self.get(key)?;
+    type Key = BasicPhysicalKey;
+
+    fn get_value(
+        &self,
+        key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>,
+    ) -> Result<Option<DBVector>> {
+        let pk_slice = key.to_physical_slice_container();
+        let v = self.get(pk_slice.as_physical_std_slice())?;
         Ok(v)
     }
 
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
+    fn get_value_cf(
+        &self,
+        cf: &str,
+        key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>,
+    ) -> Result<Option<DBVector>> {
         let handle = util::get_cf_handle(self, cf)?;
-        let v = self.get_cf(handle, key)?;
+        let pk_slice = key.to_physical_slice_container();
+        let v = self.get_cf(handle, pk_slice.as_physical_std_slice())?;
         Ok(v)
     }
 }

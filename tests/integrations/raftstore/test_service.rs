@@ -603,7 +603,7 @@ fn test_debug_raft_log() {
     entry.set_data(vec![42]);
     engine.put_msg(&key, &entry).unwrap();
     assert_eq!(
-        engine.get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
+        engine.get_msg::<eraftpb::Entry, _>(&key).unwrap().unwrap(),
         entry
     );
 
@@ -640,7 +640,7 @@ fn test_debug_region_info() {
     raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
     assert_eq!(
         raft_engine
-            .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
+            .get_msg::<raft_serverpb::RaftLocalState, _>(&raft_state_key)
             .unwrap()
             .unwrap(),
         raft_state
@@ -654,7 +654,7 @@ fn test_debug_region_info() {
         .unwrap();
     assert_eq!(
         kv_engine
-            .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
+            .get_msg_cf::<raft_serverpb::RaftApplyState, _>(CF_RAFT, &apply_state_key)
             .unwrap()
             .unwrap(),
         apply_state
@@ -668,7 +668,7 @@ fn test_debug_region_info() {
         .unwrap();
     assert_eq!(
         kv_engine
-            .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
+            .get_msg_cf::<raft_serverpb::RegionLocalState, _>(CF_RAFT, &region_state_key)
             .unwrap()
             .unwrap(),
         region_state

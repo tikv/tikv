@@ -3169,7 +3169,7 @@ mod tests {
         let apply_state_key = keys::apply_state_key(2);
         assert!(engines
             .kv
-            .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
+            .get_msg_cf::<RaftApplyState, _>(CF_RAFT, &apply_state_key)
             .unwrap()
             .is_none());
         // Make sure Apply and Snapshot are in the same batch.

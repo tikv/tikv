@@ -1103,7 +1103,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .ctx
             .engines
             .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
+            .get_msg_cf::<RegionLocalState, _>(CF_RAFT, &state_key)?
         {
             debug!(
                 "check target region local state";

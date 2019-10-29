@@ -840,7 +840,7 @@ mod tests {
             let region_key = keys::region_state_key(id);
             let mut region_state = engine
                 .kv
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+                .get_msg_cf::<RegionLocalState, _>(CF_RAFT, &region_key)
                 .unwrap()
                 .unwrap();
             region_state.set_state(PeerState::Applying);
@@ -862,7 +862,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(100));
                 if engine
                     .kv
-                    .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+                    .get_msg_cf::<RegionLocalState, _>(CF_RAFT, &region_key)
                     .unwrap()
                     .unwrap()
                     .get_state()
