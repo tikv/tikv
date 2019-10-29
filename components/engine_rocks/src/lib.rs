@@ -31,6 +31,8 @@ mod import;
 pub use crate::import::*;
 mod snapshot;
 pub use crate::snapshot::*;
+mod sst;
+pub use crate::sst::*;
 mod write_batch;
 pub use crate::write_batch::*;
 
