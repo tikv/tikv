@@ -1573,6 +1573,7 @@ impl Decimal {
         Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
     }
 
+    /// Return Err only whne the `s` is empty or can not convert to decimal
     fn from_bytes_with_word_buf(s: &[u8], word_buf_len: u8) -> Result<Res<Decimal>> {
         // trim whitespace
         let mut bs = match s.iter().position(|c| !c.is_ascii_whitespace()) {
@@ -1811,7 +1812,13 @@ impl ConvertTo<Decimal> for &[u8] {
     //  TiDB's seems has bug, fix this after fix TiDB's
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let r = Decimal::from_bytes(self)?;
+        let r = match Decimal::from_bytes(self) {
+            Err(e) => {
+                debug!("Decimal::from_bytes failed, err is {:?}", e);
+                return Ok(Decimal::zero());
+            }
+            Ok(x) => x,
+        };
         let err = Error::overflow("DECIMAL", "");
         r.into_result_with_overflow_err(ctx, err)
     }
