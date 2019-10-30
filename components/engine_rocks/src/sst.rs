@@ -4,17 +4,28 @@ use engine_traits::{Result, Iterable, SstExt, SstReader};
 use engine_traits::{SeekMode, SeekKey, Iterator};
 use engine_traits::IterOptions;
 use engine_traits::Error;
+use engine_traits::{SstWriter, SstWriterBuilder, ExternalSstFileInfo};
+use engine_traits::{CfName, CF_DEFAULT};
 use crate::engine::RocksEngine;
 use rocksdb::{SstFileReader, ColumnFamilyOptions};
 use rocksdb::DBIterator;
+use rocksdb::DB;
+use rocksdb::{SstFileWriter, Env, EnvOptions};
+use rocksdb::ExternalSstFileInfo as RawExternalSstFileInfo;
+use rocksdb::DBCompressionType;
 use std::rc::Rc;
+use std::sync::Arc;
 use crate::options::{RocksReadOptions, RocksWriteOptions};
 // FIXME: Move RocksSeekKey into a common module since
 // it's shared between multiple iterators
 use crate::engine_iterator::{RocksSeekKey};
+use std::path::PathBuf;
+use engine::rocks::util::get_fastest_supported_compression_type;
 
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;
+    type SstWriter = RocksSstWriter;
+    type SstWriterBuilder = RocksSstWriterBuilder;
 }
 
 // FIXME: like in RocksEngineIterator and elsewhere, here we are using
@@ -90,5 +101,155 @@ impl Iterator for RocksSstIterator {
 
     fn status(&self) -> Result<()> {
         self.0.status().map_err(Error::Engine)
+    }
+}
+
+pub struct RocksSstWriterBuilder {
+    cf: Option<CfName>,
+    db: Option<Arc<DB>>,
+    in_memory: bool,
+}
+
+impl SstWriterBuilder for RocksSstWriterBuilder {
+    type KvEngine = RocksEngine;
+    type SstWriter = RocksSstWriter;
+
+    fn new() -> Self {
+        RocksSstWriterBuilder {
+            cf: None,
+            in_memory: false,
+            db: None,
+        }
+    }
+
+    fn set_db(mut self, db: &Self::KvEngine) -> Self {
+        self.db = Some(db.as_inner().clone());
+        self
+    }
+
+    fn set_cf(mut self, cf: CfName) -> Self {
+        self.cf = Some(cf);
+        self
+    }
+
+    fn set_in_memory(mut self, in_memory: bool) -> Self {
+        self.in_memory = in_memory;
+        self
+    }
+
+    fn build(self, path: &str) -> Result<Self::SstWriter> {
+        let mut env = None;
+        let mut io_options = if let Some(db) = self.db.as_ref() {
+            env = db.env();
+            let handle = db
+                .cf_handle(self.cf.unwrap_or(CF_DEFAULT))
+                .ok_or_else(|| format!("CF {:?} is not found", self.cf))?;
+            db.get_options_cf(handle).clone()
+        } else {
+            ColumnFamilyOptions::new()
+        };
+        if self.in_memory {
+            // Set memenv.
+            let mem_env = Arc::new(Env::new_mem());
+            io_options.set_env(mem_env.clone());
+            env = Some(mem_env);
+        } else if let Some(env) = env.as_ref() {
+            io_options.set_env(env.clone());
+        }
+        io_options.compression(get_fastest_supported_compression_type());
+        // in rocksdb 5.5.1, SstFileWriter will try to use bottommost_compression and
+        // compression_per_level first, so to make sure our specified compression type
+        // being used, we must set them empty or disabled.
+        io_options.compression_per_level(&[]);
+        io_options.bottommost_compression(DBCompressionType::Disable);
+        let mut writer = SstFileWriter::new(EnvOptions::new(), io_options);
+        writer.open(path)?;
+        Ok(RocksSstWriter { writer, env })
+    }
+}
+
+pub struct RocksSstWriter {
+    writer: SstFileWriter,
+    env: Option<Arc<Env>>,
+}
+
+impl SstWriter for RocksSstWriter {
+    type ExternalSstFileInfo = RocksExternalSstFileInfo;
+
+    fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
+        Ok(self.writer.put(key, val)?)
+    }
+
+    fn delete(&mut self, key: &[u8]) -> Result<()> {
+        Ok(self.writer.delete(key)?)
+    }
+
+    fn file_size(&mut self) -> u64 {
+        self.writer.file_size()
+    }
+
+    fn finish(mut self) -> Result<Self::ExternalSstFileInfo> {
+        Ok(RocksExternalSstFileInfo(self.writer.finish()?))
+    }
+
+    fn finish_into(mut self, buf: &mut Vec<u8>) -> Result<Self::ExternalSstFileInfo> {
+        use std::io::Read;
+        if let Some(env) = self.env.take() {
+            let sst_info = self.writer.finish()?;
+            let p = sst_info.file_path();
+            let path = p.as_os_str().to_str().ok_or_else(|| {
+                Error::Engine(format!(
+                    "failed to sequential file bad path {}",
+                    sst_info.file_path().display()
+                ))
+            })?;
+            let mut seq_file = env.new_sequential_file(path, EnvOptions::new())?;
+            let len = seq_file
+                .read_to_end(buf)
+                .map_err(|e| Error::Engine(format!("failed to read sequential file {:?}", e)))?;
+            if len as u64 != sst_info.file_size() {
+                Err(Error::Engine(format!(
+                    "failed to read sequential file inconsistent length {} != {}",
+                    len,
+                    sst_info.file_size()
+                )))
+            } else {
+                Ok(RocksExternalSstFileInfo(sst_info))
+            }
+        } else {
+            Err(Error::Engine("failed to read sequential file no env provided".to_owned()))
+        }
+    }
+}
+
+pub struct RocksExternalSstFileInfo(RawExternalSstFileInfo);
+
+impl ExternalSstFileInfo for RocksExternalSstFileInfo {
+    fn new() -> Self {
+        RocksExternalSstFileInfo(RawExternalSstFileInfo::new())
+    }
+
+    fn file_path(&self) -> PathBuf {
+        self.0.file_path()
+    }
+
+    fn smallest_key(&self) -> &[u8] {
+        self.0.smallest_key()
+    }
+
+    fn largest_key(&self) -> &[u8] {
+        self.0.largest_key()
+    }
+
+    fn sequence_number(&self) -> u64 {
+        self.0.sequence_number()
+    }
+
+    fn file_size(&self) -> u64 {
+        self.0.file_size()
+    }
+
+    fn num_entries(&self) -> u64 {
+        self.0.num_entries()
     }
 }
