@@ -10,7 +10,7 @@ use tidb_query_datatype::{self, FieldTypeFlag, FieldTypeTp};
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::convert::*;
 use crate::codec::mysql::decimal::RoundMode;
-use crate::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
+use crate::codec::mysql::{charset, Decimal, Duration, Json, Time, TimeType};
 use crate::codec::{mysql, Datum};
 use crate::expr::Flag;
 
