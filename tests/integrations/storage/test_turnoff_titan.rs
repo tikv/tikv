@@ -79,18 +79,18 @@ fn test_turnoff_titan() {
         all_check_pass = true;
         for i in cluster.get_node_ids().into_iter() {
             let db = cluster.get_engine(i);
-            if db.get_property_int(&"rocksdb.num-files-at-level0").unwrap() > 0 {
+            if db.get_property_int(&"rocksdb.num-files-at-level0").unwrap() != 0 {
                 all_check_pass = false;
                 break;
             }
-            if db.get_property_int(&"rocksdb.num-files-at-level1").unwrap() > 1 {
+            if db.get_property_int(&"rocksdb.num-files-at-level1").unwrap() != 1 {
                 all_check_pass = false;
                 break;
             }
             if db
                 .get_property_int(&"rocksdb.titandb.num-live-blob-file")
                 .unwrap()
-                > 0
+                != 0
             {
                 all_check_pass = false;
                 break;
@@ -101,7 +101,7 @@ fn test_turnoff_titan() {
         }
     }
     if !all_check_pass {
-        panic!("titan should be turnoffed");
+        panic!("unexpected titan gc results");
     }
     cluster.shutdown();
 

@@ -170,6 +170,7 @@ fn test_region_heartbeat_timestamp() {
     sleep(Duration::from_millis(1000));
     cluster.must_transfer_leader(1, new_peer(2, 2));
     for _ in 0..100 {
+        sleep_ms(100);
         let reported_ts_now = cluster.pd_client.get_region_last_report_ts(1).unwrap();
         if reported_ts_now > reported_ts {
             return;
@@ -191,6 +192,7 @@ fn test_region_heartbeat_term() {
     // transfer leader to increase the term
     cluster.must_transfer_leader(1, new_peer(1, 1));
     for _ in 0..100 {
+        sleep_ms(100);
         let reported_term_now = cluster.pd_client.get_region_last_report_term(1).unwrap();
         if reported_term_now > reported_term {
             return;

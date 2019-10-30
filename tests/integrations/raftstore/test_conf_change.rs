@@ -191,7 +191,6 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let engine_3 = cluster.get_engine(peer3.get_store_id());
     pd_client.must_add_peer(region_id, peer3.clone());
     must_get_equal(&engine_3, b"k1", b"v1");
-    must_get_equal(&engine_3, b"k2", b"v2");
 
     // Remove peer2 from first region.
     pd_client.must_remove_peer(region_id, peer2.clone());
