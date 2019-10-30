@@ -2,7 +2,7 @@
 
 mod db;
 mod sst;
-pub use sst::{SstWriter, SstWriterBuilder};
+pub use sst::{SstReader, SstWriter, SstWriterBuilder};
 
 pub mod util;
 

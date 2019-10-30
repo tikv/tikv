@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::DB;
+use engine_traits::{CFOptions, DBOptions, KvEngine};
 use kvproto::import_sstpb::*;
 
 use super::Result;
@@ -22,7 +22,7 @@ impl ImportModeSwitcher {
         }
     }
 
-    pub fn enter_normal_mode(&mut self, db: &DB, mf: RocksDBMetricsFn) -> Result<()> {
+    pub fn enter_normal_mode(&mut self, db: &impl KvEngine, mf: RocksDBMetricsFn) -> Result<()> {
         if self.mode == SwitchMode::Normal {
             return Ok(());
         }
@@ -36,7 +36,7 @@ impl ImportModeSwitcher {
         Ok(())
     }
 
-    pub fn enter_import_mode(&mut self, db: &DB, mf: RocksDBMetricsFn) -> Result<()> {
+    pub fn enter_import_mode(&mut self, db: &impl KvEngine, mf: RocksDBMetricsFn) -> Result<()> {
         if self.mode == SwitchMode::Import {
             return Ok(());
         }
@@ -69,14 +69,14 @@ impl ImportModeDBOptions {
         }
     }
 
-    fn new_options(db: &DB) -> ImportModeDBOptions {
+    fn new_options(db: &impl KvEngine) -> ImportModeDBOptions {
         let db_opts = db.get_db_options();
         ImportModeDBOptions {
             max_background_jobs: db_opts.get_max_background_jobs(),
         }
     }
 
-    fn set_options(&self, db: &DB) -> Result<()> {
+    fn set_options(&self, db: &impl KvEngine) -> Result<()> {
         let opts = [(
             "max_background_jobs".to_string(),
             self.max_background_jobs.to_string(),
@@ -106,8 +106,8 @@ impl ImportModeCFOptions {
         }
     }
 
-    fn new_options(db: &DB, cf_name: &str) -> ImportModeCFOptions {
-        let cf = db.cf_handle(cf_name).unwrap();
+    fn new_options(db: &impl KvEngine, cf_name: &str) -> ImportModeCFOptions {
+        let cf = db.get_cf_handle(cf_name).unwrap();
         let cf_opts = db.get_options_cf(cf);
 
         ImportModeCFOptions {
@@ -119,8 +119,8 @@ impl ImportModeCFOptions {
         }
     }
 
-    fn set_options(&self, db: &DB, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()> {
-        let cf = db.cf_handle(cf_name).unwrap();
+    fn set_options(&self, db: &impl KvEngine, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()> {
+        let cf = db.get_cf_handle(cf_name).unwrap();
         let cf_opts = db.get_options_cf(cf);
         cf_opts.set_block_cache_capacity(self.block_cache_size)?;
         mf(cf_name, "block_cache_size", self.block_cache_size as f64);
@@ -158,14 +158,17 @@ impl ImportModeCFOptions {
 mod tests {
     use super::*;
 
-    use engine::rocks::util::new_engine;
+    use engine_traits::KvEngine;
     use tempfile::Builder;
+    use test_sst_importer::new_test_engine;
 
-    fn check_import_options(
-        db: &DB,
+    fn check_import_options<E>(
+        db: &E,
         expected_db_opts: &ImportModeDBOptions,
         expected_cf_opts: &ImportModeCFOptions,
-    ) {
+    ) where
+        E: KvEngine,
+    {
         let db_opts = db.get_db_options();
         assert_eq!(
             db_opts.get_max_background_jobs(),
@@ -173,7 +176,7 @@ mod tests {
         );
 
         for cf_name in db.cf_names() {
-            let cf = db.cf_handle(cf_name).unwrap();
+            let cf = db.get_cf_handle(cf_name).unwrap();
             let cf_opts = db.get_options_cf(cf);
             assert_eq!(
                 cf_opts.get_block_cache_capacity(),
@@ -204,7 +207,7 @@ mod tests {
             .prefix("test_import_mode_switcher")
             .tempdir()
             .unwrap();
-        let db = new_engine(temp_dir.path().to_str().unwrap(), None, &["a", "b"], None).unwrap();
+        let db = new_test_engine(temp_dir.path().to_str().unwrap(), &["a", "b"]);
 
         let import_db_options = ImportModeDBOptions::new();
         let normal_db_options = ImportModeDBOptions::new_options(&db);
