@@ -27,6 +27,8 @@ pub struct Builder {
     inner_builder: TokioBuilder,
     name_prefix: Option<String>,
     on_tick: Option<Box<dyn Fn() + Send + Sync>>,
+    // for accessing pool_size config since Tokio doesn't offer such getter.
+    pool_size: usize,
     max_tasks: usize,
 }
 
@@ -36,6 +38,7 @@ impl Builder {
             inner_builder: TokioBuilder::new(),
             name_prefix: None,
             on_tick: None,
+            pool_size: 0,
             max_tasks: std::usize::MAX,
         }
     }
@@ -50,6 +53,7 @@ impl Builder {
     }
 
     pub fn pool_size(&mut self, val: usize) -> &mut Self {
+        self.pool_size = val;
         self.inner_builder.pool_size(val);
         self
     }
@@ -110,6 +114,7 @@ impl Builder {
         super::FuturePool {
             pool,
             env,
+            pool_size: self.pool_size,
             max_tasks: self.max_tasks,
         }
     }
