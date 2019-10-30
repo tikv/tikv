@@ -219,6 +219,8 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                                 })
                                 .collect();
                             self.take_scheduler().on_batch_msg(results);
+                            // @TODO(tabokie): tikv abnormal behaviour
+                            self.take_scheduler().on_batch_finished(cid);
                         } else {
                             notify_scheduler(
                                 self.take_scheduler(),
