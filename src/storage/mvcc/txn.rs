@@ -539,6 +539,43 @@ impl<S: Snapshot> MvccTxn<S> {
         self.cleanup(key, 0)
     }
 
+    fn check_txn_status_missing_lock(&mut self, primary_key: Key) -> Result<TxnStatus> {
+        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
+        match self
+            .reader
+            .get_txn_commit_info(&primary_key, self.start_ts)?
+        {
+            Some((ts, write_type)) => {
+                if write_type == WriteType::Rollback {
+                    Ok(TxnStatus::RollbackedBefore)
+                } else {
+                    Ok(TxnStatus::Committed(ts))
+                }
+            }
+            None => {
+                let ts = self.start_ts;
+
+                // collapse previous rollback if exist.
+                if self.collapse_rollback {
+                    self.collapse_prev_rollback(primary_key.clone())?;
+                }
+
+                // Insert a Rollback to Write CF in case that a stale prewrite command
+                // is received after a cleanup command.
+                // Pessimistic transactions prewrite successfully only if all its
+                // pessimistic locks exist. So collapsing the rollback of a pessimistic
+                // lock is safe. After a pessimistic transaction acquires all its locks,
+                // it is impossible that neither a lock nor a write record is found.
+                // Therefore, we don't need to protect the rollback here.
+                let write = Write::new_rollback(ts, false);
+                self.put_write(primary_key, ts, write.to_bytes());
+                MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
+
+                Ok(TxnStatus::NotExist)
+            }
+        }
+    }
+
     /// Cleanup the lock if it's TTL has expired, comparing with `current_ts`. If `current_ts` is 0,
     /// cleanup the lock without checking TTL. If the lock is the primary lock of a pessimistic
     /// transaction, the rollback record is protected from being collapsed.
@@ -569,45 +606,11 @@ impl<S: Snapshot> MvccTxn<S> {
                 self.rollback_lock(key, lock, is_pessimistic_txn)?;
                 Ok(is_pessimistic_txn)
             }
-            _ => {
-                match self.reader.get_txn_commit_info(&key, self.start_ts)? {
-                    Some((ts, write_type)) => {
-                        if write_type == WriteType::Rollback {
-                            // return Ok on Rollback already exist
-                            MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
-                            Ok(false)
-                        } else {
-                            MVCC_CONFLICT_COUNTER.rollback_committed.inc();
-                            info!(
-                                "txn conflict (committed)";
-                                "key" => %key,
-                                "start_ts" => self.start_ts,
-                                "commit_ts" => ts,
-                            );
-                            Err(Error::Committed { commit_ts: ts })
-                        }
-                    }
-                    None => {
-                        let ts = self.start_ts;
-
-                        // collapse previous rollback if exist.
-                        if self.collapse_rollback {
-                            self.collapse_prev_rollback(key.clone())?;
-                        }
-
-                        // Insert a Rollback to Write CF in case that a stale prewrite command
-                        // is received after a cleanup command.
-                        // Pessimistic transactions prewrite successfully only if all its
-                        // pessimistic locks exist. So collapsing the rollback of a pessimistic
-                        // lock is safe. After a pessimistic transaction acquires all its locks,
-                        // it is impossible that neither a lock nor a write record is found.
-                        // Therefore, we don't need to protect the rollback here.
-                        let write = Write::new_rollback(ts, false);
-                        self.put_write(key, ts, write.to_bytes());
-                        Ok(false)
-                    }
-                }
-            }
+            _ => match self.check_txn_status_missing_lock(key)? {
+                TxnStatus::Committed(ts) => Err(Error::Committed { commit_ts: ts }),
+                TxnStatus::RollbackedBefore | TxnStatus::NotExist => Ok(false),
+                _ => unreachable!(),
+            },
         }
     }
 
@@ -716,42 +719,9 @@ impl<S: Snapshot> MvccTxn<S> {
 
                 Ok((TxnStatus::Uncommitted(lock_ttl), is_pessimistic_txn))
             }
-            _ => {
-                MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
-                match self
-                    .reader
-                    .get_txn_commit_info(&primary_key, self.start_ts)?
-                {
-                    Some((ts, write_type)) => {
-                        if write_type == WriteType::Rollback {
-                            Ok((TxnStatus::RollbackedBefore, false))
-                        } else {
-                            Ok((TxnStatus::Committed(ts), false))
-                        }
-                    }
-                    None => {
-                        let ts = self.start_ts;
-
-                        // collapse previous rollback if exist.
-                        if self.collapse_rollback {
-                            self.collapse_prev_rollback(primary_key.clone())?;
-                        }
-
-                        // Insert a Rollback to Write CF in case that a stale prewrite command
-                        // is received after a cleanup command.
-                        // Pessimistic transactions prewrite successfully only if all its
-                        // pessimistic locks exist. So collapsing the rollback of a pessimistic
-                        // lock is safe. After a pessimistic transaction acquires all its locks,
-                        // it is impossible that neither a lock nor a write record is found.
-                        // Therefore, we don't need to protect the rollback here.
-                        let write = Write::new_rollback(ts, false);
-                        self.put_write(primary_key, ts, write.to_bytes());
-                        MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-
-                        Ok((TxnStatus::NotExist, false))
-                    }
-                }
-            }
+            _ => self
+                .check_txn_status_missing_lock(primary_key)
+                .map(|s| (s, false)),
         }
     }
 
