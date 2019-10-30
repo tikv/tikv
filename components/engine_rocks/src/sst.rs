@@ -253,3 +253,48 @@ impl ExternalSstFileInfo for RocksExternalSstFileInfo {
         self.0.num_entries()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::new_default_engine;
+    use tempfile::Builder;
+
+    #[test]
+    fn test_smoke() {
+        let path = Builder::new().tempdir().unwrap();
+        let engine =
+            new_default_engine(path.path().to_str().unwrap()).unwrap();
+        let (k, v) = (b"foo", b"bar");
+
+        let p = path.path().join("sst");
+        let mut writer = RocksSstWriterBuilder::new()
+            .set_cf(CF_DEFAULT)
+            .set_db(&engine)
+            .build(p.as_os_str().to_str().unwrap())
+            .unwrap();
+        writer.put(k, v).unwrap();
+        let sst_file = writer.finish().unwrap();
+        assert_eq!(sst_file.num_entries(), 1);
+        assert!(sst_file.file_size() > 0);
+        // There must be a file in disk.
+        std::fs::metadata(p).unwrap();
+
+        // Test in-memory sst writer.
+        let p = path.path().join("inmem.sst");
+        let mut writer = RocksSstWriterBuilder::new()
+            .set_in_memory(true)
+            .set_cf(CF_DEFAULT)
+            .set_db(&engine)
+            .build(p.as_os_str().to_str().unwrap())
+            .unwrap();
+        writer.put(k, v).unwrap();
+        let mut buf = vec![];
+        let sst_file = writer.finish_into(&mut buf).unwrap();
+        assert_eq!(sst_file.num_entries(), 1);
+        assert!(sst_file.file_size() > 0);
+        assert_eq!(buf.len() as u64, sst_file.file_size());
+        // There must not be a file in disk.
+        std::fs::metadata(p).unwrap_err();
+    }
+}
