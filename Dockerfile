@@ -4,6 +4,8 @@ WORKDIR /tikv
 
 # Install Rust
 COPY rust-toolchain ./
+RUN rustup self update
+RUN rustup set profile minimal
 RUN rustup default nightly-2019-06-14
 
 # Use Makefile to build
