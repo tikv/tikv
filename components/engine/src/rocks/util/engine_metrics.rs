@@ -30,6 +30,24 @@ pub const ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
                                                        live-blob-file-size";
 pub const ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
                                                            obsolete-blob-file-size";
+pub const ROCKSDB_CFSTATS: &str = "rocksdb.cfstats";
+pub const ROCKSDB_IOSTALL_KEY: &[&str] = &[
+    "io_stalls.level0_slowdown",
+    "io_stalls.level0_numfiles",
+    "io_stalls.slowdown_for_pending_compaction_bytes",
+    "io_stalls.stop_for_pending_compaction_bytes",
+    "io_stalls.memtable_slowdown",
+    "io_stalls.memtable_compaction",
+];
+
+pub const ROCKSDB_IOSTALL_TYPE: &[&str] = &[
+    "level0_file_limit_slowdown",
+    "level0_file_limit_stop",
+    "pending_compaction_bytes_slowdown",
+    "pending_compaction_bytes_stop",
+    "memtable_count_limit_slowdown",
+    "memtable_count_limit_stop",
+];
 
 pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::BlockCacheMiss,
@@ -107,6 +125,7 @@ pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::BlobDbGcBytesOverwritten,
     TickerType::BlobDbGcBytesRelocated,
 ];
+
 pub const ENGINE_HIST_TYPES: &[HistType] = &[
     HistType::DbGet,
     HistType::DbWrite,
@@ -791,6 +810,27 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
     }
 }
 
+pub fn flush_engine_iostall_properties(engine: &DB, name: &str) {
+    let stall_num = ROCKSDB_IOSTALL_KEY.len();
+    let mut counter = vec![0; stall_num];
+    for cf in engine.cf_names() {
+        let handle = rocks::util::get_cf_handle(engine, cf).unwrap();
+        if let Some(info) = engine.get_map_property_cf(handle, ROCKSDB_CFSTATS) {
+            for i in 0..stall_num {
+                let value = info.get_property_int_value(ROCKSDB_IOSTALL_KEY[i]);
+                counter[i] += value as i64;
+            }
+        } else {
+            return;
+        }
+    }
+    for i in 0..stall_num {
+        STORE_ENGINE_WRITE_STALL_REASON_GAUSE_VEC
+            .with_label_values(&[name, ROCKSDB_IOSTALL_TYPE[i]])
+            .set(counter[i]);
+    }
+}
+
 pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool) {
     for cf in engine.cf_names() {
         let handle = rocks::util::get_cf_handle(engine, cf).unwrap();
@@ -980,6 +1020,11 @@ lazy_static! {
         "Oldest unreleased snapshot duration in seconds",
         &["db"]
     ).unwrap();
+    pub static ref STORE_ENGINE_WRITE_STALL_REASON_GAUSE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_write_stall_reason",
+        "QPS of each reason which cause tikv write stall",
+        &["db", "type"]
+    ).unwrap();
 }
 
 // For ticker type
@@ -1080,11 +1125,6 @@ lazy_static! {
         "tikv_engine_num_immutable_mem_table",
         "Number of immutable mem-table",
         &["db", "cf"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_engine_stall_conditions_changed",
-        "Stall conditions changed of each column family",
-        &["db", "cf", "type"]
     ).unwrap();
     pub static ref STORE_ENGINE_BLOB_LOCATE_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_engine_blob_locate",
@@ -1332,5 +1372,8 @@ mod tests {
 
         let shared_block_cache = false;
         flush_engine_properties(&db, "test-name", shared_block_cache);
+        let handle = db.cf_handle("default").unwrap();
+        let info = db.get_map_property_cf(handle, ROCKSDB_CFSTATS);
+        assert!(info.is_some());
     }
 }
