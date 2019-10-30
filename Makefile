@@ -135,7 +135,6 @@ prof_release:
 fail_release:
 	FAIL_POINT=1 make release
 
-
 ## Distribution builds (true release builds)
 ## -------------------
 
