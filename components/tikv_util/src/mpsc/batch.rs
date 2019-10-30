@@ -300,11 +300,11 @@ impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> Stream for BatchReceiver<T, E, I, C> 
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{mpsc, Mutex};
     use std::{thread, time};
 
     use futures::executor::{self, Notify, Spawn};
-    use futures::Future;
+    use futures::{stream, Async, Future};
     use futures_cpupool::CpuPool;
 
     use super::*;
@@ -356,16 +356,25 @@ mod tests {
         let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), |v, e| v.push(e));
 
         let msg_counter = Arc::new(AtomicUsize::new(0));
-        let msg_counter1 = Arc::clone(&msg_counter);
+        let msg_counter_spawned = Arc::clone(&msg_counter);
+        let (nty, polled) = mpsc::sync_channel(1);
         let pool = CpuPool::new(1);
-        pool.spawn(rx.for_each(move |v| {
-            let len = v.len();
-            assert!(len <= 8);
-            msg_counter1.fetch_add(len, Ordering::AcqRel);
-            Ok(())
-        }))
+        pool.spawn(
+            rx.select(stream::poll_fn(move || -> Poll<Option<Vec<u64>>, ()> {
+                nty.send(()).unwrap();
+                Ok(Async::Ready(None))
+            }))
+            .for_each(move |v| {
+                let len = v.len();
+                assert!(len <= 8);
+                msg_counter_spawned.fetch_add(len, Ordering::AcqRel);
+                Ok(())
+            }),
+        )
         .forget();
-        thread::sleep(time::Duration::from_millis(10));
+
+        // Wait until the receiver has been polled in the spawned thread.
+        polled.recv().unwrap();
 
         // Send without notify, the receiver can't get batched messages.
         assert!(tx.send(0).is_ok());
