@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{Result, Iterable, SstExt, SstReader};
-use engine_traits::{SeekMode, SeekKey, Iterator};
+use engine_traits::{SeekKey, Iterator};
 use engine_traits::IterOptions;
 use engine_traits::Error;
 use engine_traits::{SstWriter, SstWriterBuilder, ExternalSstFileInfo};
@@ -15,7 +15,7 @@ use rocksdb::ExternalSstFileInfo as RawExternalSstFileInfo;
 use rocksdb::DBCompressionType;
 use std::rc::Rc;
 use std::sync::Arc;
-use crate::options::{RocksReadOptions, RocksWriteOptions};
+use crate::options::RocksReadOptions;
 // FIXME: Move RocksSeekKey into a common module since
 // it's shared between multiple iterators
 use crate::engine_iterator::{RocksSeekKey};
@@ -60,7 +60,7 @@ impl Iterable for RocksSstReader {
         Ok(RocksSstIterator(SstFileReader::iter_opt_rc(self.inner.clone(), opt)))
     }
 
-    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iterator> {
+    fn iterator_cf_opt(&self, _opts: &IterOptions, _cf: &str) -> Result<Self::Iterator> {
         unimplemented!() // FIXME: What should happen here?
     }
 }
