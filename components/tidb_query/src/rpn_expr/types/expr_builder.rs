@@ -14,7 +14,7 @@ use crate::codec::{datum, Datum};
 use crate::Result;
 
 /// Helper to build an `RpnExpression`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 
 impl RpnExpressionBuilder {
