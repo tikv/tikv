@@ -21,6 +21,7 @@ use futures::prelude::*;
 use prometheus::{IntCounter, IntGauge};
 use rand::prelude::*;
 use texn::ThreadPool as TexnPool;
+use tokio::runtime::Runtime;
 use tokio_threadpool::ThreadPool;
 
 use tikv_util::time::Instant;
@@ -68,9 +69,31 @@ impl AdaptiveSpawn for TokioPool {
 }
 
 #[derive(Clone)]
+pub struct TokioPool2 {
+    inner: Arc<Runtime>,
+}
+
+impl TokioPool2 {
+    pub fn new(inner: Runtime) -> Self {
+        TokioPool2 {
+            inner: Arc::new(inner),
+        }
+    }
+}
+
+impl AdaptiveSpawn for TokioPool2 {
+    fn spawn_opt<Fut>(&self, f: Fut, _: adaptive_spawn::Options)
+    where
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.inner.spawn(f);
+    }
+}
+
+#[derive(Clone)]
 pub struct FuturePool {
     // pool: Arc<ThreadPool>,
-    pool: TokioPool,
+    pool: TokioPool2,
     // pool: TexnPool,
     env: Arc<Env>,
     max_tasks: usize,
