@@ -406,7 +406,9 @@ mod tests {
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::{IngestExternalFileOptions, Snapshot, SstWriterBuilder, Writable};
+    use engine::rocks::{IngestExternalFileOptions, Snapshot, Writable};
+    use engine_traits::{SstWriter, SstWriterBuilder};
+    use engine_rocks::RocksSstWriterBuilder;
     use engine::util::{delete_all_files_in_range, delete_all_in_range};
     use engine::Engines;
     use engine::*;
@@ -935,7 +937,7 @@ mod tests {
         // Delete one mvcc kvs we have written above.
         // Here we make the kvs on the L5 by ingesting SST.
         let sst_file_path = Path::new(db.path()).join("for_ingest.sst");
-        let mut writer = SstWriterBuilder::new()
+        let mut writer = RocksSstWriterBuilder::new()
             .build(&sst_file_path.to_str().unwrap())
             .unwrap();
         writer
