@@ -6,13 +6,16 @@ use std::path::Path;
 use crc::crc32::{self, Hasher32};
 use engine_rocks::RocksEngine;
 use engine_rocks::RocksSstReader;
+use engine_rocks::RocksSstWriter;
+use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::KvEngine;
 use engine_traits::SstReader;
+use engine_traits::SstWriter;
+use engine_traits::SstWriterBuilder;
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
 use engine::rocks::util::new_engine;
-use engine::rocks::SstWriterBuilder;
 use std::sync::Arc;
 
 pub use engine_rocks::RocksEngine as TestEngine;
@@ -24,6 +27,11 @@ pub fn new_test_engine(path: &str, cfs: &[&str]) -> RocksEngine {
 
 pub fn new_sst_reader(path: &str) -> RocksSstReader {
     RocksSstReader::open(path).expect("test sst reader")
+}
+
+pub fn new_sst_writer(path: &str) -> RocksSstWriter {
+    RocksSstWriterBuilder::new()
+        .build(path).expect("test writer builder")
 }
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
@@ -43,7 +51,7 @@ where
 }
 
 pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SstMeta, Vec<u8>) {
-    let mut w = SstWriterBuilder::new()
+    let mut w = RocksSstWriterBuilder::new()
         .build(path.as_ref().to_str().unwrap())
         .unwrap();
     for i in range.0..range.1 {

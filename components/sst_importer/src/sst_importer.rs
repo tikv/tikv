@@ -11,8 +11,7 @@ use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
 use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
-use engine::rocks::SstWriterBuilder;
-use engine_traits::{SeekKey, SstReader};
+use engine_traits::{SeekKey, SstReader, SstWriterBuilder, SstWriter};
 use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::Iterator;
 use external_storage::create_storage;
@@ -238,7 +237,7 @@ impl SSTImporter {
         }
 
         // perform iteration and key rewrite.
-        let mut sst_writer = SstWriterBuilder::new().build(path.save.to_str().unwrap())?;
+        let mut sst_writer = E::SstWriterBuilder::new().build(path.save.to_str().unwrap())?;
         let mut key = keys::data_key(new_prefix);
         let new_prefix_data_key_len = key.len();
         let mut first_key = None;
@@ -541,9 +540,11 @@ mod tests {
 
     use engine_traits::{Iterable, Iterator, SeekKey};
     use engine_traits::Error as TraitError;
+    use engine_traits::ExternalSstFileInfo;
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine,
-                            new_sst_reader};
+                            new_sst_reader,
+                            new_sst_writer};
 
     #[test]
     fn test_import_dir() {
@@ -676,8 +677,7 @@ mod tests {
 
     fn create_sample_external_sst_file() -> Result<(tempfile::TempDir, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
-        let mut sst_writer = SstWriterBuilder::new()
-            .build(ext_sst_dir.path().join("sample.sst").to_str().unwrap())?;
+        let mut sst_writer = new_sst_writer(ext_sst_dir.path().join("sample.sst").to_str().unwrap());
         sst_writer.put(b"zt123_r01", b"abc")?;
         sst_writer.put(b"zt123_r04", b"xyz")?;
         sst_writer.put(b"zt123_r07", b"pqrst")?;
