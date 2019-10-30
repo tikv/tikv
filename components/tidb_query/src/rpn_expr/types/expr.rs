@@ -6,7 +6,7 @@ use super::super::function::RpnFnMeta;
 use crate::codec::data_type::ScalarValue;
 
 /// A type for each node in the RPN expression list.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum RpnExpressionNode {
     /// Represents a function call.
     FnCall {
@@ -59,7 +59,7 @@ impl RpnExpressionNode {
 /// An expression in Reverse Polish notation, which is simply a list of RPN expression nodes.
 ///
 /// You may want to build it using `RpnExpressionBuilder`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RpnExpression(Vec<RpnExpressionNode>);
 
 impl std::ops::Deref for RpnExpression {
