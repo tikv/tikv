@@ -6,9 +6,11 @@ use std::{fs, usize};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::util::io_limiter::IOLimiter;
 use engine::rocks::{
-    IngestExternalFileOptions, Snapshot as DbSnapshot, SstWriter, SstWriterBuilder, Writable,
+    IngestExternalFileOptions, Snapshot as DbSnapshot, Writable,
     WriteBatch, DB,
 };
+use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+use engine_traits::{SstWriter, SstWriterBuilder};
 use engine::{CfName, Iterable};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
@@ -137,9 +139,10 @@ pub fn apply_sst_cf_file(path: &str, db: &DB, cf: &str) -> Result<(), Error> {
     Ok(())
 }
 
-fn create_sst_file_writer(snap: &DbSnapshot, cf: CfName, path: &str) -> Result<SstWriter, Error> {
+fn create_sst_file_writer(snap: &DbSnapshot, cf: CfName, path: &str) -> Result<RocksSstWriter, Error> {
     let db = snap.get_db();
-    let builder = SstWriterBuilder::new().set_db(db).set_cf(cf);
+    let engine = RocksEngine::from_ref(&db);
+    let builder = RocksSstWriterBuilder::new().set_db(&engine).set_cf(cf);
     let writer = box_try!(builder.build(path));
     Ok(writer)
 }
