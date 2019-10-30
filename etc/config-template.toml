@@ -110,6 +110,18 @@
 ## It should be set based on your disk performance.
 # snap-max-write-bytes-per-sec = "100MB"
 
+## Whether to enable request batch.
+# enable-request-batch = true
+
+## Whether to collect batch across commands.
+## When disabled, wait duration is ignored. When enabled, collect batch for specified duration
+## when load is high.
+# request-batch-enable-cross-command = true
+
+## Wait duration before each request batch is processed. Wait is triggered when cross-command
+## option is enabled and system load is high.
+# request-batch-wait-duration = "1ms"
+
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
