@@ -4,6 +4,8 @@ use kvproto::coprocessor as coppb;
 use tipb::ColumnInfo;
 
 use crate::codec::datum::Datum;
+use crate::codec::table;
+use crate::error::EvaluateError;
 
 /// Convert the key to the smallest key which is larger than the key given.
 pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
@@ -103,9 +105,39 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     }
 }
 
+#[inline]
+pub fn check_record_key(key: &[u8]) -> Result<(), EvaluateError> {
+    let sep = &key[table::TABLE_PREFIX_KEY_LEN..table::PREFIX_LEN];
+    if sep == table::RECORD_PREFIX_SEP {
+        Ok(())
+    } else {
+        Err(EvaluateError::Other(format!(
+            "record key expected, but got {:?}",
+            key
+        )))
+    }
+}
+
+#[inline]
+pub fn check_index_key(key: &[u8]) -> Result<(), EvaluateError> {
+    let sep = &key[table::TABLE_PREFIX_KEY_LEN..table::PREFIX_LEN];
+    if sep == table::INDEX_PREFIX_SEP {
+        Ok(())
+    } else {
+        Err(EvaluateError::Other(format!(
+            "Index key expected, but got {:?}",
+            key
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::tests::generate_index_data;
+
+    const TABLE_ID: i64 = 1;
+    const INDEX_ID: i64 = 1;
 
     fn test_prefix_next_once(key: &[u8], expected: &[u8]) {
         let mut key = key.to_vec();
@@ -175,5 +207,16 @@ mod tests {
                 &[1, 2, 4, 0, 0, 0],
             ],
         );
+    }
+
+    #[test]
+    fn test_check_key_type() {
+        let record_key = table::encode_row_key(TABLE_ID, 1);
+        assert!(check_record_key(&record_key.as_slice()).is_ok());
+        assert!(check_index_key(&record_key.as_slice()).is_err());
+
+        let (_, index_key) = generate_index_data(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
+        assert!(check_record_key(&index_key.as_slice()).is_err());
+        assert!(check_index_key(&index_key.as_slice()).is_ok());
     }
 }
