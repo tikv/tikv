@@ -606,6 +606,9 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
     ) -> usize {
+        if self.commands.is_empty() {
+            return 0;
+        }
         let commands = mem::replace(&mut self.commands, vec![]);
         self.router.clear();
         let output = commands.len();

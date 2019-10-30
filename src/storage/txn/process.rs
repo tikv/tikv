@@ -13,8 +13,7 @@ use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Error as EngineError, Modify, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockMgr};
 use crate::storage::mvcc::{
-    BatchMvccTxn, Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write,
-    MAX_TXN_WRITE_SIZE,
+    Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
 use crate::storage::{
@@ -31,31 +30,13 @@ pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 /// Process result of a command.
 pub enum ProcessResult {
     Res,
-    MultiRes {
-        results: Vec<StorageResult<()>>,
-    },
-    BatchMultiRes {
-        results: Vec<(u64, Vec<StorageResult<()>>)>,
-    },
-    MvccKey {
-        mvcc: MvccInfo,
-    },
-    MvccStartTs {
-        mvcc: Option<(Key, MvccInfo)>,
-    },
-    Locks {
-        locks: Vec<LockInfo>,
-    },
-    TxnStatus {
-        lock_ttl: u64,
-        commit_ts: u64,
-    },
-    NextCommand {
-        cmd: Command,
-    },
-    Failed {
-        err: StorageError,
-    },
+    MultiRes { results: Vec<StorageResult<()>> },
+    MvccKey { mvcc: MvccInfo },
+    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
+    Locks { locks: Vec<LockInfo> },
+    TxnStatus { lock_ttl: u64, commit_ts: u64 },
+    NextCommand { cmd: Command },
+    Failed { err: StorageError },
 }
 
 /// Delivers the process result of a command to the storage callback.
@@ -218,14 +199,36 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 self.take_pool()
                     .pool
                     .spawn(move || {
-                        notify_scheduler(
-                            self.take_scheduler(),
-                            Msg::FinishedWithErr {
-                                cid: task.cid,
-                                err: Error::from(err),
-                                tag: task.tag,
-                            },
-                        );
+                        let (cid, tag) = (task.cid, task.tag);
+                        if let Command::Batch { mut ids, .. } = task.cmd {
+                            let results = ids
+                                .iter_mut()
+                                .filter_map(|id| {
+                                    if let Some(id) = id {
+                                        Some((
+                                            *id,
+                                            Msg::FinishedWithErr {
+                                                cid,
+                                                err: Error::from(err.maybe_clone().unwrap()),
+                                                tag,
+                                            },
+                                        ))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            self.take_scheduler().on_batch_msg(results);
+                        } else {
+                            notify_scheduler(
+                                self.take_scheduler(),
+                                Msg::FinishedWithErr {
+                                    cid,
+                                    err: Error::from(err),
+                                    tag,
+                                },
+                            );
+                        }
                         future::ok::<_, ()>(())
                     })
                     .unwrap();
@@ -945,7 +948,11 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
     statistics: &mut Statistics,
 ) -> Result<()> {
     let tag = cmd.tag();
-    if let Command::Batch { mut ids, commands } = cmd {
+    if let Command::Batch {
+        mut ids,
+        mut commands,
+    } = cmd
+    {
         if tag == CommandKind::commit {
             let results: Vec<(u64, Msg)> = ids
                 .iter_mut()
@@ -973,56 +980,108 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
         }
         // all requests in a batch have the same region, epoch, term, sync_log
         let ctx = match commands[0] {
-            Command::Prewrite { ref ctx, .. } => ctx,
-            Command::Commit { ref ctx, .. } => ctx,
+            Command::Prewrite { ref ctx, .. } => ctx.clone(),
+            Command::Commit { ref ctx, .. } => ctx.clone(),
             _ => unreachable!(),
         };
         let multi_res = tag == CommandKind::prewrite;
-        let mut txn = BatchMvccTxn::new(snapshot)?;
+        let mut txn = MvccTxn::new(snapshot, 0, false)?;
         // check conflict
         let results = match tag {
             CommandKind::prewrite => {
-                let results = txn.batch_prewrite(&mut ids, &commands)?;
-                results
-                    .into_iter()
-                    .map(|(id, res)| {
-                        (
-                            id,
-                            match res {
-                                Err(e) => Msg::FinishedWithErr {
+                let mut results = Vec::new();
+                let len = commands.len();
+                for i in 0..len {
+                    if ids[i].is_none() {
+                        continue;
+                    }
+                    if let Command::Prewrite {
+                        mutations,
+                        primary,
+                        start_ts,
+                        options,
+                        ..
+                    } = &mut commands[i]
+                    {
+                        if options.for_update_ts != 0 {
+                            panic!("batch command does not accept pessimistic prewrite request");
+                        }
+                        txn.start_ts(*start_ts);
+                        let mut locks = Vec::new();
+                        let mut failed = false;
+                        let mutations = std::mem::replace(mutations, vec![]);
+                        for m in mutations {
+                            match txn.prewrite(m, &primary, &options) {
+                                e @ Err(MvccError::KeyIsLocked { .. }) => {
+                                    locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                                }
+                                Err(e) => {
+                                    results.push((
+                                        ids[i].take().unwrap(),
+                                        Msg::FinishedWithErr {
+                                            cid,
+                                            err: Error::from(e),
+                                            tag,
+                                        },
+                                    ));
+                                    failed = true;
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if !failed && !locks.is_empty() {
+                            results.push((
+                                ids[i].take().unwrap(),
+                                Msg::WriteFinished {
                                     cid,
-                                    err: Error::from(e),
-                                    tag,
-                                },
-                                Ok(results) => Msg::WriteFinished {
-                                    cid,
-                                    pr: ProcessResult::MultiRes { results },
+                                    pr: ProcessResult::MultiRes { results: locks },
                                     result: Ok(()),
                                     tag,
                                 },
-                            },
-                        )
-                    })
-                    .collect()
+                            ));
+                        }
+                    } else {
+                        unreachable!();
+                    }
+                }
+                results
             }
             CommandKind::commit => {
-                let results = txn.batch_commit(&mut ids, &commands)?;
+                let mut results = Vec::new();
+                let len = commands.len();
+                for i in 0..len {
+                    if ids[i].is_none() {
+                        continue;
+                    }
+                    if let Command::Commit {
+                        keys,
+                        commit_ts,
+                        lock_ts,
+                        ..
+                    } = &commands[i]
+                    {
+                        txn.start_ts(*lock_ts);
+                        let checkpoint = txn.write_checkpoint();
+                        for k in keys {
+                            if let Err(e) = txn.commit(k.clone(), *commit_ts) {
+                                results.push((
+                                    ids[i].take().unwrap(),
+                                    Msg::FinishedWithErr {
+                                        cid,
+                                        err: Error::from(e),
+                                        tag,
+                                    },
+                                ));
+                                txn.write_reset(checkpoint);
+                                break;
+                            }
+                        }
+                    } else {
+                        unreachable!();
+                    }
+                }
                 results
-                    .into_iter()
-                    .map(|(id, res)| {
-                        (
-                            id,
-                            match res {
-                                Err(e) => Msg::FinishedWithErr {
-                                    cid,
-                                    err: Error::from(e),
-                                    tag,
-                                },
-                                _ => unreachable!(),
-                            },
-                        )
-                    })
-                    .collect()
             }
             _ => unreachable!(),
         };
@@ -1098,7 +1157,7 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                         .unwrap()
                 },
             );
-            if let Err(e) = engine.async_write(ctx, modifies, engine_cb) {
+            if let Err(e) = engine.async_write(&ctx, modifies, engine_cb) {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                 info!("engine async_write failed"; "cid" => cid, "err" => ?e);

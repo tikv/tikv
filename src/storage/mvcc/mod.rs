@@ -2,14 +2,12 @@
 
 //! Multi-version concurrency control functionality.
 
-mod batch_txn;
 mod lock;
 mod metrics;
 mod reader;
 mod txn;
 mod write;
 
-pub use self::batch_txn::BatchMvccTxn;
 pub use self::lock::{Lock, LockType};
 pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};

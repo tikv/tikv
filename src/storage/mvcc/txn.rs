@@ -68,6 +68,10 @@ impl<S: Snapshot> MvccTxn<S> {
         })
     }
 
+    pub fn start_ts(&mut self, start_ts: u64) {
+        self.start_ts = start_ts;
+    }
+
     pub fn collapse_rollback(&mut self, collapse: bool) {
         self.collapse_rollback = collapse;
     }
@@ -84,6 +88,15 @@ impl<S: Snapshot> MvccTxn<S> {
 
     pub fn write_size(&self) -> usize {
         self.write_size
+    }
+
+    pub fn write_checkpoint(&self) -> (usize, usize) {
+        (self.write_size, self.writes.len())
+    }
+
+    pub fn write_reset(&mut self, checkpoint: (usize, usize)) {
+        self.write_size = checkpoint.0;
+        self.writes.truncate(checkpoint.1);
     }
 
     fn put_lock(&mut self, key: Key, lock: &Lock) {
