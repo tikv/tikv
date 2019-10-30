@@ -87,6 +87,10 @@ quick_error! {
             description("write cf corresponding value not found in default cf")
             display("default not found: key:{}, write:{:?}, maybe read truncated/dropped table data?", hex::encode_upper(key), write)
         }
+        CommitTsExpired { start_ts: u64, commit_ts: u64, key: Vec<u8>, min_commit_ts: u64 } {
+            description("commit_ts less than lock's min_commit_ts")
+            display("try to commit key {} with commit_ts {} but min_commit_ts is {}", hex::encode_upper(key), commit_ts, min_commit_ts)
+        }
         KeyVersion { description("bad format key(version)") }
         PessimisticLockNotFound { start_ts: u64, key: Vec<u8> } {
             description("pessimistic lock not found when prewrite")
@@ -155,6 +159,17 @@ impl Error {
             Error::DefaultNotFound { key, write } => Some(Error::DefaultNotFound {
                 key: key.to_owned(),
                 write: write.clone(),
+            }),
+            Error::CommitTsExpired {
+                start_ts,
+                commit_ts,
+                key,
+                min_commit_ts,
+            } => Some(Error::CommitTsExpired {
+                start_ts: *start_ts,
+                commit_ts: *commit_ts,
+                key: key.clone(),
+                min_commit_ts: *min_commit_ts,
             }),
             Error::KeyVersion => Some(Error::KeyVersion),
             Error::Committed { commit_ts } => Some(Error::Committed {
