@@ -623,8 +623,16 @@ impl<S: Snapshot> MvccTxn<S> {
                 Ok(is_pessimistic_txn)
             }
             _ => match self.check_txn_status_missing_lock(key)? {
-                TxnStatus::Committed(ts) => Err(Error::Committed { commit_ts: ts }),
-                TxnStatus::RollbackedBefore | TxnStatus::NotExist => Ok(false),
+                TxnStatus::Committed(ts) => {
+                    MVCC_CONFLICT_COUNTER.rollback_committed.inc();
+                    Err(Error::Committed { commit_ts: ts })
+                }
+                TxnStatus::RollbackedBefore => {
+                    // Return Ok on Rollback already exist.
+                    MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
+                    Ok(false)
+                }
+                TxnStatus::NotExist => Ok(false),
                 _ => unreachable!(),
             },
         }
