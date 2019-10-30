@@ -131,11 +131,14 @@ fn get_background_job_limit(
     // Otherwise, the number of background jobs should not exceed cpu_num - 1.
     // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
     // the rest shared by flush and compaction.
-    let max_background_jobs: i32 = cmp::max(2, cmp::min(default_background_jobs, cpu_num - 1));
+    let max_background_jobs: i32 =
+        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1) as i32));
     // Cap max_sub_compactions to allow at least two compactions.
     let max_compactions = max_background_jobs - max_background_jobs / 4;
-    let max_sub_compactions: u32 =
-        cmp::max(1, cmp::min(default_sub_compactions, max_compactions - 1));
+    let max_sub_compactions: u32 = cmp::max(
+        1,
+        cmp::min(default_sub_compactions, (max_compactions - 1) as u32),
+    );
     (max_background_jobs, max_sub_compactions)
 }
 
