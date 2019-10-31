@@ -80,6 +80,7 @@ BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
 export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
 export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+export TIKV_BUILD_GIT_TAG := $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 
@@ -160,6 +161,31 @@ build_dist_release:
 dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make dist_release
 
+# Create distributable artifacts. Binaries and Docker image tarballs.
+dist_artifacts: dist_tarballs
+
+# Build gzipped tarballs of the binaries and docker images.
+# Used to build a `dist/` folder containing the release artifacts.
+dist_tarballs: docker
+	docker rm -f tikv-binary-extraction-dummy || true
+	docker create --name tikv-binary-extraction-dummy tikv/tikv
+	mkdir -p dist bin
+	docker cp tikv-binary-extraction-dummy:/tikv-server bin/tikv-server
+	docker cp tikv-binary-extraction-dummy:/tikv-ctl bin/tikv-ctl
+	tar -czf dist/tikv.tar.gz bin/*
+	docker save pingcap/tikv | gzip > dist/tikv-docker.tar.gz
+	docker rm tikv-binary-extraction-dummy
+
+# Create tags of the docker images
+docker-tag: docker-tag-with-git-hash docker-tag-with-git-tag
+
+# Tag docker images with the git hash
+docker-tag-with-git-hash:
+	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_HASH}
+
+# Tag docker images with the git tag
+docker-tag-with-git-tag:
+	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_TAG}
 
 ## Testing
 ## -------
