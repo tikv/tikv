@@ -241,6 +241,7 @@ expression: format clippy
 	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package tidb_query "expr" -- --nocapture
 
 # A special target for building TiKV docker image.
+.PHONY: docker
 docker:
 	bash ./scripts/gen-dockerfile.sh | docker build -t pingcap/tikv -f - .
 
