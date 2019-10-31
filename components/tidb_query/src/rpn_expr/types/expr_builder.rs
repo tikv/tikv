@@ -15,7 +15,7 @@ use crate::expr::EvalContext;
 use crate::Result;
 
 /// Helper to build an `RpnExpression`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 
 impl RpnExpressionBuilder {
