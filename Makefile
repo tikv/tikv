@@ -108,6 +108,9 @@ dev: format clippy
 build:
 	cargo build --no-default-features --features "${ENABLE_FEATURES}"
 
+docker:
+	bash ./scripts/gen-dockerfile.sh | docker build -t pingcap/tikv -f - .
+
 ## Release builds (optimized dev builds)
 ## ----------------------------
 
