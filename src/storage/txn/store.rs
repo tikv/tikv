@@ -5,7 +5,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 use crate::storage::metrics::*;
 use crate::storage::mvcc::EntryScanner;
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::mvcc::PointGetterBuilder;
+use crate::storage::mvcc::{PointGetter, PointGetterBuilder};
 use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder, Write};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
@@ -17,6 +17,12 @@ pub trait Store: Send {
 
     /// Fetch the provided key.
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
+
+    /// Re-use last cursor to incrementally (if possible) fetch the provided key.
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>>;
+
+    /// Take the statistics. Currently only available for `incremental_get`.
+    fn incremental_get_take_statistics(&mut self) -> Statistics;
 
     /// Fetch the provided set of keys.
     fn batch_get(
@@ -167,6 +173,8 @@ pub struct SnapshotStore<S: Snapshot> {
     start_ts: u64,
     isolation_level: IsolationLevel,
     fill_cache: bool,
+
+    point_getter_cache: Option<PointGetter<S>>,
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
@@ -181,6 +189,27 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         let v = point_getter.get(key)?;
         statistics.add(&point_getter.take_statistics());
         Ok(v)
+    }
+
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
+        if self.point_getter_cache.is_none() {
+            self.point_getter_cache = Some(
+                PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
+                    .fill_cache(self.fill_cache)
+                    .isolation_level(self.isolation_level)
+                    .multi(true)
+                    .build()?,
+            );
+        }
+        Ok(self.point_getter_cache.as_mut().unwrap().get(key)?)
+    }
+
+    fn incremental_get_take_statistics(&mut self) -> Statistics {
+        if self.point_getter_cache.is_none() {
+            Statistics::default()
+        } else {
+            self.point_getter_cache.as_mut().unwrap().take_statistics()
+        }
     }
 
     fn batch_get(
@@ -275,7 +304,19 @@ impl<S: Snapshot> SnapshotStore<S> {
             start_ts,
             isolation_level,
             fill_cache,
+
+            point_getter_cache: None,
         }
+    }
+
+    #[inline]
+    pub fn set_start_ts(&mut self, start_ts: u64) {
+        self.start_ts = start_ts;
+    }
+
+    #[inline]
+    pub fn set_isolation_level(&mut self, isolation_level: IsolationLevel) {
+        self.isolation_level = isolation_level;
     }
 
     fn verify_range(&self, lower_bound: &Option<Key>, upper_bound: &Option<Key>) -> Result<()> {
@@ -350,6 +391,17 @@ impl Store for FixtureStore {
             Some(Ok(v)) => Ok(Some(v.clone())),
             Some(Err(e)) => Err(e.maybe_clone().unwrap()),
         }
+    }
+
+    #[inline]
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Vec<u8>>> {
+        let mut s = Statistics::default();
+        self.get(key, &mut s)
+    }
+
+    #[inline]
+    fn incremental_get_take_statistics(&mut self) -> Statistics {
+        Statistics::default()
     }
 
     #[inline]
