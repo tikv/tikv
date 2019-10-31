@@ -241,7 +241,7 @@ impl RpnExpression {
                     args_len,
                     field_type: ret_field_type,
                     implicit_args,
-                    data,
+                    metadata,
                 } => {
                     // Suppose that we have function call `Foo(A, B, C)`, the RPN nodes looks like
                     // `[A, B, C, Foo]`.
@@ -260,7 +260,7 @@ impl RpnExpression {
                         output_rows,
                         stack_slice,
                         &mut call_extra,
-                        &**data,
+                        &**metadata,
                     )?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
@@ -1053,7 +1053,7 @@ mod tests {
     fn test_rpn_fn_data() {
         use tipb::{Expr, ScalarFuncSig};
 
-        #[rpn_fn(capture = [data], data_initializer = prepare_a)]
+        #[rpn_fn(capture = [metadata], metadata_ctor = prepare_a)]
         fn fn_a(data: &i64, v: &Option<Int>) -> Result<Option<Int>> {
             Ok(v.map(|v| v + *data))
         }

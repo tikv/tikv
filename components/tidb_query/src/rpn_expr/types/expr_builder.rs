@@ -128,7 +128,7 @@ impl RpnExpressionBuilder {
             args_len,
             field_type: return_field_type.into(),
             implicit_args: vec![],
-            data: Box::new(()),
+            metadata: Box::new(()),
         };
         self.0.push(node);
         self
@@ -147,7 +147,7 @@ impl RpnExpressionBuilder {
             args_len,
             field_type: return_field_type.into(),
             implicit_args,
-            data: Box::new(()),
+            metadata: Box::new(()),
         };
         self.0.push(node);
         self
@@ -309,7 +309,7 @@ where
 
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
-    let data = (func_meta.data_initializer_ptr)(&tree_node);
+    let metadata = (func_meta.metadata_ctor_ptr)(&tree_node);
 
     // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
     let datums = datum::decode(&mut tree_node.get_val())?;
@@ -337,7 +337,7 @@ where
         args_len,
         field_type: tree_node.take_field_type(),
         implicit_args,
-        data,
+        metadata,
     });
     Ok(())
 }

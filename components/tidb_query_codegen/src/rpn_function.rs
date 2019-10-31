@@ -58,12 +58,12 @@
 //! validated. The validator function should have the signature `&tipb::Expr -> Result<()>`.
 //! E.g., `#[rpn_fn(raw_varg, extra_validator = json_object_validator)]`
 //!
-//! ### `data_initializer`
+//! ### `metadata_ctor`
 //!
-//! A function name for custom code to initialize attached data from its tree node in the
-//! expression tree. After setting this argument, `data` is available in the `capture` array.
-//! The initializer function should have the signature `&tipb::Expr -> `T`.
-//! E.g., `#[rpn_fn(varg, capture = [data], data_initializer = helper_initializer)]`
+//! A function name for custom code to construct metadata from its tree node in the
+//! expression tree. After setting this argument, `metadata` is available in the `capture` array.
+//! The constructor function should have the signature `&tipb::Expr -> T`.
+//! E.g., `#[rpn_fn(varg, capture = [metadata], metadata_ctor = some_ctor)]`
 //!
 //! ### `capture`
 //!
@@ -77,7 +77,7 @@
 //! * `output_rows: usize`
 //! * `args: &[rpn_expr::RpnStackNode<'_>]`
 //! * `extra: &mut rpn_expr::RpnFnCallExtra<'_>`
-//! * `data: &T` (where T is the type returned by your data initializer)
+//! * `metadata: &T` (where T is the type returned by your metadata constructor)
 //!
 //! ```ignore
 //! // This generates `with_context_fn_meta() -> RpnFnMeta`
@@ -144,7 +144,7 @@
 //!         output_rows: usize,
 //!         args: &[RpnStackNode<'_>],
 //!         extra: &mut RpnFnCallExtra<'_>,
-//!         data: &(dyn Any + Send),
+//!         metadata: &(dyn Any + Send),
 //!     ) -> Result<VectorValue> {
 //!         let (regex, arg) = self.extract(0);
 //!         let regex = build_regex(regex);
@@ -220,8 +220,8 @@ struct RpnFnAttr {
     /// Extra validator.
     extra_validator: Option<TokenStream>,
 
-    /// Data initializer.
-    data_initializer: Option<TokenStream>,
+    /// Metadata constructor.
+    metadata_ctor: Option<TokenStream>,
 
     /// Special variables captured when calling the function.
     captures: Vec<Expr>,
@@ -233,7 +233,7 @@ impl parse::Parse for RpnFnAttr {
         let mut is_raw_varg = false;
         let mut min_args = None;
         let mut extra_validator = None;
-        let mut data_initializer = None;
+        let mut metadata_ctor = None;
         let mut captures = Vec::new();
 
         let config_items = Punctuated::<Expr, Token![,]>::parse_terminated(input).unwrap();
@@ -261,8 +261,8 @@ impl parse::Parse for RpnFnAttr {
                         "extra_validator" => {
                             extra_validator = Some((&**right).into_token_stream());
                         }
-                        "data_initializer" => {
-                            data_initializer = Some((&**right).into_token_stream());
+                        "metadata_ctor" => {
+                            metadata_ctor = Some((&**right).into_token_stream());
                         }
                         _ => {
                             return Err(Error::new_spanned(
@@ -315,7 +315,7 @@ impl parse::Parse for RpnFnAttr {
             is_raw_varg,
             min_args,
             extra_validator,
-            data_initializer,
+            metadata_ctor,
             captures,
         })
     }
@@ -493,16 +493,19 @@ impl ValidatorFnGenerator {
 }
 
 fn generate_init_data_fn(
-    data_initializer: &Option<TokenStream>,
+    metadata_ctor: &Option<TokenStream>,
     impl_generics: &ImplGenerics<'_>,
     where_clause: Option<&WhereClause>,
 ) -> TokenStream {
-    let drop_fn = &quote! {drop};
-    let init_data_fn = data_initializer.as_ref().unwrap_or(drop_fn);
+    let fn_body = if let Some(metadata_ctor) = metadata_ctor {
+        quote! { Box::new(#metadata_ctor(expr)) }
+    } else {
+        quote! { Box::new(()) }
+    };
     quote! {
         fn init_data #impl_generics (expr: &::tipb::Expr)
             -> Box<dyn std::any::Any + Send> #where_clause {
-            Box::new(#init_data_fn(expr))
+            #fn_body
         }
     }
 }
@@ -513,7 +516,7 @@ struct VargsRpnFn {
     captures: Vec<Expr>,
     min_args: Option<usize>,
     extra_validator: Option<TokenStream>,
-    data_initializer: Option<TokenStream>,
+    metadata_ctor: Option<TokenStream>,
     item_fn: ItemFn,
     arg_type: TypePath,
     ret_type: TypePath,
@@ -547,7 +550,7 @@ impl VargsRpnFn {
             captures: attr.captures,
             min_args: attr.min_args,
             extra_validator: attr.extra_validator,
-            data_initializer: attr.data_initializer,
+            metadata_ctor: attr.metadata_ctor,
             item_fn,
             arg_type: arg_type.eval_type,
             ret_type: ret_type.eval_type,
@@ -573,13 +576,14 @@ impl VargsRpnFn {
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
         let arg_type = &self.arg_type;
-        let init_data_fn =
-            generate_init_data_fn(&self.data_initializer, &impl_generics, where_clause);
-        let downcast_data = self.data_initializer.as_ref().map(|_| {
+        let init_data_fn = generate_init_data_fn(&self.metadata_ctor, &impl_generics, where_clause);
+        let downcast_metadata = if self.metadata_ctor.is_some() {
             quote! {
-                let data = std::any::Any::downcast_ref(data).expect("downcast data error");
+                let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
             }
-        });
+        } else {
+            TokenStream::new()
+        };
         let captures = &self.captures;
 
         let validator_fn = ValidatorFnGenerator::new()
@@ -600,9 +604,9 @@ impl VargsRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> #where_clause {
-                    #downcast_data
+                    #downcast_metadata
                     crate::rpn_expr::function::VARG_PARAM_BUF.with(|vargs_buf| {
                         use crate::codec::data_type::Evaluable;
                         let mut vargs_buf = vargs_buf.borrow_mut();
@@ -629,7 +633,7 @@ impl VargsRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    data_initializer_ptr: init_data #ty_generics_turbofish,
+                    metadata_ctor_ptr: init_data #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -644,7 +648,7 @@ struct RawVargsRpnFn {
     captures: Vec<Expr>,
     min_args: Option<usize>,
     extra_validator: Option<TokenStream>,
-    data_initializer: Option<TokenStream>,
+    metadata_ctor: Option<TokenStream>,
     item_fn: ItemFn,
     ret_type: TypePath,
 }
@@ -671,7 +675,7 @@ impl RawVargsRpnFn {
             captures: attr.captures,
             min_args: attr.min_args,
             extra_validator: attr.extra_validator,
-            data_initializer: attr.data_initializer,
+            metadata_ctor: attr.metadata_ctor,
             item_fn,
             ret_type: ret_type.eval_type,
         })
@@ -695,13 +699,14 @@ impl RawVargsRpnFn {
         let ty_generics_turbofish = ty_generics.as_turbofish();
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
-        let init_data_fn =
-            generate_init_data_fn(&self.data_initializer, &impl_generics, where_clause);
-        let downcast_data = self.data_initializer.as_ref().map(|_| {
+        let init_data_fn = generate_init_data_fn(&self.metadata_ctor, &impl_generics, where_clause);
+        let downcast_metadata = if self.metadata_ctor.is_some() {
             quote! {
-                let data = std::any::Any::downcast_ref(data).expect("downcast data error");
+                let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
             }
-        });
+        } else {
+            TokenStream::new()
+        };
         let captures = &self.captures;
 
         let validator_fn = ValidatorFnGenerator::new()
@@ -721,9 +726,9 @@ impl RawVargsRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> #where_clause {
-                    #downcast_data
+                    #downcast_metadata
                     crate::rpn_expr::function::RAW_VARG_PARAM_BUF.with(|mut vargs_buf| {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
@@ -751,7 +756,7 @@ impl RawVargsRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    data_initializer_ptr: init_data #ty_generics_turbofish,
+                    metadata_ctor_ptr: init_data #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -765,7 +770,7 @@ impl RawVargsRpnFn {
 struct NormalRpnFn {
     captures: Vec<Expr>,
     extra_validator: Option<TokenStream>,
-    data_initializer: Option<TokenStream>,
+    metadata_ctor: Option<TokenStream>,
     item_fn: ItemFn,
     fn_trait_ident: Ident,
     evaluator_ident: Ident,
@@ -798,7 +803,7 @@ impl NormalRpnFn {
         Ok(Self {
             captures: attr.captures,
             extra_validator: attr.extra_validator,
-            data_initializer: attr.data_initializer,
+            metadata_ctor: attr.metadata_ctor,
             item_fn,
             fn_trait_ident,
             evaluator_ident,
@@ -831,7 +836,7 @@ impl NormalRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue>;
             }
         }
@@ -854,7 +859,7 @@ impl NormalRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     unreachable!()
                 }
@@ -887,11 +892,13 @@ impl NormalRpnFn {
             (0..self.arg_types.len()).map(|i| Ident::new(&format!("arg{}", i), Span::call_site()));
         let call_arg = extract.clone();
         let ty_generics_turbofish = ty_generics.as_turbofish();
-        let downcast_data = self.data_initializer.as_ref().map(|_| {
+        let downcast_metadata = if self.metadata_ctor.is_some() {
             quote! {
-                let data = std::any::Any::downcast_ref(data).expect("downcast data error");
+                let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
             }
-        });
+        } else {
+            TokenStream::new()
+        };
 
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp #where_clause {
@@ -901,9 +908,9 @@ impl NormalRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    #downcast_data
+                    #downcast_metadata
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
                     for row in 0..output_rows {
@@ -939,9 +946,9 @@ impl NormalRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    #fn_trait_ident #ty_generics_turbofish::eval(def, ctx, output_rows, args, extra, data)
+                    #fn_trait_ident #ty_generics_turbofish::eval(def, ctx, output_rows, args, extra, metadata)
                 }
             }
         }
@@ -961,8 +968,7 @@ impl NormalRpnFn {
             evaluator = quote! { <ArgConstructor<#arg_type, _>>::new(#arg_index, #evaluator) };
         }
         let fn_name = self.item_fn.sig.ident.to_string();
-        let init_data_fn =
-            generate_init_data_fn(&self.data_initializer, &impl_generics, where_clause);
+        let init_data_fn = generate_init_data_fn(&self.metadata_ctor, &impl_generics, where_clause);
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
@@ -981,10 +987,10 @@ impl NormalRpnFn {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> #where_clause {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
-                    #evaluator.eval(Null, ctx, output_rows, args, extra, data)
+                    #evaluator.eval(Null, ctx, output_rows, args, extra, metadata)
                 }
 
                 #init_data_fn
@@ -993,7 +999,7 @@ impl NormalRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    data_initializer_ptr: init_data #ty_generics_turbofish,
+                    metadata_ctor_ptr: init_data #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -1030,7 +1036,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue>;
             }
         };
@@ -1048,7 +1054,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     unreachable!()
                 }
@@ -1081,7 +1087,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
@@ -1115,7 +1121,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     Foo_Fn::eval(def, ctx, output_rows, args, extra)
                 }
@@ -1135,7 +1141,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
                     <ArgConstructor<Real, _>>::new(
@@ -1192,7 +1198,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue>;
             }
         };
@@ -1213,7 +1219,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     unreachable!()
                 }
@@ -1244,7 +1250,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
@@ -1282,9 +1288,9 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    Foo_Fn::<A, B>::eval(def, ctx, output_rows, args, extra, data)
+                    Foo_Fn::<A, B>::eval(def, ctx, output_rows, args, extra, metadata)
                 }
             }
         };
@@ -1305,20 +1311,20 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue>
                 where
                     B: N<A>
                 {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
                     <ArgConstructor<A::X, _>>::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData))
-                                .eval(Null, ctx, output_rows, args, extra, data)
+                                .eval(Null, ctx, output_rows, args, extra, metadata)
                 }
                 fn init_data <A: M, B> (expr: &::tipb::Expr)-> Box<dyn std::any::Any + Send>
                 where
                     B: N<A>
                 {
-                    Box::new(drop(expr))
+                    Box::new(())
                 }
                 fn validate<A: M, B>(expr: &tipb::Expr) -> crate::Result<()>
                 where
@@ -1334,7 +1340,7 @@ mod tests_normal {
                 }
                 crate::rpn_expr::RpnFnMeta {
                     name: "foo",
-                    data_initializer_ptr: init_data::<A, B>,
+                    metadata_ctor_ptr: init_data::<A, B>,
                     validator_ptr: validate::<A, B>,
                     fn_ptr: run::<A, B>,
                 }
@@ -1359,7 +1365,7 @@ mod tests_normal {
                 is_raw_varg: false,
                 min_args: None,
                 extra_validator: None,
-                data_initializer: None,
+                metadata_ctor: None,
                 captures: vec![parse_str("ctx").unwrap()],
             },
             item_fn,
@@ -1388,7 +1394,7 @@ mod tests_normal {
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                    data: &(dyn std::any::Any + Send),
+                    metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);

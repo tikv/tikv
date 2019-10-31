@@ -16,7 +16,7 @@ pub enum RpnExpressionNode {
         args_len: usize,
         field_type: FieldType,
         implicit_args: Vec<ScalarValue>,
-        data: Box<dyn Any + Send>,
+        metadata: Box<dyn Any + Send>,
     },
 
     /// Represents a scalar constant value.
