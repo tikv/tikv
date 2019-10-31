@@ -5,6 +5,7 @@ use std::iter::FromIterator;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
+use std::time::Duration;
 use std::{error, result};
 
 use engine::rocks::util::get_cf_handle;
@@ -32,8 +33,10 @@ use crate::raftstore::store::{
     write_peer_state,
 };
 use crate::raftstore::store::{keys, PeerStorage};
+use crate::server::gc_worker::GCWorker;
 use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
+use crate::storage::Engine;
 use crate::storage::Iterator as EngineIterator;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
@@ -128,13 +131,14 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 }
 
 #[derive(Clone)]
-pub struct Debugger {
+pub struct Debugger<E: Engine> {
     engines: Engines,
+    gc_worker: Option<GCWorker<E>>,
 }
 
-impl Debugger {
-    pub fn new(engines: Engines) -> Debugger {
-        Debugger { engines }
+impl<E: Engine> Debugger<E> {
+    pub fn new(engines: Engines, gc_worker: Option<GCWorker<E>>) -> Debugger<E> {
+        Debugger { engines, gc_worker }
     }
 
     pub fn get_engine(&self) -> &Engines {
@@ -800,6 +804,25 @@ impl Debugger {
                     )));
                 }
                 Ok(())
+            }
+            Module::Server => {
+                // The change config task may be blocked by other GC tasks,
+                // so try to wait for it completed.
+                match wait_op!(
+                    |cb| self
+                        .gc_worker
+                        .as_ref()
+                        .expect("must be some")
+                        .async_change_config(config_name, config_value, cb)
+                        .map_err(|e| Error::Other(e.into())),
+                    Duration::from_secs(3)
+                ) {
+                    Some(Ok(())) => Ok(()),
+                    Some(Err(e)) => Err(Error::Other(e.into())),
+                    None => Err(box_err!(
+                        "Waiting for config changed timed out. The config will be changed soon."
+                    )),
+                }
             }
             _ => Err(Error::NotFound(format!("unsupported module: {:?}", module))),
         }
@@ -1490,7 +1513,9 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use crate::server::gc_worker::GCConfig;
     use crate::storage::mvcc::{Lock, LockType};
+    use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::Mutable;
@@ -1591,7 +1616,7 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> Debugger {
+    fn new_debugger() -> Debugger<TestEngine> {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
@@ -1610,10 +1635,13 @@ mod tests {
 
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
-        Debugger::new(engines)
+        let test_engine = TestEngineBuilder::new().build().unwrap();
+        let mut gc_worker = GCWorker::new(test_engine, None, None, GCConfig::default());
+        gc_worker.start().unwrap();
+        Debugger::new(engines, Some(gc_worker))
     }
 
-    impl Debugger {
+    impl Debugger<TestEngine> {
         fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
             db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
@@ -2322,5 +2350,21 @@ mod tests {
             cluster_id,
             debugger.get_cluster_id().expect("get cluster id")
         );
+    }
+
+    #[test]
+    fn test_modify_gc_io_limit() {
+        use crate::server::gc_worker::GC_IO_LIMITER_CONFIG_NAME;
+
+        let debugger = new_debugger();
+        assert!(debugger
+            .modify_tikv_config(Module::Server, "gc", "10MB")
+            .is_err());
+        assert!(debugger
+            .modify_tikv_config(Module::Storage, GC_IO_LIMITER_CONFIG_NAME, "10MB")
+            .is_err());
+        assert!(debugger
+            .modify_tikv_config(Module::Server, GC_IO_LIMITER_CONFIG_NAME, "10MB")
+            .is_ok());
     }
 }

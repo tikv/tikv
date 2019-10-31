@@ -37,6 +37,8 @@ use raft::eraftpb::{ConfChange, Entry, EntryType};
 use tikv::config::TiKvConfig;
 use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
+use tikv::server::{RaftKv, ServerRaftStoreRouter};
+use tikv::storage::kv::Engine;
 use tikv::storage::Key;
 use tikv_util::security::{SecurityConfig, SecurityManager};
 use tikv_util::{escape, unescape};
@@ -87,11 +89,10 @@ fn new_debug_executor(
             let raft_db =
                 rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
-            Box::new(Debugger::new(Engines::new(
-                Arc::new(kv_db),
-                Arc::new(raft_db),
-                cache.is_some(),
-            ))) as Box<dyn DebugExecutor>
+            Box::new(Debugger::<RaftKv<ServerRaftStoreRouter>>::new(
+                Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),
+                None,
+            )) as Box<dyn DebugExecutor>
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
         _ => unreachable!(),
@@ -765,7 +766,7 @@ impl DebugExecutor for DebugClient {
     }
 }
 
-impl DebugExecutor for Debugger {
+impl<E: Engine> DebugExecutor for Debugger<E> {
     fn check_local_mode(&self) {}
 
     fn get_all_meta_regions(&self) -> Vec<u64> {
