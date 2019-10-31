@@ -1,12 +1,4 @@
-# TiKV root
-dir="."
-output="./Dockerfile"
-
-if [ "$#" -ge 1 ]; then
-    output=$1
-fi
-
-cat <<EOT > ${output}
+cat <<EOT
 FROM pingcap/rust as builder
 
 WORKDIR /tikv
@@ -31,18 +23,18 @@ COPY cmd/Cargo.toml ./cmd/
 EOT
 
 # Get components, remove test and profiler components
-components=$(ls -d ${dir}/components/*  | xargs -n 1 basename | grep -v "test" | grep -v "profiler")
+components=$(ls -d ./components/*  | xargs -n 1 basename | grep -v "test" | grep -v "profiler")
 
 # List components and add their Cargo files
 echo "# Add components Cargo files
-# Notice: every time we add a new component, we must regenerate the dockerfile" >> ${output}
+# Notice: every time we add a new component, we must regenerate the dockerfile"
 
 for i in ${components}; do
-    echo "COPY ${dir}/components/${i}/Cargo.toml ./components/${i}/Cargo.toml" >> ${output}
+    echo "COPY ./components/${i}/Cargo.toml ./components/${i}/Cargo.toml"
 done
 
 
-cat <<EOT >> ${output}
+cat <<EOT
 
 # Create dummy files, build the dependencies
 # then remove TiKV fingerprint for following rebuild
@@ -55,10 +47,10 @@ RUN mkdir -p ./cmd/src/bin && \\
 EOT
 
 for i in ${components}; do
-    echo "    mkdir ./components/${i}/src && echo '' > ./components/${i}/src/lib.rs && \\" >> ${output}
+    echo "    mkdir ./components/${i}/src && echo '' > ./components/${i}/src/lib.rs && \\"
 done
 
-cat <<EOT >> ${output}
+cat <<EOT
     # Remove test dependencies and profile features.
     for cargotoml in \$(find . -name "Cargo.toml"); do \\
         sed -i '/fuzz/d' \${cargotoml} && \\
@@ -69,20 +61,20 @@ cat <<EOT >> ${output}
 
 EOT
 
-echo 'RUN make build_dist_release && \' >> ${output}
+echo 'RUN make build_dist_release && \'
 
 for i in ${components}; do
-    echo "    rm -rf ./target/release/.fingerprint/${i}-* && \\" >> ${output}
+    echo "    rm -rf ./target/release/.fingerprint/${i}-* && \\"
 done
 
-echo "    rm -rf ./target/release/.fingerprint/tikv-*" >> ${output}
+echo "    rm -rf ./target/release/.fingerprint/tikv-*"
 
-cat <<EOT >> ${output}
+cat <<EOT
 
 # Build real binaries now
-COPY ${dir}/src ./src
-COPY ${dir}/cmd/src ./cmd/src
-COPY ${dir}/components ./components
+COPY ./src ./src
+COPY ./cmd/src ./cmd/src
+COPY ./components ./components
 
 RUN make build_dist_release
 
@@ -98,5 +90,3 @@ EXPOSE 20160 20180
 
 ENTRYPOINT ["/tikv-server"]
 EOT
-
-cat .gitignore > .dockerignore
