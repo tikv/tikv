@@ -1053,6 +1053,7 @@ mod tests {
     fn test_rpn_fn_data() {
         use tipb::{Expr, ScalarFuncSig};
 
+        #![allow(clippy::trivially-copy-pass-by-ref)]
         #[rpn_fn(capture = [metadata], metadata_ctor = prepare_a)]
         fn fn_a(data: &i64, v: &Option<Int>) -> Result<Option<Int>> {
             Ok(v.map(|v| v + *data))
