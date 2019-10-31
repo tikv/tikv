@@ -492,7 +492,7 @@ impl ValidatorFnGenerator {
     }
 }
 
-fn generate_init_data_fn(
+fn generate_init_metadata_fn(
     metadata_ctor: &Option<TokenStream>,
     impl_generics: &ImplGenerics<'_>,
     where_clause: Option<&WhereClause>,
@@ -503,7 +503,7 @@ fn generate_init_data_fn(
         quote! { Box::new(()) }
     };
     quote! {
-        fn init_data #impl_generics (expr: &::tipb::Expr)
+        fn init_metadata #impl_generics (expr: &::tipb::Expr)
             -> Box<dyn std::any::Any + Send> #where_clause {
             #fn_body
         }
@@ -576,7 +576,8 @@ impl VargsRpnFn {
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
         let arg_type = &self.arg_type;
-        let init_data_fn = generate_init_data_fn(&self.metadata_ctor, &impl_generics, where_clause);
+        let init_metadata_fn =
+            generate_init_metadata_fn(&self.metadata_ctor, &impl_generics, where_clause);
         let downcast_metadata = if self.metadata_ctor.is_some() {
             quote! {
                 let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
@@ -627,13 +628,13 @@ impl VargsRpnFn {
                     })
                 }
 
-                #init_data_fn
+                #init_metadata_fn
 
                 #validator_fn
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    metadata_ctor_ptr: init_data #ty_generics_turbofish,
+                    metadata_ctor_ptr: init_metadata #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -699,7 +700,8 @@ impl RawVargsRpnFn {
         let ty_generics_turbofish = ty_generics.as_turbofish();
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
-        let init_data_fn = generate_init_data_fn(&self.metadata_ctor, &impl_generics, where_clause);
+        let init_metadata_fn =
+            generate_init_metadata_fn(&self.metadata_ctor, &impl_generics, where_clause);
         let downcast_metadata = if self.metadata_ctor.is_some() {
             quote! {
                 let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
@@ -750,13 +752,13 @@ impl RawVargsRpnFn {
                     })
                 }
 
-                #init_data_fn
+                #init_metadata_fn
 
                 #validator_fn
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    metadata_ctor_ptr: init_data #ty_generics_turbofish,
+                    metadata_ctor_ptr: init_metadata #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -968,7 +970,8 @@ impl NormalRpnFn {
             evaluator = quote! { <ArgConstructor<#arg_type, _>>::new(#arg_index, #evaluator) };
         }
         let fn_name = self.item_fn.sig.ident.to_string();
-        let init_data_fn = generate_init_data_fn(&self.metadata_ctor, &impl_generics, where_clause);
+        let init_metadata_fn =
+            generate_init_metadata_fn(&self.metadata_ctor, &impl_generics, where_clause);
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
@@ -993,13 +996,13 @@ impl NormalRpnFn {
                     #evaluator.eval(Null, ctx, output_rows, args, extra, metadata)
                 }
 
-                #init_data_fn
+                #init_metadata_fn
 
                 #validator_fn
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    metadata_ctor_ptr: init_data #ty_generics_turbofish,
+                    metadata_ctor_ptr: init_metadata #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -1123,7 +1126,7 @@ mod tests_normal {
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                     metadata: &(dyn std::any::Any + Send),
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    Foo_Fn::eval(def, ctx, output_rows, args, extra)
+                    Foo_Fn::eval(def, ctx, output_rows, args, extra, metadata)
                 }
             }
         };
@@ -1148,7 +1151,11 @@ mod tests_normal {
                         1usize,
                         <ArgConstructor<Int, _>>::new(0usize, Foo_Evaluator(std::marker::PhantomData))
                     )
-                    .eval(Null, ctx, output_rows, args, extra)
+                    .eval(Null, ctx, output_rows, args, extra, metadata)
+                }
+                fn init_metadata(expr: &::tipb::Expr)-> Box<dyn std::any::Any + Send>
+                {
+                    Box::new(())
                 }
                 fn validate(expr: &tipb::Expr) -> crate::Result<()> {
                     use crate::codec::data_type::Evaluable;
@@ -1163,6 +1170,7 @@ mod tests_normal {
                 }
                 crate::rpn_expr::RpnFnMeta {
                     name: "foo",
+                    metadata_ctor_ptr: init_metadata,
                     validator_ptr: validate,
                     fn_ptr: run,
                 }
@@ -1320,7 +1328,7 @@ mod tests_normal {
                     <ArgConstructor<A::X, _>>::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData))
                                 .eval(Null, ctx, output_rows, args, extra, metadata)
                 }
-                fn init_data <A: M, B> (expr: &::tipb::Expr)-> Box<dyn std::any::Any + Send>
+                fn init_metadata <A: M, B> (expr: &::tipb::Expr)-> Box<dyn std::any::Any + Send>
                 where
                     B: N<A>
                 {
@@ -1340,7 +1348,7 @@ mod tests_normal {
                 }
                 crate::rpn_expr::RpnFnMeta {
                     name: "foo",
-                    metadata_ctor_ptr: init_data::<A, B>,
+                    metadata_ctor_ptr: init_metadata::<A, B>,
                     validator_ptr: validate::<A, B>,
                     fn_ptr: run::<A, B>,
                 }
