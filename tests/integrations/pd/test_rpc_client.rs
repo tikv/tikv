@@ -389,7 +389,7 @@ fn test_change_leader_async() {
 
         let new = client.get_leader();
         if new != leader {
-            assert_eq!(1, counter.load(Ordering::SeqCst));
+            assert!(counter.load(Ordering::SeqCst) >= 1);
             return;
         }
         thread::sleep(LeaderChange::get_leader_interval());
