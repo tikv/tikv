@@ -116,9 +116,9 @@ impl Builder {
             metrics_running_task_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name]),
             metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
         });
-        let pool = TokioPool2::new(self.inner_builder.build().unwrap());
+        // let pool = TokioPool2::new(self.inner_builder.build().unwrap());
         // let pool = TokioPool::new(self.inner_builder.build());
-        // let pool = TexnPool::new_from_config(self.after_start_func.clone());
+        let pool = TexnPool::new_from_config(self.after_start_func.clone());
         super::FuturePool {
             pool,
             env,
