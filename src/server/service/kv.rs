@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::{BTreeMap, HashSet};
+use std::default::Default;
 use std::iter::{self, FromIterator};
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -452,17 +453,20 @@ impl WriteId {
     }
 }
 
-struct WriteBatchMeta {
-    idx: usize,
+struct WriteBatch {
     key_set: HashSet<Vec<u8>>,
     // TODO(tabokie): size limit here
+    command: Command,
 }
 
-impl WriteBatchMeta {
-    fn new() -> Self {
-        WriteBatchMeta {
-            idx: 0,
+impl Default for WriteBatch {
+    fn default() -> Self {
+        WriteBatch {
             key_set: HashSet::default(),
+            command: Command::Batch {
+                ids: Vec::new(),
+                commands: Vec::new(),
+            },
         }
     }
 }
@@ -470,7 +474,7 @@ impl WriteBatchMeta {
 struct WriteBatcher {
     cmd: BatchableRequestKind,
     commands: Vec<Command>,
-    router: HashMap<WriteId, WriteBatchMeta>,
+    router: HashMap<WriteId, WriteBatch>,
 }
 
 impl WriteBatcher {
@@ -525,33 +529,17 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
                 return false;
             }
         };
-        let idx = match self.router.get_mut(&ver) {
-            Some(meta) => {
-                for key in &keys {
-                    if meta.key_set.contains(key.as_encoded()) {
-                        return false;
-                    }
+        let batch = self.router.entry(ver).or_default();
+        if !batch.key_set.is_empty() {
+            for key in &keys {
+                if batch.key_set.contains(key.as_encoded()) {
+                    return false;
                 }
-                for key in &keys {
-                    meta.key_set.insert(key.clone().into_encoded());
-                }
-                meta.idx
             }
-            None => {
-                let mut meta = WriteBatchMeta::new();
-                let idx = self.commands.len();
-                meta.idx = idx;
-                for key in &keys {
-                    meta.key_set.insert(key.clone().into_encoded());
-                }
-                self.router.insert(ver, meta);
-                self.commands.push(Command::Batch {
-                    commands: Vec::new(),
-                    ids: Vec::new(),
-                });
-                idx
-            }
-        };
+        }
+        for key in &keys {
+            batch.key_set.insert(key.clone().into_encoded());
+        }
         let cmd = match request {
             batch_commands_request::request::Cmd::Prewrite(req) => {
                 let mutations: Vec<Mutation> = req
@@ -591,7 +579,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
         if let Command::Batch {
             ref mut commands,
             ref mut ids,
-        } = self.commands[idx]
+        } = batch.command
         {
             commands.push(cmd);
             ids.push(Some(request_id));
