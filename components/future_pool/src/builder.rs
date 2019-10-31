@@ -95,8 +95,8 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        // self.after_start_func = Arc::new(f);
-        self.inner_builder.after_start(f);
+        self.after_start_func = Arc::new(f);
+        // self.inner_builder.after_start(f);
         self
     }
 
