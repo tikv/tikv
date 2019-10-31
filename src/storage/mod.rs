@@ -592,7 +592,7 @@ impl<E: Engine> TestStorageBuilder<E> {
         Storage::from_engine(
             self.engine,
             &self.config,
-            &GCConfig::default(),
+            &self.gc_config,
             read_pool,
             self.local_storage,
             self.raft_store_router,
