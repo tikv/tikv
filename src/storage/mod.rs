@@ -55,6 +55,8 @@ pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
 pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
+const BATCH_INCREMENTAL_GET_LIMIT: usize = 4;
+
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use tikv_util::future_pool::FuturePool;
 
@@ -990,27 +992,35 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 !ctx.get_not_fill_cache(),
                             );
                             let mut results = vec![];
-                            // TODO: optimize using seek.
-                            gets.sort_by(|a, b| match a.key.cmp(&b.key) {
-                                cmp::Ordering::Equal => {
-                                    if a.ts == b.ts {
-                                        cmp::Ordering::Equal
-                                    } else if a.ts < b.ts {
-                                        cmp::Ordering::Greater
-                                    } else {
-                                        cmp::Ordering::Less
+                            let use_incremental_get = gets.len() >= BATCH_INCREMENTAL_GET_LIMIT;
+                            if use_incremental_get {
+                                gets.sort_by(|a, b| match a.key.cmp(&b.key) {
+                                    cmp::Ordering::Equal => {
+                                        if a.ts == b.ts {
+                                            cmp::Ordering::Equal
+                                        } else if a.ts < b.ts {
+                                            cmp::Ordering::Greater
+                                        } else {
+                                            cmp::Ordering::Less
+                                        }
                                     }
-                                }
-                                ord => ord,
-                            });
+                                    ord => ord,
+                                });
+                            }
                             for get in gets {
                                 snap_store.set_start_ts(get.ts.unwrap());
                                 snap_store.set_isolation_level(get.ctx.get_isolation_level());
-                                results.push(
-                                    snap_store.incremental_get(&get.key).map_err(Error::from),
-                                );
+                                if use_incremental_get {
+                                    results.push(
+                                        snap_store.incremental_get(&get.key).map_err(Error::from),
+                                    );
+                                } else {
+                                    snap_store.get(&get.key, &mut statistics);
+                                }
                             }
-                            statistics.add(&snap_store.incremental_get_take_statistics());
+                            if use_incremental_get {
+                                statistics.add(&snap_store.incremental_get_take_statistics());
+                            }
                             future::ok(results)
                         })
                     })
