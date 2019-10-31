@@ -583,7 +583,7 @@ impl VargsRpnFn {
                 let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
             }
         } else {
-            TokenStream::new()
+            quote! {}
         };
         let captures = &self.captures;
 
@@ -707,7 +707,7 @@ impl RawVargsRpnFn {
                 let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
             }
         } else {
-            TokenStream::new()
+            quote! {}
         };
         let captures = &self.captures;
 
@@ -899,7 +899,7 @@ impl NormalRpnFn {
                 let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
             }
         } else {
-            TokenStream::new()
+            quote! {}
         };
 
         quote! {
