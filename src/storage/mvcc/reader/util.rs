@@ -1,15 +1,19 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::mvcc::default_not_found_error;
-use crate::storage::mvcc::{Error, Result};
+use crate::storage::mvcc::{Error, Result, TsSet};
 use crate::storage::mvcc::{Lock, LockType, Write};
 use crate::storage::{Cursor, Iterator, Key, Statistics, Value};
 
 /// Checks whether the lock conflicts with the given `ts`. If `ts == MaxU64`, the primary lock will be ignored.
 #[inline]
-pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<()> {
+pub fn check_lock(key: &Key, ts: u64, lock: &Lock, bypass_locks: &TsSet) -> Result<()> {
     if lock.ts > ts || lock.lock_type == LockType::Lock || lock.lock_type == LockType::Pessimistic {
         // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
+        return Ok(());
+    }
+
+    if bypass_locks.contains(ts) {
         return Ok(());
     }
 
@@ -106,24 +110,24 @@ mod tests {
         let mut lock = Lock::new(LockType::Put, vec![], 100, 3, None, 0, 1, 0);
 
         // Ignore the lock if read ts is less than the lock version
-        assert!(check_lock(&key, 50, &lock).is_ok());
+        assert!(check_lock(&key, 50, &lock, &Default::default()).is_ok());
 
         // Returns the lock if read ts >= lock version
-        assert!(check_lock(&key, 110, &lock).is_err());
+        assert!(check_lock(&key, 110, &lock, &Default::default()).is_err());
 
         // Ignore the lock if it is Lock or Pessimistic.
         lock.lock_type = LockType::Lock;
-        assert!(check_lock(&key, 110, &lock).is_ok());
+        assert!(check_lock(&key, 110, &lock, &Default::default()).is_ok());
         lock.lock_type = LockType::Pessimistic;
-        assert!(check_lock(&key, 110, &lock).is_ok());
+        assert!(check_lock(&key, 110, &lock, &Default::default()).is_ok());
 
         // Ignore the primary lock when reading the latest committed version by setting u64::MAX as ts
         lock.lock_type = LockType::Put;
         lock.primary = b"foo".to_vec();
-        assert!(check_lock(&key, std::u64::MAX, &lock).is_ok());
+        assert!(check_lock(&key, std::u64::MAX, &lock, &Default::default()).is_ok());
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();
-        assert!(check_lock(&key, std::u64::MAX, &lock).is_err());
+        assert!(check_lock(&key, std::u64::MAX, &lock, &Default::default()).is_err());
     }
 }

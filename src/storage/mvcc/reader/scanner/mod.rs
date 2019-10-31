@@ -7,7 +7,7 @@ mod txn_entry;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
-use crate::storage::mvcc::Result;
+use crate::storage::mvcc::{Result, TsSet};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
     Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics, Value,
@@ -16,6 +16,8 @@ use crate::storage::{
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
 pub use self::txn_entry::Scanner as EntryScanner;
+
+use std::sync::Arc;
 
 /// `Scanner` factory.
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
@@ -77,6 +79,16 @@ impl<S: Snapshot> ScannerBuilder<S> {
     pub fn range(mut self, lower_bound: Option<Key>, upper_bound: Option<Key>) -> Self {
         self.lower_bound = lower_bound;
         self.upper_bound = upper_bound;
+        self
+    }
+
+    /// Set locks that the scanner can bypass. Locks with start_ts in the specified set will be
+    /// ignored during scanning.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn bypass_locks(mut self, locks: Arc<TsSet>) -> Self {
+        self.bypass_locks = locks;
         self
     }
 
@@ -151,6 +163,8 @@ pub struct ScannerConfig<S: Snapshot> {
 
     ts: u64,
     desc: bool,
+
+    bypass_locks: Arc<TsSet>,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -164,6 +178,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             upper_bound: None,
             ts,
             desc,
+            bypass_locks: Default::default(),
         }
     }
 

@@ -15,10 +15,13 @@ pub use self::write::{Write, WriteType};
 
 use std::error;
 use std::io;
+use tikv_util::collections::HashSet;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 pub const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
+
+const TS_SET_USE_VEC_LIMIT: usize = 8;
 
 // Extracts physical part of a timestamp, in milliseconds.
 pub fn extract_physical(ts: u64) -> u64 {
@@ -27,6 +30,42 @@ pub fn extract_physical(ts: u64) -> u64 {
 
 pub fn compose_ts(physical: u64, logical: u64) -> u64 {
     (physical << TSO_PHYSICAL_SHIFT_BITS) + logical
+}
+
+pub enum TsSet {
+    Vec(Vec<u64>),
+    Set(HashSet<u64>),
+}
+
+impl Default for TsSet {
+    fn default() -> TsSet {
+        TsSet::new(vec![])
+    }
+}
+
+impl TsSet {
+    #[inline]
+    pub fn new(ts: Vec<u64>) -> Self {
+        if ts.len() <= TS_SET_USE_VEC_LIMIT {
+            // If there are too less elements in `ts`, use Vec directly instead of making a
+            TsSet::Vec(ts)
+        } else {
+            TsSet::Set(ts.into_iter().collect())
+        }
+    }
+
+    #[inline]
+    pub fn vec(ts: Vec<u64>) -> Self {
+        TsSet::Vec(ts)
+    }
+
+    #[inline]
+    pub fn contains(&self, ts: u64) -> bool {
+        match self {
+            TsSet::Vec(vec) => vec.contains(&ts),
+            TsSet::Set(set) => set.contains(&ts),
+        }
+    }
 }
 
 quick_error! {

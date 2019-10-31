@@ -3,9 +3,11 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::{default_not_found_error, Lock, Result};
+use crate::storage::mvcc::{default_not_found_error, Lock, Result, TsSet};
 use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value, CF_LOCK};
 use crate::storage::{CF_DEFAULT, CF_WRITE};
+
+use std::sync::Arc;
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -15,6 +17,7 @@ pub struct PointGetterBuilder<S: Snapshot> {
     omit_value: bool,
     isolation_level: IsolationLevel,
     ts: u64,
+    bypass_locks: Arc<TsSet>,
 }
 
 impl<S: Snapshot> PointGetterBuilder<S> {
@@ -27,6 +30,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             omit_value: false,
             isolation_level: IsolationLevel::Si,
             ts,
+            bypass_locks: Default::default(),
         }
     }
 
@@ -69,6 +73,15 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         self
     }
 
+    /// Set a set to locks that the reading process can bypass.
+    ///
+    /// Defaults to none.
+    #[inline]
+    pub fn bypass_locks(mut self, locks: Arc<TsSet>) -> Self {
+        self.bypass_locks = locks;
+        self
+    }
+
     /// Build `PointGetter` from the current configuration.
     pub fn build(self) -> Result<PointGetter<S>> {
         // If we only want to get single value, we can use prefix seek.
@@ -88,6 +101,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             omit_value: self.omit_value,
             isolation_level: self.isolation_level,
             ts: self.ts,
+            bypass_locks: self.bypass_locks,
 
             statistics: Statistics::default(),
 
@@ -108,6 +122,7 @@ pub struct PointGetter<S: Snapshot> {
     omit_value: bool,
     isolation_level: IsolationLevel,
     ts: u64,
+    bypass_locks: Arc<TsSet>,
 
     statistics: Statistics,
 
@@ -163,7 +178,7 @@ impl<S: Snapshot> PointGetter<S> {
         if let Some(ref lock_value) = lock_value {
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
-            super::util::check_lock(user_key, self.ts, &lock)
+            super::util::check_lock(user_key, self.ts, &lock, &self.bypass_locks)
         } else {
             Ok(())
         }
