@@ -968,7 +968,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn async_batch_get_command(
         &self,
-        gets: Vec<PointGetCommand>,
+        mut gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: &str = "batch_get_command";
         // all requests in a batch have the same region, epoch, term, replica_read
@@ -991,15 +991,26 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                             );
                             let mut results = vec![];
                             // TODO: optimize using seek.
+                            gets.sort_by(|a, b| match a.key.cmp(&b.key) {
+                                cmp::Ordering::Equal => {
+                                    if a.ts == b.ts {
+                                        cmp::Ordering::Equal
+                                    } else if a.ts < b.ts {
+                                        cmp::Ordering::Greater
+                                    } else {
+                                        cmp::Ordering::Less
+                                    }
+                                }
+                                ord => ord,
+                            });
                             for get in gets {
                                 snap_store.set_start_ts(get.ts.unwrap());
                                 snap_store.set_isolation_level(get.ctx.get_isolation_level());
                                 results.push(
-                                    snap_store
-                                        .get(&get.key, &mut statistics)
-                                        .map_err(Error::from),
+                                    snap_store.incremental_get(&get.key).map_err(Error::from),
                                 );
                             }
+                            statistics.add(&snap_store.incremental_get_take_statistics());
                             future::ok(results)
                         })
                     })
