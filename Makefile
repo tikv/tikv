@@ -242,7 +242,7 @@ expression: format clippy
 
 # A special target for building TiKV docker image.
 docker:
-	scripts/gen-dockerfile.sh && docker build .
+	bash ./scripts/gen-dockerfile.sh | docker build -t pingcap/tikv -f - .
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------
