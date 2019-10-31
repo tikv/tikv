@@ -219,8 +219,8 @@ impl VectorValue {
         }
     }
 
-    /// Returns maximum encoded size in arrow format.
-    pub fn maximum_encoded_size_arrow(&self, logical_rows: &[usize]) -> Result<usize> {
+    /// Returns maximum encoded size in chunk format.
+    pub fn maximum_encoded_size_chunk(&self, logical_rows: &[usize]) -> Result<usize> {
         match self {
             VectorValue::Int(_) => Ok(logical_rows.len() * 9 + 10),
             VectorValue::Real(_) => Ok(logical_rows.len() * 9 + 10),
