@@ -139,7 +139,7 @@ impl Task {
 pub trait MsgScheduler: Clone + Send + 'static {
     fn on_msg(&self, task: Msg);
     fn on_batch_msg(&self, tasks: Vec<(u64, Msg)>);
-    fn on_batch_finished(&self, cid: u64);
+    fn on_batch_completed(&self, cid: u64);
 }
 
 pub struct Executor<E: Engine, S: MsgScheduler, L: LockMgr> {
@@ -218,9 +218,10 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                                     }
                                 })
                                 .collect();
-                            self.take_scheduler().on_batch_msg(results);
+                            let sched = self.take_scheduler();
+                            sched.on_batch_msg(results);
                             // @TODO(tabokie): tikv abnormal behaviour
-                            self.take_scheduler().on_batch_finished(cid);
+                            sched.on_batch_completed(cid);
                         } else {
                             notify_scheduler(
                                 self.take_scheduler(),
@@ -311,16 +312,116 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
         let lock_mgr = self.take_lock_mgr();
         match task.cmd {
             cmd @ Command::Batch { .. } => {
-                if let Err(e) = process_batch_write_impl(
-                    cid,
-                    cmd,
-                    snapshot,
-                    engine,
-                    scheduler,
-                    self.take_pool(),
-                    &mut statistics,
-                ) {
-                    error!("write command failed at batch write"; "err" => ?e);
+                match process_batch_write_impl(cid, cmd, snapshot, &mut statistics) {
+                    Ok(BatchWriteResults {
+                        ctx,
+                        ids,
+                        multi_res,
+                        mut results,
+                        to_be_write,
+                    }) => {
+                        if to_be_write.is_empty() {
+                            results.extend(ids.iter().filter_map(move |id| {
+                                if let Some(id) = id {
+                                    Some((
+                                        *id,
+                                        Msg::WriteFinished {
+                                            cid,
+                                            pr: if multi_res {
+                                                ProcessResult::MultiRes { results: vec![] }
+                                            } else {
+                                                ProcessResult::Res
+                                            },
+                                            result: Ok(()),
+                                            tag,
+                                        },
+                                    ))
+                                } else {
+                                    None
+                                }
+                            }));
+                        }
+                        scheduler.on_batch_msg(results);
+                        if !to_be_write.is_empty() {
+                            let ids = Arc::new(ids);
+                            let sched = scheduler.clone();
+                            let cloned_ids = ids.clone();
+                            let sched_pool = self.take_pool();
+                            let engine_cb = Box::new(
+                                move |(_, res): (
+                                    CbContext,
+                                    std::result::Result<(), EngineError>,
+                                )| {
+                                    sched_pool
+                                        .pool
+                                        .spawn(move || {
+                                            let results: Vec<(u64, Msg)> = cloned_ids
+                                                .iter()
+                                                .filter_map(move |id| {
+                                                    if let Some(id) = id {
+                                                        Some((
+                                                            *id,
+                                                            Msg::WriteFinished {
+                                                                cid,
+                                                                pr: if multi_res {
+                                                                    ProcessResult::MultiRes {
+                                                                        results: vec![],
+                                                                    }
+                                                                } else {
+                                                                    ProcessResult::Res
+                                                                },
+                                                                result: if let EngineResult::Err(
+                                                                    e,
+                                                                ) = &res
+                                                                {
+                                                                    Err(e.maybe_clone().unwrap())
+                                                                } else {
+                                                                    Ok(())
+                                                                },
+                                                                tag,
+                                                            },
+                                                        ))
+                                                    } else {
+                                                        None
+                                                    }
+                                                })
+                                                .collect();
+                                            sched.on_batch_msg(results);
+                                            sched.on_batch_completed(cid);
+                                            future::ok::<_, ()>(())
+                                        })
+                                        .unwrap()
+                                },
+                            );
+                            if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
+                                SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
+
+                                info!("engine async_write failed"; "cid" => cid, "err" => ?e);
+                                let results: Vec<(u64, Msg)> = ids
+                                    .iter()
+                                    .filter_map(move |id| {
+                                        if let Some(id) = id {
+                                            Some((
+                                                *id,
+                                                Msg::FinishedWithErr {
+                                                    cid,
+                                                    err: Error::Engine(e.maybe_clone().unwrap()),
+                                                    tag,
+                                                },
+                                            ))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                scheduler.on_batch_msg(results);
+                                scheduler.on_batch_completed(cid);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("write command failed at batch write"; "err" => ?e);
+                    }
                 }
                 statistics
             }
@@ -576,6 +677,14 @@ struct WriteResult {
     pr: ProcessResult,
     // (lock, is_first_lock)
     lock_info: Option<(lock_manager::Lock, bool)>,
+}
+
+struct BatchWriteResults {
+    ctx: Context,
+    ids: Vec<Option<u64>>,
+    multi_res: bool,
+    results: Vec<(u64, Msg)>,
+    to_be_write: Vec<Modify>,
 }
 
 fn process_write_impl<S: Snapshot, L: LockMgr>(
@@ -940,45 +1049,40 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
     })
 }
 
-fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
+fn process_batch_write_impl<S: Snapshot>(
     cid: u64,
     cmd: Command,
-    snapshot: En::Snap,
-    engine: &En,
-    scheduler: Sched,
-    sched_pool: SchedPool,
+    snapshot: S,
     statistics: &mut Statistics,
-) -> Result<()> {
+) -> Result<BatchWriteResults> {
     let tag = cmd.tag();
     if let Command::Batch {
         mut ids,
         mut commands,
     } = cmd
     {
+        let mut results: Vec<(u64, Msg)> = Vec::new();
         if tag == CommandKind::commit {
-            let results: Vec<(u64, Msg)> = ids
-                .iter_mut()
-                .zip(commands.iter())
-                .filter_map(|(id, cmd)| match cmd {
-                    Command::Commit {
-                        commit_ts, lock_ts, ..
-                    } if id.is_some() && commit_ts <= lock_ts => Some((
-                        id.take().unwrap(),
-                        Msg::FinishedWithErr {
-                            cid,
-                            err: Error::InvalidTxnTso {
-                                start_ts: *lock_ts,
-                                commit_ts: *commit_ts,
+            results.extend(
+                ids.iter_mut()
+                    .zip(commands.iter())
+                    .filter_map(|(id, cmd)| match cmd {
+                        Command::Commit {
+                            commit_ts, lock_ts, ..
+                        } if id.is_some() && commit_ts <= lock_ts => Some((
+                            id.take().unwrap(),
+                            Msg::FinishedWithErr {
+                                cid,
+                                err: Error::InvalidTxnTso {
+                                    start_ts: *lock_ts,
+                                    commit_ts: *commit_ts,
+                                },
+                                tag,
                             },
-                            tag,
-                        },
-                    )),
-                    _ => None,
-                })
-                .collect();
-            if !results.is_empty() {
-                scheduler.on_batch_msg(results);
-            }
+                        )),
+                        _ => None,
+                    }),
+            );
         }
         // all requests in a batch have the same region, epoch, term, sync_log
         let ctx = match commands[0] {
@@ -989,9 +1093,8 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
         let multi_res = tag == CommandKind::prewrite;
         let mut txn = MvccTxn::new(snapshot, 0, false)?;
         // check conflict
-        let results = match tag {
+        match tag {
             CommandKind::prewrite => {
-                let mut results = Vec::new();
                 let len = commands.len();
                 for i in 0..len {
                     if ids[i].is_none() {
@@ -1047,10 +1150,8 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                         unreachable!();
                     }
                 }
-                results
             }
             CommandKind::commit => {
-                let mut results = Vec::new();
                 let len = commands.len();
                 for i in 0..len {
                     if ids[i].is_none() {
@@ -1083,109 +1184,20 @@ fn process_batch_write_impl<En: Engine, Sched: MsgScheduler>(
                         unreachable!();
                     }
                 }
-                results
             }
             _ => unreachable!(),
         };
         statistics.add(&txn.take_statistics());
-        scheduler.on_batch_msg(results);
-        let modifies = txn.into_modifies();
-        // send all modifies to raftstore
-        SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
-        if modifies.is_empty() {
-            let results: Vec<(u64, Msg)> = ids
-                .iter()
-                .filter_map(move |id| {
-                    if let Some(id) = id {
-                        Some((
-                            *id,
-                            Msg::WriteFinished {
-                                cid,
-                                pr: if multi_res {
-                                    ProcessResult::MultiRes { results: vec![] }
-                                } else {
-                                    ProcessResult::Res
-                                },
-                                result: Ok(()),
-                                tag,
-                            },
-                        ))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            scheduler.on_batch_msg(results);
-            scheduler.on_batch_finished(cid);
-        } else {
-            let ids = Arc::new(ids);
-            let sched = scheduler.clone();
-            let cloned_ids = ids.clone();
-            let engine_cb = Box::new(
-                move |(_, res): (CbContext, std::result::Result<(), EngineError>)| {
-                    sched_pool
-                        .pool
-                        .spawn(move || {
-                            let results: Vec<(u64, Msg)> = cloned_ids
-                                .iter()
-                                .filter_map(move |id| {
-                                    if let Some(id) = id {
-                                        Some((
-                                            *id,
-                                            Msg::WriteFinished {
-                                                cid,
-                                                pr: if multi_res {
-                                                    ProcessResult::MultiRes { results: vec![] }
-                                                } else {
-                                                    ProcessResult::Res
-                                                },
-                                                result: if let EngineResult::Err(e) = &res {
-                                                    Err(e.maybe_clone().unwrap())
-                                                } else {
-                                                    Ok(())
-                                                },
-                                                tag,
-                                            },
-                                        ))
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            sched.on_batch_msg(results);
-                            sched.on_batch_finished(cid);
-                            future::ok::<_, ()>(())
-                        })
-                        .unwrap()
-                },
-            );
-            if let Err(e) = engine.async_write(&ctx, modifies, engine_cb) {
-                SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
-
-                info!("engine async_write failed"; "cid" => cid, "err" => ?e);
-                let results: Vec<(u64, Msg)> = ids
-                    .iter()
-                    .filter_map(move |id| {
-                        if let Some(id) = id {
-                            Some((
-                                *id,
-                                Msg::FinishedWithErr {
-                                    cid,
-                                    err: Error::Engine(e.maybe_clone().unwrap()),
-                                    tag,
-                                },
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                scheduler.on_batch_msg(results);
-                scheduler.on_batch_finished(cid);
-            }
-        }
+        Ok(BatchWriteResults {
+            ctx,
+            ids,
+            multi_res,
+            results,
+            to_be_write: txn.into_modifies(),
+        })
+    } else {
+        unreachable!();
     }
-    Ok(())
 }
 
 pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {

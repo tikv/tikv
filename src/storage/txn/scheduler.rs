@@ -394,7 +394,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
 
                 info!("engine async_snapshot failed"; "err" => ?e);
                 if let Some(ids) = ids {
-                    self.on_batch_finish(
+                    self.batch_finish_some(
                         cid,
                         ids.into_iter()
                             .filter_map(move |id| {
@@ -512,7 +512,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         self.release_lock(&tctx.lock, cid);
     }
 
-    fn on_batch_finish(&self, cid: u64, results: Vec<(u64, ProcessResult)>) {
+    fn batch_finish_some(&self, cid: u64, results: Vec<(u64, ProcessResult)>) {
         let mut tasks = self.inner.peek_task_mutex(cid).lock();
         let tctx = tasks.get_mut(&cid).unwrap();
         execute_batch_callback(&mut tctx.cb, results);
@@ -557,7 +557,7 @@ impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
             Msg::FinishedWithErr { cid, .. } => cid,
             _ => panic!("msg type mismatch"),
         };
-        self.on_batch_finish(
+        self.batch_finish_some(
             cid,
             tasks
                 .into_iter()
@@ -583,7 +583,7 @@ impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
         );
     }
 
-    fn on_batch_finished(&self, cid: u64) {
+    fn on_batch_completed(&self, cid: u64) {
         self.batch_cleanup(cid);
     }
 }
