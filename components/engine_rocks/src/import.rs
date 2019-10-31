@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::Rocks;
+use crate::engine::RocksEngine;
 use engine::rocks::util::prepare_sst_for_ingestion;
-use engine_traits::Import;
+use engine_traits::ImportExt;
 use engine_traits::IngestExternalFileOptions;
 use engine_traits::{Error, Result};
 use rocksdb::set_external_sst_file_global_seq_no;
@@ -11,20 +11,8 @@ use std::fs::File;
 use std::path::Path;
 use tikv_util::file::calc_crc32;
 
-pub struct RocksIngestExternalFileOptions(RawIngestExternalFileOptions);
-
-impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
-    fn move_files(&mut self, f: bool) {
-        self.0.move_files(f);
-    }
-}
-
-impl Import for Rocks {
+impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
-
-    fn new_ingest_external_file_options() -> RocksIngestExternalFileOptions {
-        RocksIngestExternalFileOptions(RawIngestExternalFileOptions::new())
-    }
 
     fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
@@ -86,5 +74,17 @@ impl Import for Rocks {
         }
 
         Ok(())
+    }
+}
+
+pub struct RocksIngestExternalFileOptions(RawIngestExternalFileOptions);
+
+impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
+    fn new() -> RocksIngestExternalFileOptions {
+        RocksIngestExternalFileOptions(RawIngestExternalFileOptions::new())
+    }
+
+    fn move_files(&mut self, f: bool) {
+        self.0.move_files(f);
     }
 }
