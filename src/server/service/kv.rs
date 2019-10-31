@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::default::Default;
 use std::iter::{self, FromIterator};
-use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -415,10 +414,9 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
     ) -> usize {
-        let mut output = 0;
+        let output = self.router.len();
         for (id, (reqs, commands)) in self.router.drain() {
             let tx = tx.clone();
-            output += 1;
             match id.cf {
                 Some(cf) => {
                     let f = future_raw_batch_get_command(storage, tx, reqs, cf, commands);
@@ -473,7 +471,6 @@ impl Default for WriteBatch {
 
 struct WriteBatcher {
     cmd: BatchableRequestKind,
-    commands: Vec<Command>,
     router: HashMap<WriteId, WriteBatch>,
 }
 
@@ -481,7 +478,6 @@ impl WriteBatcher {
     fn new(cmd: BatchableRequestKind) -> Self {
         WriteBatcher {
             cmd,
-            commands: Vec::new(),
             router: HashMap::default(),
         }
     }
@@ -594,15 +590,11 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
         tx: &Sender<(u64, batch_commands_response::Response)>,
         storage: &Storage<E, L>,
     ) -> usize {
-        if self.commands.is_empty() {
-            return 0;
-        }
-        let commands = mem::replace(&mut self.commands, vec![]);
-        self.router.clear();
-        let output = commands.len();
+        let output = self.router.len();
         match self.cmd {
             BatchableRequestKind::Prewrite => {
-                for command in commands {
+                for (_, batch) in self.router.drain() {
+                    let command = batch.command;
                     let tx = tx.clone();
                     let res = storage.async_batch_prewrite_command(
                         command,
@@ -629,7 +621,8 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
                 }
             }
             BatchableRequestKind::Commit => {
-                for command in commands {
+                for (_, batch) in self.router.drain() {
+                    let command = batch.command;
                     let tx = tx.clone();
                     let res = storage.async_batch_commit_command(
                         command,
@@ -662,7 +655,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
 
     #[inline]
     fn is_empty(&self) -> bool {
-        self.commands.is_empty()
+        self.router.is_empty()
     }
 }
 
