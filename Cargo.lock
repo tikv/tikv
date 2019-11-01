@@ -2530,9 +2530,9 @@ dependencies = [
 
 [[package]]
 name = "rsperftools"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37b57791c90850f0ea2b4bb1177605bfdc29c45e0996da0426c7a37ea3dfd504"
+checksum = "6d247cd7c29ad325b42a7b4016b7fce3b9d436f36d3d261fa0f640adfbf0b647"
 dependencies = [
  "backtrace",
  "inferno",
