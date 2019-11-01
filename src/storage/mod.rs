@@ -55,7 +55,7 @@ pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
 pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
-const BATCH_INCREMENTAL_GET_LIMIT: usize = 4;
+const BATCH_GET_SORTED_LIMIT: usize = 10;
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use tikv_util::future_pool::FuturePool;
@@ -991,32 +991,53 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
                             );
-                            let mut results = vec![];
-                            let use_incremental_get = gets.len() >= BATCH_INCREMENTAL_GET_LIMIT;
-                            if use_incremental_get {
+                            let sorted_get = gets.len() >= BATCH_GET_SORTED_LIMIT;
+                            let results = if sorted_get {
+                                use std::mem::{self, MaybeUninit};
+                                type Element = Result<Option<Vec<u8>>>;
+
+                                let mut order_and_keys: Vec<_> = gets.iter().enumerate().collect();
+                                order_and_keys.sort_unstable_by(|(_, a), (_, b)| {
+                                    match a.key.cmp(&b.key) {
+                                        cmp::Ordering::Equal => b.ts.cmp(&a.ts),
+                                        ord => ord,
+                                    }
+                                });
+
+                                let mut results: Vec<MaybeUninit<Element>> =
+                                    Vec::with_capacity(gets.len());
+                                for _ in 0..gets.len() {
+                                    results.push(MaybeUninit::uninit());
+                                }
+                                for (original_order, get) in order_and_keys {
+                                    let value =
+                                        snap_store.incremental_get(&get.key).map_err(Error::from);
+                                    unsafe {
+                                        results[original_order].as_mut_ptr().write(value);
+                                    }
+                                }
+
                                 gets.sort_by(|a, b| match a.key.cmp(&b.key) {
                                     cmp::Ordering::Equal => b.ts.cmp(&a.ts),
                                     ord => ord,
                                 });
-                            }
-                            for get in gets {
-                                snap_store.set_start_ts(get.ts.unwrap());
-                                snap_store.set_isolation_level(get.ctx.get_isolation_level());
-                                if use_incremental_get {
+                                unsafe {
+                                    mem::transmute::<Vec<MaybeUninit<Element>>, Vec<Element>>(
+                                        results,
+                                    )
+                                }
+                            } else {
+                                let mut results = Vec::with_capacity(gets.len());
+                                for get in gets {
+                                    snap_store.set_start_ts(get.ts.unwrap());
+                                    snap_store.set_isolation_level(get.ctx.get_isolation_level());
                                     results.push(
                                         snap_store.incremental_get(&get.key).map_err(Error::from),
                                     );
-                                } else {
-                                    results.push(
-                                        snap_store
-                                            .get(&get.key, &mut statistics)
-                                            .map_err(Error::from),
-                                    );
                                 }
-                            }
-                            if use_incremental_get {
-                                statistics.add(&snap_store.incremental_get_take_statistics());
-                            }
+                                results
+                            };
+                            statistics.add(&snap_store.incremental_get_take_statistics());
                             future::ok(results)
                         })
                     })
