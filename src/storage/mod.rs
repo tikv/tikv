@@ -24,7 +24,7 @@ use std::{cmp, error, u64};
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::errorpb;
-use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
 
 use tikv_util::collections::HashMap;
 
@@ -111,6 +111,40 @@ pub enum StorageCb {
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
     TxnStatus(Callback<(u64, u64)>),
+}
+
+pub struct PointGetCommand {
+    ctx: Context,
+    key: Key,
+    ts: Option<u64>,
+}
+
+impl PointGetCommand {
+    pub fn from_get(request: &mut GetRequest) -> Self {
+        PointGetCommand {
+            ctx: request.take_context(),
+            key: Key::from_raw(request.get_key()),
+            ts: Some(request.get_version()),
+        }
+    }
+
+    pub fn from_raw_get(request: &mut RawGetRequest) -> Self {
+        PointGetCommand {
+            ctx: request.take_context(),
+            key: Key::from_raw(request.get_key()),
+            ts: None,
+        }
+    }
+
+    /// Only used in tests.
+    #[cfg(test)]
+    pub fn from_key_ts(key: Key, ts: Option<u64>) -> Self {
+        PointGetCommand {
+            ctx: Context::default(),
+            key,
+            ts,
+        }
+    }
 }
 
 /// Store Transaction scheduler commands.
@@ -436,6 +470,21 @@ pub fn get_priority_tag(priority: CommandPri) -> CommandPriority {
         CommandPri::Low => CommandPriority::low,
         CommandPri::Normal => CommandPriority::normal,
         CommandPri::High => CommandPriority::high,
+    }
+}
+
+pub fn get_priority_code(priority: CommandPri) -> u8 {
+    match priority {
+        CommandPri::Low => 1,
+        CommandPri::Normal => 2,
+        CommandPri::High => 3,
+    }
+}
+
+pub fn is_normal_priority(priority: CommandPri) -> bool {
+    match priority {
+        CommandPri::Normal => true,
+        _ => false,
     }
 }
 
@@ -775,6 +824,11 @@ impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
 }
 
 impl<E: Engine, L: LockMgr> Storage<E, L> {
+    /// Get concurrency of normal readpool.
+    pub fn readpool_normal_concurrency(&self) -> usize {
+        self.read_pool_normal.get_pool_size()
+    }
+
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,
@@ -902,6 +956,57 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             })
         });
 
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
+    }
+
+    /// Get values of a set of keys with seperate context from a snapshot, return a list of `Result`s.
+    ///
+    /// Only writes that are committed before their respective `start_ts` are visible.
+    pub fn async_batch_get_command(
+        &self,
+        gets: Vec<PointGetCommand>,
+    ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
+        const CMD: &str = "batch_get_command";
+        // all requests in a batch have the same region, epoch, term, replica_read
+        let ctx = gets[0].ctx.clone();
+        let priority = get_priority_tag(ctx.get_priority());
+        let res = self.get_read_pool(priority).spawn_handle(move || {
+            tls_collect_command_count(CMD, priority);
+            let command_duration = tikv_util::time::Instant::now_coarse();
+
+            Self::with_tls_engine(move |engine| {
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let mut statistics = Statistics::default();
+                            let mut snap_store = SnapshotStore::new(
+                                snapshot,
+                                0,
+                                ctx.get_isolation_level(),
+                                !ctx.get_not_fill_cache(),
+                            );
+                            let mut results = vec![];
+                            // TODO: optimize using seek.
+                            for get in gets {
+                                snap_store.set_start_ts(get.ts.unwrap());
+                                snap_store.set_isolation_level(get.ctx.get_isolation_level());
+                                results.push(
+                                    snap_store
+                                        .get(&get.key, &mut statistics)
+                                        .map_err(Error::from),
+                                );
+                            }
+                            future::ok(results)
+                        })
+                    })
+                    .then(move |r| {
+                        tls_collect_command_duration(CMD, command_duration.elapsed());
+                        r
+                    })
+            })
+        });
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
             .flatten()
@@ -1439,6 +1544,46 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             })
         });
 
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
+    }
+
+    /// Get the values of a set of raw keys, return a list of `Result`s.
+    pub fn async_raw_batch_get_command(
+        &self,
+        cf: String,
+        gets: Vec<PointGetCommand>,
+    ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
+        const CMD: &str = "raw_batch_get_command";
+        // all requests in a batch have the same region, epoch, term, replica_read
+        let ctx = gets[0].ctx.clone();
+        let priority = get_priority_tag(ctx.get_priority());
+        let res = self.get_read_pool(priority).spawn_handle(move || {
+            tls_collect_command_count(CMD, priority);
+            let command_duration = tikv_util::time::Instant::now_coarse();
+            Self::with_tls_engine(move |engine| {
+                Self::async_snapshot(engine, &ctx)
+                    .and_then(move |snapshot: E::Snap| {
+                        tls_processing_read_observe_duration(CMD, || {
+                            let cf = match Self::rawkv_cf(&cf) {
+                                Ok(x) => x,
+                                Err(e) => return future::err(e),
+                            };
+                            let mut results = vec![];
+                            // TODO: optimize using seek.
+                            for get in gets {
+                                results.push(snapshot.get_cf(cf, &get.key).map_err(Error::from));
+                            }
+                            future::ok(results)
+                        })
+                    })
+                    .then(move |r| {
+                        tls_collect_command_duration(CMD, command_duration.elapsed());
+                        r
+                    })
+            })
+        });
         future::result(res)
             .map_err(|_| Error::SchedTooBusy)
             .flatten()
@@ -2250,6 +2395,23 @@ mod tests {
                 )
                 .wait(),
         );
+        let x = storage
+            .async_batch_get_command(vec![
+                PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(1)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"d"), Some(1)),
+            ])
+            .wait()
+            .unwrap();
+        for v in x {
+            expect_error(
+                |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
+                    }
+                    e => panic!("unexpected error chain: {:?}", e),
+                },
+                v,
+            );
+        }
     }
 
     #[test]
@@ -2538,6 +2700,77 @@ mod tests {
                     5,
                 )
                 .wait(),
+        );
+    }
+
+    #[test]
+    fn test_async_batch_get_command() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                ],
+                b"a".to_vec(),
+                1,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let mut x = storage
+            .async_batch_get_command(vec![
+                PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(2)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"d"), Some(2)),
+            ])
+            .wait()
+            .unwrap();
+        expect_error(
+            |e| match e {
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(..))) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            },
+            x.remove(0),
+        );
+        assert_eq!(x.remove(0).unwrap(), None);
+        storage
+            .async_commit(
+                Context::default(),
+                vec![
+                    Key::from_raw(b"a"),
+                    Key::from_raw(b"b"),
+                    Key::from_raw(b"c"),
+                ],
+                1,
+                2,
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let x: Vec<Option<Vec<u8>>> = storage
+            .async_batch_get_command(vec![
+                PointGetCommand::from_key_ts(Key::from_raw(b"c"), Some(5)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"x"), Some(5)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"a"), Some(5)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"b"), Some(5)),
+            ])
+            .wait()
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(
+            x,
+            vec![
+                Some(b"cc".to_vec()),
+                None,
+                Some(b"aa".to_vec()),
+                Some(b"bb".to_vec())
+            ]
         );
     }
 
@@ -3121,6 +3354,49 @@ mod tests {
                 .async_raw_batch_get(Context::default(), "".to_string(), keys)
                 .wait(),
         );
+    }
+
+    #[test]
+    fn test_batch_raw_get() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        let test_data = vec![
+            (b"a".to_vec(), b"aa".to_vec()),
+            (b"b".to_vec(), b"bb".to_vec()),
+            (b"c".to_vec(), b"cc".to_vec()),
+            (b"d".to_vec(), b"dd".to_vec()),
+            (b"e".to_vec(), b"ee".to_vec()),
+        ];
+
+        // Write key-value pairs one by one
+        for &(ref key, ref value) in &test_data {
+            storage
+                .async_raw_put(
+                    Context::default(),
+                    "".to_string(),
+                    key.clone(),
+                    value.clone(),
+                    expect_ok_callback(tx.clone(), 0),
+                )
+                .unwrap();
+        }
+        rx.recv().unwrap();
+
+        // Verify pairs in a batch
+        let cmds = test_data
+            .iter()
+            .map(|&(ref k, _)| PointGetCommand::from_key_ts(Key::from_encoded(k.clone()), Some(0)))
+            .collect();
+        let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
+        let x: Vec<Option<Vec<u8>>> = storage
+            .async_raw_batch_get_command("".to_string(), cmds)
+            .wait()
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(x, results);
     }
 
     #[test]

@@ -1495,7 +1495,7 @@ mod tests {
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::Mutable;
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use engine_rocks::Rocks;
+    use engine_rocks::RocksEngine;
     use engine_traits::CFHandleExt;
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
@@ -2047,7 +2047,7 @@ mod tests {
     #[test]
     fn test_recreate_region() {
         let debugger = new_debugger();
-        let engine: &Rocks = debugger.engines.kv.as_ref();
+        let engine = RocksEngine::from_ref(&debugger.engines.kv);
 
         let metadata = vec![("", "g"), ("g", "m"), ("m", "")];
 
@@ -2088,7 +2088,10 @@ mod tests {
         remove_region_state(1);
         remove_region_state(2);
         assert!(debugger.recreate_region(region.clone()).is_ok());
-        assert_eq!(get_region_state(engine.as_ref(), 100).get_region(), &region);
+        assert_eq!(
+            get_region_state(engine.as_inner(), 100).get_region(),
+            &region
+        );
 
         region.set_start_key(b"z".to_vec());
         region.set_end_key(b"".to_vec());
