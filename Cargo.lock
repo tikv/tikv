@@ -2529,13 +2529,14 @@ dependencies = [
 
 [[package]]
 name = "rsperftools"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5223e5c6dc7ea5a3a4ddf462af2298482c74bd5e1981dc6b61e2774299b40b39"
+checksum = "3169674be5ea9f9621730a0551161e68c3afa710cc5aef4384d8c3354d4f8cec"
 dependencies = [
  "backtrace",
  "inferno",
  "lazy_static",
+ "libc",
  "log",
  "memmap",
  "nix 0.15.0",
