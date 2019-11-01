@@ -1065,7 +1065,7 @@ mod tests {
             42
         }
 
-        #[allow(clippy::trivially_copy_pass_by_ref)]
+        #[allow(clippy::trivially_copy_pass_by_ref, clippy::ptr_arg)]
         #[rpn_fn(varg, capture = [metadata], metadata_ctor = prepare_b::<T>)]
         fn fn_b<T: Evaluable>(metadata: &String, v: &[&Option<T>]) -> Result<Option<T>> {
             assert_eq!(metadata, &format!("{}", std::mem::size_of::<T>()));
