@@ -105,12 +105,16 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     }
 }
 
-/// `check_key_type` checks if the key is the type we want, `sep_type` should be
-/// `table::RECORD_PREFIX_SEP` or  `table::INDEX_PREFIX_SEP` .
+/// `check_key_type` checks if the key is the type we want, `wanted_type` should be
+/// `table::RECORD_PREFIX_SEP` or `table::INDEX_PREFIX_SEP` .
 #[inline]
-pub fn check_key_type(key: &[u8], sep_type: &[u8]) -> Result<(), EvaluateError> {
-    if sep_type != &key[table::TABLE_PREFIX_KEY_LEN..table::PREFIX_LEN] {
-        Err(EvaluateError::Other("got a wrong key type".to_string()))
+pub fn check_key_type(key: &[u8], wanted_type: &[u8]) -> Result<(), EvaluateError> {
+    let sep = &key[table::TABLE_PREFIX_KEY_LEN..table::PREFIX_LEN];
+    if wanted_type != sep {
+        Err(EvaluateError::Other(format!(
+            "Expected key type {:?}, but got {:?})",
+            wanted_type, sep
+        )))
     } else {
         Ok(())
     }
