@@ -160,7 +160,7 @@ impl TestSuite {
             !commit_resp.has_region_error() && !commit_resp.has_error(),
             commit_resp,
             5,    // retry 5 times
-            5000  // 100ms timeout
+            5000  // 5s timeout
         );
         assert!(
             !commit_resp.has_region_error(),
