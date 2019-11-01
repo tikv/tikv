@@ -11,7 +11,7 @@ use rsperftools;
 use tikv::config::TiKvConfig;
 
 fn main() {
-    let _ = rsperftools::ProfilerGuard::new(99);
+    let guard = rsperftools::ProfilerGuard::new(99);
     let version_info = tikv::tikv_version_info();
 
     let matches = App::new("TiKV")
@@ -161,4 +161,11 @@ fn main() {
     }
 
     cmd::server::run_tikv(config);
+
+    match guard.report().build() {
+        Ok(report) => {
+            println!("{}", report);
+        }
+        Err(_) => {}
+    };
 }
