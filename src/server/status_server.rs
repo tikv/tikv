@@ -6,6 +6,7 @@ use futures::Stream;
 use futures::{self, Future};
 use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
+use regex::Regex;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio_sync::oneshot::{Receiver, Sender};
@@ -211,6 +212,37 @@ impl StatusServer {
         Box::new(ok(res))
     }
 
+    fn frames_post_processor() -> impl Fn(&mut rsperftools::Frames) {
+        let thread_rename = [
+            (Regex::new(r"^grpc-server-\d*$").unwrap(), "grpc-server"),
+            (Regex::new(r"^cop-high\d*$").unwrap(), "cop-high"),
+            (Regex::new(r"^cop-normal\d*$").unwrap(), "cop-normal"),
+            (Regex::new(r"^cop-low\d*$").unwrap(), "cop-low"),
+            (Regex::new(r"^raftstore-\d*$").unwrap(), "raftstore"),
+            (Regex::new(r"^raftstore-\d*-\d*$").unwrap(), "raftstore"),
+            (Regex::new(r"^sst-importer\d*$").unwrap(), "sst-importer"),
+            (
+                Regex::new(r"^store-read-low\d*$").unwrap(),
+                "store-read-low",
+            ),
+            (Regex::new(r"^rocksdb:bg\d*$").unwrap(), "rocksdb:bg"),
+            (Regex::new(r"^rocksdb:low\d*$").unwrap(), "rocksdb:low"),
+            (Regex::new(r"^rocksdb:high\d*$").unwrap(), "rocksdb:high"),
+            (Regex::new(r"^snap sender\d*$").unwrap(), "snap-sender"),
+            (Regex::new(r"^snap-sender\d*$").unwrap(), "snap-sender"),
+            (Regex::new(r"^apply-\d*$").unwrap(), "apply"),
+            (Regex::new(r"^future-poller-\d*$").unwrap(), "future-poller"),
+        ];
+
+        move |frames| {
+            for (regex, name) in thread_rename.iter() {
+                if regex.is_match(&frames.thread_name) {
+                    frames.thread_name = name.to_string();
+                }
+            }
+        }
+    }
+
     pub fn dump_rsprof(
         seconds: u64,
         frequency: i32,
@@ -232,10 +264,16 @@ impl StatusServer {
                                     + Send,
                             > {
                                 let _ = guard;
-                                Box::new(match guard.report() {
-                                    Ok(report) => ok(report),
-                                    Err(e) => err(e),
-                                })
+                                Box::new(
+                                    match guard
+                                        .report()
+                                        .frames_post_processor(Self::frames_post_processor())
+                                        .build()
+                                    {
+                                        Ok(report) => ok(report),
+                                        Err(e) => err(e),
+                                    },
+                                )
                             },
                         ),
                 )
