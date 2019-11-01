@@ -171,7 +171,7 @@ impl StatusServer {
                     return Box::new(ok(response));
                 }
             },
-            None => 10,
+            None => 99,
         };
 
         Box::new(
