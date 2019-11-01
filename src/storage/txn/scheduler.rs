@@ -357,7 +357,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
                             )
                         })
                         .collect(),
-                )
+                );
             } else {
                 execute_callback(
                     callback,

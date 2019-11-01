@@ -662,7 +662,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
 type ReqBatcherInner<E, L> = (BatchLimiter, Box<dyn Batcher<E, L> + Send>);
 
 /// ReqBatcher manages multiple `Batcher`s which batch requests from one unique stream of `batch_commands`
-// and controls the submit timing of those batchers based on respective `BatchLimiter`.
+/// and controls the submit timing of those batchers based on respective `BatchLimiter`.
 struct ReqBatcher<E: Engine, L: LockMgr> {
     inners: BTreeMap<BatchableRequestKind, ReqBatcherInner<E, L>>,
     tx: Sender<(u64, batch_commands_response::Response)>,

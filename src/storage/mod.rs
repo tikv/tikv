@@ -565,7 +565,11 @@ impl Command {
                 if commands.is_empty() {
                     unreachable!()
                 } else {
-                    commands[0].tag()
+                    match commands[0].tag() {
+                        CommandKind::prewrite => CommandKind::batch_prewrite,
+                        CommandKind::commit => CommandKind::batch_commit,
+                        _ => CommandKind::batch,
+                    }
                 }
             }
         }
@@ -1260,6 +1264,9 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         Ok(())
     }
 
+    /// The prewrite phase of a set of transactions. The first phase of 2PC.
+    ///
+    /// Schedules a [`Command::Batch`].
     pub fn async_batch_prewrite_command(
         &self,
         mut command: Command,
@@ -1274,14 +1281,16 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 .iter_mut()
                 .zip(commands.iter())
                 .filter_map(|(id, command)| {
-                    if let Command::Prewrite { ref mutations, .. } = command {
-                        for m in mutations {
-                            let key_size = m.key().as_encoded().len();
-                            if key_size > self.max_key_size {
-                                return Some((
-                                    id.take().unwrap(),
-                                    Err(Error::KeyTooLarge(key_size, self.max_key_size)),
-                                ));
+                    if id.is_some() {
+                        if let Command::Prewrite { ref mutations, .. } = command {
+                            for m in mutations {
+                                let key_size = m.key().as_encoded().len();
+                                if key_size > self.max_key_size {
+                                    return Some((
+                                        id.take().unwrap(),
+                                        Err(Error::KeyTooLarge(key_size, self.max_key_size)),
+                                    ));
+                                }
                             }
                         }
                     }
@@ -1293,8 +1302,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             }
         }
         self.schedule(command, StorageCb::BatchBooleans(callback))?;
-        // TODO(tabokie): batch_prewrite metrics
-        KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.batch_prewrite.inc();
         Ok(())
     }
 
@@ -1355,12 +1363,16 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         Ok(())
     }
 
+    /// Commit a set of transactions.
+    ///
+    /// Schedules a [`Command::Batch`].
     pub fn async_batch_commit_command(
         &self,
         command: Command,
         callback: BatchCallback<()>,
     ) -> Result<()> {
         self.schedule(command, StorageCb::BatchBoolean(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.batch_commit.inc();
         Ok(())
     }
 
