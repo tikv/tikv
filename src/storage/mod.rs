@@ -627,8 +627,9 @@ pub struct Options {
     // How many keys this transaction involved.
     pub txn_size: u64,
     pub min_commit_ts: u64,
-    // Time to wait for lock released in milliseconds when encountering locks
-    pub wait_timeout: u64,
+    // Time to wait for lock released in milliseconds when encountering locks.
+    // 0 means using default timeout. Negative means no wait.
+    pub wait_timeout: i64,
 }
 
 impl Options {

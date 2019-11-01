@@ -29,7 +29,7 @@ pub trait LockMgr: Clone + Send + 'static {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
-        timeout: u64,
+        timeout: i64,
     );
 
     /// The locks with `lock_ts` and `hashes` are released, trys to wake up transactions.
@@ -61,7 +61,7 @@ impl LockMgr for DummyLockMgr {
         _pr: ProcessResult,
         _lock: Lock,
         _is_first_lock: bool,
-        _wait_timeout: u64,
+        _wait_timeout: i64,
     ) {
     }
 

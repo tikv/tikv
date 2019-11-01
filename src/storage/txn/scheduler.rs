@@ -69,7 +69,7 @@ pub enum Msg {
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
-        wait_timeout: u64,
+        wait_timeout: i64,
     },
 }
 
@@ -448,7 +448,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
-        wait_timeout: u64,
+        wait_timeout: i64,
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
