@@ -53,7 +53,7 @@ tikv_util = { path = "../components/tikv_util" }
 engine = { path = "../components/engine" }
 pd_client = { path = "../components/pd_client" }
 backup = { path = "../components/backup" }
-rsperftools = { version = "0.2.3", features = ["flamegraph"] }
+rsperftools = { version = "0.3.1", features = ["flamegraph"] }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
