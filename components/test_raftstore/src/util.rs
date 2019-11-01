@@ -462,7 +462,7 @@ pub fn must_read_on_peer<T: Simulator>(
     key: &[u8],
     value: &[u8],
 ) {
-    let timeout = Duration::from_secs(1);
+    let timeout = Duration::from_secs(5);
     match read_on_peer(cluster, peer, region, key, false, timeout) {
         Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
         other => panic!(
