@@ -20,7 +20,7 @@ RUN yum clean all \
 	&& yum update -y \
 	&& yum install -y tar wget git which file unzip python-pip openssl-devel \
 		make cmake3 gcc gcc-c++ libstdc++-static pkg-config psmisc gdb \
-		libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel golang \
+		libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
 	&& yum clean all
 
 # CentOS gives cmake 3 a weird binary name, so we link it to something more normal
