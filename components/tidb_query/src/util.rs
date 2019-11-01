@@ -105,29 +105,14 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     }
 }
 
+/// `check_key_type` checks if the key is the type we want, `sep_type` should be
+/// `table::RECORD_PREFIX_SEP` or  `table::INDEX_PREFIX_SEP` .
 #[inline]
-pub fn check_record_key(key: &[u8]) -> Result<(), EvaluateError> {
-    let sep = &key[table::TABLE_PREFIX_KEY_LEN..table::PREFIX_LEN];
-    if sep == table::RECORD_PREFIX_SEP {
-        Ok(())
+pub fn check_key_type(key: &[u8], sep_type: &[u8]) -> Result<(), EvaluateError> {
+    if sep_type != &key[table::TABLE_PREFIX_KEY_LEN..table::PREFIX_LEN] {
+        Err(EvaluateError::Other("got a wrong key type".to_string()))
     } else {
-        Err(EvaluateError::Other(format!(
-            "record key expected, but got {:?}",
-            key
-        )))
-    }
-}
-
-#[inline]
-pub fn check_index_key(key: &[u8]) -> Result<(), EvaluateError> {
-    let sep = &key[table::TABLE_PREFIX_KEY_LEN..table::PREFIX_LEN];
-    if sep == table::INDEX_PREFIX_SEP {
         Ok(())
-    } else {
-        Err(EvaluateError::Other(format!(
-            "Index key expected, but got {:?}",
-            key
-        )))
     }
 }
 
@@ -212,11 +197,11 @@ mod tests {
     #[test]
     fn test_check_key_type() {
         let record_key = table::encode_row_key(TABLE_ID, 1);
-        assert!(check_record_key(&record_key.as_slice()).is_ok());
-        assert!(check_index_key(&record_key.as_slice()).is_err());
+        assert!(check_key_type(&record_key.as_slice(), table::RECORD_PREFIX_SEP).is_ok());
+        assert!(check_key_type(&record_key.as_slice(), table::INDEX_PREFIX_SEP).is_err());
 
         let (_, index_key) = generate_index_data(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
-        assert!(check_record_key(&index_key.as_slice()).is_err());
-        assert!(check_index_key(&index_key.as_slice()).is_ok());
+        assert!(check_key_type(&index_key.as_slice(), table::RECORD_PREFIX_SEP).is_err());
+        assert!(check_key_type(&index_key.as_slice(), table::INDEX_PREFIX_SEP).is_ok());
     }
 }

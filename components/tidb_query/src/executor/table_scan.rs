@@ -10,7 +10,7 @@ use tipb::TableScan;
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::codec::table;
 use crate::storage::Storage;
-use crate::util::check_record_key;
+use crate::util::check_key_type;
 use crate::Result;
 
 pub struct TableInnerExecutor {
@@ -40,7 +40,7 @@ impl InnerExecutor for TableInnerExecutor {
         value: Vec<u8>,
         columns: Arc<Vec<ColumnInfo>>,
     ) -> Result<Option<Row>> {
-        check_record_key(key.as_slice())?;
+        check_key_type(key.as_slice(), table::RECORD_PREFIX_SEP)?;
         let row_data = box_try!(table::cut_row(value, &self.col_ids));
         let h = box_try!(table::decode_handle(&key));
         Ok(Some(Row::origin(h, row_data, columns)))

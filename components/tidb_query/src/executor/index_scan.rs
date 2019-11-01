@@ -9,7 +9,7 @@ use tipb::IndexScan;
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
 use crate::codec::table;
 use crate::storage::Storage;
-use crate::util::check_index_key;
+use crate::util::check_key_type;
 use crate::Result;
 
 pub struct IndexInnerExecutor {
@@ -41,7 +41,7 @@ impl InnerExecutor for IndexInnerExecutor {
         use tidb_query_datatype::prelude::*;
         use tidb_query_datatype::FieldTypeFlag;
 
-        check_index_key(key.as_slice())?;
+        check_key_type(key.as_slice(), table::INDEX_PREFIX_SEP)?;
         let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
         let handle = match handle {
             None => box_try!(value.as_slice().read_i64::<BigEndian>()),

@@ -13,7 +13,7 @@ use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::expr::{EvalConfig, EvalContext};
 use crate::storage::{IntervalRange, Storage};
-use crate::util::check_index_key;
+use crate::util::check_key_type;
 use crate::Result;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);
@@ -167,7 +167,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         use crate::codec::{datum, table};
         use codec::prelude::NumberDecoder;
 
-        check_index_key(key)?;
+        check_key_type(&key, table::INDEX_PREFIX_SEP)?;
         // The payload part of the key
         let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
 
