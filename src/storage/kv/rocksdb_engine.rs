@@ -14,10 +14,13 @@ use engine::Engines;
 use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::{IterOption, Peekable};
+use keys::{
+    BasicPhysicalKey, BasicPhysicalKeySlice, LogicalKeySlice, PhysicalKeySlice, ToPhysicalKeySlice,
+};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 
-use crate::storage::{BlockCacheConfig, Key, Value};
+use crate::storage::{BlockCacheConfig, Value};
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -291,22 +294,28 @@ impl Engine for RocksEngine {
 }
 
 impl Snapshot for RocksSnapshot {
+    type Key = BasicPhysicalKey;
     type Iter = DBIterator<Arc<DB>>;
 
-    fn get(&self, key: &Key) -> Result<Option<Value>> {
-        trace!("RocksSnapshot: get"; "key" => %key);
-        let v = box_try!(self.get_value(key.as_encoded()));
+    fn get(&self, key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>) -> Result<Option<Value>> {
+        let v = box_try!(self.get_value(key));
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
-        trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+    fn get_cf(
+        &self,
+        cf: CfName,
+        key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>,
+    ) -> Result<Option<Value>> {
+        let v = box_try!(self.get_value_cf(cf, key));
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
-        trace!("RocksSnapshot: create iterator");
+    fn iter(
+        &self,
+        iter_opt: IterOption<BasicPhysicalKey>,
+        mode: ScanMode,
+    ) -> Result<Cursor<Self::Iter>> {
         let iter = self.db_iterator(iter_opt);
         Ok(Cursor::new(iter, mode))
     }
@@ -314,16 +323,17 @@ impl Snapshot for RocksSnapshot {
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOption<BasicPhysicalKey>,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
-        trace!("RocksSnapshot: create cf iterator");
         let iter = self.db_iterator_cf(cf, iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 }
 
 impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
+    type Key = BasicPhysicalKey;
+
     fn next(&mut self) -> bool {
         DBIterator::next(self)
     }
@@ -332,14 +342,24 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
         DBIterator::prev(self)
     }
 
-    fn seek(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek(self, key.as_encoded().as_slice().into()))
+    fn seek(&mut self, key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>) -> Result<bool> {
+        Ok(DBIterator::seek(
+            self,
+            key.to_physical_slice_container()
+                .as_physical_std_slice()
+                .into(),
+        ))
     }
 
-    fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
+    fn seek_for_prev(
+        &mut self,
+        key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>,
+    ) -> Result<bool> {
         Ok(DBIterator::seek_for_prev(
             self,
-            key.as_encoded().as_slice().into(),
+            key.to_physical_slice_container()
+                .as_physical_std_slice()
+                .into(),
         ))
     }
 
@@ -361,8 +381,12 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
             .map_err(From::from)
     }
 
-    fn key(&self) -> &[u8] {
-        DBIterator::key(self)
+    fn key(&self) -> &LogicalKeySlice {
+        self.physical_key().as_logical_slice()
+    }
+
+    fn physical_key(&self) -> &BasicPhysicalKeySlice {
+        BasicPhysicalKeySlice::from_physical_std_slice(DBIterator::key(self))
     }
 
     fn value(&self) -> &[u8] {
@@ -376,6 +400,7 @@ mod tests {
     use super::super::tests::*;
     use super::super::CFStatistics;
     use super::*;
+    use keys::Key;
     use tempfile::Builder;
 
     #[test]

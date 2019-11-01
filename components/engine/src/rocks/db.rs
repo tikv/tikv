@@ -31,11 +31,17 @@ impl Peekable for DB {
 }
 
 impl Iterable for DB {
-    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB> {
+    type Key = BasicPhysicalKey;
+
+    fn new_iterator(&self, iter_opt: IterOption<BasicPhysicalKey>) -> DBIterator<&DB> {
         self.iter_opt(iter_opt.build_read_opts())
     }
 
-    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>> {
+    fn new_iterator_cf(
+        &self,
+        cf: &str,
+        iter_opt: IterOption<BasicPhysicalKey>,
+    ) -> Result<DBIterator<&DB>> {
         let handle = util::get_cf_handle(self, cf)?;
         let readopts = iter_opt.build_read_opts();
         Ok(DBIterator::new_cf(self, handle, readopts))

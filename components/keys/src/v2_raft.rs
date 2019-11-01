@@ -5,11 +5,30 @@
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Display};
 
-use super::v2::*;
 use codec::prelude::BufferWriter;
+
+use super::v2::*;
+use crate::Key;
 
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RaftPhysicalKey(pub Vec<u8>);
+
+impl RaftPhysicalKey {
+    pub fn transmute_from_basic(basic_key: BasicPhysicalKey) -> Self {
+        // Safety: BasicPhysicalKey and RaftPhysicalKey has the same layout.
+        unsafe { std::mem::transmute(basic_key) }
+    }
+
+    pub fn transmute_from_basic_ref(ptr: &BasicPhysicalKey) -> &Self {
+        // Safety: BasicPhysicalKey and RaftPhysicalKey has the same layout.
+        unsafe { &*(ptr as *const BasicPhysicalKey as *const RaftPhysicalKey) }
+    }
+
+    pub fn transmute_from_basic_mut(ptr: &mut BasicPhysicalKey) -> &mut Self {
+        // Safety: BasicPhysicalKey and RaftPhysicalKey has the same layout.
+        unsafe { &mut *(ptr as *mut BasicPhysicalKey as *mut RaftPhysicalKey) }
+    }
+}
 
 impl Debug for RaftPhysicalKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -74,6 +93,12 @@ impl PhysicalKey for RaftPhysicalKey {
     }
 }
 
+impl From<RaftPhysicalKey> for BasicPhysicalKey {
+    fn from(v: RaftPhysicalKey) -> Self {
+        Self::from_physical_vec(v.0)
+    }
+}
+
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RaftPhysicalKeySlice(pub [u8]);
 
@@ -101,6 +126,18 @@ impl RaftPhysicalKeySlice {
 
 impl PhysicalKeySlice for RaftPhysicalKeySlice {
     type OwnedKey = RaftPhysicalKey;
+
+    // TODO: Only to support `impl Key for ToPhysicalKeySlice<T>`. To be removed.
+    type LegacyKeySliceOwner = RaftPhysicalKey;
+
+    // TODO: Only to support `impl Key for ToPhysicalKeySlice<T>`. To be removed.
+    fn from_legacy_key(key: &Key) -> PKContainer<'_, RaftPhysicalKey, Self> {
+        let physical_key = RaftPhysicalKey::alloc_from_logical_slice(key.as_logical_key_slice());
+        let key_slice = physical_key.as_physical_slice() as *const RaftPhysicalKeySlice;
+        // `physical_key` is not mutable and its data address will never change, so that
+        // the `key_slice` reference is always valid.
+        unsafe { PKContainer::new(physical_key, key_slice) }
+    }
 
     #[inline]
     fn as_physical_std_slice(&self) -> &[u8] {
@@ -158,20 +195,5 @@ impl ToPhysicalKeySlice<BasicPhysicalKeySlice> for RaftPhysicalKey {
     #[inline]
     fn to_physical_slice_container(&self) -> PKContainer<'_, (), BasicPhysicalKeySlice> {
         self.as_physical_slice().to_physical_slice_container()
-    }
-}
-
-impl ToPhysicalKeySlice<RaftPhysicalKeySlice> for super::types::Key {
-    type SliceOwner = RaftPhysicalKey;
-
-    #[inline]
-    fn to_physical_slice_container(
-        &self,
-    ) -> PKContainer<'_, RaftPhysicalKey, RaftPhysicalKeySlice> {
-        let physical_key = RaftPhysicalKey::alloc_from_logical_slice(self.as_logical_key_slice());
-        let key_slice = physical_key.as_physical_slice() as *const RaftPhysicalKeySlice;
-        // `physical_key` is not mutable and its data address will never change, so that
-        // the `key_slice` reference is always valid.
-        unsafe { PKContainer::new(physical_key, key_slice) }
     }
 }

@@ -14,7 +14,7 @@ pub trait KeyLike: Debug + Display + Hash + PartialEq + Eq + PartialOrd + Ord {}
 
 pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
     const PHYSICAL_PREFIX: &'static [u8];
-    type Slice: PhysicalKeySlice + ?Sized;
+    type Slice: PhysicalKeySlice<OwnedKey = Self> + ?Sized;
 
     /// Only used for `PhysicalKey` implementations. Not intended to be used elsewhere.
     #[doc(hidden)]
@@ -36,6 +36,11 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
     fn from_physical_vec(pk: Vec<u8>) -> Self {
         assert!(pk.starts_with(Self::PHYSICAL_PREFIX));
         Self::_new_from_vec(pk)
+    }
+
+    #[inline]
+    fn alloc_from_physical_std_slice(pk: &[u8]) -> Self {
+        Self::from_physical_vec(pk.to_vec())
     }
 
     #[inline]
@@ -63,6 +68,11 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
     #[inline]
     fn as_logical_slice(&self) -> &LogicalKeySlice {
         self.as_physical_slice().as_logical_slice()
+    }
+
+    #[inline]
+    fn as_logical_std_slice(&self) -> &[u8] {
+        self.as_logical_slice().as_std_slice()
     }
 
     #[inline]
@@ -134,9 +144,14 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
     }
 
     #[inline]
-    fn reset_from_logical_slice(&mut self, lk: &LogicalKeySlice) {
+    fn reset_from_logical_std_slice(&mut self, lk: &[u8]) {
         self._vec_mut().truncate(Self::PHYSICAL_PREFIX.len());
-        self.write_bytes(lk.as_std_slice()).unwrap();
+        self.write_bytes(lk).unwrap();
+    }
+
+    #[inline]
+    fn reset_from_logical_slice(&mut self, lk: &LogicalKeySlice) {
+        self.reset_from_logical_std_slice(lk.as_std_slice())
     }
 
     // FIXME: This is a MVCC knowledge.
@@ -147,8 +162,14 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
     }
 }
 
-pub trait PhysicalKeySlice: KeyLike {
+pub trait PhysicalKeySlice: KeyLike + ToPhysicalKeySlice<Self> {
     type OwnedKey: PhysicalKey<Slice = Self>;
+
+    // TODO: Only to support `impl Key for ToPhysicalKeySlice<T>`. To be removed.
+    type LegacyKeySliceOwner;
+
+    // TODO: Only to support `impl Key for ToPhysicalKeySlice<T>`. To be removed.
+    fn from_legacy_key(key: &Key) -> PKContainer<'_, Self::LegacyKeySliceOwner, Self>;
 
     fn as_physical_std_slice(&self) -> &[u8];
 
@@ -157,8 +178,13 @@ pub trait PhysicalKeySlice: KeyLike {
     fn as_logical_slice(&self) -> &LogicalKeySlice;
 
     #[inline]
+    fn as_logical_std_slice(&self) -> &[u8] {
+        self.as_logical_slice().as_std_slice()
+    }
+
+    #[inline]
     fn alloc_to_physical_key(&self) -> Self::OwnedKey {
-        Self::OwnedKey::from_physical_vec(self.as_physical_std_slice().to_vec())
+        Self::OwnedKey::alloc_from_physical_std_slice(self.as_physical_std_slice())
     }
 
     #[inline]
@@ -267,6 +293,15 @@ impl KeyLike for BasicPhysicalKeySlice {}
 
 impl PhysicalKeySlice for BasicPhysicalKeySlice {
     type OwnedKey = BasicPhysicalKey;
+
+    // TODO: Only to support `impl Key for ToPhysicalKeySlice<T>`. To be removed.
+    type LegacyKeySliceOwner = ();
+
+    // TODO: Only to support `impl Key for ToPhysicalKeySlice<T>`. To be removed.
+    fn from_legacy_key(key: &Key) -> PKContainer<'_, (), Self> {
+        let pk_slice = BasicPhysicalKeySlice::from_logical_slice(key.as_logical_key_slice());
+        pk_slice.to_physical_slice_container()
+    }
 
     #[inline]
     fn as_physical_std_slice(&self) -> &[u8] {
@@ -430,15 +465,12 @@ impl ToPhysicalKeySlice<BasicPhysicalKeySlice> for BasicPhysicalKey {
         self.as_physical_slice().to_physical_slice_container()
     }
 }
-impl ToPhysicalKeySlice<BasicPhysicalKeySlice> for Key {
-    // Converting `Key` to `BasicPhysicalKeySlice` is zero cost and does not need to carry an
-    // extra owned value
-    type SliceOwner = ();
 
-    #[inline]
-    fn to_physical_slice_container(&self) -> PKContainer<'_, (), BasicPhysicalKeySlice> {
-        let pk_slice = BasicPhysicalKeySlice::from_logical_slice(self.as_logical_key_slice());
-        pk_slice.to_physical_slice_container()
+impl<T: PhysicalKeySlice + ?Sized> ToPhysicalKeySlice<T> for Key {
+    type SliceOwner = T::LegacyKeySliceOwner;
+
+    fn to_physical_slice_container(&self) -> PKContainer<'_, Self::SliceOwner, T> {
+        T::from_legacy_key(self)
     }
 }
 

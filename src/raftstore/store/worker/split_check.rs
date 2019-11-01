@@ -9,6 +9,7 @@ use std::sync::Arc;
 use engine::rocks::DBIterator;
 use engine::{CfName, CF_WRITE, LARGE_CFS};
 use engine::{IterOption, Iterable, DB};
+use keys::{BasicPhysicalKey, PhysicalKey};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -17,7 +18,6 @@ use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::coprocessor::SplitCheckerHost;
 use crate::raftstore::store::{keys, Callback, CasualMessage, CasualRouter};
 use crate::raftstore::Result;
-use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
@@ -75,16 +75,16 @@ impl<'a> MergedIterator<'a> {
     fn new(
         db: &'a DB,
         cfs: &[CfName],
-        start_key: &[u8],
-        end_key: &[u8],
+        start_key: &[u8], // TODO: Use PhysicalKey as type
+        end_key: &[u8],   // TODO: Use PhysicalKey as type
         fill_cache: bool,
     ) -> Result<MergedIterator<'a>> {
         let mut iters = Vec::with_capacity(cfs.len());
         let mut heap = BinaryHeap::with_capacity(cfs.len());
         for (pos, cf) in cfs.iter().enumerate() {
             let iter_opt = IterOption::new(
-                Some(KeyBuilder::from_slice(start_key, 0, 0)),
-                Some(KeyBuilder::from_slice(end_key, 0, 0)),
+                Some(BasicPhysicalKey::alloc_from_physical_std_slice(start_key)),
+                Some(BasicPhysicalKey::alloc_from_physical_std_slice(end_key)),
                 fill_cache,
             );
             let mut iter = db.new_iterator_cf(cf, iter_opt)?;

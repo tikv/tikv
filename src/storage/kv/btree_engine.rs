@@ -9,6 +9,10 @@ use std::sync::{Arc, RwLock};
 
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys::{
+    BasicPhysicalKey, BasicPhysicalKeySlice, LogicalKeySlice, PhysicalKey, PhysicalKeySlice,
+    ToPhysicalKeySlice,
+};
 use kvproto::kvrpcpb::Context;
 
 use crate::storage::kv::{
@@ -112,15 +116,18 @@ pub struct BTreeEngineIterator {
 }
 
 impl BTreeEngineIterator {
-    pub fn new(tree: Arc<RwLockTree>, iter_opt: IterOption) -> BTreeEngineIterator {
+    pub fn new(
+        tree: Arc<RwLockTree>,
+        iter_opt: IterOption<BasicPhysicalKey>,
+    ) -> BTreeEngineIterator {
         let lower_bound = match iter_opt.lower_bound() {
             None => Unbounded,
-            Some(key) => Included(Key::from_raw(key)),
+            Some(key) => Included(Key::from_encoded_slice(key.as_physical_std_slice())),
         };
 
         let upper_bound = match iter_opt.upper_bound() {
             None => Unbounded,
-            Some(key) => Excluded(Key::from_raw(key)),
+            Some(key) => Excluded(Key::from_encoded_slice(key.as_physical_std_slice())),
         };
         let bounds = (lower_bound.clone(), upper_bound.clone());
         Self {
@@ -158,6 +165,8 @@ impl BTreeEngineIterator {
 }
 
 impl Iterator for BTreeEngineIterator {
+    type Key = BasicPhysicalKey;
+
     fn next(&mut self) -> bool {
         let range = (Excluded(self.cur_key.clone().unwrap()), Unbounded);
         self.seek_to_range_endpoint(range, true)
@@ -168,13 +177,20 @@ impl Iterator for BTreeEngineIterator {
         self.seek_to_range_endpoint(range, false)
     }
 
-    fn seek(&mut self, key: &Key) -> EngineResult<bool> {
-        let range = (Included(key.clone()), Unbounded);
+    fn seek(&mut self, key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>) -> EngineResult<bool> {
+        let key = key.to_physical_slice_container();
+        let key = Key::from_encoded_slice(key.as_physical_std_slice());
+        let range = (Included(key), Unbounded);
         Ok(self.seek_to_range_endpoint(range, true))
     }
 
-    fn seek_for_prev(&mut self, key: &Key) -> EngineResult<bool> {
-        let range = (Unbounded, Included(key.clone()));
+    fn seek_for_prev(
+        &mut self,
+        key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>,
+    ) -> EngineResult<bool> {
+        let key = key.to_physical_slice_container();
+        let key = Key::from_encoded_slice(key.as_physical_std_slice());
+        let range = (Unbounded, Included(key));
         Ok(self.seek_to_range_endpoint(range, false))
     }
 
@@ -198,9 +214,13 @@ impl Iterator for BTreeEngineIterator {
         Ok(())
     }
 
-    fn key(&self) -> &[u8] {
+    fn key(&self) -> &LogicalKeySlice {
+        self.physical_key().as_logical_slice()
+    }
+
+    fn physical_key(&self) -> &BasicPhysicalKeySlice {
         assert!(self.valid());
-        self.cur_key.as_ref().unwrap().as_encoded()
+        BasicPhysicalKeySlice::from_physical_std_slice(self.cur_key.as_ref().unwrap().as_encoded())
     }
 
     fn value(&self) -> &[u8] {
@@ -210,28 +230,46 @@ impl Iterator for BTreeEngineIterator {
 }
 
 impl Snapshot for BTreeEngineSnapshot {
+    type Key = BasicPhysicalKey;
     type Iter = BTreeEngineIterator;
 
-    fn get(&self, key: &Key) -> EngineResult<Option<Value>> {
+    fn get(
+        &self,
+        key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>,
+    ) -> EngineResult<Option<Value>> {
         self.get_cf(CF_DEFAULT, key)
     }
-    fn get_cf(&self, cf: CfName, key: &Key) -> EngineResult<Option<Value>> {
+
+    fn get_cf(
+        &self,
+        cf: CfName,
+        key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>,
+    ) -> EngineResult<Option<Value>> {
+        let key = key.to_physical_slice_container();
+        let key = Key::from_encoded_slice(key.as_physical_std_slice());
+
         let tree_cf = self.inner_engine.get_cf(cf);
         let tree = tree_cf.read().unwrap();
-        let v = tree.get(key);
+        let v = tree.get(&key);
         match v {
             None => Ok(None),
             Some(v) => Ok(Some(v.clone())),
         }
     }
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
+
+    fn iter(
+        &self,
+        iter_opt: IterOption<BasicPhysicalKey>,
+        mode: ScanMode,
+    ) -> EngineResult<Cursor<Self::Iter>> {
         self.iter_cf(CF_DEFAULT, iter_opt, mode)
     }
+
     #[inline]
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOption<BasicPhysicalKey>,
         mode: ScanMode,
     ) -> EngineResult<Cursor<Self::Iter>> {
         let tree = self.inner_engine.get_cf(cf);
@@ -315,14 +353,14 @@ pub mod tests {
 
         // lower bound > upper bound, seek() returns false.
         let mut iter_op = IterOption::default();
-        iter_op.set_lower_bound(b"a7", 0);
-        iter_op.set_upper_bound(b"a3", 0);
+        iter_op.set_lower_bound(BasicPhysicalKey::alloc_from_logical_std_slice(b"a7"));
+        iter_op.set_upper_bound(BasicPhysicalKey::alloc_from_logical_std_slice(b"a3"));
         let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
         assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
         let mut iter_op = IterOption::default();
-        iter_op.set_lower_bound(b"a3", 0);
-        iter_op.set_upper_bound(b"a7", 0);
+        iter_op.set_lower_bound(BasicPhysicalKey::alloc_from_logical_std_slice(b"a3"));
+        iter_op.set_upper_bound(BasicPhysicalKey::alloc_from_logical_std_slice(b"a7"));
         let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
 
         assert!(cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
@@ -368,37 +406,61 @@ pub mod tests {
 
         assert!(iter.seek_to_first());
         assert!(iter.valid());
-        assert_eq!(iter.key(), Key::from_raw(b"a1").as_encoded().as_slice());
+        assert_eq!(
+            iter.key().as_std_slice(),
+            Key::from_raw(b"a1").as_encoded().as_slice()
+        );
         assert!(!iter.prev());
         assert!(!iter.valid());
         assert!(iter.next());
         assert!(iter.valid());
-        assert_eq!(iter.key(), Key::from_raw(b"a3").as_encoded().as_slice());
+        assert_eq!(
+            iter.key().as_std_slice(),
+            Key::from_raw(b"a3").as_encoded().as_slice()
+        );
 
         assert!(iter.seek(&Key::from_raw(b"a1")).unwrap());
         assert!(iter.valid());
-        assert_eq!(iter.key(), Key::from_raw(b"a1").as_encoded().as_slice());
+        assert_eq!(
+            iter.key().as_std_slice(),
+            Key::from_raw(b"a1").as_encoded().as_slice()
+        );
 
         assert!(iter.seek_to_last());
         assert!(iter.valid());
-        assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
+        assert_eq!(
+            iter.key().as_std_slice(),
+            Key::from_raw(b"a7").as_encoded().as_slice()
+        );
         assert!(!iter.next());
         assert!(!iter.valid());
         assert!(iter.prev());
         assert!(iter.valid());
-        assert_eq!(iter.key(), Key::from_raw(b"a5").as_encoded().as_slice());
+        assert_eq!(
+            iter.key().as_std_slice(),
+            Key::from_raw(b"a5").as_encoded().as_slice()
+        );
 
         assert!(iter.seek(&Key::from_raw(b"a7")).unwrap());
         assert!(iter.valid());
-        assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
+        assert_eq!(
+            iter.key().as_std_slice(),
+            Key::from_raw(b"a7").as_encoded().as_slice()
+        );
 
         assert!(!iter.seek_for_prev(&Key::from_raw(b"a0")).unwrap());
 
         assert!(iter.seek_for_prev(&Key::from_raw(b"a1")).unwrap());
-        assert_eq!(iter.key(), Key::from_raw(b"a1").as_encoded().as_slice());
+        assert_eq!(
+            iter.key().as_std_slice(),
+            Key::from_raw(b"a1").as_encoded().as_slice()
+        );
 
         assert!(iter.seek_for_prev(&Key::from_raw(b"a8")).unwrap());
-        assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
+        assert_eq!(
+            iter.key().as_std_slice(),
+            Key::from_raw(b"a7").as_encoded().as_slice()
+        );
     }
 
     #[test]

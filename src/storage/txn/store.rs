@@ -464,6 +464,10 @@ mod tests {
         TestEngineBuilder, Value,
     };
     use engine::IterOption;
+    use keys::{
+        LogicalKeySlice, PhysicalKeySlice, RaftPhysicalKey, RaftPhysicalKeySlice,
+        ToPhysicalKeySlice,
+    };
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -553,16 +557,21 @@ mod tests {
     struct MockRangeSnapshotIter {}
 
     impl Iterator for MockRangeSnapshotIter {
+        type Key = RaftPhysicalKey;
+
         fn next(&mut self) -> bool {
             true
         }
         fn prev(&mut self) -> bool {
             true
         }
-        fn seek(&mut self, _: &Key) -> EngineResult<bool> {
+        fn seek(&mut self, _: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>) -> EngineResult<bool> {
             Ok(true)
         }
-        fn seek_for_prev(&mut self, _: &Key) -> EngineResult<bool> {
+        fn seek_for_prev(
+            &mut self,
+            _: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+        ) -> EngineResult<bool> {
             Ok(true)
         }
         fn seek_to_first(&mut self) -> bool {
@@ -577,11 +586,14 @@ mod tests {
         fn status(&self) -> EngineResult<()> {
             Ok(())
         }
-        fn validate_key(&self, _: &Key) -> EngineResult<()> {
+        fn validate_key(&self, _: &LogicalKeySlice) -> EngineResult<()> {
             Ok(())
         }
-        fn key(&self) -> &[u8] {
-            b""
+        fn key(&self) -> &LogicalKeySlice {
+            LogicalKeySlice::from_std_slice(b"")
+        }
+        fn physical_key(&self) -> &RaftPhysicalKeySlice {
+            RaftPhysicalKeySlice::from_physical_std_slice(b"")
         }
         fn value(&self) -> &[u8] {
             b""
@@ -595,15 +607,27 @@ mod tests {
     }
 
     impl Snapshot for MockRangeSnapshot {
+        type Key = RaftPhysicalKey;
         type Iter = MockRangeSnapshotIter;
 
-        fn get(&self, _: &Key) -> EngineResult<Option<Value>> {
+        fn get(
+            &self,
+            _: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+        ) -> EngineResult<Option<Value>> {
             Ok(None)
         }
-        fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
+        fn get_cf(
+            &self,
+            _: CfName,
+            _: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+        ) -> EngineResult<Option<Value>> {
             Ok(None)
         }
-        fn iter(&self, _: IterOption, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
+        fn iter(
+            &self,
+            _: IterOption<RaftPhysicalKey>,
+            _: ScanMode,
+        ) -> EngineResult<Cursor<Self::Iter>> {
             Ok(Cursor::new(
                 MockRangeSnapshotIter::default(),
                 ScanMode::Forward,
@@ -612,7 +636,7 @@ mod tests {
         fn iter_cf(
             &self,
             _: CfName,
-            _: IterOption,
+            _: IterOption<RaftPhysicalKey>,
             _: ScanMode,
         ) -> EngineResult<Cursor<Self::Iter>> {
             Ok(Cursor::new(

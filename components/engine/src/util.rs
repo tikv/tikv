@@ -6,6 +6,7 @@ use crate::CF_LOCK;
 
 use super::Result;
 use super::{IterOption, Iterable};
+use keys::{BasicPhysicalKey, PhysicalKey};
 use tikv_util::keybuilder::KeyBuilder;
 
 // In our tests, we found that if the batch size is too large, running delete_all_in_range will
@@ -14,8 +15,8 @@ pub const MAX_DELETE_BATCH_SIZE: usize = 32 * 1024;
 
 pub fn delete_all_in_range(
     db: &DB,
-    start_key: &[u8],
-    end_key: &[u8],
+    start_key: &[u8], // FIXME: Use BasicPhysicalKeySlice
+    end_key: &[u8],   // FIXME: Use BasicPhysicalKeySlice
     use_delete_range: bool,
 ) -> Result<()> {
     if start_key >= end_key {
@@ -32,8 +33,8 @@ pub fn delete_all_in_range(
 pub fn delete_all_in_range_cf(
     db: &DB,
     cf: &str,
-    start_key: &[u8],
-    end_key: &[u8],
+    start_key: &[u8], // FIXME: Use BasicPhysicalKeySlice
+    end_key: &[u8],   // FIXME: Use BasicPhysicalKeySlice
     use_delete_range: bool,
 ) -> Result<()> {
     let handle = rocks::util::get_cf_handle(db, cf)?;
@@ -41,13 +42,13 @@ pub fn delete_all_in_range_cf(
     if use_delete_range && cf != CF_LOCK {
         wb.delete_range_cf(handle, start_key, end_key)?;
     } else {
-        let start = KeyBuilder::from_slice(start_key, 0, 0);
-        let end = KeyBuilder::from_slice(end_key, 0, 0);
+        let start = BasicPhysicalKey::alloc_from_physical_std_slice(start_key);
+        let end = BasicPhysicalKey::alloc_from_physical_std_slice(end_key);
         let mut iter_opt = IterOption::new(Some(start), Some(end), false);
         if db.is_titan() {
             // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
             // to avoid referring to missing blob files.
-            iter_opt.titan_key_only(true);
+            iter_opt.set_titan_key_only(true);
         }
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
         it.seek(start_key.into());
@@ -74,7 +75,11 @@ pub fn delete_all_in_range_cf(
     Ok(())
 }
 
-pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> Result<()> {
+pub fn delete_all_files_in_range(
+    db: &DB,
+    start_key: &[u8], // FIXME: Use BasicPhysicalKeySlice
+    end_key: &[u8],   // FIXME: Use BasicPhysicalKeySlice
+) -> Result<()> {
     if start_key >= end_key {
         return Ok(());
     }
@@ -90,8 +95,8 @@ pub fn delete_all_files_in_range(db: &DB, start_key: &[u8], end_key: &[u8]) -> R
 pub fn get_range_properties_cf(
     db: &DB,
     cfname: &str,
-    start_key: &[u8],
-    end_key: &[u8],
+    start_key: &[u8], // FIXME: Use BasicPhysicalKeySlice
+    end_key: &[u8],   // FIXME: Use BasicPhysicalKeySlice
 ) -> Result<TablePropertiesCollection> {
     let cf = rocks::util::get_cf_handle(db, cfname)?;
     let range = Range::new(start_key, end_key);

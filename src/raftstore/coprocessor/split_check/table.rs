@@ -5,10 +5,10 @@ use std::cmp::Ordering;
 use engine::rocks::{SeekKey, DB};
 use engine::CF_WRITE;
 use engine::{IterOption, Iterable};
+use keys::{BasicPhysicalKey, PhysicalKey};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
-use tikv_util::keybuilder::KeyBuilder;
 
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
@@ -173,8 +173,8 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
     let mut last_key = None;
 
     let iter_opt = IterOption::new(
-        Some(KeyBuilder::from_vec(start_key, 0, 0)),
-        Some(KeyBuilder::from_vec(end_key, 0, 0)),
+        Some(BasicPhysicalKey::from_physical_vec(start_key)),
+        Some(BasicPhysicalKey::from_physical_vec(end_key)),
         false,
     );
     let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));

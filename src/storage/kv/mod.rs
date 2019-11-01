@@ -11,6 +11,7 @@ use crate::storage::{Key, Value};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys::{LogicalKeySlice, PhysicalKey, ToPhysicalKeySlice};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::worker::FutureScheduler;
@@ -105,15 +106,23 @@ pub trait Engine: Send + Clone + 'static {
 }
 
 pub trait Snapshot: Send + Clone {
-    type Iter: Iterator;
+    type Key: PhysicalKey;
+    type Iter: Iterator<Key = Self::Key>;
 
-    fn get(&self, key: &Key) -> Result<Option<Value>>;
-    fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
+    fn get(
+        &self,
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+    ) -> Result<Option<Value>>;
+    fn get_cf(
+        &self,
+        cf: CfName,
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+    ) -> Result<Option<Value>>;
+    fn iter(&self, iter_opt: IterOption<Self::Key>, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOption<Self::Key>,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>>;
     fn get_properties(&self) -> Result<TablePropertiesCollection> {
@@ -135,20 +144,33 @@ pub trait Snapshot: Send + Clone {
 }
 
 pub trait Iterator: Send {
+    type Key: PhysicalKey;
+
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
-    fn seek(&mut self, key: &Key) -> Result<bool>;
-    fn seek_for_prev(&mut self, key: &Key) -> Result<bool>;
+    fn seek(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+    ) -> Result<bool>;
+    fn seek_for_prev(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+    ) -> Result<bool>;
     fn seek_to_first(&mut self) -> bool;
     fn seek_to_last(&mut self) -> bool;
     fn valid(&self) -> bool;
     fn status(&self) -> Result<()>;
 
-    fn validate_key(&self, _: &Key) -> Result<()> {
+    fn validate_key(
+        &self,
+        _: &LogicalKeySlice, // For performance consideration, use `LogicalKeySlice` directly. otherwise the legacy `Key` will be converted twice.
+    ) -> Result<()> {
         Ok(())
     }
 
-    fn key(&self) -> &[u8];
+    // TODO: Remove this interface. Always provide physical key.
+    fn key(&self) -> &LogicalKeySlice;
+    fn physical_key(&self) -> &<Self::Key as PhysicalKey>::Slice;
     fn value(&self) -> &[u8];
 }
 
@@ -380,7 +402,7 @@ impl<I: Iterator> Cursor<I> {
             .as_ref()
             .map_or(false, |k| k <= key.as_encoded())
         {
-            self.iter.validate_key(key)?;
+            self.iter.validate_key(key.as_logical_key_slice())?;
             return Ok(false);
         }
 
@@ -418,7 +440,7 @@ impl<I: Iterator> Cursor<I> {
             .as_ref()
             .map_or(false, |k| k <= key.as_encoded())
         {
-            self.iter.validate_key(key)?;
+            self.iter.validate_key(key.as_logical_key_slice())?;
             return Ok(false);
         }
         if ord == Ordering::Greater {
@@ -475,7 +497,7 @@ impl<I: Iterator> Cursor<I> {
             .as_ref()
             .map_or(false, |k| k >= key.as_encoded())
         {
-            self.iter.validate_key(key)?;
+            self.iter.validate_key(key.as_logical_key_slice())?;
             return Ok(false);
         }
 
@@ -510,7 +532,7 @@ impl<I: Iterator> Cursor<I> {
             .as_ref()
             .map_or(false, |k| k >= key.as_encoded())
         {
-            self.iter.validate_key(key)?;
+            self.iter.validate_key(key.as_logical_key_slice())?;
             return Ok(false);
         }
 

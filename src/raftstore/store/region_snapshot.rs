@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
+use engine::rocks::{DBIterator, DBVector, TablePropertiesCollection, DB};
 use engine::{
     self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
     SyncSnapshot,
@@ -8,12 +8,14 @@ use engine::{
 use kvproto::metapb::Region;
 use std::sync::Arc;
 
-use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
+use crate::storage::Iterator;
 use engine_traits::util::check_key_in_range;
-use keys::{PhysicalKeySlice, RaftPhysicalKey, RaftPhysicalKeySlice, ToPhysicalKeySlice};
-use tikv_util::keybuilder::KeyBuilder;
+use keys::{
+    BasicPhysicalKey, LogicalKeySlice, PhysicalKey, PhysicalKeySlice, RaftPhysicalKey,
+    RaftPhysicalKeySlice, ToPhysicalKeySlice,
+};
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
@@ -46,11 +48,15 @@ impl RegionSnapshot {
         &self.region
     }
 
-    pub fn iter(&self, iter_opt: IterOption) -> RegionIterator {
+    pub fn iter(&self, iter_opt: IterOption<RaftPhysicalKey>) -> RegionIterator {
         RegionIterator::new(&self.snap, Arc::clone(&self.region), iter_opt)
     }
 
-    pub fn iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<RegionIterator> {
+    pub fn iter_cf(
+        &self,
+        cf: &str,
+        iter_opt: IterOption<RaftPhysicalKey>,
+    ) -> Result<RegionIterator> {
         Ok(RegionIterator::new_cf(
             &self.snap,
             Arc::clone(&self.region),
@@ -59,46 +65,67 @@ impl RegionSnapshot {
         ))
     }
 
+    // TODO: Remove this implementation, implement `Iterable` instead, when HRTB is ready.
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
-    pub fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
-    where
-        F: FnMut(&[u8], &[u8]) -> Result<bool>,
-    {
-        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
-        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
-        self.scan_impl(self.iter(iter_opt), start_key, f)
-    }
-
-    // like `scan`, only on a specific column family.
-    pub fn scan_cf<F>(
+    pub fn scan<F>(
         &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
+        start_key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+        end_key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
         fill_cache: bool,
         f: F,
     ) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
-        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
-        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
-        self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
+        let start_key = start_key.to_physical_slice_container();
+        let end_key = end_key.to_physical_slice_container();
+        // TODO: Can we avoid the allocation?
+        let iter_opt = IterOption::new(
+            Some(start_key.alloc_to_physical_key()),
+            Some(end_key.alloc_to_physical_key()),
+            fill_cache,
+        );
+        self.scan_impl(self.iter(iter_opt), &*start_key, f)
     }
 
-    fn scan_impl<F>(&self, mut it: RegionIterator, start_key: &[u8], mut f: F) -> Result<()>
+    // TODO: Remove this implementation, implement `Iterable` instead, when HRTB is ready.
+    // like `scan`, only on a specific column family.
+    pub fn scan_cf<F>(
+        &self,
+        cf: &str,
+        start_key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+        end_key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+        fill_cache: bool,
+        f: F,
+    ) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        if !it.seek(start_key)? {
-            return Ok(());
-        }
+        let start_key = start_key.to_physical_slice_container();
+        let end_key = end_key.to_physical_slice_container();
+        // TODO: Can we avoid the allocation?
+        let iter_opt = IterOption::new(
+            Some(start_key.alloc_to_physical_key()),
+            Some(end_key.alloc_to_physical_key()),
+            fill_cache,
+        );
+        self.scan_impl(self.iter_cf(cf, iter_opt)?, &*start_key, f)
+    }
+
+    // TODO: Remove this implementation, implement `Iterable` instead, when HRTB is ready.
+    fn scan_impl<F>(
+        &self,
+        mut it: RegionIterator,
+        start_key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+        mut f: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&[u8], &[u8]) -> Result<bool>,
+    {
+        it.seek(start_key)?;
         while it.valid() {
             let r = f(it.key(), it.value())?;
-
             if !r || !it.next() {
                 break;
             }
@@ -213,163 +240,143 @@ impl Peekable for RegionSnapshot {
 /// db only contains one region.
 pub struct RegionIterator {
     iter: DBIterator<Arc<DB>>,
-    valid: bool,
+    // valid: bool,
     region: Arc<Region>,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
+    //    start_key: RaftPhysicalKey,
+    //    end_key: RaftPhysicalKey,
 }
 
-fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
-    let region_start_key = keys::enc_start_key(region);
-    if iter_opt.lower_bound().is_some() && !iter_opt.lower_bound().as_ref().unwrap().is_empty() {
-        iter_opt.set_lower_bound_prefix(keys::DATA_PREFIX_KEY);
-        if region_start_key.as_slice() > *iter_opt.lower_bound().as_ref().unwrap() {
-            iter_opt.set_vec_lower_bound(region_start_key);
-        }
-    } else {
-        iter_opt.set_vec_lower_bound(region_start_key);
-    }
-}
+fn convert_raft_iter_opt(
+    iter_opt: IterOption<RaftPhysicalKey>,
+    region: &Region,
+) -> IterOption<BasicPhysicalKey> {
+    let mut iter_opt: IterOption<BasicPhysicalKey> = iter_opt.into();
 
-fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
-    let region_end_key = keys::enc_end_key(region);
-    if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
-        iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
-        if region_end_key.as_slice() < *iter_opt.upper_bound().as_ref().unwrap() {
-            iter_opt.set_vec_upper_bound(region_end_key);
+    // Limit lower bound to region start key
+    if let Some(lower_bound) = iter_opt.mut_lower_bound() {
+        let lower_bound = RaftPhysicalKey::transmute_from_basic_mut(lower_bound);
+        if region.get_start_key() > lower_bound.as_logical_std_slice() {
+            lower_bound.reset_from_logical_std_slice(region.get_start_key());
         }
     } else {
-        iter_opt.set_vec_upper_bound(region_end_key);
+        iter_opt.set_lower_bound(
+            RaftPhysicalKey::alloc_from_logical_std_slice(region.get_start_key()).into(),
+        );
     }
+
+    // Limit upper bound to region end key
+    if let Some(upper_bound) = iter_opt.mut_upper_bound() {
+        let upper_bound = RaftPhysicalKey::transmute_from_basic_mut(upper_bound);
+        if !region.get_end_key().is_empty() {
+            if region.get_end_key() < upper_bound.as_logical_std_slice() {
+                upper_bound.reset_from_logical_std_slice(region.get_end_key());
+            }
+        } else {
+            // No need to check and update the upper bound when region end key == "" because
+            // the physical key of region end key must be > user supplied physical key.
+        }
+    } else {
+        if region.get_end_key().is_empty() {
+            iter_opt.set_upper_bound(BasicPhysicalKey::alloc_from_physical_std_slice(
+                keys::DATA_MAX_KEY,
+            ));
+        } else {
+            iter_opt.set_upper_bound(
+                RaftPhysicalKey::alloc_from_logical_std_slice(region.get_end_key()).into(),
+            );
+        }
+    }
+
+    iter_opt
 }
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
-    pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
-        update_lower_bound(&mut iter_opt, &region);
-        update_upper_bound(&mut iter_opt, &region);
-        let start_key = iter_opt.lower_bound().unwrap().to_vec();
-        let end_key = iter_opt.upper_bound().unwrap().to_vec();
+    pub fn new(
+        snap: &Snapshot,
+        region: Arc<Region>,
+        iter_opt: IterOption<RaftPhysicalKey>,
+    ) -> RegionIterator {
+        let iter_opt = convert_raft_iter_opt(iter_opt, &region);
         let iter = snap.db_iterator(iter_opt);
-        RegionIterator {
-            iter,
-            valid: false,
-            start_key,
-            end_key,
-            region,
-        }
+        RegionIterator { iter, region }
     }
 
     pub fn new_cf(
         snap: &Snapshot,
         region: Arc<Region>,
-        mut iter_opt: IterOption,
+        iter_opt: IterOption<RaftPhysicalKey>,
         cf: &str,
     ) -> RegionIterator {
-        update_lower_bound(&mut iter_opt, &region);
-        update_upper_bound(&mut iter_opt, &region);
-        let start_key = iter_opt.lower_bound().unwrap().to_vec();
-        let end_key = iter_opt.upper_bound().unwrap().to_vec();
+        let iter_opt = convert_raft_iter_opt(iter_opt, &region);
         let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
-        RegionIterator {
-            iter,
-            valid: false,
-            start_key,
-            end_key,
-            region,
-        }
-    }
-
-    pub fn seek_to_first(&mut self) -> bool {
-        self.valid = self.iter.seek(self.start_key.as_slice().into());
-
-        self.update_valid(true)
+        RegionIterator { iter, region }
     }
 
     #[inline]
-    fn update_valid(&mut self, forward: bool) -> bool {
-        if self.valid {
-            let key = self.iter.key();
-            self.valid = if forward {
-                key < self.end_key.as_slice()
-            } else {
-                key >= self.start_key.as_slice()
-            };
-        }
-        self.valid
+    pub fn seek_to_first(&mut self) -> bool {
+        self.iter.seek_to_first()
     }
 
+    #[inline]
     pub fn seek_to_last(&mut self) -> bool {
-        if !self.iter.seek(self.end_key.as_slice().into()) && !self.iter.seek(SeekKey::End) {
-            self.valid = false;
-            return self.valid;
-        }
-
-        while self.iter.key() >= self.end_key.as_slice() && self.iter.prev() {}
-
-        self.valid = self.iter.valid();
-        self.update_valid(false)
+        self.iter.seek_to_last()
     }
 
-    pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
+    #[inline]
+    pub fn seek(&mut self, key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>) -> Result<bool> {
         fail_point!("region_snapshot_seek", |_| {
             return Err(box_err!("region seek error"));
         });
-
-        self.should_seekable(key)?;
-        let key = keys::data_key(key);
-        if key == self.end_key {
-            self.valid = false;
-        } else {
-            self.valid = self.iter.seek(key.as_slice().into());
-        }
-
-        Ok(self.update_valid(true))
-    }
-
-    pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
-        self.should_seekable(key)?;
-        let key = keys::data_key(key);
-        self.valid = self.iter.seek_for_prev(key.as_slice().into());
-        if self.valid && self.iter.key() == self.end_key.as_slice() {
-            self.valid = self.iter.prev();
-        }
-        Ok(self.update_valid(false))
-    }
-
-    pub fn prev(&mut self) -> bool {
-        if !self.valid {
-            return false;
-        }
-        self.valid = self.iter.prev();
-
-        self.update_valid(false)
-    }
-
-    pub fn next(&mut self) -> bool {
-        if !self.valid {
-            return false;
-        }
-        self.valid = self.iter.next();
-
-        self.update_valid(true)
+        let key = key.to_physical_slice_container();
+        self.should_seekable(key.as_logical_slice())?;
+        Ok(self.iter.seek(key.as_physical_std_slice().into()))
     }
 
     #[inline]
-    pub fn key(&self) -> &[u8] {
-        assert!(self.valid);
-        keys::origin_key(self.iter.key())
+    pub fn seek_for_prev(
+        &mut self,
+        key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+    ) -> Result<bool> {
+        let key = key.to_physical_slice_container();
+        self.should_seekable(key.as_logical_slice())?;
+        Ok(self.iter.seek_for_prev(key.as_physical_std_slice().into()))
+    }
+
+    #[inline]
+    pub fn prev(&mut self) -> bool {
+        if !self.valid() {
+            return false;
+        }
+        self.iter.prev()
+    }
+
+    #[inline]
+    pub fn next(&mut self) -> bool {
+        if !self.valid() {
+            return false;
+        }
+        self.iter.next()
+    }
+
+    #[inline]
+    pub fn key(&self) -> &LogicalKeySlice {
+        self.physical_key().as_logical_slice()
+    }
+
+    #[inline]
+    pub fn physical_key(&self) -> &RaftPhysicalKeySlice {
+        RaftPhysicalKeySlice::from_physical_std_slice(self.iter.key())
     }
 
     #[inline]
     pub fn value(&self) -> &[u8] {
-        assert!(self.valid);
         self.iter.value()
     }
 
     #[inline]
     pub fn valid(&self) -> bool {
-        self.valid
+        self.iter.valid()
     }
 
     #[inline]
@@ -380,9 +387,8 @@ impl RegionIterator {
             .map_err(From::from)
     }
 
-    #[inline]
-    pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
-        if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
+    pub fn should_seekable(&self, key: &LogicalKeySlice) -> Result<()> {
+        if let Err(e) = util::check_key_in_region_inclusive(key.as_std_slice(), &self.region) {
             CRITICAL_ERROR
                 .with_label_values(&["key not in region"])
                 .inc();
@@ -563,8 +569,8 @@ mod tests {
             Option<(&[u8], &[u8])>,
         )>| {
             let iter_opt = IterOption::new(
-                lower_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
-                upper_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
+                lower_bound.map(|v| RaftPhysicalKey::alloc_from_logical_std_slice(v)),
+                upper_bound.map(|v| RaftPhysicalKey::alloc_from_logical_std_slice(v)),
                 true,
             );
             let mut iter = snap.iter(iter_opt);
@@ -590,12 +596,13 @@ mod tests {
                             hex::encode_upper(seek_key)
                         );
                         let (exp_key, exp_val) = exp.unwrap();
-                        assert_eq!(iter.key(), exp_key);
+                        assert_eq!(iter.key().as_std_slice(), exp_key);
                         assert_eq!(iter.value(), exp_val);
                     };
-                let seek_res = iter.seek(seek_key);
+                let seek_res = iter.seek(RaftPhysicalKey::alloc_from_logical_std_slice(seek_key));
                 check_res(&iter, seek_res, seek_exp);
-                let prev_res = iter.seek_for_prev(seek_key);
+                let prev_res =
+                    iter.seek_for_prev(RaftPhysicalKey::alloc_from_logical_std_slice(seek_key));
                 check_res(&iter, prev_res, prev_exp);
             }
         };
@@ -664,20 +671,30 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut data = vec![];
-        snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
-            data.push((key.to_vec(), value.to_vec()));
-            Ok(true)
-        })
+        snap.scan(
+            RaftPhysicalKey::alloc_from_logical_std_slice(b"a2"),
+            RaftPhysicalKey::alloc_from_logical_std_slice(&[0xFF, 0xFF]),
+            false,
+            |key, value| {
+                data.push((key.to_vec(), value.to_vec()));
+                Ok(true)
+            },
+        )
         .unwrap();
 
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
 
         data.clear();
-        snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
-            data.push((key.to_vec(), value.to_vec()));
-            Ok(false)
-        })
+        snap.scan(
+            RaftPhysicalKey::alloc_from_logical_std_slice(b"a2"),
+            RaftPhysicalKey::alloc_from_logical_std_slice(&[0xFF, 0xFF]),
+            false,
+            |key, value| {
+                data.push((key.to_vec(), value.to_vec()));
+                Ok(false)
+            },
+        )
         .unwrap();
 
         assert_eq!(data.len(), 1);
@@ -699,17 +716,24 @@ mod tests {
         let store = new_peer_storage(engines.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         data.clear();
-        snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
-            data.push((key.to_vec(), value.to_vec()));
-            Ok(true)
-        })
+        snap.scan(
+            RaftPhysicalKey::alloc_from_logical_std_slice(b""),
+            RaftPhysicalKey::alloc_from_logical_std_slice(&[0xFF, 0xFF]),
+            false,
+            |key, value| {
+                data.push((key.to_vec(), value.to_vec()));
+                Ok(true)
+            },
+        )
         .unwrap();
 
         assert_eq!(data.len(), 5);
         assert_eq!(data, base_data);
 
         let mut iter = snap.iter(IterOption::default());
-        assert!(iter.seek(b"a1").unwrap());
+        assert!(iter
+            .seek(RaftPhysicalKey::alloc_from_logical_std_slice(b"a1"))
+            .unwrap());
 
         assert!(iter.seek_to_first());
         let mut res = vec![];
@@ -726,7 +750,7 @@ mod tests {
         let snap = RegionSnapshot::new(&store);
         let mut iter = snap.iter(IterOption::new(
             None,
-            Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
+            Some(RaftPhysicalKey::alloc_from_logical_std_slice(b"a5")),
             true,
         ));
         assert!(iter.seek_to_first());
@@ -850,7 +874,7 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut iter_opt = IterOption::default();
-        iter_opt.set_lower_bound(b"a3", 1);
+        iter_opt.set_lower_bound(RaftPhysicalKey::alloc_from_logical_std_slice(b"a3"));
         let mut iter = snap.iter(iter_opt);
         assert!(iter.seek_to_last());
         let mut res = vec![];

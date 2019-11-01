@@ -35,11 +35,11 @@ use crate::raftstore::store::{keys, PeerStorage};
 use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Iterator as EngineIterator;
+use keys::{BasicPhysicalKey, PhysicalKey};
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
 use tikv_util::escape;
-use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
@@ -465,8 +465,8 @@ impl Debugger {
         let from = keys::REGION_META_MIN_KEY.to_owned();
         let to = keys::REGION_META_MAX_KEY.to_owned();
         let readopts = IterOption::new(
-            Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
-            Some(KeyBuilder::from_vec(to, 0, 0)),
+            Some(BasicPhysicalKey::from_physical_vec(from.clone())),
+            Some(BasicPhysicalKey::from_physical_vec(to)),
             false,
         )
         .build_read_opts();
@@ -929,8 +929,8 @@ impl MvccChecker {
             let from = start_key.clone();
             let to = end_key.clone();
             let readopts = IterOption::new(
-                Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
-                Some(KeyBuilder::from_vec(to, 0, 0)),
+                Some(BasicPhysicalKey::from_physical_vec(from.clone())),
+                Some(BasicPhysicalKey::from_physical_vec(to)),
                 false,
             )
             .build_read_opts();
@@ -1194,7 +1194,7 @@ impl MvccInfoIterator {
             let to = if to.is_empty() {
                 None
             } else {
-                Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
+                Some(BasicPhysicalKey::from_physical_vec(to.to_vec()))
             };
             let readopts = IterOption::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
