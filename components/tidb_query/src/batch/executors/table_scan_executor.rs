@@ -15,7 +15,7 @@ use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::expr::{EvalConfig, EvalContext};
 use crate::storage::{IntervalRange, Storage};
-use crate::util::check_key_type;
+use crate::util::check_record_key;
 use crate::Result;
 
 pub struct BatchTableScanExecutor<S: Storage>(ScanExecutor<S, TableScanExecutorImpl>);
@@ -207,7 +207,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         use crate::codec::{datum, table};
         use codec::prelude::NumberDecoder;
 
-        check_key_type(&key, table::RECORD_PREFIX_SEP)?;
+        check_record_key(&key)?;
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 

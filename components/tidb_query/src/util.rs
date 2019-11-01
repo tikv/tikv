@@ -105,6 +105,16 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     }
 }
 
+#[inline]
+pub fn check_record_key(key: &[u8]) -> Result<(), EvaluateError> {
+    check_key_type(key, table::RECORD_PREFIX_SEP)
+}
+
+#[inline]
+pub fn check_index_key(key: &[u8]) -> Result<(), EvaluateError> {
+    check_key_type(key, table::INDEX_PREFIX_SEP)
+}
+
 /// `check_key_type` checks if the key is the type we want, `wanted_type` should be
 /// `table::RECORD_PREFIX_SEP` or `table::INDEX_PREFIX_SEP` .
 #[inline]
