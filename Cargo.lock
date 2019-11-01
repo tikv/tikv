@@ -2529,9 +2529,9 @@ dependencies = [
 
 [[package]]
 name = "rsperftools"
-version = "0.2.3"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13b2e1082d3ba4d396ee297c546e0a59ae510396de1173e1cb73ec737da61270"
+checksum = "5223e5c6dc7ea5a3a4ddf462af2298482c74bd5e1981dc6b61e2774299b40b39"
 dependencies = [
  "backtrace",
  "inferno",
@@ -3275,6 +3275,7 @@ dependencies = [
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.6.5",
  "rand_xorshift",
+ "regex",
  "rsperftools",
  "serde",
  "serde_derive",
