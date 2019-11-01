@@ -995,15 +995,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                             let use_incremental_get = gets.len() >= BATCH_INCREMENTAL_GET_LIMIT;
                             if use_incremental_get {
                                 gets.sort_by(|a, b| match a.key.cmp(&b.key) {
-                                    cmp::Ordering::Equal => {
-                                        if a.ts == b.ts {
-                                            cmp::Ordering::Equal
-                                        } else if a.ts < b.ts {
-                                            cmp::Ordering::Greater
-                                        } else {
-                                            cmp::Ordering::Less
-                                        }
-                                    }
+                                    cmp::Ordering::Equal => b.ts.cmp(&a.ts),
                                     ord => ord,
                                 });
                             }
@@ -1015,7 +1007,11 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                         snap_store.incremental_get(&get.key).map_err(Error::from),
                                     );
                                 } else {
-                                    snap_store.get(&get.key, &mut statistics);
+                                    results.push(
+                                        snap_store
+                                            .get(&get.key, &mut statistics)
+                                            .map_err(Error::from),
+                                    );
                                 }
                             }
                             if use_incremental_get {
