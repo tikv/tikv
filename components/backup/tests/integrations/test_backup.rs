@@ -12,13 +12,19 @@ use engine::CF_DEFAULT;
 use engine::*;
 use external_storage::*;
 use kvproto::backup::*;
+use kvproto::coprocessor::KeyRange;
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
 use kvproto::tikvpb_grpc::TikvClient;
 use tempfile::Builder;
 use test_raftstore::*;
+use tikv::coprocessor::checksum_crc64_xor;
+use tikv::coprocessor::dag::{ScanOn, Scanner};
+use tikv::storage::kv::Engine;
+use tikv::storage::SnapshotStore;
 use tikv_util::collections::HashMap;
+use tikv_util::file::calc_crc32_bytes;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
 
@@ -144,6 +150,26 @@ impl TestSuite {
         }
         rx
     }
+
+    fn admin_checksum(&self, backup_ts: u64, start: String, end: String) -> (u64, u64, u64) {
+        let mut checksum = 0;
+        let mut total_kvs = 0;
+        let mut total_bytes = 0;
+        let sim = self.cluster.sim.rl();
+        let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
+        let snapshot = engine.snapshot(&self.context.clone()).unwrap();
+        let snap_store = SnapshotStore::new(snapshot, backup_ts, IsolationLevel::SI, false);
+        let mut range = KeyRange::default();
+        range.set_start(start.into_bytes());
+        range.set_end(end.into_bytes());
+        let mut scanner = Scanner::new(&snap_store, ScanOn::Table, false, false, range).unwrap();
+        while let Some((k, v)) = scanner.next_row().unwrap() {
+            checksum = checksum_crc64_xor(checksum, &[], &k, &v);
+            total_kvs += 1;
+            total_bytes += (k.len() + v.len()) as u64;
+        }
+        (checksum, total_kvs, total_bytes)
+    }
 }
 
 // Extrat CF name from sst name.
@@ -229,7 +255,7 @@ fn test_backup_and_import() {
         let mut content = vec![];
         reader.read_to_end(&mut content).unwrap();
         let mut m = sst_meta.clone();
-        m.crc32 = f.crc32;
+        m.crc32 = calc_crc32_bytes(&content);
         m.length = content.len() as _;
         m.cf_name = name_to_cf(&f.name).to_owned();
         metas.push((m, content));
@@ -276,4 +302,62 @@ fn test_backup_and_import() {
     assert_eq!(files1, resps3[0].files);
 
     suite.stop();
+}
+
+#[test]
+fn test_backup_meta() {
+    let mut suite = TestSuite::new(3);
+    let key_count = 60;
+
+    // 3 version for each key.
+    for _ in 0..3 {
+        for i in 0..key_count {
+            let (k, v) = (format!("key_{}", i), format!("value_{}", i));
+            // Prewrite
+            let start_ts = suite.alloc_ts();
+            let mut mutation = Mutation::default();
+            mutation.op = Op::Put;
+            mutation.key = k.clone().into_bytes();
+            mutation.value = v.clone().into_bytes();
+            suite.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
+            // Commit
+            let commit_ts = suite.alloc_ts();
+            suite.must_kv_commit(vec![k.clone().into_bytes()], start_ts, commit_ts);
+        }
+    }
+    let backup_ts = suite.alloc_ts();
+    // key are order by lexicographical order, 'a'-'z' will cover all
+    let (admin_checksum, admin_total_kvs, admin_total_bytes) =
+        suite.admin_checksum(backup_ts, "a".to_owned(), "z".to_owned());
+
+    // Push down backup request.
+    let tmp = Builder::new().tempdir().unwrap();
+    let storage_path = format!(
+        "local://{}",
+        tmp.path().join(format!("{}", backup_ts)).display()
+    );
+    let rx = suite.backup(
+        vec![], // start
+        vec![], // end
+        backup_ts,
+        storage_path.clone(),
+    );
+    let resps1 = rx.collect().wait().unwrap();
+    // Only leader can handle backup.
+    assert_eq!(resps1.len(), 1);
+    let files: Vec<_> = resps1[0].files.clone().into_iter().collect();
+    // Short value is piggybacked in write cf, so we get 1 sst at least.
+    assert!(!files.is_empty());
+    let mut checksum = 0;
+    let mut total_kvs = 0;
+    let mut total_bytes = 0;
+    for f in files {
+        checksum ^= f.get_crc64xor();
+        total_kvs += f.get_total_kvs();
+        total_bytes += f.get_total_bytes();
+    }
+    assert_eq!(total_kvs, key_count);
+    assert_eq!(total_kvs, admin_total_kvs);
+    assert_eq!(total_bytes, admin_total_bytes);
+    assert_eq!(checksum, admin_checksum);
 }
