@@ -378,7 +378,7 @@ impl<T: Simulator> Cluster<T> {
                 };
                 leaders
                     .entry(l.get_id())
-                    .or_insert_with(|| (l, vec![]))
+                    .or_insert((l, vec![]))
                     .1
                     .push(*store_id);
             }
