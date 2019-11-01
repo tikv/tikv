@@ -15,6 +15,7 @@ Name | Email | Focus
 [Siddon Tang](https://github.com/siddontang) | [tl@pingcap.com](mailto:tl@pingcap.com) | Project Lead
 [Jay Li](https://github.com/busyjay) | [jay@pingcap.com](mailto:jay@pingcap.com) | Raft, Coprocessor
 [Jinpeng Zhang](https://github.com/zhangjinpeng1987) | [zhangjinpeng@pingcap.com](mailto:zhangjinpeng@pingcap.com) | Storage, Transaction
+[Wink Yao](https://github.com/winkyao) | [wink@pingcap.com](mailto:wink@pingcap.com) | Focus Areas: Community, Transaction
 
 # Maintainers
 
