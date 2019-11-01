@@ -13,6 +13,8 @@ WORKDIR /tikv
 
 # Install Rust
 COPY rust-toolchain ./
+RUN rustup self update
+RUN rustup set profile minimal
 RUN rustup default $(cat "rust-toolchain")
 
 # Use Makefile to build
@@ -41,9 +43,6 @@ done
 
 
 cat <<EOT >> ${output}
-
-# Remove profiler from tidb_query
-RUN sed -i '/profiler/d' ./components/tidb_query/Cargo.toml
 
 # Create dummy files, build the dependencies
 # then remove TiKV fingerprint for following rebuild
@@ -99,3 +98,5 @@ EXPOSE 20160 20180
 
 ENTRYPOINT ["/tikv-server"]
 EOT
+
+cat .gitignore > .dockerignore
