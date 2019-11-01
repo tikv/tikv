@@ -307,9 +307,9 @@ where
         )
     })?;
 
+    let metadata = (func_meta.metadata_ctor_ptr)(&mut tree_node);
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
-    let metadata = (func_meta.metadata_ctor_ptr)(&tree_node);
 
     // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
     let datums = datum::decode(&mut tree_node.get_val())?;

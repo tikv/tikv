@@ -62,7 +62,7 @@
 //!
 //! A function name for custom code to construct metadata from its tree node in the
 //! expression tree. After setting this argument, `metadata` is available in the `capture` array.
-//! The constructor function should have the signature `&tipb::Expr -> T`.
+//! The constructor function should have the signature `&mut tipb::Expr -> T`.
 //! E.g., `#[rpn_fn(varg, capture = [metadata], metadata_ctor = some_ctor)]`
 //!
 //! ### `capture`
@@ -503,10 +503,44 @@ fn generate_init_metadata_fn(
         quote! { Box::new(()) }
     };
     quote! {
-        fn init_metadata #impl_generics (expr: &::tipb::Expr)
+        fn init_metadata #impl_generics (expr: &mut ::tipb::Expr)
             -> Box<dyn std::any::Any + Send> #where_clause {
             #fn_body
         }
+    }
+}
+
+fn generate_downcast_metadata(has_metadata: bool) -> TokenStream {
+    if has_metadata {
+        quote! {
+            let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
+        }
+    } else {
+        quote! {}
+    }
+}
+
+fn generate_metadata_type_checker(
+    metadata_ctor: &Option<TokenStream>,
+    impl_generics: &ImplGenerics<'_>,
+    where_clause: Option<&WhereClause>,
+    fn_body: impl FnOnce(&TokenStream) -> TokenStream,
+) -> TokenStream {
+    if let Some(metadata_ctor) = metadata_ctor {
+        let body = fn_body(metadata_ctor);
+        quote! {
+            fn _type_checker #impl_generics (
+                ctx: &mut crate::expr::EvalContext,
+                output_rows: usize,
+                args: &[crate::rpn_expr::RpnStackNode<'_>],
+                extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                expr: &mut ::tipb::Expr,
+            ) #where_clause {
+                #body
+            }
+        }
+    } else {
+        quote! {}
     }
 }
 
@@ -576,16 +610,24 @@ impl VargsRpnFn {
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
         let arg_type = &self.arg_type;
+        let captures = &self.captures;
         let init_metadata_fn =
             generate_init_metadata_fn(&self.metadata_ctor, &impl_generics, where_clause);
-        let downcast_metadata = if self.metadata_ctor.is_some() {
-            quote! {
-                let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
-            }
-        } else {
-            quote! {}
-        };
-        let captures = &self.captures;
+        let downcast_metadata = generate_downcast_metadata(self.metadata_ctor.is_some());
+        let metadata_type_checker = generate_metadata_type_checker(
+            &self.metadata_ctor,
+            &impl_generics,
+            where_clause,
+            |metadata_ctor| {
+                quote! {
+                    let metadata = &#metadata_ctor(expr);
+                    static DUMMY: &[()] = &[];
+                    #fn_ident( #(#captures,)* unsafe {
+                        &*(DUMMY as *const _ as *const [&Option<#arg_type>])
+                    }).ok();
+                }
+            },
+        );
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
@@ -629,6 +671,8 @@ impl VargsRpnFn {
                 }
 
                 #init_metadata_fn
+
+                #metadata_type_checker
 
                 #validator_fn
 
@@ -700,16 +744,22 @@ impl RawVargsRpnFn {
         let ty_generics_turbofish = ty_generics.as_turbofish();
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
+        let captures = &self.captures;
         let init_metadata_fn =
             generate_init_metadata_fn(&self.metadata_ctor, &impl_generics, where_clause);
-        let downcast_metadata = if self.metadata_ctor.is_some() {
-            quote! {
-                let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
-            }
-        } else {
-            quote! {}
-        };
-        let captures = &self.captures;
+        let downcast_metadata = generate_downcast_metadata(self.metadata_ctor.is_some());
+        let metadata_type_checker = generate_metadata_type_checker(
+            &self.metadata_ctor,
+            &impl_generics,
+            where_clause,
+            |metadata_ctor| {
+                quote! {
+                    let metadata = &#metadata_ctor(expr);
+                    static DUMMY: &[ScalarValueRef<'static>] = &[];
+                    #fn_ident( #(#captures,)* DUMMY).ok();
+                }
+            },
+        );
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
@@ -753,6 +803,8 @@ impl RawVargsRpnFn {
                 }
 
                 #init_metadata_fn
+
+                #metadata_type_checker
 
                 #validator_fn
 
@@ -894,13 +946,22 @@ impl NormalRpnFn {
             (0..self.arg_types.len()).map(|i| Ident::new(&format!("arg{}", i), Span::call_site()));
         let call_arg = extract.clone();
         let ty_generics_turbofish = ty_generics.as_turbofish();
-        let downcast_metadata = if self.metadata_ctor.is_some() {
-            quote! {
-                let metadata = std::any::Any::downcast_ref(metadata).expect("downcast metadata error");
-            }
-        } else {
-            quote! {}
-        };
+        let downcast_metadata = generate_downcast_metadata(self.metadata_ctor.is_some());
+        let extract2 = extract.clone();
+        let call_arg2 = extract.clone();
+        let metadata_type_checker = generate_metadata_type_checker(
+            &self.metadata_ctor,
+            &impl_generics,
+            where_clause,
+            |metadata_ctor| {
+                quote! {
+                    let arg: &#tp = unsafe { &*std::ptr::null() };
+                    #(let (#extract2, arg) = arg.extract(0));*;
+                    let metadata = &#metadata_ctor(expr);
+                    #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
+                }
+            },
+        );
 
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp #where_clause {
@@ -922,6 +983,8 @@ impl NormalRpnFn {
                     Ok(crate::codec::data_type::Evaluable::into_vector_value(result))
                 }
             }
+
+            #metadata_type_checker
         }
     }
 
@@ -1153,7 +1216,7 @@ mod tests_normal {
                     )
                     .eval(Null, ctx, output_rows, args, extra, metadata)
                 }
-                fn init_metadata(expr: &::tipb::Expr)-> Box<dyn std::any::Any + Send>
+                fn init_metadata(expr: &mut ::tipb::Expr)-> Box<dyn std::any::Any + Send>
                 {
                     Box::new(())
                 }
@@ -1328,7 +1391,7 @@ mod tests_normal {
                     <ArgConstructor<A::X, _>>::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData))
                                 .eval(Null, ctx, output_rows, args, extra, metadata)
                 }
-                fn init_metadata <A: M, B> (expr: &::tipb::Expr)-> Box<dyn std::any::Any + Send>
+                fn init_metadata <A: M, B> (expr: &mut ::tipb::Expr)-> Box<dyn std::any::Any + Send>
                 where
                     B: N<A>
                 {
