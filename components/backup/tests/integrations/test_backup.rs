@@ -399,4 +399,6 @@ fn test_backup_meta() {
     assert_eq!(total_kvs, admin_total_kvs);
     assert_eq!(total_bytes, admin_total_bytes);
     assert_eq!(checksum, admin_checksum);
+
+    suite.stop();
 }
