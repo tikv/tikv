@@ -9,9 +9,17 @@ impl RocksColumnFamilyOptions {
     pub fn from_raw(raw: RawCFOptions) -> RocksColumnFamilyOptions {
         RocksColumnFamilyOptions(raw)
     }
+
+    pub fn into_raw(self) -> RawCFOptions {
+        self.0
+    }
 }
 
 impl ColumnFamilyOptions for RocksColumnFamilyOptions {
+    fn new() -> Self {
+        RocksColumnFamilyOptions::from_raw(RawCFOptions::new())
+    }
+
     fn get_level_zero_slowdown_writes_trigger(&self) -> u32 {
         self.0.get_level_zero_slowdown_writes_trigger()
     }

@@ -257,7 +257,7 @@ impl ExternalSstFileInfo for RocksExternalSstFileInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::new_default_engine;
+    use crate::util::new_default_engine;
     use tempfile::Builder;
 
     #[test]

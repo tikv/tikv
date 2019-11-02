@@ -25,9 +25,17 @@ impl RocksDBOptions {
     pub fn from_raw(raw: RawDBOptions) -> RocksDBOptions {
         RocksDBOptions(raw)
     }
+
+    pub fn into_raw(self) -> RawDBOptions {
+        self.0
+    }
 }
 
 impl DBOptions for RocksDBOptions {
+    fn new() -> Self {
+        RocksDBOptions::from_raw(RawDBOptions::new())
+    }
+
     fn get_max_background_jobs(&self) -> i32 {
         self.0.get_max_background_jobs()
     }

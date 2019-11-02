@@ -12,5 +12,6 @@ pub trait DBOptionsExt {
 
 /// A handle to a database's options
 pub trait DBOptions {
+    fn new() -> Self;
     fn get_max_background_jobs(&self) -> i32;
 }

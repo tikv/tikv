@@ -40,7 +40,4 @@ mod engine_iterator;
 pub use crate::engine_iterator::*;
 
 mod options;
-mod util;
-
-#[cfg(test)]
-mod test_helpers;
+pub mod util;
