@@ -97,11 +97,14 @@ mod tests {
     use engine_traits::Peekable;
     use engine_traits::ImportExt;
     use engine_traits::CFHandleExt;
+    use engine_traits::{DBOptions, TitanDBOptions};
+    use engine_traits::ColumnFamilyOptions;
     use crate::sst::RocksSstWriterBuilder;
-    use crate::db_options::RocksDBOptions;
+    use crate::db_options::{RocksDBOptions, RocksTitanDBOptions};
     use crate::engine::RocksEngine;
     use crate::import::RocksIngestExternalFileOptions;
     use crate::util::{RocksCFOptions, new_engine};
+    use crate::cf_options::RocksColumnFamilyOptions;
     use tempfile::Builder;
     use std::fs;
     use std::path::Path;
@@ -199,10 +202,10 @@ mod tests {
         check_prepare_sst_for_ingestion(None, None);
     }
 
-    /*#[test]
+    #[test]
     fn test_prepare_sst_for_ingestion_titan() {
         let mut db_opts = RocksDBOptions::new();
-        let mut titan_opts = TitanDBOptions::new();
+        let mut titan_opts = RocksTitanDBOptions::new();
         // Force all values write out to blob files.
         titan_opts.set_min_blob_size(0);
         db_opts.set_titandb_options(&titan_opts);
@@ -212,5 +215,5 @@ mod tests {
             Some(db_opts),
             Some(vec![RocksCFOptions::new("default", cf_opts)]),
         );
-    }*/
+    }
 }

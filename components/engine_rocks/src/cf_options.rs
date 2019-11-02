@@ -2,6 +2,7 @@
 
 use engine_traits::ColumnFamilyOptions;
 use rocksdb::ColumnFamilyOptions as RawCFOptions;
+use crate::db_options::RocksTitanDBOptions;
 
 pub struct RocksColumnFamilyOptions(RawCFOptions);
 
@@ -16,6 +17,8 @@ impl RocksColumnFamilyOptions {
 }
 
 impl ColumnFamilyOptions for RocksColumnFamilyOptions {
+    type TitanDBOptions = RocksTitanDBOptions;
+
     fn new() -> Self {
         RocksColumnFamilyOptions::from_raw(RawCFOptions::new())
     }
@@ -42,5 +45,9 @@ impl ColumnFamilyOptions for RocksColumnFamilyOptions {
 
     fn set_block_cache_capacity(&self, capacity: u64) -> Result<(), String> {
         self.0.set_block_cache_capacity(capacity)
+    }
+
+    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
+        self.0.set_titandb_options(opts.as_raw())
     }
 }

@@ -3,8 +3,10 @@
 use crate::engine::RocksEngine;
 use engine_traits::DBOptions;
 use engine_traits::DBOptionsExt;
+use engine_traits::TitanDBOptions;
 use engine_traits::Result;
 use rocksdb::DBOptions as RawDBOptions;
+use rocksdb::TitanDBOptions as RawTitanDBOptions;
 
 impl DBOptionsExt for RocksEngine {
     type DBOptions = RocksDBOptions;
@@ -32,11 +34,39 @@ impl RocksDBOptions {
 }
 
 impl DBOptions for RocksDBOptions {
+    type TitanDBOptions = RocksTitanDBOptions;
+
     fn new() -> Self {
         RocksDBOptions::from_raw(RawDBOptions::new())
     }
 
     fn get_max_background_jobs(&self) -> i32 {
         self.0.get_max_background_jobs()
+    }
+
+    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions) {
+        self.0.set_titandb_options(opts.as_raw())
+    }
+}
+
+pub struct RocksTitanDBOptions(RawTitanDBOptions);
+
+impl RocksTitanDBOptions {
+    pub fn from_raw(raw: RawTitanDBOptions) -> RocksTitanDBOptions {
+        RocksTitanDBOptions(raw)
+    }
+
+    pub fn as_raw(&self) -> &RawTitanDBOptions {
+        &self.0
+    }
+}
+
+impl TitanDBOptions for RocksTitanDBOptions {
+    fn new() -> Self {
+        RocksTitanDBOptions::from_raw(RawTitanDBOptions::new())
+    }
+
+    fn set_min_blob_size(&mut self, size: u64) {
+        self.0.set_min_blob_size(size)
     }
 }
