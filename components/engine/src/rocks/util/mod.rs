@@ -9,8 +9,7 @@ pub mod security;
 pub mod stats;
 
 use std::cmp;
-use std::fs::{self, File};
-use std::io::{self, ErrorKind};
+use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
