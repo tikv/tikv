@@ -11,7 +11,7 @@ impl CFHandleExt for RocksEngine {
     type CFHandle = RocksCFHandle;
     type ColumnFamilyOptions = RocksColumnFamilyOptions;
 
-    fn get_cf_handle(&self, name: &str) -> Option<&Self::CFHandle> {
+    fn cf_handle(&self, name: &str) -> Option<&Self::CFHandle> {
         self.as_inner().cf_handle(name).map(RocksCFHandle::from_raw)
     }
 

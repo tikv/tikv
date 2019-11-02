@@ -358,7 +358,7 @@ impl ImportDir {
     fn ingest<E: KvEngine>(&self, meta: &SstMeta, engine: &E) -> Result<()> {
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
-        let cf = engine.get_cf_handle(cf).expect("bad cf name");
+        let cf = engine.cf_handle(cf).expect("bad cf name");
         engine.prepare_sst_for_ingestion(&path.save, &path.clone)?;
         let length = meta.get_length();
         let crc32 = meta.get_crc32();
