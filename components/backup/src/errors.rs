@@ -3,13 +3,13 @@
 use std::io::Error as IoError;
 use std::{error, result};
 
+use engine_traits::Error as EngineTraitError;
 use kvproto::backup::Error as ErrorPb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::KeyError;
 use tikv::storage::kv::Error as EngineError;
 use tikv::storage::mvcc::Error as MvccError;
 use tikv::storage::txn::Error as TxnError;
-use engine_traits::Error as EngineTraitError;
 
 use crate::metrics::*;
 

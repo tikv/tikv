@@ -3,8 +3,8 @@
 use crate::engine::RocksEngine;
 use engine_traits::DBOptions;
 use engine_traits::DBOptionsExt;
-use engine_traits::TitanDBOptions;
 use engine_traits::Result;
+use engine_traits::TitanDBOptions;
 use rocksdb::DBOptions as RawDBOptions;
 use rocksdb::TitanDBOptions as RawTitanDBOptions;
 

@@ -1,9 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::PathBuf;
+use crate::cfdefs::CfName;
 use crate::errors::Result;
 use crate::iterable::Iterable;
-use crate::cfdefs::CfName;
+use std::path::PathBuf;
 
 pub trait SstExt {
     type SstReader: SstReader;
@@ -71,4 +71,3 @@ pub trait ExternalSstFileInfo {
     fn file_size(&self) -> u64;
     fn num_entries(&self) -> u64;
 }
-

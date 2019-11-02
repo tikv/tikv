@@ -7,9 +7,9 @@ use engine_traits::{Error, Result};
 use rocksdb::set_external_sst_file_global_seq_no;
 use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
 use std::fs::{self, File};
+use std::io::{self, ErrorKind};
 use std::path::Path;
 use tikv_util::file::calc_crc32;
-use std::io::{self, ErrorKind};
 
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
@@ -155,23 +155,23 @@ fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::CfName;
-    use engine_traits::{SstWriterBuilder, SstWriter};
-    use engine_traits::IngestExternalFileOptions;
-    use engine_traits::Peekable;
-    use engine_traits::ImportExt;
-    use engine_traits::CFHandleExt;
-    use engine_traits::{DBOptions, TitanDBOptions};
-    use engine_traits::ColumnFamilyOptions;
-    use crate::sst::RocksSstWriterBuilder;
+    use crate::cf_options::RocksColumnFamilyOptions;
     use crate::db_options::{RocksDBOptions, RocksTitanDBOptions};
     use crate::engine::RocksEngine;
     use crate::import::RocksIngestExternalFileOptions;
-    use crate::util::{RocksCFOptions, new_engine};
-    use crate::cf_options::RocksColumnFamilyOptions;
-    use tempfile::Builder;
+    use crate::sst::RocksSstWriterBuilder;
+    use crate::util::{new_engine, RocksCFOptions};
+    use engine_traits::CFHandleExt;
+    use engine_traits::CfName;
+    use engine_traits::ColumnFamilyOptions;
+    use engine_traits::ImportExt;
+    use engine_traits::IngestExternalFileOptions;
+    use engine_traits::Peekable;
+    use engine_traits::{DBOptions, TitanDBOptions};
+    use engine_traits::{SstWriter, SstWriterBuilder};
     use std::fs;
     use std::path::Path;
+    use tempfile::Builder;
     use tikv_util::file::calc_crc32;
 
     #[cfg(target_os = "linux")]
@@ -223,8 +223,7 @@ mod tests {
         let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
 
         let cf_name = "default";
-        let db = new_engine(path_str, db_opts, &[cf_name], cf_opts)
-            .unwrap();
+        let db = new_engine(path_str, db_opts, &[cf_name], cf_opts).unwrap();
         let cf = db.cf_handle(cf_name).unwrap();
         let mut ingest_opts = RocksIngestExternalFileOptions::new();
         ingest_opts.move_files(true);
@@ -236,12 +235,14 @@ mod tests {
         // The first ingestion will hard link sst_path to sst_clone.
         check_hard_link(&sst_path, 1);
         db.prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
-        db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum).unwrap();
+        db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum)
+            .unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
         // If we prepare again, it will use hard link too.
         db.prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
-        db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum).unwrap();
+        db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum)
+            .unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 2);
         db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])
@@ -252,7 +253,8 @@ mod tests {
         // The second ingestion will copy sst_path to sst_clone.
         check_hard_link(&sst_path, 2);
         db.prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
-        db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum).unwrap();
+        db.validate_sst_for_ingestion(cf, &sst_clone, size, checksum)
+            .unwrap();
         check_hard_link(&sst_path, 2);
         check_hard_link(&sst_clone, 1);
         db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])

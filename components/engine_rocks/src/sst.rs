@@ -1,26 +1,26 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Result, Iterable, SstExt, SstReader};
-use engine_traits::{SeekKey, Iterator};
-use engine_traits::IterOptions;
-use engine_traits::Error;
-use engine_traits::{SstWriter, SstWriterBuilder, ExternalSstFileInfo};
-use engine_traits::{CfName, CF_DEFAULT};
 use crate::engine::RocksEngine;
-use rocksdb::{SstFileReader, ColumnFamilyOptions};
-use rocksdb::DBIterator;
-use rocksdb::DB;
-use rocksdb::{SstFileWriter, Env, EnvOptions};
-use rocksdb::ExternalSstFileInfo as RawExternalSstFileInfo;
+use crate::options::RocksReadOptions;
+use engine_traits::Error;
+use engine_traits::IterOptions;
+use engine_traits::{CfName, CF_DEFAULT};
+use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
+use engine_traits::{Iterable, Result, SstExt, SstReader};
+use engine_traits::{Iterator, SeekKey};
 use rocksdb::DBCompressionType;
+use rocksdb::DBIterator;
+use rocksdb::ExternalSstFileInfo as RawExternalSstFileInfo;
+use rocksdb::DB;
+use rocksdb::{ColumnFamilyOptions, SstFileReader};
+use rocksdb::{Env, EnvOptions, SstFileWriter};
 use std::rc::Rc;
 use std::sync::Arc;
-use crate::options::RocksReadOptions;
 // FIXME: Move RocksSeekKey into a common module since
 // it's shared between multiple iterators
-use crate::engine_iterator::{RocksSeekKey};
-use std::path::PathBuf;
+use crate::engine_iterator::RocksSeekKey;
 use engine::rocks::util::get_fastest_supported_compression_type;
+use std::path::PathBuf;
 
 impl SstExt for RocksEngine {
     type SstReader = RocksSstReader;
@@ -57,7 +57,10 @@ impl Iterable for RocksSstReader {
     fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         let opt = opt.into_raw();
-        Ok(RocksSstIterator(SstFileReader::iter_opt_rc(self.inner.clone(), opt)))
+        Ok(RocksSstIterator(SstFileReader::iter_opt_rc(
+            self.inner.clone(),
+            opt,
+        )))
     }
 
     fn iterator_cf_opt(&self, _opts: &IterOptions, _cf: &str) -> Result<Self::Iterator> {
@@ -217,7 +220,9 @@ impl SstWriter for RocksSstWriter {
                 Ok(RocksExternalSstFileInfo(sst_info))
             }
         } else {
-            Err(Error::Engine("failed to read sequential file no env provided".to_owned()))
+            Err(Error::Engine(
+                "failed to read sequential file no env provided".to_owned(),
+            ))
         }
     }
 }
@@ -263,8 +268,7 @@ mod tests {
     #[test]
     fn test_smoke() {
         let path = Builder::new().tempdir().unwrap();
-        let engine =
-            new_default_engine(path.path().to_str().unwrap()).unwrap();
+        let engine = new_default_engine(path.path().to_str().unwrap()).unwrap();
         let (k, v) = (b"foo", b"bar");
 
         let p = path.path().join("sst");

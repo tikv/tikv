@@ -31,7 +31,8 @@ pub fn new_sst_reader(path: &str) -> RocksSstReader {
 
 pub fn new_sst_writer(path: &str) -> RocksSstWriter {
     RocksSstWriterBuilder::new()
-        .build(path).expect("test writer builder")
+        .build(path)
+        .expect("test writer builder")
 }
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {

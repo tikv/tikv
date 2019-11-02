@@ -510,11 +510,8 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rocks::{
-        ColumnFamilyOptions, DBOptions,
-        Writable, DB,
-    };
-    use crate::{CF_DEFAULT};
+    use crate::rocks::{ColumnFamilyOptions, DBOptions, Writable, DB};
+    use crate::CF_DEFAULT;
     use tempfile::Builder;
 
     #[test]

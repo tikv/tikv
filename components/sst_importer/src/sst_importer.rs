@@ -11,9 +11,9 @@ use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
 use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
-use engine_traits::{SeekKey, SstReader, SstWriterBuilder, SstWriter};
-use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::Iterator;
+use engine_traits::{IngestExternalFileOptions, KvEngine};
+use engine_traits::{SeekKey, SstReader, SstWriter, SstWriterBuilder};
 use external_storage::create_storage;
 
 use super::{Error, Result};
@@ -538,13 +538,11 @@ mod tests {
     use super::*;
     use test_sst_importer::*;
 
-    use engine_traits::{Iterable, Iterator, SeekKey};
     use engine_traits::Error as TraitError;
     use engine_traits::ExternalSstFileInfo;
+    use engine_traits::{Iterable, Iterator, SeekKey};
     use tempfile::Builder;
-    use test_sst_importer::{new_test_engine,
-                            new_sst_reader,
-                            new_sst_writer};
+    use test_sst_importer::{new_sst_reader, new_sst_writer, new_test_engine};
 
     #[test]
     fn test_import_dir() {
@@ -677,7 +675,8 @@ mod tests {
 
     fn create_sample_external_sst_file() -> Result<(tempfile::TempDir, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
-        let mut sst_writer = new_sst_writer(ext_sst_dir.path().join("sample.sst").to_str().unwrap());
+        let mut sst_writer =
+            new_sst_writer(ext_sst_dir.path().join("sample.sst").to_str().unwrap());
         sst_writer.put(b"zt123_r01", b"abc")?;
         sst_writer.put(b"zt123_r04", b"xyz")?;
         sst_writer.put(b"zt123_r07", b"pqrst")?;
@@ -944,7 +943,8 @@ mod tests {
             0,
         );
         match &result {
-            Err(Error::EngineTraits(TraitError::Engine(msg))) if msg.starts_with("Corruption:") => {}
+            Err(Error::EngineTraits(TraitError::Engine(msg))) if msg.starts_with("Corruption:") => {
+            }
             _ => panic!("unexpected download result: {:?}", result),
         }
     }

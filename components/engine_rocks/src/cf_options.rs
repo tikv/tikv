@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::db_options::RocksTitanDBOptions;
 use engine_traits::ColumnFamilyOptions;
 use rocksdb::ColumnFamilyOptions as RawCFOptions;
-use crate::db_options::RocksTitanDBOptions;
 
 pub struct RocksColumnFamilyOptions(RawCFOptions);
 

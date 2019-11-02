@@ -16,8 +16,8 @@ use crc::crc32::{self, Digest, Hasher32};
 use engine::rocks::Snapshot as DbSnapshot;
 use engine::rocks::DB;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_traits::{CFHandleExt, ImportExt};
 use engine_rocks::RocksEngine;
+use engine_traits::{CFHandleExt, ImportExt};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
@@ -559,7 +559,8 @@ impl Snap {
                 check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
             } else {
                 let engine = RocksEngine::from_ref(&kv_engine);
-                let cf = engine.cf_handle(cf_file.cf)
+                let cf = engine
+                    .cf_handle(cf_file.cf)
                     .ok_or_else(|| Error::Other(box_err!("bad cf handle")))?;
                 engine.prepare_sst_for_ingestion(&cf_file.path, &cf_file.clone_path)?;
                 engine.validate_sst_for_ingestion(
