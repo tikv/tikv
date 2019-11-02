@@ -529,15 +529,17 @@ fn generate_metadata_type_checker(
     if let Some(metadata_ctor) = metadata_ctor {
         let body = fn_body(metadata_ctor);
         quote! {
-            fn _type_checker #impl_generics (
-                ctx: &mut crate::expr::EvalContext,
-                output_rows: usize,
-                args: &[crate::rpn_expr::RpnStackNode<'_>],
-                extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                expr: &mut ::tipb::Expr,
-            ) #where_clause {
-                #body
-            }
+            const _: () = {
+                fn _type_checker #impl_generics (
+                    ctx: &mut crate::expr::EvalContext,
+                    output_rows: usize,
+                    args: &[crate::rpn_expr::RpnStackNode<'_>],
+                    extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
+                    expr: &mut ::tipb::Expr,
+                ) #where_clause {
+                    #body
+                }
+            };
         }
     } else {
         quote! {}
@@ -621,10 +623,7 @@ impl VargsRpnFn {
             |metadata_ctor| {
                 quote! {
                     let metadata = &#metadata_ctor(expr);
-                    static DUMMY: &[()] = &[];
-                    #fn_ident( #(#captures,)* unsafe {
-                        &*(DUMMY as *const _ as *const [&Option<#arg_type>])
-                    }).ok();
+                    #fn_ident #ty_generics_turbofish ( #(#captures,)* &[]).ok();
                 }
             },
         );
@@ -662,7 +661,7 @@ impl VargsRpnFn {
                                 let arg: &Option<#arg_type> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
                                 vargs_buf[arg_index] = arg as *const _ as usize;
                             }
-                            result.push(#fn_ident( #(#captures,)* unsafe {
+                            result.push(#fn_ident #ty_generics_turbofish( #(#captures,)* unsafe {
                                 &*(vargs_buf.as_slice() as *const _ as *const [&Option<#arg_type>])
                             })?);
                         }
@@ -755,8 +754,7 @@ impl RawVargsRpnFn {
             |metadata_ctor| {
                 quote! {
                     let metadata = &#metadata_ctor(expr);
-                    static DUMMY: &[ScalarValueRef<'static>] = &[];
-                    #fn_ident( #(#captures,)* DUMMY).ok();
+                    #fn_ident #ty_generics_turbofish ( #(#captures,)* &[]).ok();
                 }
             },
         );
