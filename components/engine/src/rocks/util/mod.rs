@@ -619,10 +619,10 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::rocks::{
-        ColumnFamilyOptions, DBOptions, IngestExternalFileOptions,
-        TitanDBOptions, Writable, DB,
+        ColumnFamilyOptions, DBOptions,
+        Writable, DB,
     };
-    use crate::{CfName, CF_DEFAULT};
+    use crate::{CF_DEFAULT};
     use tempfile::Builder;
 
     #[test]
@@ -726,23 +726,6 @@ mod tests {
         db.put_cf(cf, b"a", b"a").unwrap();
         db.flush_cf(cf, true).unwrap();
         assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_some());
-    }
-
-    #[cfg(target_os = "linux")]
-    fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
-        use std::os::linux::fs::MetadataExt;
-        assert_eq!(fs::metadata(path).unwrap().st_nlink(), nlink);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn check_hard_link<P: AsRef<Path>>(_: P, _: u64) {
-        // Just do nothing
-    }
-
-    fn check_db_with_kvs(db: &DB, cf: &CFHandle, kvs: &[(&str, &str)]) {
-        for &(k, v) in kvs {
-            assert_eq!(db.get_cf(cf, k.as_bytes()).unwrap().unwrap(), v.as_bytes());
-        }
     }
 
     #[test]
