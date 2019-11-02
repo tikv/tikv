@@ -28,6 +28,7 @@ use chrono::prelude::*;
 const MIN_TIMESTAMP: i64 = 0;
 const MAX_TIMESTAMP: i64 = (1 << 31) - 1;
 const MICRO_WIDTH: usize = 6;
+const COMPLETE_COMPONENTS_LEN: usize = 7;
 
 pub const MONTH_NAMES: &[&str] = &[
     "January",
@@ -60,6 +61,7 @@ fn last_day_of_month(year: u32, month: u32) -> u32 {
     }
 }
 
+/// When year, month or day is zero, there can not have a carry."
 fn round_components(parts: &mut [u32]) -> Option<()> {
     debug_assert_eq!(parts.len(), 7);
     let modulus = [
@@ -122,8 +124,11 @@ fn chrono_naive_datetime(
         .ok_or_else(|| Error::truncated())
 }
 
+/// Round `frac` with `fsp`, return if there is a carry and the result.
+/// NOTE: we assume that `frac` is less than `100_000_000` and `fsp` is valid.
 fn round_frac(frac: u32, fsp: u8) -> (bool, u32) {
-    debug_assert!(frac < 100_000_000 && fsp < 7);
+    debug_assert!(frac < 100_000_000);
+    debug_assert!(fsp < 7);
     if frac < 1_000_000 && fsp == 6 {
         return (false, frac);
     }
@@ -248,6 +253,10 @@ mod parser {
         })
     }
 
+    /// Match at least one digit and return the rest of the slice.
+    /// e.g.:
+    ///     digit(&[b"12:32"]) == Some((b":32", b"12"))
+    ///     digit(&[b":32"]) == None
     fn digit1(input: &[u8]) -> Option<(&[u8], &[u8])> {
         let end = input
             .iter()
@@ -277,7 +286,7 @@ mod parser {
                 && !buffer.last().unwrap().is_ascii_whitespace()
         );
 
-        let mut components = Vec::with_capacity(7);
+        let mut components = Vec::with_capacity(COMPLETE_COMPONENTS_LEN);
 
         while !buffer.is_empty() {
             let (mut rest, digits): (&[u8], &[u8]) = digit1(buffer)?;
@@ -313,6 +322,9 @@ mod parser {
         Some(components)
     }
 
+    /// If a two-digit year encountered, add an offset to it.
+    /// 99 -> 1999
+    /// 20 -> 2020
     fn adjust_year(year: u32) -> u32 {
         if year <= 69 {
             2000 + year
@@ -323,10 +335,14 @@ mod parser {
         }
     }
 
+    /// Try to parse a datetime string `input` without fractional part and separators.
     /// return an array that stores `[year, month, day, hour, minute, second, 0]`
     fn parse_whole(input: &[u8]) -> Option<[u32; 7]> {
         let mut parts = [0u32; 7];
 
+        // If `input`'s len is 8 or 14, then `input` should be in format like:
+        // yyyymmdd/yyyymmddhhmmss which means we have a four-digit year.
+        // Otherwise, we have a two-digit year.
         let year_digits = match input.len() {
             14 | 8 => 4,
             9..=12 | 5..=7 => 2,
@@ -346,6 +362,9 @@ mod parser {
         Some(parts)
     }
 
+    /// Try to parse a fractional part from `input` with `fsp`, round the result if `round` is
+    /// true.
+    /// NOTE: This function assumes that `fsp` is in range: [0, 6].
     fn parse_frac(input: &[u8], fsp: u8, round: bool) -> Option<(bool, u32)> {
         let fsp = usize::from(fsp);
         let len = input.len();
@@ -400,13 +419,13 @@ mod parser {
             }
             3..=7 => {
                 let whole = std::cmp::min(components.len(), 6);
-                let mut parts: Vec<_> =
-                    components[..whole]
-                        .iter()
-                        .try_fold(vec![], |mut acc, part| -> Option<_> {
-                            acc.push(bytes_to_u32(part)?);
-                            Some(acc)
-                        })?;
+                let mut parts: Vec<_> = components[..whole].iter().try_fold(
+                    Vec::with_capacity(COMPLETE_COMPONENTS_LEN),
+                    |mut acc, part| -> Option<_> {
+                        acc.push(bytes_to_u32(part)?);
+                        Some(acc)
+                    },
+                )?;
 
                 if components[0].len() == 2 {
                     parts[0] = adjust_year(parts[0]);
