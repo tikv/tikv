@@ -1,15 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
-use engine::rocks::util::prepare_sst_for_ingestion;
 use engine_traits::ImportExt;
 use engine_traits::IngestExternalFileOptions;
 use engine_traits::{Error, Result};
 use rocksdb::set_external_sst_file_global_seq_no;
 use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
-use std::fs::File;
+use std::fs::{self, File};
 use std::path::Path;
 use tikv_util::file::calc_crc32;
+use std::io::{self, ErrorKind};
 
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
@@ -87,6 +87,70 @@ impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
     fn move_files(&mut self, f: bool) {
         self.0.move_files(f);
     }
+}
+
+/// Prepares the SST file for ingestion.
+/// The purpose is to make the ingestion retryable when using the `move_files` option.
+/// Things we need to consider here:
+/// 1. We need to access the original file on retry, so we should make a clone
+///    before ingestion.
+/// 2. `RocksDB` will modified the global seqno of the ingested file, so we need
+///    to modified the global seqno back to 0 so that we can pass the checksum
+///    validation.
+/// 3. If the file has been ingested to `RocksDB`, we should not modified the
+///    global seqno directly, because that may corrupt RocksDB's data.
+#[cfg(target_os = "linux")]
+pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone: Q) -> Result<()> {
+    use std::os::linux::fs::MetadataExt;
+
+    let path = path.as_ref().to_str().unwrap();
+    let clone = clone.as_ref().to_str().unwrap();
+
+    if Path::new(clone).exists() {
+        fs::remove_file(clone).map_err(|e| format!("remove {}: {:?}", clone, e))?;
+    }
+
+    let meta = fs::metadata(path).map_err(|e| format!("read metadata from {}: {:?}", path, e))?;
+
+    if meta.st_nlink() == 1 {
+        // RocksDB must not have this file, we can make a hard link.
+        fs::hard_link(path, clone)
+            .map_err(|e| format!("link from {} to {}: {:?}", path, clone, e))?;
+    } else {
+        // RocksDB may have this file, we should make a copy.
+        copy_and_sync(path, clone)
+            .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone: Q) -> Result<()> {
+    let path = path.as_ref().to_str().unwrap();
+    let clone = clone.as_ref().to_str().unwrap();
+    if !Path::new(clone).exists() {
+        copy_and_sync(path, clone)
+            .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
+    }
+    Ok(())
+}
+
+/// Copies the source file to a newly created file.
+fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
+    if !from.as_ref().is_file() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "the source path is not an existing regular file",
+        ));
+    }
+
+    let mut reader = File::open(from)?;
+    let mut writer = File::create(to)?;
+
+    let res = io::copy(&mut reader, &mut writer)?;
+    writer.sync_all()?;
+    Ok(res)
 }
 
 #[cfg(test)]
