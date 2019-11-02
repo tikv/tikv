@@ -382,11 +382,13 @@ mod tests {
         // And group by:
         // - col_0 + col_1
 
-        let group_by_exp = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_column_ref(1)
-            .push_fn_call(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
-            .build();
+        let group_by_exp = || {
+            RpnExpressionBuilder::new()
+                .push_column_ref(0)
+                .push_column_ref(1)
+                .push_fn_call(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
+                .build()
+        };
 
         let aggr_definitions = vec![
             ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
@@ -407,7 +409,7 @@ mod tests {
         let exec_fast = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
-                group_by_exp.clone(),
+                group_by_exp(),
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -416,7 +418,7 @@ mod tests {
         let exec_slow = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![group_by_exp.clone()],
+                vec![group_by_exp()],
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -582,12 +584,12 @@ mod tests {
     /// E.g. SELECT 1 FROM t GROUP BY x
     #[test]
     fn test_no_aggr_fn() {
-        let group_by_exp = RpnExpressionBuilder::new().push_column_ref(0).build();
+        let group_by_exp = || RpnExpressionBuilder::new().push_column_ref(0).build();
 
         let exec_fast = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
-                group_by_exp.clone(),
+                group_by_exp(),
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -596,7 +598,7 @@ mod tests {
         let exec_slow = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![group_by_exp.clone()],
+                vec![group_by_exp()],
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>

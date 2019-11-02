@@ -368,7 +368,7 @@ impl ImportDir {
             debug!("skipping SST validation since length and crc32 are both 0");
         }
 
-        let mut opts = E::new_ingest_external_file_options();
+        let mut opts = E::IngestExternalFileOptions::new();
         opts.move_files(true);
         engine.ingest_external_file_cf(cf, &opts, &[path.clone.to_str().unwrap()])?;
         Ok(())
