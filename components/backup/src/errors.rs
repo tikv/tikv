@@ -9,6 +9,7 @@ use kvproto::kvrpcpb::KeyError;
 use tikv::storage::kv::Error as EngineError;
 use tikv::storage::mvcc::Error as MvccError;
 use tikv::storage::txn::Error as TxnError;
+use engine_traits::Error as EngineTraitError;
 
 use crate::metrics::*;
 
@@ -97,6 +98,8 @@ pub enum Error {
     Io(IoError),
     #[fail(display = "Engine error {}", _0)]
     Engine(EngineError),
+    #[fail(display = "Engine error {}", _0)]
+    EngineTrait(EngineTraitError),
     #[fail(display = "Transaction error {}", _0)]
     Txn(TxnError),
     #[fail(display = "ClusterID error current {}, request {}", current, request)]
@@ -120,6 +123,7 @@ impl_from! {
     String => Rocks,
     IoError => Io,
     EngineError => Engine,
+    EngineTraitError => EngineTrait,
     TxnError => Txn,
 }
 

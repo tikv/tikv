@@ -117,6 +117,8 @@ name = "backup"
 version = "0.0.1"
 dependencies = [
  "engine",
+ "engine_rocks",
+ "engine_traits",
  "external_storage",
  "failure",
  "futures",
