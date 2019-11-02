@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CFOptions, DBOptions, KvEngine};
+use engine_traits::{ColumnFamilyOptions, DBOptions, KvEngine};
 use kvproto::import_sstpb::*;
 
 use super::Result;

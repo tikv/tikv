@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub trait CFOptions {
+pub trait ColumnFamilyOptions {
     fn get_level_zero_slowdown_writes_trigger(&self) -> u32;
     fn get_level_zero_stop_writes_trigger(&self) -> u32;
     fn get_soft_pending_compaction_bytes_limit(&self) -> u64;

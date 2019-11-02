@@ -1,17 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::CFOptions;
+use engine_traits::ColumnFamilyOptions;
 use rocksdb::ColumnFamilyOptions as RawCFOptions;
 
-pub struct RocksCFOptions(RawCFOptions);
+pub struct RocksColumnFamilyOptions(RawCFOptions);
 
-impl RocksCFOptions {
-    pub fn from_raw(raw: RawCFOptions) -> RocksCFOptions {
-        RocksCFOptions(raw)
+impl RocksColumnFamilyOptions {
+    pub fn from_raw(raw: RawCFOptions) -> RocksColumnFamilyOptions {
+        RocksColumnFamilyOptions(raw)
     }
 }
 
-impl CFOptions for RocksCFOptions {
+impl ColumnFamilyOptions for RocksColumnFamilyOptions {
     fn get_level_zero_slowdown_writes_trigger(&self) -> u32 {
         self.0.get_level_zero_slowdown_writes_trigger()
     }
