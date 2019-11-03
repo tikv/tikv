@@ -63,7 +63,9 @@ impl RowSlice<'_> {
     /// Returns the `start` position and `offset` in `values` field if found, otherwise returns `None`
     ///
     /// # Errors
-    /// If the id is found with no offset, `Error::ColumnOffset` will be returned.
+    ///
+    /// If the id is found with no offset(It will only happen when the row data is broken),
+    /// `Error::ColumnOffset` will be returned.
     fn search_in_non_null_ids(&self, id: i64) -> Result<Option<(usize, usize)>> {
         if !self.id_valid(id) {
             return Ok(None);

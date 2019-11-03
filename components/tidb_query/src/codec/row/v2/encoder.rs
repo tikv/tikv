@@ -91,10 +91,9 @@ pub trait RowEncoder: NumberEncoder {
             non_null_ids.push(col.id);
             value_wtr.write_value(col)?;
             offsets.push(value_wtr.len());
-
-            if value_wtr.len() > (u16::MAX as usize) {
-                is_big = true;
-            }
+        }
+        if value_wtr.len() > (u16::MAX as usize) {
+            is_big = true;
         }
 
         // encode begins
