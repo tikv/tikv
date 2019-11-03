@@ -241,6 +241,7 @@ impl RpnExpression {
                     args_len,
                     field_type: ret_field_type,
                     implicit_args,
+                    metadata,
                 } => {
                     // Suppose that we have function call `Foo(A, B, C)`, the RPN nodes looks like
                     // `[A, B, C, Foo]`.
@@ -254,7 +255,13 @@ impl RpnExpression {
                         ret_field_type,
                         implicit_args,
                     };
-                    let ret = (func_meta.fn_ptr)(ctx, output_rows, stack_slice, &mut call_extra)?;
+                    let ret = (func_meta.fn_ptr)(
+                        ctx,
+                        output_rows,
+                        stack_slice,
+                        &mut call_extra,
+                        &**metadata,
+                    )?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Generated {
@@ -1037,6 +1044,94 @@ mod tests {
         assert_eq!(
             val.vector_value().unwrap().as_ref().as_int_slice(),
             [Some(574), Some(-13)]
+        );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+    }
+
+    #[test]
+    fn test_rpn_fn_data() {
+        use crate::codec::data_type::Evaluable;
+        use tipb::{Expr, ScalarFuncSig};
+
+        #[allow(clippy::trivially_copy_pass_by_ref)]
+        #[rpn_fn(capture = [metadata], metadata_ctor = prepare_a::<T>)]
+        fn fn_a<T: Evaluable>(metadata: &i64, v: &Option<Int>) -> Result<Option<Int>> {
+            assert_eq!(*metadata, 42);
+            Ok(v.map(|v| v + *metadata))
+        }
+
+        fn prepare_a<T: Evaluable>(_expr: &mut Expr) -> i64 {
+            42
+        }
+
+        #[allow(clippy::trivially_copy_pass_by_ref, clippy::ptr_arg)]
+        #[rpn_fn(varg, capture = [metadata], metadata_ctor = prepare_b::<T>)]
+        fn fn_b<T: Evaluable>(metadata: &String, v: &[&Option<T>]) -> Result<Option<T>> {
+            assert_eq!(metadata, &format!("{}", std::mem::size_of::<T>()));
+            Ok(v[0].clone())
+        }
+
+        fn prepare_b<T: Evaluable>(_expr: &mut Expr) -> String {
+            format!("{}", std::mem::size_of::<T>())
+        }
+
+        #[allow(clippy::trivially_copy_pass_by_ref)]
+        #[rpn_fn(raw_varg, capture = [metadata], metadata_ctor = prepare_c::<T>)]
+        fn fn_c<T: Evaluable>(
+            _data: &std::marker::PhantomData<T>,
+            args: &[ScalarValueRef<'_>],
+        ) -> Result<Option<Int>> {
+            Ok(Some(args.len() as i64))
+        }
+
+        fn prepare_c<T: Evaluable>(_expr: &mut Expr) -> std::marker::PhantomData<T> {
+            std::marker::PhantomData
+        }
+
+        fn fn_mapper(expr: &Expr) -> Result<RpnFnMeta> {
+            // fn_a: CastIntAsInt
+            // fn_b: CastIntAsReal
+            // fn_c: CastIntAsString
+            Ok(match expr.get_sig() {
+                ScalarFuncSig::CastIntAsInt => fn_a_fn_meta::<Real>(),
+                ScalarFuncSig::CastIntAsReal => fn_b_fn_meta::<Real>(),
+                ScalarFuncSig::CastIntAsString => fn_c_fn_meta::<Int>(),
+                _ => unreachable!(),
+            })
+        }
+
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsString, FieldTypeTp::LongLong)
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsReal, FieldTypeTp::Double)
+                        .push_child(ExprDefBuilder::constant_real(0.5)),
+                )
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsInt, FieldTypeTp::LongLong)
+                        .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong)),
+                )
+                .build();
+
+        // Build RPN expression from this expression tree.
+        let exp =
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 1).unwrap();
+
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(2, EvalType::Int);
+            col.mut_decoded().push_int(Some(1)); // row 1
+            col.mut_decoded().push_int(None); // row 0
+            col
+        }]);
+        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
+
+        let mut ctx = EvalContext::default();
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[1, 0], 2);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().as_int_slice(),
+            [Some(2), Some(2)]
         );
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
