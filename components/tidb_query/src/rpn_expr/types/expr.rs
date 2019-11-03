@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::any::Any;
+
 use tipb::FieldType;
 
 use super::super::function::RpnFnMeta;
@@ -14,6 +16,7 @@ pub enum RpnExpressionNode {
         args_len: usize,
         field_type: FieldType,
         implicit_args: Vec<ScalarValue>,
+        metadata: Box<dyn Any + Send>,
     },
 
     /// Represents a scalar constant value.
