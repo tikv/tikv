@@ -650,15 +650,14 @@ impl Duration {
 
     /// If the error is overflow, the result will be returned, too.
     /// Otherwise, only one of result or err will be returned
-    pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> (Option<Duration>, Option<Error>) {
+    pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> Result<Duration> {
         let fsp = match check_fsp(fsp) {
-            Err(e) => return (None, Some(e)),
+            Err(e) => return Err(e),
             Ok(fsp) => fsp,
         };
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
-            let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp);
-            return (Some(max), Some(Error::overflow("Duration", n)));
+            return Err(Error::overflow("Duration", n));
         }
 
         let negative = n < 0;
@@ -666,13 +665,10 @@ impl Duration {
             n = -n;
         }
         if n / 10000 > i64::from(MAX_HOURS) || n % 100 >= 60 || (n / 100) % 100 >= 60 {
-            return (
-                None,
-                Some(Error::Eval(
-                    format!("invalid time format: '{}'", n),
-                    ERR_TRUNCATE_WRONG_VALUE,
-                )),
-            );
+            return Err(Error::Eval(
+                format!("invalid time format: '{}'", n),
+                ERR_TRUNCATE_WRONG_VALUE,
+            ));
         }
         let dur = Duration::new(
             negative,
@@ -682,38 +678,23 @@ impl Duration {
             0,
             fsp,
         );
-        (Some(dur), None)
+        Ok(dur)
     }
 
     pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
-        let (dur, err) = Duration::from_i64_without_ctx(n, fsp);
-        err.map_or_else(
-            || {
-                debug_assert!(dur.is_some());
-                dur.ok_or_else(|_| {
-                    debug!(
-                        "{}",
-                        box_err!("Expect a not none result here, this is a bug")
-                    );
-                    Ok(Duration::zero())
-                })
-            },
-            |e| {
+        match Duration::from_i64_without_ctx(n, fsp) {
+            Ok(dur) => Ok(dur),
+            Err(e) => {
                 if e.is_overflow() {
                     ctx.handle_overflow_err(e)?;
-                    debug_assert!(dur.is_some());
-                    dur.ok_or_else(|_| {
-                        debug!(
-                            "{}",
-                            box_err!("Expect a not none result here, this is a bug")
-                        );
-                        Ok(Duration::zero())
-                    })
+                    let max =
+                        Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp as u8);
+                    Ok(max)
                 } else {
                     Err(e)
                 }
-            },
-        )
+            }
+        }
     }
 }
 
