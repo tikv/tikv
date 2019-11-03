@@ -117,12 +117,8 @@ impl Worker {
                     poll_task(task);
                 } else {
                     match step {
-                        0 | 1 => {
+                        0..=2 => {
                             std::thread::yield_now();
-                            step += 1;
-                        }
-                        2 => {
-                            std::thread::sleep(Duration::from_micros(10));
                             step += 1;
                         }
                         _ => {
