@@ -48,6 +48,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 30;
 const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
+const REQUEST_BATCH_LIMITER_INPUT_THRESHOLD: usize = 500;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
@@ -142,7 +143,7 @@ impl BatchLimiter {
     /// Whether current batch needs more requests.
     #[inline]
     fn needs_more(&self) -> bool {
-        self.enable_batch
+        self.batch_input <= REQUEST_BATCH_LIMITER_INPUT_THRESHOLD && self.enable_batch
     }
 
     /// Observe a tick from timer guard. Limiter will update statistics at this point.
