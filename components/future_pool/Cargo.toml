@@ -8,16 +8,25 @@ edition = "2018"
 
 [dependencies]
 adaptive-spawn = { git = "https://github.com/sticnarf/adaptive-thread-pool.git" }
-futures-preview = { version = "=0.3.0-alpha.19", features = ["compat"] }
+futures-preview = { version = "=0.3.0-alpha.19", features = ["compat", "async-await"] }
 futures01 = { package = "futures", version = "0.1" }
 tokio-threadpool = "0.1"
 lazy_static = "1"
 fail = "0.3"
 rand = "0.7"
 num_cpus = "1"
-texn = { git = "https://github.com/waynexia/texn" }
+# texn = { git = "https://github.com/waynexia/texn" }
 # texn = { git = "https://github.com/sticnarf/texn", branch = "default-config" }
 tokio = { git = "https://github.com/tokio-rs/tokio.git", features = ["executor-core"] }
+crossbeam  = "0.7.2"
+toml = "0.5.3"
+serde = { version = "1.0", features = ["derive"] }
+dashmap = "1"
+parking_lot = "0.9"
+
+futures-timer = "1"
+runtime = "0.3.0-alpha.7"
+histogram = "0.6"
 
 tikv_util = { path = "../tikv_util" }
 

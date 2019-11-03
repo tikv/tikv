@@ -177,7 +177,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let engine = RaftKv::new(raft_router.clone());
 
     let reporter = pd_sender.clone();
-    let reporter2 = pd_sender.clone();
     let engine2 = Arc::new(Mutex::new(engine.clone()));
     let read_pool = Builder::new()
         .on_tick(move || {

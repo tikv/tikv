@@ -8,6 +8,7 @@ extern crate fail;
 
 mod builder;
 mod metrics;
+pub mod texn;
 
 pub use self::builder::{Builder, Config};
 
@@ -92,8 +93,8 @@ impl AdaptiveSpawn for TokioPool2 {
 #[derive(Clone)]
 pub struct FuturePool {
     // pool: Arc<ThreadPool>,
-    pool: TokioPool2,
-    // pool: TexnPool,
+    // pool: TokioPool2,
+    pool: TexnPool,
     env: Arc<Env>,
     max_tasks: usize,
 }
