@@ -116,18 +116,19 @@ impl Worker {
                     step = 0;
                     poll_task(task);
                 } else {
-                    step += 1;
-                }
-                match step {
-                    0 | 1 => {
-                        std::thread::yield_now();
-                    }
-                    2 => {
-                        std::thread::sleep(Duration::from_micros(10));
-                    }
-                    _ => {
-                        self.parker.wait();
-                        step = 0;
+                    match step {
+                        0 | 1 => {
+                            std::thread::yield_now();
+                            step += 1;
+                        }
+                        2 => {
+                            std::thread::sleep(Duration::from_micros(10));
+                            step += 1;
+                        }
+                        _ => {
+                            self.parker.wait();
+                            step = 0;
+                        }
                     }
                 }
             }
