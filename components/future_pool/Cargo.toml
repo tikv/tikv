@@ -17,7 +17,7 @@ rand = "0.7"
 num_cpus = "1"
 texn = { git = "https://github.com/waynexia/texn" }
 # texn = { git = "https://github.com/sticnarf/texn", branch = "default-config" }
-tokio = { git = "https://github.com/tokio-rs/tokio.git" }
+tokio = { git = "https://github.com/tokio-rs/tokio.git", features = ["executor-core"] }
 
 tikv_util = { path = "../tikv_util" }
 

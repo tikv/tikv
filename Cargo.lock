@@ -3651,11 +3651,9 @@ dependencies = [
 [[package]]
 name = "tokio"
 version = "0.2.0-alpha.6"
-source = "git+https://github.com/tokio-rs/tokio.git#109fd3086b97896c422d9565e7d1ddbe4b6f300b"
+source = "git+https://github.com/tokio-rs/tokio.git#e19bd77ef0149b3141981b36f3ebc442fae4a0b4"
 dependencies = [
  "bytes",
- "crossbeam-channel",
- "crossbeam-queue",
  "fnv",
  "futures-core-preview",
  "futures-sink-preview",
@@ -3761,7 +3759,7 @@ dependencies = [
 [[package]]
 name = "tokio-macros"
 version = "0.2.0-alpha.6"
-source = "git+https://github.com/tokio-rs/tokio.git#109fd3086b97896c422d9565e7d1ddbe4b6f300b"
+source = "git+https://github.com/tokio-rs/tokio.git#e19bd77ef0149b3141981b36f3ebc442fae4a0b4"
 dependencies = [
  "quote 1.0.2",
  "syn 1.0.5",

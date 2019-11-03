@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::TokioPool;
 use super::TokioPool2;
 use texn::ThreadPool as TexnPool;
-use tokio::runtime::Builder as Tokio2Builder;
+use tokio::executor::thread_pool::Builder as Tokio2Builder;
 use tokio_threadpool::Builder as TokioBuilder;
 
 use super::metrics::*;
@@ -87,7 +87,7 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.inner_builder.before_stop(f);
+        // self.inner_builder.before_stop(f);
         self
     }
 
@@ -95,8 +95,11 @@ impl Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.after_start_func = Arc::new(f);
-        // self.inner_builder.after_start(f);
+        // self.after_start_func = Arc::new(f);
+        self.inner_builder.around_worker(move |index, work| {
+            f();
+            work();
+        });
         self
     }
 
@@ -116,9 +119,9 @@ impl Builder {
             metrics_running_task_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name]),
             metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
         });
-        // let pool = TokioPool2::new(self.inner_builder.build().unwrap());
+        let pool = TokioPool2::new(self.inner_builder.build());
         // let pool = TokioPool::new(self.inner_builder.build());
-        let pool = TexnPool::new_from_config(self.after_start_func.clone());
+        // let pool = TexnPool::new_from_config(self.after_start_func.clone());
         super::FuturePool {
             pool,
             env,
