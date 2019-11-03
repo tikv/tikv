@@ -816,7 +816,13 @@ fn cast_int_as_duration(
                     if let Some(dur) = dur {
                         Ok(Some(dur))
                     } else {
-                        Err(other_err!("Expect a not none result here, this is a bug"))
+                        dur.ok_or_else(|_| {
+                            debug!(
+                                "{}",
+                                box_err!("Expect a not none result here, this is a bug")
+                            );
+                            Ok(Duration::zero())
+                        })
                     }
                 }
             }
