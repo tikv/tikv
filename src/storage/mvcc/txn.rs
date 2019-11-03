@@ -45,20 +45,11 @@ impl<S: Snapshot> MvccTxn<S> {
             // scan only.
             // IsolationLevel is `SI`, actually the method we use in MvccTxn does not rely on
             // isolation level, so it can be any value.
-            reader: MvccReader::new(
-                snapshot.clone(),
-                None,
-                fill_cache,
-                None,
-                None,
-                IsolationLevel::Si,
-            ),
+            reader: MvccReader::new(snapshot.clone(), None, fill_cache, IsolationLevel::Si),
             gc_reader: MvccReader::new(
                 snapshot,
                 Some(ScanMode::Forward),
                 fill_cache,
-                None,
-                None,
                 IsolationLevel::Si,
             ),
             start_ts,
@@ -1518,14 +1509,8 @@ mod tests {
         must_commit(&engine, &[6], 3, 6);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut reader = MvccReader::new(
-            snapshot,
-            Some(ScanMode::Forward),
-            true,
-            None,
-            None,
-            IsolationLevel::Si,
-        );
+        let mut reader =
+            MvccReader::new(snapshot, Some(ScanMode::Forward), true, IsolationLevel::Si);
 
         let v = reader.scan_values_in_default(&Key::from_raw(&[3])).unwrap();
         assert_eq!(v.len(), 2);
@@ -1562,14 +1547,8 @@ mod tests {
         must_commit(&engine, &[6], 3, 6);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut reader = MvccReader::new(
-            snapshot,
-            Some(ScanMode::Forward),
-            true,
-            None,
-            None,
-            IsolationLevel::Si,
-        );
+        let mut reader =
+            MvccReader::new(snapshot, Some(ScanMode::Forward), true, IsolationLevel::Si);
 
         assert_eq!(reader.seek_ts(3).unwrap().unwrap(), Key::from_raw(&[2]));
     }

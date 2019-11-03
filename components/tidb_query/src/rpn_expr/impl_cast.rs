@@ -195,6 +195,7 @@ pub fn get_cast_fn_rpn_node(
         args_len: 1,
         field_type: to_field_type,
         implicit_args: Vec::new(),
+        metadata: Box::new(()),
     })
 }
 
