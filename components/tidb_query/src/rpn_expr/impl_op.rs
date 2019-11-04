@@ -7,7 +7,15 @@ use crate::Result;
 
 #[rpn_fn]
 #[inline]
-pub fn logical_and(lhs: &Option<i64>, rhs: &Option<i64>) -> Result<Option<i64>> {
+pub fn int_logical_and(lhs: &Option<i64>, rhs: &Option<i64>) -> Result<Option<i64>> {
+    Ok(match (lhs, rhs) {
+        (Some(0), _) | (_, Some(0)) => Some(0),
+        (None, _) | (_, None) => None,
+        _ => Some(1),
+    })
+}
+
+pub fn real_logical_and(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<i64>> {
     Ok(match (lhs, rhs) {
         (Some(0), _) | (_, Some(0)) => Some(0),
         (None, _) | (_, None) => None,
@@ -96,7 +104,7 @@ mod tests {
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[test]
-    fn test_logical_and() {
+    fn test_int_logical_and() {
         let test_cases = vec![
             (Some(1), Some(1), Some(1)),
             (Some(1), Some(0), Some(0)),
@@ -109,14 +117,34 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .push_param(arg1)
-                .evaluate(ScalarFuncSig::LogicalAnd)
+                .evaluate(ScalarFuncSig::IntLogicalAnd)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
     }
 
     #[test]
-    fn test_logical_or() {
+    fn test_real_logical_and() {
+        let test_cases = vec![
+            (0.3.into(), 0.3.into(), Some(1)),
+            (0.3.into(), 0.0.into(), Some(0)),
+            (0.0.into(), 0.0.into(), Some(0)),
+            (0.3.into(), -0.3.into(), Some(1)),
+            (0.0.into(), ScalarValue::Real(None), Some(0)),
+            (ScalarValue::Real(None), 0.3.into(), None),
+        ];
+        for (arg0, arg1, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RealLogicalAnd)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+   
+    #[test]
+    fn test_int_logical_or() {
         let test_cases = vec![
             (Some(1), Some(1), Some(1)),
             (Some(1), Some(0), Some(1)),
@@ -129,7 +157,27 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .push_param(arg1)
-                .evaluate(ScalarFuncSig::LogicalOr)
+                .evaluate(ScalarFuncSig::IntLogicalOr)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_real_logical_or() {
+        let test_cases = vec![
+            (0.3.into(), 0.3.into(), Some(1)),
+            (0.3.into(), 0.0.into(), Some(1)),
+            (0.0.into(), 0.0.into(), Some(0)),
+            (0.3.into(), -0.3.into(), Some(1)),
+            (0.3.into(), ScalarValue::Real(None), Some(1)),
+            (ScalarValue::Real(None), 0.0.into(), None),
+        ];
+        for (arg0, arg1, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RealLogicalOr)
                 .unwrap();
             assert_eq!(output, expect_output);
         }

@@ -4,8 +4,8 @@ use std::borrow::Cow;
 use std::i64;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use crate::codec::mysql::Decimal;
-use crate::codec::Datum;
+use crate::coprocessor::codec::mysql::Decimal;
+use crate::coprocessor::codec::Datum;
 
 impl ScalarFunc {
     pub fn int_logical_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -25,11 +25,11 @@ impl ScalarFunc {
 
     pub fn real_logical_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = self.children[0].eval_real(ctx, row)?;
-        if arg0.map_or(false, |v| v == 0f64) {
+        if arg0.map_or(false, |v| v == 0) {
             return Ok(Some(0));
         }
         let arg1 = self.children[1].eval_real(ctx, row)?;
-        if arg1.map_or(false, |v| v == 0f64) {
+        if arg1.map_or(false, |v| v == 0) {
             return Ok(Some(0));
         }
         if arg0.is_none() || arg1.is_none() {
@@ -38,26 +38,13 @@ impl ScalarFunc {
         Ok(Some(1))
     }
 
-    pub fn int_logical_or(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn logical_or(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = self.children[0].eval_int(ctx, row)?;
         if arg0.map_or(false, |v| v != 0) {
             return Ok(Some(1));
         }
         let arg1 = try_opt!(self.children[1].eval_int(ctx, row));
         if arg1 != 0 {
-            Ok(Some(1))
-        } else {
-            Ok(arg0)
-        }
-    }
-
-       pub fn real_logical_or(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg0 = self.children[0].eval_real(ctx, row)?;
-        if arg0.map_or(false, |v| v != 0f64) {
-            return Ok(Some(1));
-        }
-        let arg1 = try_opt!(self.children[1].eval_real(ctx, row));
-        if arg1 != 0f64 {
             Ok(Some(1))
         } else {
             Ok(arg0)
@@ -103,19 +90,9 @@ impl ScalarFunc {
         Ok(Some(ret))
     }
 
-    pub fn unary_not_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = try_opt!(self.children[0].eval_real(ctx, row));
-        Ok(Some((arg == 0f64) as i64))
-    }
-
-    pub fn unary_not_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn unary_not(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try_opt!(self.children[0].eval_int(ctx, row));
         Ok(Some((arg == 0) as i64))
-    }
-
-    pub fn unary_not_decimal(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let arg = try_opt!(self.children[0].eval_decimal(ctx, row));
-        Ok(Some(arg.is_zero() as i64))
     }
 
     pub fn unary_minus_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -222,12 +199,14 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod tests {
-    use crate::codec::mysql::Duration;
-    use crate::codec::Datum;
-    use crate::expr::tests::{check_overflow, datum_expr, scalar_func_expr, str2dec};
-    use crate::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::mysql::Duration;
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{
+        check_overflow, datum_expr, scalar_func_expr, str2dec,
+    };
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::i64;
-    use tipb::ScalarFuncSig;
+    use tipb::expression::ScalarFuncSig;
 
     #[test]
     fn test_logic_op() {
@@ -396,17 +375,11 @@ mod tests {
     #[test]
     fn test_unary_op() {
         let tests = vec![
-            (ScalarFuncSig::UnaryNotInt, Datum::I64(1), Some(0)),
-            (ScalarFuncSig::UnaryNotInt, Datum::I64(0), Some(1)),
-            (ScalarFuncSig::UnaryNotInt, Datum::I64(123), Some(0)),
-            (ScalarFuncSig::UnaryNotInt, Datum::I64(-123), Some(0)),
-            (ScalarFuncSig::UnaryNotInt, Datum::Null, None),
-            (ScalarFuncSig::UnaryNotReal, Datum::F64(0.3), Some(0)),
-            (ScalarFuncSig::UnaryNotReal, Datum::F64(0.0), Some(1)),
-            (ScalarFuncSig::UnaryNotReal, Datum::Null, None),
-            (ScalarFuncSig::UnaryNotDecimal, str2dec("0.3"), Some(0)),
-            (ScalarFuncSig::UnaryNotDecimal, str2dec("0"), Some(1)),
-            (ScalarFuncSig::UnaryNotDecimal, Datum::Null, None),
+            (ScalarFuncSig::UnaryNot, Datum::I64(1), Some(0)),
+            (ScalarFuncSig::UnaryNot, Datum::I64(0), Some(1)),
+            (ScalarFuncSig::UnaryNot, Datum::I64(123), Some(0)),
+            (ScalarFuncSig::UnaryNot, Datum::I64(-123), Some(0)),
+            (ScalarFuncSig::UnaryNot, Datum::Null, None),
             (ScalarFuncSig::RealIsTrue, Datum::F64(0.25), Some(1)),
             (ScalarFuncSig::RealIsTrue, Datum::F64(0.0), Some(0)),
             (ScalarFuncSig::RealIsTrue, Datum::Null, Some(0)),
