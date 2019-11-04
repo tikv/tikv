@@ -48,7 +48,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 30;
 const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
-const REQUEST_BATCH_LIMITER_INPUT_THRESHOLD: usize = 500;
+const REQUEST_BATCH_LIMITER_INPUT_THRESHOLD: usize = 300;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
