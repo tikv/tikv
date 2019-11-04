@@ -163,10 +163,7 @@ fn main() {
 
     cmd::server::run_tikv(config);
 
-    match guard.report().build() {
-        Ok(report) => {
-            println!("{}", report);
-        }
-        Err(_) => {}
+    if let Ok(report) = guard.report().build() {
+        println!("{}", report);
     };
 }
