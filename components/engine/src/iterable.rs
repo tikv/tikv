@@ -1,10 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::DATA_KEY_PREFIX_LEN;
 pub use crate::rocks::{DBIterator, ReadOptions, DB};
 use crate::Result;
 use keys::{BasicPhysicalKey, PhysicalKey, PhysicalKeySlice, RaftPhysicalKey, ToPhysicalKeySlice};
-use tikv_util::keybuilder::KeyBuilder;
 
 #[derive(Clone, PartialEq)]
 enum SeekMode {
@@ -107,10 +105,14 @@ impl<Key: PhysicalKey> IterOption<Key> {
             opts.set_prefix_same_as_start(true);
         }
         if let Some(key) = self.lower_bound {
-            opts.set_iterate_lower_bound(key.into_physical_vec());
+            if key.logical_len() > 0 {
+                opts.set_iterate_lower_bound(key.into_physical_vec());
+            }
         }
         if let Some(key) = self.upper_bound {
-            opts.set_iterate_upper_bound(key.into_physical_vec());
+            if key.logical_len() > 0 {
+                opts.set_iterate_upper_bound(key.into_physical_vec());
+            }
         }
         opts
     }

@@ -13,8 +13,8 @@ use crate::raftstore::Result;
 use crate::storage::Iterator;
 use engine_traits::util::check_key_in_range;
 use keys::{
-    BasicPhysicalKey, LogicalKeySlice, PhysicalKey, PhysicalKeySlice, RaftPhysicalKey,
-    RaftPhysicalKeySlice, ToPhysicalKeySlice,
+    BasicPhysicalKey, BasicPhysicalKeySlice, LogicalKeySlice, PhysicalKey, PhysicalKeySlice,
+    RaftPhysicalKey, RaftPhysicalKeySlice, ToPhysicalKeySlice,
 };
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -254,9 +254,13 @@ fn convert_raft_iter_opt(
 
     // Limit lower bound to region start key
     if let Some(lower_bound) = iter_opt.mut_lower_bound() {
-        let lower_bound = RaftPhysicalKey::transmute_from_basic_mut(lower_bound);
-        if region.get_start_key() > lower_bound.as_logical_std_slice() {
-            lower_bound.reset_from_logical_std_slice(region.get_start_key());
+        let lower_bound_raft = RaftPhysicalKey::transmute_from_basic_mut(lower_bound);
+        if !lower_bound_raft.as_logical_slice().is_empty() {
+            if region.get_start_key() > lower_bound_raft.as_logical_std_slice() {
+                lower_bound_raft.reset_from_logical_std_slice(region.get_start_key());
+            }
+        } else {
+            lower_bound_raft.reset_from_logical_std_slice(region.get_start_key());
         }
     } else {
         iter_opt.set_lower_bound(
@@ -266,14 +270,25 @@ fn convert_raft_iter_opt(
 
     // Limit upper bound to region end key
     if let Some(upper_bound) = iter_opt.mut_upper_bound() {
-        let upper_bound = RaftPhysicalKey::transmute_from_basic_mut(upper_bound);
-        if !region.get_end_key().is_empty() {
-            if region.get_end_key() < upper_bound.as_logical_std_slice() {
-                upper_bound.reset_from_logical_std_slice(region.get_end_key());
+        let upper_bound_raft = RaftPhysicalKey::transmute_from_basic_mut(upper_bound);
+        if !upper_bound_raft.as_logical_slice().is_empty() {
+            if !region.get_end_key().is_empty() {
+                if region.get_end_key() < upper_bound_raft.as_logical_std_slice() {
+                    upper_bound_raft.reset_from_logical_std_slice(region.get_end_key());
+                }
+            } else {
+                // No need to check and update the upper bound when region end key == "" because
+                // the physical key of region end key must be > user supplied physical key.
             }
         } else {
-            // No need to check and update the upper bound when region end key == "" because
-            // the physical key of region end key must be > user supplied physical key.
+            if region.get_end_key().is_empty() {
+                // DATA_MAX_KEY is not a valid Raft Key, so we set upper_bound directly.
+                upper_bound.reset_from_physical_slice(
+                    BasicPhysicalKeySlice::from_physical_std_slice(keys::DATA_MAX_KEY),
+                );
+            } else {
+                upper_bound_raft.reset_from_logical_std_slice(region.get_end_key());
+            }
         }
     } else {
         if region.get_end_key().is_empty() {
