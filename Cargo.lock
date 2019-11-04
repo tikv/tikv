@@ -1392,7 +1392,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#66e0f313ef1b4147329db76991bef362960b6621"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1409,7 +1409,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#66e0f313ef1b4147329db76991bef362960b6621"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2395,7 +2395,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#66e0f313ef1b4147329db76991bef362960b6621"
 dependencies = [
  "crc",
  "libc",
