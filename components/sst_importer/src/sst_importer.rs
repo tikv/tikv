@@ -11,7 +11,7 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
+use engine_traits::{IOLimiter, LimitReader};
 use engine_traits::Iterator;
 use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::{SeekKey, SstReader, SstWriter, SstWriterBuilder};
@@ -125,7 +125,7 @@ impl SSTImporter {
 
         // open the external storage and limit the read speed.
         let limiter = if speed_limit > 0 {
-            Some(Arc::new(IOLimiter::new(speed_limit)))
+            Some(Arc::new(E::IOLimiter::new(speed_limit)))
         } else {
             None
         };
