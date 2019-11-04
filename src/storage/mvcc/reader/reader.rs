@@ -7,10 +7,9 @@ use crate::storage::mvcc::lock::Lock;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::{Key, Value};
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine::IterOption;
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use tikv_util::keybuilder::KeyBuilder;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -26,8 +25,6 @@ pub struct MvccReader<S: Snapshot> {
     key_only: bool,
 
     fill_cache: bool,
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
     isolation_level: IsolationLevel,
 }
 
@@ -36,8 +33,6 @@ impl<S: Snapshot> MvccReader<S> {
         snapshot: S,
         scan_mode: Option<ScanMode>,
         fill_cache: bool,
-        lower_bound: Option<Vec<u8>>,
-        upper_bound: Option<Vec<u8>>,
         isolation_level: IsolationLevel,
     ) -> Self {
         Self {
@@ -50,8 +45,6 @@ impl<S: Snapshot> MvccReader<S> {
             isolation_level,
             key_only: false,
             fill_cache,
-            lower_bound,
-            upper_bound,
         }
     }
 
@@ -235,7 +228,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
-            let iter_opt = self.gen_iter_opt();
+            let iter_opt = IterOption::new(None, None, true);
             let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
             self.data_cursor = Some(iter);
         }
@@ -244,7 +237,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            let iter_opt = self.gen_iter_opt();
+            let iter_opt = IterOption::new(None, None, true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
@@ -255,30 +248,13 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            let mut iter_opt = self.gen_iter_opt();
-            iter_opt.fill_cache(true);
+            let iter_opt = IterOption::new(None, None, true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
             self.lock_cursor = Some(iter);
         }
         Ok(())
-    }
-
-    fn gen_iter_opt(&self) -> IterOption {
-        let l_bound = if let Some(ref b) = self.lower_bound {
-            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN, 0);
-            Some(builder)
-        } else {
-            None
-        };
-        let u_bound = if let Some(ref b) = self.upper_bound {
-            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN, 0);
-            Some(builder)
-        } else {
-            None
-        };
-        IterOption::new(l_bound, u_bound, true)
     }
 
     /// Return the first committed key for which `start_ts` equals to `ts`
@@ -641,7 +617,7 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }
@@ -779,7 +755,7 @@ mod tests {
         engine.commit(k, 45, 50);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         // Let's assume `50_45 PUT` means a commit version with start ts is 45 and commit ts
         // is 50.
@@ -842,7 +818,7 @@ mod tests {
         engine.commit(k, 1, 4);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 2).unwrap().unwrap();
         assert_eq!(commit_ts, 3);
         assert_eq!(write_type, WriteType::Put);
@@ -886,7 +862,7 @@ mod tests {
         // is 2.
         // Commit versions: [25_23 PUT, 20_10 PUT, 17_15 PUT, 7_7 Rollback, 5_1 PUT, 3_3 Rollback].
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         let k = Key::from_raw(k);
         let (commit_ts, write) = reader.seek_write(&k, 30).unwrap().unwrap();
@@ -926,7 +902,7 @@ mod tests {
         engine.commit(k2, 1, 2);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region);
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         let (commit_ts, write) = reader.seek_write(&Key::from_raw(k2), 3).unwrap().unwrap();
         assert_eq!(commit_ts, 2);
@@ -937,7 +913,7 @@ mod tests {
         // Test seek_write touches region's end.
         let region1 = make_region(1, vec![], Key::from_raw(b"k1").into_encoded());
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region1);
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         assert!(reader.seek_write(&k, 2).unwrap().is_none());
     }
@@ -987,7 +963,7 @@ mod tests {
         engine.prewrite(m, k, 24);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
         // is 2.
@@ -1050,7 +1026,7 @@ mod tests {
         engine.prewrite(Mutation::Lock(Key::from_raw(k3)), k1, 5);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         // Ignore the lock if read ts is less than the lock version
         assert!(reader.check_lock(&Key::from_raw(k1), 4).is_ok());
         assert!(reader.check_lock(&Key::from_raw(k2), 4).is_ok());
@@ -1067,7 +1043,7 @@ mod tests {
         // Commit the primary lock only
         engine.commit(k1, 5, 7);
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         // Then reading the primary key should succeed
         assert!(reader.check_lock(&Key::from_raw(k1), 6).is_ok());
         // Reading secondary keys should still fail
@@ -1077,7 +1053,7 @@ mod tests {
         // Pessimistic locks
         engine.acquire_pessimistic_lock(Key::from_raw(k4), k4, 9, 9);
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         // Pessimistic locks don't block any read operation
         assert!(reader.check_lock(&Key::from_raw(k4), 10).is_ok());
     }
@@ -1141,7 +1117,7 @@ mod tests {
         let check_scan_lock =
             |start_key: Option<Key>, limit, expect_res: &[_], expect_is_remain| {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-                let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+                let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
                 let res = reader
                     .scan_locks(start_key.as_ref(), |l| l.ts <= 10, limit)
                     .unwrap();
