@@ -4,6 +4,7 @@
 
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Display};
+use std::ops::Deref;
 
 use codec::prelude::BufferWriter;
 
@@ -64,6 +65,14 @@ impl BufferWriter for RaftPhysicalKey {
 
 impl Borrow<RaftPhysicalKeySlice> for RaftPhysicalKey {
     fn borrow(&self) -> &RaftPhysicalKeySlice {
+        self.as_physical_slice()
+    }
+}
+
+impl Deref for RaftPhysicalKey {
+    type Target = RaftPhysicalKeySlice;
+
+    fn deref(&self) -> &Self::Target {
         self.as_physical_slice()
     }
 }

@@ -418,13 +418,13 @@ impl Snapshot for RegionSnapshot {
     }
 
     #[inline]
-    fn lower_bound(&self) -> Option<&[u8]> {
-        Some(self.get_start_key())
+    fn lower_bound(&self) -> Option<&LogicalKeySlice> {
+        Some(LogicalKeySlice::from_std_slice(self.get_start_key()))
     }
 
     #[inline]
-    fn upper_bound(&self) -> Option<&[u8]> {
-        Some(self.get_end_key())
+    fn upper_bound(&self) -> Option<&LogicalKeySlice> {
+        Some(LogicalKeySlice::from_std_slice(self.get_end_key()))
     }
 }
 

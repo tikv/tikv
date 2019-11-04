@@ -5,6 +5,7 @@ mod forward;
 mod txn_entry;
 
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys::PhysicalKey;
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::Result;
@@ -146,6 +147,7 @@ pub struct ScannerConfig<S: Snapshot> {
     /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `upper_bound`
     /// is used in initial seek(or `lower_bound` in initial backward seek) as well. They will be consumed after `default_cursor` is being
     /// created.
+    // FIXME: Change to S::Key to avoid copy
     lower_bound: Option<Key>,
     upper_bound: Option<Key>,
 
@@ -180,9 +182,23 @@ impl<S: Snapshot> ScannerConfig<S> {
     #[inline]
     fn create_cf_cursor(&mut self, cf: CfName) -> Result<Cursor<S::Iter>> {
         let (lower, upper) = if cf == CF_DEFAULT {
-            (self.lower_bound.take(), self.upper_bound.take())
+            (
+                self.lower_bound
+                    .take()
+                    .map(|k| S::Key::copy_from_logical_vec(k.into_encoded())),
+                self.upper_bound
+                    .take()
+                    .map(|k| S::Key::copy_from_logical_vec(k.into_encoded())),
+            )
         } else {
-            (self.lower_bound.clone(), self.upper_bound.clone())
+            (
+                self.lower_bound
+                    .as_ref()
+                    .map(|k| S::Key::alloc_from_logical_slice(k.as_logical_key_slice())),
+                self.upper_bound
+                    .as_ref()
+                    .map(|k| S::Key::alloc_from_logical_slice(k.as_logical_key_slice())),
+            )
         };
         let cursor = CursorBuilder::new(&self.snapshot, cf)
             .range(lower, upper)

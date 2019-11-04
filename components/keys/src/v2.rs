@@ -7,12 +7,15 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
 use super::types::Key;
-use codec::byte::{MemComparableByteCodec, MemComparableByteEncoder};
-use codec::prelude::{BufferWriter, NumberEncoder};
+use codec::byte::MemComparableByteCodec;
+use codec::prelude::*;
 
-pub trait KeyLike: Debug + Display + Hash + PartialEq + Eq + PartialOrd + Ord {}
+pub trait KeyLike:
+    Send + Sync + Debug + Display + Hash + PartialEq + Eq + PartialOrd + Ord
+{
+}
 
-pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
+pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter + Deref {
     const PHYSICAL_PREFIX: &'static [u8];
     type Slice: PhysicalKeySlice<OwnedKey = Self> + ?Sized;
 
@@ -33,26 +36,8 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
     fn _into_vec(self) -> Vec<u8>;
 
     #[inline]
-    fn from_physical_vec(pk: Vec<u8>) -> Self {
-        assert!(pk.starts_with(Self::PHYSICAL_PREFIX));
-        Self::_new_from_vec(pk)
-    }
-
-    #[inline]
-    fn alloc_from_physical_std_slice(pk: &[u8]) -> Self {
-        Self::from_physical_vec(pk.to_vec())
-    }
-
-    #[inline]
     fn into_physical_vec(self) -> Vec<u8> {
         self._into_vec()
-    }
-
-    #[inline]
-    fn alloc_with_logical_capacity(capacity: usize) -> Self {
-        let mut vec = Vec::with_capacity(Self::PHYSICAL_PREFIX.len() + capacity);
-        vec.extend_from_slice(Self::PHYSICAL_PREFIX);
-        Self::_new_from_vec(vec)
     }
 
     #[inline]
@@ -66,13 +51,54 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
     }
 
     #[inline]
+    fn as_physical_slice_without_ts(&self) -> &Self::Slice {
+        self.as_physical_slice().as_physical_slice_without_ts()
+    }
+
+    #[inline]
     fn as_logical_slice(&self) -> &LogicalKeySlice {
         self.as_physical_slice().as_logical_slice()
     }
 
     #[inline]
+    fn as_logical_slice_without_ts(&self) -> &LogicalKeySlice {
+        self.as_physical_slice().as_logical_slice_without_ts()
+    }
+
+    #[inline]
     fn as_logical_std_slice(&self) -> &[u8] {
         self.as_logical_slice().as_std_slice()
+    }
+
+    #[inline]
+    fn from_physical_vec(pk: Vec<u8>) -> Self {
+        assert!(pk.starts_with(Self::PHYSICAL_PREFIX));
+        Self::_new_from_vec(pk)
+    }
+
+    #[inline]
+    fn alloc_from_physical_std_slice(pk: &[u8]) -> Self {
+        let mut v = Vec::with_capacity(pk.len() + 8);
+        v.extend_from_slice(pk);
+        Self::from_physical_vec(v)
+    }
+
+    #[inline]
+    fn alloc_from_physical_slice(pk: &Self::Slice) -> Self {
+        Self::alloc_from_physical_std_slice(pk.as_physical_std_slice())
+    }
+
+    #[inline]
+    fn alloc_with_logical_capacity(capacity: usize) -> Self {
+        let mut vec = Vec::with_capacity(Self::PHYSICAL_PREFIX.len() + capacity + 8);
+        vec.extend_from_slice(Self::PHYSICAL_PREFIX);
+        Self::_new_from_vec(vec)
+    }
+
+    #[inline]
+    fn alloc_new() -> Self {
+        // Note: 40 is a size suitable for TiDB payload (without ts suffix).
+        Self::alloc_with_logical_capacity(40)
     }
 
     #[inline]
@@ -95,7 +121,7 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
             unsafe {
                 let len = lk.len();
                 let prefix_len = Self::PHYSICAL_PREFIX.len();
-                lk.reserve(prefix_len);
+                lk.reserve(prefix_len + 8);
                 copy(lk.as_ptr(), lk.as_mut_ptr().add(prefix_len), len);
                 copy(Self::PHYSICAL_PREFIX.as_ptr(), lk.as_mut_ptr(), prefix_len);
                 lk.set_len(len + prefix_len);
@@ -107,8 +133,9 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
     // FIXME: This is a MVCC knowledge.
     #[inline]
     fn alloc_from_user_std_slice(uk: &[u8]) -> Self {
-        let mut key =
+        let mut key: Self =
             Self::alloc_with_logical_capacity(MemComparableByteCodec::encoded_len(uk.len()));
+        // 8 for timestamp
         key.write_comparable_bytes(uk).unwrap();
         key
     }
@@ -138,9 +165,33 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
 
     // FIXME: This is a MVCC knowledge.
     #[inline]
-    fn clear_ts(&mut self) {
+    fn shrink_ts(&mut self) {
         let len = self._vec_ref().len();
         self._vec_mut().truncate(len - 8);
+    }
+
+    // FIXME: This is a MVCC knowledge.
+    #[inline]
+    fn call_with_ts<T, F>(&mut self, ts: u64, f: F) -> T
+    where
+        T: 'static,
+        F: FnOnce(&mut Self) -> T,
+    {
+        self.append_ts(ts);
+        let r = f(self);
+        self.shrink_ts();
+        r
+    }
+
+    #[inline]
+    fn get_ts(&self) -> u64 {
+        self.as_physical_slice().get_ts()
+    }
+
+    #[inline]
+    fn reset_from_physical_slice(&mut self, pk: &Self::Slice) {
+        self._vec_mut().clear();
+        self.write_bytes(pk.as_physical_std_slice()).unwrap();
     }
 
     #[inline]
@@ -178,13 +229,24 @@ pub trait PhysicalKeySlice: KeyLike + ToPhysicalKeySlice<Self> {
     fn as_logical_slice(&self) -> &LogicalKeySlice;
 
     #[inline]
+    fn as_logical_slice_without_ts(&self) -> &LogicalKeySlice {
+        self.as_logical_slice().as_physical_slice_without_ts()
+    }
+
+    #[inline]
     fn as_logical_std_slice(&self) -> &[u8] {
         self.as_logical_slice().as_std_slice()
     }
 
     #[inline]
+    fn as_physical_slice_without_ts(&self) -> &Self {
+        let s = self.as_physical_std_slice();
+        Self::from_physical_std_slice(&s[..s.len() - 8])
+    }
+
+    #[inline]
     fn alloc_to_physical_key(&self) -> Self::OwnedKey {
-        Self::OwnedKey::alloc_from_physical_std_slice(self.as_physical_std_slice())
+        Self::OwnedKey::alloc_from_physical_slice(self)
     }
 
     #[inline]
@@ -195,6 +257,11 @@ pub trait PhysicalKeySlice: KeyLike + ToPhysicalKeySlice<Self> {
     #[inline]
     fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    #[inline]
+    fn get_ts(&self) -> u64 {
+        self.as_logical_slice().get_ts()
     }
 }
 
@@ -235,6 +302,14 @@ impl BufferWriter for BasicPhysicalKey {
 
 impl Borrow<BasicPhysicalKeySlice> for BasicPhysicalKey {
     fn borrow(&self) -> &BasicPhysicalKeySlice {
+        self.as_physical_slice()
+    }
+}
+
+impl Deref for BasicPhysicalKey {
+    type Target = BasicPhysicalKeySlice;
+
+    fn deref(&self) -> &Self::Target {
         self.as_physical_slice()
     }
 }
@@ -358,9 +433,22 @@ impl LogicalKeySlice {
 
     // FIXME: This is a MVCC knowledge.
     #[inline]
-    pub fn as_slice_without_ts(&self) -> &LogicalKeySlice {
+    pub fn as_physical_slice_without_ts(&self) -> &LogicalKeySlice {
         let s = self.as_std_slice();
         Self::from_std_slice(&s[..s.len() - 8])
+    }
+
+    // FIXME: This is a MVCC knowledge.
+    #[inline]
+    pub fn alloc_to_user_vec(&self) -> codec::Result<Vec<u8>> {
+        self.as_std_slice().read_comparable_bytes()
+    }
+
+    #[inline]
+    pub fn get_ts(&self) -> u64 {
+        let s = self.as_std_slice();
+        let mut s_ts = &s[s.len() - 8..];
+        s_ts.read_u64_desc().unwrap()
     }
 }
 

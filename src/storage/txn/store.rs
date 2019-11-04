@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use keys::LogicalKeySlice;
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
@@ -255,11 +256,15 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         &self,
         desc: bool,
         key_only: bool,
+        // FIXME: Change to S::Key to avoid constructing Option again
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<MvccScanner<S>> {
         // Check request bounds with physical bound
-        self.verify_range(&lower_bound, &upper_bound)?;
+        self.verify_range(
+            lower_bound.as_ref().map(|k| k.as_logical_key_slice()),
+            upper_bound.as_ref().map(|k| k.as_logical_key_slice()),
+        )?;
         let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts, desc)
             .range(lower_bound, upper_bound)
             .omit_value(key_only)
@@ -275,11 +280,15 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
     type Scanner = EntryScanner<S>;
     fn entry_scanner(
         &self,
+        // FIXME: Change to S::Key to avoid constructing Option again
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
     ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
-        self.verify_range(&lower_bound, &upper_bound)?;
+        self.verify_range(
+            lower_bound.as_ref().map(|k| k.as_logical_key_slice()),
+            upper_bound.as_ref().map(|k| k.as_logical_key_slice()),
+        )?;
         let scanner =
             ScannerBuilder::new(self.snapshot.clone(), self.start_ts, false /* desc */)
                 .range(lower_bound, upper_bound)
@@ -319,29 +328,39 @@ impl<S: Snapshot> SnapshotStore<S> {
         self.isolation_level = isolation_level;
     }
 
-    fn verify_range(&self, lower_bound: &Option<Key>, upper_bound: &Option<Key>) -> Result<()> {
-        if let Some(ref l) = lower_bound {
+    fn verify_range(
+        &self,
+        lower_bound: Option<&LogicalKeySlice>,
+        upper_bound: Option<&LogicalKeySlice>,
+    ) -> Result<()> {
+        if let Some(l) = lower_bound {
             if let Some(b) = self.snapshot.lower_bound() {
-                if !b.is_empty() && l.as_encoded().as_slice() < b {
+                if l < b {
                     REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::InvalidReqRange {
-                        start: Some(l.as_encoded().clone()),
-                        end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
-                        lower_bound: Some(b.to_vec()),
-                        upper_bound: self.snapshot.upper_bound().map(|b| b.to_vec()),
+                        start: Some(l.as_std_slice().to_vec()),
+                        end: upper_bound.as_ref().map(|ref b| b.as_std_slice().to_vec()),
+                        lower_bound: Some(b.as_std_slice().to_vec()),
+                        upper_bound: self
+                            .snapshot
+                            .upper_bound()
+                            .map(|b| b.as_std_slice().to_vec()),
                     });
                 }
             }
         }
-        if let Some(ref u) = upper_bound {
+        if let Some(u) = upper_bound {
             if let Some(b) = self.snapshot.upper_bound() {
-                if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
+                if !b.is_empty() && u > b {
                     REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::InvalidReqRange {
-                        start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
-                        end: Some(u.as_encoded().clone()),
-                        lower_bound: self.snapshot.lower_bound().map(|b| b.to_vec()),
-                        upper_bound: Some(b.to_vec()),
+                        start: lower_bound.as_ref().map(|ref b| b.as_std_slice().to_vec()),
+                        end: Some(u.as_std_slice().to_vec()),
+                        lower_bound: self
+                            .snapshot
+                            .lower_bound()
+                            .map(|b| b.as_std_slice().to_vec()),
+                        upper_bound: Some(b.as_std_slice().to_vec()),
                     });
                 }
             }
@@ -686,11 +705,11 @@ mod tests {
                 ScanMode::Forward,
             ))
         }
-        fn lower_bound(&self) -> Option<&[u8]> {
-            Some(self.start.as_slice())
+        fn lower_bound(&self) -> Option<&LogicalKeySlice> {
+            Some(LogicalKeySlice::from_std_slice(self.start.as_slice()))
         }
-        fn upper_bound(&self) -> Option<&[u8]> {
-            Some(self.end.as_slice())
+        fn upper_bound(&self) -> Option<&LogicalKeySlice> {
+            Some(LogicalKeySlice::from_std_slice(self.end.as_slice()))
         }
     }
 

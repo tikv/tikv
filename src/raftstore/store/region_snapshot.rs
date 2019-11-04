@@ -141,12 +141,12 @@ impl RegionSnapshot {
         Ok(prop)
     }
 
-    pub fn get_start_key(&self) -> &[u8] {
-        self.region.get_start_key()
+    pub fn get_start_key(&self) -> &LogicalKeySlice {
+        LogicalKeySlice::from_std_slice(self.region.get_start_key())
     }
 
-    pub fn get_end_key(&self) -> &[u8] {
-        self.region.get_end_key()
+    pub fn get_end_key(&self) -> &LogicalKeySlice {
+        LogicalKeySlice::from_std_slice(self.region.get_end_key())
     }
 }
 
