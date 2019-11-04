@@ -129,6 +129,7 @@ impl RpnExpressionBuilder {
             args_len,
             field_type: return_field_type.into(),
             implicit_args: vec![],
+            metadata: Box::new(()),
         };
         self.0.push(node);
         self
@@ -147,6 +148,7 @@ impl RpnExpressionBuilder {
             args_len,
             field_type: return_field_type.into(),
             implicit_args,
+            metadata: Box::new(()),
         };
         self.0.push(node);
         self
@@ -306,6 +308,7 @@ where
         )
     })?;
 
+    let metadata = (func_meta.metadata_ctor_ptr)(&mut tree_node);
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
 
@@ -335,6 +338,7 @@ where
         args_len,
         field_type: tree_node.take_field_type(),
         implicit_args,
+        metadata,
     });
     Ok(())
 }
