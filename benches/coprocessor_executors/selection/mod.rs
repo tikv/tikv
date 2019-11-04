@@ -2,6 +2,8 @@
 
 mod util;
 
+use criterion::measurement::Measurement;
+
 use tidb_query_datatype::FieldTypeTp;
 use tipb::ScalarFuncSig;
 use tipb_helper::ExprDefBuilder;
@@ -9,14 +11,20 @@ use tipb_helper::ExprDefBuilder;
 use crate::util::{BenchCase, FixtureBuilder};
 
 /// For SQLs like `WHERE column`.
-fn bench_selection_column(b: &mut criterion::Bencher, input: &Input) {
+fn bench_selection_column<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_random();
     let expr = ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build();
     input.bencher.bench(b, &fb, &[expr]);
 }
 
 /// For SQLs like `WHERE a > b`.
-fn bench_selection_binary_func_column_column(b: &mut criterion::Bencher, input: &Input) {
+fn bench_selection_binary_func_column_column<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_f64_random()
         .push_column_f64_random();
@@ -28,7 +36,10 @@ fn bench_selection_binary_func_column_column(b: &mut criterion::Bencher, input: 
 }
 
 /// For SQLS like `WHERE a > 1`.
-fn bench_selection_binary_func_column_constant(b: &mut criterion::Bencher, input: &Input) {
+fn bench_selection_binary_func_column_constant<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows).push_column_f64_random();
     let expr = ExprDefBuilder::scalar_func(ScalarFuncSig::GtReal, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
@@ -38,7 +49,10 @@ fn bench_selection_binary_func_column_constant(b: &mut criterion::Bencher, input
 }
 
 /// For SQLs like `WHERE a > 1 AND b > 2`.
-fn bench_selection_multiple_predicate(b: &mut criterion::Bencher, input: &Input) {
+fn bench_selection_multiple_predicate<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_i64_random()
         .push_column_f64_random();
@@ -56,21 +70,30 @@ fn bench_selection_multiple_predicate(b: &mut criterion::Bencher, input: &Input)
 }
 
 #[derive(Clone)]
-struct Input {
+struct Input<M>
+where
+    M: Measurement,
+{
     /// How many rows to filter
     src_rows: usize,
 
     /// The selection executor (batch / normal) to use
-    bencher: Box<dyn util::SelectionBencher>,
+    bencher: Box<dyn util::SelectionBencher<M>>,
 }
 
-impl std::fmt::Debug for Input {
+impl<M> std::fmt::Display for Input<M>
+where
+    M: Measurement,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/rows={}", self.bencher.name(), self.src_rows)
     }
 }
 
-pub fn bench(c: &mut criterion::Criterion) {
+pub fn bench<M>(c: &mut criterion::Criterion<M>)
+where
+    M: Measurement + 'static,
+{
     let mut inputs = vec![];
 
     let mut rows_options = vec![5000];
@@ -80,7 +103,7 @@ pub fn bench(c: &mut criterion::Criterion) {
     if crate::util::bench_level() >= 2 {
         rows_options.push(1);
     }
-    let bencher_options: Vec<Box<dyn util::SelectionBencher>> =
+    let bencher_options: Vec<Box<dyn util::SelectionBencher<M>>> =
         vec![Box::new(util::NormalBencher), Box::new(util::BatchBencher)];
 
     for rows in &rows_options {
@@ -113,6 +136,14 @@ pub fn bench(c: &mut criterion::Criterion) {
 
     cases.sort();
     for case in cases {
-        c.bench_function_over_inputs(case.name, case.f, inputs.clone());
+        let mut group = c.benchmark_group(case.get_name());
+        for input in inputs.iter() {
+            group.bench_with_input(
+                criterion::BenchmarkId::from_parameter(input),
+                input,
+                case.get_fn(),
+            );
+        }
+        group.finish();
     }
 }

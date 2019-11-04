@@ -1019,6 +1019,7 @@ fn send_destroy_peer_message(
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;

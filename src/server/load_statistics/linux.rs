@@ -15,11 +15,13 @@ use procinfo::pid;
 pub struct ThreadLoadStatistics {
     pid: pid_t,
     tids: Vec<pid_t>,
+    prefix: String,
     slots: usize,
     cur_pos: usize,
     cpu_usages: Vec<f64>,
     instants: Vec<Instant>,
     thread_load: Arc<ThreadLoad>,
+    target: usize,
 }
 
 impl ThreadLoadStatistics {
@@ -29,26 +31,23 @@ impl ThreadLoadStatistics {
     /// Note: call this after the target threads are initialized, otherwise it can't catch them.
     pub fn new(slots: usize, prefix: &str, thread_load: Arc<ThreadLoad>) -> Self {
         let pid: pid_t = unsafe { getpid() };
-        let mut tids = vec![];
-        let mut cpu_total_count = 0f64;
-        for tid in get_thread_ids(pid).unwrap() {
-            if let Ok(stat) = pid::stat_task(pid, tid) {
-                if !stat.command.starts_with(prefix) {
-                    continue;
-                }
-                cpu_total_count += cpu_total(&stat);
-                tids.push(tid);
-            }
-        }
+        let (tids, cpu_total_count) = poll_task(pid, prefix);
         ThreadLoadStatistics {
             pid,
             tids,
+            prefix: prefix.to_string(),
             slots,
             cur_pos: 0,
             cpu_usages: vec![cpu_total_count; slots],
             instants: vec![Instant::now(); slots],
             thread_load,
+            target: 0,
         }
+    }
+
+    /// Designate target thread count of this collector.
+    pub fn set_thread_target(&mut self, target: usize) {
+        self.target = target;
     }
 
     /// For every threads with the name prefix given in `ThreadLoadStatistics::new`,
@@ -60,11 +59,24 @@ impl ThreadLoadStatistics {
     pub fn record(&mut self, instant: Instant) {
         self.instants[self.cur_pos] = instant;
         self.cpu_usages[self.cur_pos] = 0f64;
-        for tid in &self.tids {
-            // TODO: if monitored threads exited and restarted then, we should update `self.tids`.
-            if let Ok(stat) = pid::stat_task(self.pid, *tid) {
-                self.cpu_usages[self.cur_pos] += cpu_total(&stat);
+        // workaround for tokio's threadpool with unstable worker.
+        let need_poll_task = self.tids.len() < self.target;
+        if !need_poll_task {
+            for tid in &self.tids {
+                if let Ok(stat) = pid::stat_task(self.pid, *tid) {
+                    self.cpu_usages[self.cur_pos] += cpu_total(&stat);
+                    // } else {
+                    // TODO: if monitored threads exited and restarted then, we should update `self.tids`.
+                    // pending this for it will arouse unstable integration tests.
+                    // need_poll_task = true;
+                    // break;
+                }
             }
+        }
+        if need_poll_task {
+            let (tids, cpu_usage) = poll_task(self.pid, self.prefix.as_str());
+            std::mem::replace(&mut self.tids, tids);
+            self.cpu_usages[self.cur_pos] = cpu_usage;
         }
         let current_instant = self.instants[self.cur_pos];
         let current_cpu_usage = self.cpu_usages[self.cur_pos];
@@ -80,8 +92,8 @@ impl ThreadLoadStatistics {
             if cpu_usage > self.tids.len() * 100 {
                 cpu_usage = self.tids.len() * 100;
             }
-            self.thread_load.load.store(cpu_usage, Ordering::Release);
-            self.thread_load.term.fetch_add(1, Ordering::Release);
+            self.thread_load.load.store(cpu_usage, Ordering::Relaxed);
+            self.thread_load.term.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -91,6 +103,21 @@ fn calc_cpu_load(elapsed_millis: usize, start_usage: f64, end_usage: f64) -> usi
     // Multiply by 1000 for millis, and multiply 100 for percentage.
     let cpu_usage = (end_usage - start_usage) * 1000f64 * 100f64;
     cpu_usage as usize / elapsed_millis
+}
+
+#[inline]
+fn poll_task(pid: pid_t, prefix: &str) -> (Vec<pid_t>, f64) {
+    let tids = get_thread_ids(pid).unwrap();
+    let mut cpu_total_count = 0f64;
+    for tid in &tids {
+        if let Ok(stat) = pid::stat_task(pid, *tid) {
+            if !stat.command.starts_with(prefix) {
+                continue;
+            }
+            cpu_total_count += cpu_total(&stat);
+        }
+    }
+    (tids, cpu_total_count)
 }
 
 #[cfg(test)]

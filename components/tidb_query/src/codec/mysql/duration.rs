@@ -610,7 +610,7 @@ impl Duration {
 
     fn format(self, sep: &str) -> String {
         use std::fmt::Write;
-        let res_max_len = 1 + 6 + 2 * sep.len() + 1 + MAX_FSP as usize;
+        let res_max_len = 8 + 2 * sep.len() + MAX_FSP as usize;
         let mut string = String::with_capacity(res_max_len);
         if self.get_neg() {
             string.push('-');
@@ -650,7 +650,11 @@ impl Duration {
 
     /// If the error is overflow, the result will be returned, too.
     /// Otherwise, only one of result or err will be returned
-    pub fn from_i64_without_ctx(mut n: i64, fsp: u8) -> (Option<Duration>, Option<Error>) {
+    pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> (Option<Duration>, Option<Error>) {
+        let fsp = match check_fsp(fsp) {
+            Err(e) => return (None, Some(e)),
+            Ok(fsp) => fsp,
+        };
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
             let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp);
@@ -681,7 +685,7 @@ impl Duration {
         (Some(dur), None)
     }
 
-    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: u8) -> Result<Duration> {
+    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
         let (dur, err) = Duration::from_i64_without_ctx(n, fsp);
         err.map_or_else(
             || {
@@ -773,26 +777,26 @@ impl Ord for Duration {
 impl<T: BufferWriter> DurationEncoder for T {}
 
 pub trait DurationEncoder: NumberEncoder {
-    fn encode_duration(&mut self, v: Duration) -> Result<()> {
+    fn write_duration(&mut self, v: Duration) -> Result<()> {
         self.write_i64(v.to_nanos())?;
         self.write_i64(i64::from(v.get_fsp())).map_err(From::from)
     }
 
-    fn encode_duration_to_chunk(&mut self, v: Duration) -> Result<()> {
+    fn write_duration_to_chunk(&mut self, v: Duration) -> Result<()> {
         self.write_i64_le(v.to_nanos())?;
         Ok(())
     }
 }
 
 pub trait DurationDecoder: NumberDecoder {
-    /// `decode_duration` decodes duration encoded by `encode_duration`.
-    fn decode_duration(&mut self) -> Result<Duration> {
+    /// `read_duration` decodes duration encoded by `write_duration`.
+    fn read_duration(&mut self) -> Result<Duration> {
         let nanos = self.read_i64()?;
         let fsp = self.read_i64()?;
         Duration::from_nanos(nanos, fsp as i8)
     }
 
-    fn decode_duration_from_chunk(&mut self, fsp: isize) -> Result<Duration> {
+    fn read_duration_from_chunk(&mut self, fsp: isize) -> Result<Duration> {
         let nanos = self.read_i64_le()?;
         Duration::from_nanos(nanos, fsp as i8)
     }
@@ -809,11 +813,11 @@ impl crate::codec::data_type::AsMySQLBool for Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::EPSILON;
-
     use super::*;
     use crate::codec::data_type::DateTime;
+    use crate::codec::mysql::UNSPECIFIED_FSP;
     use crate::expr::{EvalConfig, EvalContext, Flag};
+    use std::f64::EPSILON;
     use std::sync::Arc;
 
     #[test]
@@ -1100,10 +1104,10 @@ mod tests {
         for (input, fsp) in cases {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
-            buf.encode_duration_to_chunk(t).unwrap();
+            buf.write_duration_to_chunk(t).unwrap();
             let got = buf
                 .as_slice()
-                .decode_duration_from_chunk(fsp as isize)
+                .read_duration_from_chunk(fsp as isize)
                 .unwrap();
             assert_eq!(t, got);
         }
@@ -1146,8 +1150,15 @@ mod tests {
 
     #[test]
     fn test_from_i64() {
-        let cs: Vec<(i64, u8, Result<Duration>, bool)> = vec![
+        let cs: Vec<(i64, i8, Result<Duration>, bool)> = vec![
             // (input, fsp, expect, overflow)
+            // UNSPECIFIED_FSP
+            (
+                8385959,
+                UNSPECIFIED_FSP as i8,
+                Ok(Duration::parse(b"838:59:59", 0).unwrap()),
+                false,
+            ),
             (
                 101010,
                 0,
@@ -1249,7 +1260,7 @@ mod tests {
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO, fix these test case after Duration::from_f64
+            // TODO: fix these test case after Duration::from_f64
             //  had impl logic for num>=10000000000
             (
                 10000000000,
@@ -1489,10 +1500,10 @@ mod benches {
             for &duration in cases {
                 let t = test::black_box(duration);
                 let mut buf = vec![];
-                buf.encode_duration_to_chunk(t).unwrap();
+                buf.write_duration_to_chunk(t).unwrap();
                 let got = test::black_box(
                     buf.as_slice()
-                        .decode_duration_from_chunk(t.fsp() as isize)
+                        .read_duration_from_chunk(t.fsp() as isize)
                         .unwrap(),
                 );
                 assert_eq!(t, got);

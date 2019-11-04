@@ -30,6 +30,7 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub data_dir: String,
+    // Replaced by `GCConfig.ratio_threshold`. Keep it for backward compatibility.
     pub gc_ratio_threshold: f64,
     pub max_key_size: usize,
     pub scheduler_notify_capacity: usize,
@@ -83,7 +84,7 @@ impl Default for BlockCacheConfig {
             capacity: None,
             num_shard_bits: 6,
             strict_capacity_limit: false,
-            high_pri_pool_ratio: 0.0,
+            high_pri_pool_ratio: 0.8,
             memory_allocator: Some(String::from("nodump")),
         }
     }

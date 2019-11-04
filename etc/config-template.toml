@@ -110,6 +110,18 @@
 ## It should be set based on your disk performance.
 # snap-max-write-bytes-per-sec = "100MB"
 
+## Whether to enable request batch.
+# enable-request-batch = true
+
+## Whether to collect batch across commands.
+## When disabled, wait duration is ignored. When enabled, collect batch for specified duration
+## when load is high.
+# request-batch-enable-cross-command = true
+
+## Wait duration before each request batch is processed. Wait is triggered when cross-command
+## option is enabled and system load is high.
+# request-batch-wait-duration = "1ms"
+
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
@@ -747,3 +759,11 @@
 ## Time to delay in milliseconds before responding to TiDB when other transactions
 ## release locks that pessimistic transactions are waiting for(0 to disable).
 # wake-up-delay-duration = 1
+
+[gc]
+## The number of keys to GC in one batch.
+# batch-keys = 512
+
+## Max bytes that GC worker can write to rocksdb in one second.
+## If it is set to 0, there is no limit.
+# max-write-bytes-per-sec = "0"

@@ -435,7 +435,14 @@ fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
 }
 
 /// Get the max possible decimal with giving precision and fraction digit count.
-fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
+/// The `prec` should >= `frac_cnt`.
+///
+/// # Panics
+///
+/// Will panic if `prec` < `frac_cnt`.
+/// The panic is because of `debug_assert`.
+pub fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
+    debug_assert!(prec >= frac_cnt);
     let int_cnt = prec - frac_cnt;
     let mut res = Decimal::new(int_cnt, frac_cnt, false);
     let mut idx = 0;
@@ -465,6 +472,12 @@ fn max_decimal(prec: u8, frac_cnt: u8) -> Decimal {
 
 /// `max_or_min_dec`(`NewMaxOrMinDec` in tidb) returns the max or min
 /// value decimal for given precision and fraction.
+/// The `prec` should >= `frac_cnt`.
+///
+/// # Panics
+///
+/// Will panic if `prec` < `frac_cnt`.
+/// The panic is because of `debug_assert`.
 pub fn max_or_min_dec(negative: bool, prec: u8, frac: u8) -> Decimal {
     let mut ret = max_decimal(prec, frac);
     ret.negative = negative;
@@ -1106,12 +1119,15 @@ impl Decimal {
         self.word_buf[buf_from] /= TEN_POW[shift];
     }
 
-    // TODO, remove this after merge the `refactor ScalarFunc::builtin_cast`
+    // TODO: remove this after merge the `refactor ScalarFunc::builtin_cast`
     //
     /// convert_to(ProduceDecWithSpecifiedTp in tidb)
     /// produces a new decimal according to `flen` and `decimal`.
     pub fn convert_to(self, ctx: &mut EvalContext, flen: u8, decimal: u8) -> Result<Decimal> {
         let (prec, frac) = self.prec_and_frac();
+        if flen < decimal {
+            return Err(Error::m_bigger_than_d(""));
+        }
         if !self.is_zero() && prec - frac > flen - decimal {
             return Ok(max_or_min_dec(self.negative, flen, decimal));
             // TODO:select (cast 111 as decimal(1)) causes a warning in MySQL.
@@ -1959,7 +1975,7 @@ macro_rules! write_word {
 pub trait DecimalEncoder: NumberEncoder {
     /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
-    fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
+    fn write_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
         self.write_bytes(&[prec, frac])?;
         let mut mask = if d.negative { u32::MAX } else { 0 };
         let mut int_cnt = prec - frac;
@@ -2068,7 +2084,7 @@ pub trait DecimalEncoder: NumberEncoder {
         Ok(res)
     }
 
-    fn encode_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
+    fn write_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
         self.write_u8(v.int_cnt)?;
         self.write_u8(v.frac_cnt)?;
         self.write_u8(v.result_frac_cnt)?;
@@ -2129,8 +2145,8 @@ fn read_word<T: BufferReader + ?Sized>(
 }
 
 pub trait DecimalDecoder: NumberDecoder {
-    /// `decode` decodes value encoded by `encode_decimal`.
-    fn decode_decimal(&mut self) -> Result<Decimal> {
+    /// `read_decimal` decodes value encoded by `write_decimal`.
+    fn read_decimal(&mut self) -> Result<Decimal> {
         if self.bytes().len() < 3 {
             return Err(box_err!("decimal too short: {} < 3", self.bytes().len()));
         }
@@ -2215,8 +2231,8 @@ pub trait DecimalDecoder: NumberDecoder {
         Ok(d)
     }
 
-    /// `decode_decimal_from_chunk` decode Decimal encoded by `encode_decimal_to_chunk`.
-    fn decode_decimal_from_chunk(&mut self) -> Result<Decimal> {
+    /// `read_decimal_from_chunk` decode Decimal encoded by `write_decimal_to_chunk`.
+    fn read_decimal_from_chunk(&mut self) -> Result<Decimal> {
         let buf = self.bytes();
         if buf.len() <= 4 {
             return Err(Error::unexpected_eof());
@@ -3046,8 +3062,8 @@ mod tests {
         for (dec_str, prec, frac, exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
             let mut buf = vec![];
-            let res = buf.encode_decimal(&dec, prec, frac).unwrap();
-            let decoded = buf.as_slice().decode_decimal().unwrap();
+            let res = buf.write_decimal(&dec, prec, frac).unwrap();
+            let decoded = buf.as_slice().read_decimal().unwrap();
             let res = res.map(|_| decoded.to_string());
             assert_eq!(res, exp.map(|s| s.to_owned()));
         }
@@ -3075,9 +3091,9 @@ mod tests {
         for dec_str in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
             let mut buf = vec![];
-            buf.encode_decimal_to_chunk(&dec).unwrap();
+            buf.write_decimal_to_chunk(&dec).unwrap();
             buf.resize(DECIMAL_STRUCT_SIZE, 0);
-            let decoded = buf.as_slice().decode_decimal_from_chunk().unwrap();
+            let decoded = buf.as_slice().read_decimal_from_chunk().unwrap();
             assert_eq!(decoded, dec);
         }
     }

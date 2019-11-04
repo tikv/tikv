@@ -165,7 +165,7 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let last_key = put_till_size(cluster, REGION_SPLIT_SIZE, &mut range);
 
     // it should be finished in millis if split.
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_millis(300));
 
     let target = pd_client.get_region(&last_key).unwrap();
 
@@ -178,7 +178,11 @@ fn test_auto_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
         &mut range,
     );
 
-    thread::sleep(Duration::from_secs(1));
+    let left = pd_client.get_region(b"").unwrap();
+    let right = pd_client.get_region(&max_key).unwrap();
+    if left == right {
+        cluster.wait_region_split(&region);
+    }
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();

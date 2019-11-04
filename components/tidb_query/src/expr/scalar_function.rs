@@ -510,7 +510,8 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonValidJsonSig
             | ScalarFuncSig::JsonContainsSig
             | ScalarFuncSig::JsonKeys2ArgsSig
-            | ScalarFuncSig::JsonValidStringSig => return Err(Error::UnknownSignature(sig)),
+            | ScalarFuncSig::JsonValidStringSig
+            | ScalarFuncSig::JsonValidOthersSig => return Err(Error::UnknownSignature(sig)),
         };
         if args < min_args || args > max_args {
             return Err(box_err!(

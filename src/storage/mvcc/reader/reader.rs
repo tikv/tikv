@@ -7,10 +7,9 @@ use crate::storage::mvcc::lock::Lock;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::{Key, Value};
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine::IterOption;
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use tikv_util::keybuilder::KeyBuilder;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -26,8 +25,6 @@ pub struct MvccReader<S: Snapshot> {
     key_only: bool,
 
     fill_cache: bool,
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
     isolation_level: IsolationLevel,
 }
 
@@ -36,8 +33,6 @@ impl<S: Snapshot> MvccReader<S> {
         snapshot: S,
         scan_mode: Option<ScanMode>,
         fill_cache: bool,
-        lower_bound: Option<Vec<u8>>,
-        upper_bound: Option<Vec<u8>>,
         isolation_level: IsolationLevel,
     ) -> Self {
         Self {
@@ -50,8 +45,6 @@ impl<S: Snapshot> MvccReader<S> {
             isolation_level,
             key_only: false,
             fill_cache,
-            lower_bound,
-            upper_bound,
         }
     }
 
@@ -235,7 +228,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
-            let iter_opt = self.gen_iter_opt();
+            let iter_opt = IterOption::new(None, None, true);
             let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
             self.data_cursor = Some(iter);
         }
@@ -244,7 +237,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            let iter_opt = self.gen_iter_opt();
+            let iter_opt = IterOption::new(None, None, true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
@@ -255,30 +248,13 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            let mut iter_opt = self.gen_iter_opt();
-            iter_opt.fill_cache(true);
+            let iter_opt = IterOption::new(None, None, true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
             self.lock_cursor = Some(iter);
         }
         Ok(())
-    }
-
-    fn gen_iter_opt(&self) -> IterOption {
-        let l_bound = if let Some(ref b) = self.lower_bound {
-            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN, 0);
-            Some(builder)
-        } else {
-            None
-        };
-        let u_bound = if let Some(ref b) = self.upper_bound {
-            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN, 0);
-            Some(builder)
-        } else {
-            None
-        };
-        IterOption::new(l_bound, u_bound, true)
     }
 
     /// Return the first committed key for which `start_ts` equals to `ts`
@@ -301,6 +277,9 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(None)
     }
 
+    /// Scan locks that satisfies `filter(lock)` returns true, from the given start key `start`.
+    /// At most `limit` locks will be returned. If `limit` is set to `0`, it means unlimited.
+    ///
     /// The return type is `(locks, is_remain)`. `is_remain` indicates whether there MAY be
     /// remaining locks that can be scanned.
     pub fn scan_locks<F>(
@@ -455,7 +434,8 @@ mod tests {
     use crate::raftstore::store::keys;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
-    use crate::storage::mvcc::write::WriteType;
+    use crate::storage::mvcc::lock::{Lock, LockType};
+    use crate::storage::mvcc::write::{Write, WriteType};
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use crate::storage::{Key, Mutation, Options};
     use engine::rocks::util::CFOptions;
@@ -637,7 +617,7 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }
@@ -775,7 +755,7 @@ mod tests {
         engine.commit(k, 45, 50);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         // Let's assume `50_45 PUT` means a commit version with start ts is 45 and commit ts
         // is 50.
@@ -838,7 +818,7 @@ mod tests {
         engine.commit(k, 1, 4);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 2).unwrap().unwrap();
         assert_eq!(commit_ts, 3);
         assert_eq!(write_type, WriteType::Put);
@@ -846,6 +826,96 @@ mod tests {
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1).unwrap().unwrap();
         assert_eq!(commit_ts, 4);
         assert_eq!(write_type, WriteType::Put);
+    }
+
+    #[test]
+    fn test_seek_write() {
+        let path = Builder::new()
+            .prefix("_test_storage_mvcc_reader_seek_write")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        let (k, v) = (b"k", b"v");
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m.clone(), k, 1);
+        engine.commit(k, 1, 5);
+
+        engine.rollback(k, 3);
+        engine.rollback(k, 7);
+
+        engine.prewrite(m.clone(), k, 15);
+        engine.commit(k, 15, 17);
+
+        // Timestamp overlap with the previous transaction.
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 10, 18);
+        engine.prewrite_pessimistic_lock(Mutation::Lock(Key::from_raw(k)), k, 10);
+        engine.commit(k, 10, 20);
+
+        engine.prewrite(m, k, 23);
+        engine.commit(k, 23, 25);
+
+        // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
+        // is 2.
+        // Commit versions: [25_23 PUT, 20_10 PUT, 17_15 PUT, 7_7 Rollback, 5_1 PUT, 3_3 Rollback].
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
+
+        let k = Key::from_raw(k);
+        let (commit_ts, write) = reader.seek_write(&k, 30).unwrap().unwrap();
+        assert_eq!(commit_ts, 25);
+        assert_eq!(write, Write::new(WriteType::Put, 23, Some(v.to_vec())));
+
+        let (commit_ts, write) = reader.seek_write(&k, 25).unwrap().unwrap();
+        assert_eq!(commit_ts, 25);
+        assert_eq!(write, Write::new(WriteType::Put, 23, Some(v.to_vec())));
+
+        let (commit_ts, write) = reader.seek_write(&k, 20).unwrap().unwrap();
+        assert_eq!(commit_ts, 20);
+        assert_eq!(write, Write::new(WriteType::Lock, 10, None));
+
+        let (commit_ts, write) = reader.seek_write(&k, 19).unwrap().unwrap();
+        assert_eq!(commit_ts, 17);
+        assert_eq!(write, Write::new(WriteType::Put, 15, Some(v.to_vec())));
+
+        let (commit_ts, write) = reader.seek_write(&k, 3).unwrap().unwrap();
+        assert_eq!(commit_ts, 3);
+        assert_eq!(write, Write::new(WriteType::Rollback, 3, None));
+
+        let (commit_ts, write) = reader.seek_write(&k, 16).unwrap().unwrap();
+        assert_eq!(commit_ts, 7);
+        assert_eq!(write, Write::new(WriteType::Rollback, 7, None));
+
+        let (commit_ts, write) = reader.seek_write(&k, 6).unwrap().unwrap();
+        assert_eq!(commit_ts, 5);
+        assert_eq!(write, Write::new(WriteType::Put, 1, Some(v.to_vec())));
+
+        assert!(reader.seek_write(&k, 2).unwrap().is_none());
+
+        // Test seek_write should not see the next key.
+        let (k2, v2) = (b"k2", b"v2");
+        let m2 = Mutation::Put((Key::from_raw(k2), v2.to_vec()));
+        engine.prewrite(m2, k2, 1);
+        engine.commit(k2, 1, 2);
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
+
+        let (commit_ts, write) = reader.seek_write(&Key::from_raw(k2), 3).unwrap().unwrap();
+        assert_eq!(commit_ts, 2);
+        assert_eq!(write, Write::new(WriteType::Put, 1, Some(v2.to_vec())));
+
+        assert!(reader.seek_write(&k, 2).unwrap().is_none());
+
+        // Test seek_write touches region's end.
+        let region1 = make_region(1, vec![], Key::from_raw(b"k1").into_encoded());
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region1);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
+
+        assert!(reader.seek_write(&k, 2).unwrap().is_none());
     }
 
     #[test]
@@ -871,24 +941,38 @@ mod tests {
         engine.delete(k, 8, 9);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.prewrite(m, k, 10);
-        engine.commit(k, 10, 11);
+        engine.prewrite(m, k, 12);
+        engine.commit(k, 12, 14);
+
+        let m = Mutation::Lock(Key::from_raw(k));
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 13, 15);
+        engine.prewrite_pessimistic_lock(m, k, 13);
+        engine.commit(k, 13, 15);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 12, 12);
-        engine.prewrite_pessimistic_lock(m, k, 12);
-        engine.commit(k, 12, 13);
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 18, 18);
+        engine.prewrite_pessimistic_lock(m, k, 18);
+        engine.commit(k, 18, 20);
+
+        let m = Mutation::Lock(Key::from_raw(k));
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 17, 21);
+        engine.prewrite_pessimistic_lock(m, k, 17);
+        engine.commit(k, 17, 21);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.prewrite(m, k, 14);
+        engine.prewrite(m, k, 24);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
         // is 2.
-        // Commit versions: [13_12 PUT, 11_10 PUT, 9_8 DELETE, 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
+        // Commit versions: [21_17 LOCK, 20_18 PUT, 15_13 LOCK, 14_12 PUT, 9_8 DELETE, 7_6 LOCK,
+        //                   5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
+
+        assert!(reader.get_write(&key, 1).unwrap().is_none());
+
         let write = reader.get_write(&key, 2).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 1);
@@ -903,17 +987,26 @@ mod tests {
 
         assert!(reader.get_write(&key, 9).unwrap().is_none());
 
-        let write = reader.get_write(&key, 11).unwrap().unwrap();
-        assert_eq!(write.write_type, WriteType::Put);
-        assert_eq!(write.start_ts, 10);
-
-        let write = reader.get_write(&key, 13).unwrap().unwrap();
+        let write = reader.get_write(&key, 14).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12);
 
-        let write = reader.get_write(&key, 15).unwrap().unwrap();
+        let write = reader.get_write(&key, 16).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 12);
+
+        let write = reader.get_write(&key, 20).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 18);
+
+        let write = reader.get_write(&key, 24).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 18);
+
+        assert!(reader
+            .get_write(&Key::from_raw(b"j"), 100)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -933,7 +1026,7 @@ mod tests {
         engine.prewrite(Mutation::Lock(Key::from_raw(k3)), k1, 5);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         // Ignore the lock if read ts is less than the lock version
         assert!(reader.check_lock(&Key::from_raw(k1), 4).is_ok());
         assert!(reader.check_lock(&Key::from_raw(k2), 4).is_ok());
@@ -950,7 +1043,7 @@ mod tests {
         // Commit the primary lock only
         engine.commit(k1, 5, 7);
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         // Then reading the primary key should succeed
         assert!(reader.check_lock(&Key::from_raw(k1), 6).is_ok());
         // Reading secondary keys should still fail
@@ -960,8 +1053,95 @@ mod tests {
         // Pessimistic locks
         engine.acquire_pessimistic_lock(Key::from_raw(k4), k4, 9, 9);
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
+        let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         // Pessimistic locks don't block any read operation
         assert!(reader.check_lock(&Key::from_raw(k4), 10).is_ok());
+    }
+
+    #[test]
+    fn test_scan_locks() {
+        let path = Builder::new()
+            .prefix("_test_storage_mvcc_reader_scan_locks")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        // Put some locks to the db.
+        engine.prewrite(
+            Mutation::Put((Key::from_raw(b"k1"), b"v1".to_vec())),
+            b"k1",
+            5,
+        );
+        engine.prewrite(
+            Mutation::Put((Key::from_raw(b"k2"), b"v2".to_vec())),
+            b"k1",
+            10,
+        );
+        engine.prewrite(Mutation::Delete(Key::from_raw(b"k3")), b"k1", 10);
+        engine.prewrite(Mutation::Lock(Key::from_raw(b"k3\x00")), b"k1", 10);
+        engine.prewrite(Mutation::Delete(Key::from_raw(b"k4")), b"k1", 12);
+        engine.acquire_pessimistic_lock(Key::from_raw(b"k5"), b"k1", 10, 12);
+        engine.acquire_pessimistic_lock(Key::from_raw(b"k6"), b"k1", 12, 12);
+
+        // All locks whose ts <= 10.
+        let visible_locks: Vec<_> = vec![
+            // key, lock_type, short_value, ts, for_update_ts
+            (b"k1".to_vec(), LockType::Put, Some(b"v1".to_vec()), 5, 0),
+            (b"k2".to_vec(), LockType::Put, Some(b"v2".to_vec()), 10, 0),
+            (b"k3".to_vec(), LockType::Delete, None, 10, 0),
+            (b"k3\x00".to_vec(), LockType::Lock, None, 10, 0),
+            (b"k5".to_vec(), LockType::Pessimistic, None, 10, 12),
+        ]
+        .into_iter()
+        .map(|(k, lock_type, short_value, ts, for_update_ts)| {
+            (
+                Key::from_raw(&k),
+                Lock::new(
+                    lock_type,
+                    b"k1".to_vec(),
+                    ts,
+                    0,
+                    short_value,
+                    for_update_ts,
+                    0,
+                    0,
+                ),
+            )
+        })
+        .collect();
+
+        // Creates a reader and scan locks,
+        let check_scan_lock =
+            |start_key: Option<Key>, limit, expect_res: &[_], expect_is_remain| {
+                let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+                let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
+                let res = reader
+                    .scan_locks(start_key.as_ref(), |l| l.ts <= 10, limit)
+                    .unwrap();
+                assert_eq!(res.0, expect_res);
+                assert_eq!(res.1, expect_is_remain);
+            };
+
+        check_scan_lock(None, 6, &visible_locks, false);
+        check_scan_lock(None, 5, &visible_locks, true);
+        check_scan_lock(None, 4, &visible_locks[0..4], true);
+        check_scan_lock(Some(Key::from_raw(b"k2")), 3, &visible_locks[1..4], true);
+        check_scan_lock(
+            Some(Key::from_raw(b"k3\x00")),
+            1,
+            &visible_locks[3..4],
+            true,
+        );
+        check_scan_lock(
+            Some(Key::from_raw(b"k3\x00")),
+            10,
+            &visible_locks[3..],
+            false,
+        );
+        // limit = 0 means unlimited.
+        check_scan_lock(None, 0, &visible_locks, false);
     }
 }

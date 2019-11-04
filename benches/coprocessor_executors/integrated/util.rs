@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use criterion::black_box;
+use criterion::measurement::Measurement;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::Executor as PbExecutor;
@@ -17,21 +18,27 @@ use tikv::storage::{RocksEngine, Store as TxnStore};
 use crate::util::bencher::Bencher;
 use crate::util::store::StoreDescriber;
 
-pub trait IntegratedBencher {
+pub trait IntegratedBencher<M>
+where
+    M: Measurement,
+{
     fn name(&self) -> String;
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         executors: &[PbExecutor],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
     );
 
-    fn box_clone(&self) -> Box<dyn IntegratedBencher>;
+    fn box_clone(&self) -> Box<dyn IntegratedBencher<M>>;
 }
 
-impl Clone for Box<dyn IntegratedBencher> {
+impl<M> Clone for Box<dyn IntegratedBencher<M>>
+where
+    M: Measurement,
+{
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
@@ -51,14 +58,18 @@ impl<T: TxnStore + 'static> NormalBencher<T> {
     }
 }
 
-impl<T: TxnStore + 'static> IntegratedBencher for NormalBencher<T> {
+impl<T, M> IntegratedBencher<M> for NormalBencher<T>
+where
+    T: TxnStore + 'static,
+    M: Measurement,
+{
     fn name(&self) -> String {
         format!("{}/normal", <T as StoreDescriber>::name())
     }
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         executors: &[PbExecutor],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
@@ -76,7 +87,7 @@ impl<T: TxnStore + 'static> IntegratedBencher for NormalBencher<T> {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn IntegratedBencher> {
+    fn box_clone(&self) -> Box<dyn IntegratedBencher<M>> {
         Box::new(Self::new())
     }
 }
@@ -94,14 +105,18 @@ impl<T: TxnStore + 'static> BatchBencher<T> {
     }
 }
 
-impl<T: TxnStore + 'static> IntegratedBencher for BatchBencher<T> {
+impl<T, M> IntegratedBencher<M> for BatchBencher<T>
+where
+    T: TxnStore + 'static,
+    M: Measurement,
+{
     fn name(&self) -> String {
         format!("{}/batch", <T as StoreDescriber>::name())
     }
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         executors: &[PbExecutor],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
@@ -119,7 +134,7 @@ impl<T: TxnStore + 'static> IntegratedBencher for BatchBencher<T> {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn IntegratedBencher> {
+    fn box_clone(&self) -> Box<dyn IntegratedBencher<M>> {
         Box::new(Self::new())
     }
 }
@@ -138,7 +153,11 @@ impl<T: TxnStore + 'static> DAGBencher<T> {
     }
 }
 
-impl<T: TxnStore + 'static> IntegratedBencher for DAGBencher<T> {
+impl<T, M> IntegratedBencher<M> for DAGBencher<T>
+where
+    T: TxnStore + 'static,
+    M: Measurement,
+{
     fn name(&self) -> String {
         let tag = if self.batch { "batch" } else { "normal" };
         format!("{}/{}/with_dag", <T as StoreDescriber>::name(), tag)
@@ -146,7 +165,7 @@ impl<T: TxnStore + 'static> IntegratedBencher for DAGBencher<T> {
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         executors: &[PbExecutor],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
@@ -157,7 +176,7 @@ impl<T: TxnStore + 'static> IntegratedBencher for DAGBencher<T> {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn IntegratedBencher> {
+    fn box_clone(&self) -> Box<dyn IntegratedBencher<M>> {
         Box::new(Self::new(self.batch))
     }
 }

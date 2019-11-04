@@ -12,7 +12,6 @@ use crate::codec::mysql::{
 use crate::codec::Datum;
 
 use codec::prelude::*;
-use tikv_util::codec::number;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 
@@ -224,7 +223,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_i64_le(&mut data).map_err(Error::from)
+        data.read_i64_le().map_err(Error::from)
     }
 
     /// Append u64 datum to the column.
@@ -238,7 +237,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_u64_le(&mut data).map_err(Error::from)
+        data.read_u64_le().map_err(Error::from)
     }
 
     /// Append a f64 datum to the column.
@@ -258,7 +257,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_f64_le(&mut data).map_err(Error::from)
+        data.read_f64_le().map_err(Error::from)
     }
 
     /// Get the f32 datum of the row in the column.
@@ -266,7 +265,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_f32_le(&mut data).map_err(Error::from)
+        data.read_f32_le().map_err(Error::from)
     }
 
     /// Called when the variant datum has been appended.
@@ -293,7 +292,7 @@ impl Column {
 
     /// Append a time datum to the column.
     pub fn append_time(&mut self, t: &Time) -> Result<()> {
-        self.data.encode_time(t)?;
+        self.data.write_time(t)?;
         self.finish_append_fixed()
     }
 
@@ -302,12 +301,12 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.decode_time()
+        data.read_time()
     }
 
     /// Append a duration datum to the column.
     pub fn append_duration(&mut self, d: Duration) -> Result<()> {
-        self.data.encode_duration_to_chunk(d)?;
+        self.data.write_duration_to_chunk(d)?;
         self.finish_append_fixed()
     }
 
@@ -316,12 +315,12 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.decode_duration_from_chunk(fsp)
+        data.read_duration_from_chunk(fsp)
     }
 
     /// Append a decimal datum to the column.
     pub fn append_decimal(&mut self, d: &Decimal) -> Result<()> {
-        self.data.encode_decimal_to_chunk(d)?;
+        self.data.write_decimal_to_chunk(d)?;
         self.finish_append_fixed()
     }
 
@@ -330,12 +329,12 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.decode_decimal_from_chunk()
+        data.read_decimal_from_chunk()
     }
 
     /// Append a json datum to the column.
     pub fn append_json(&mut self, j: &Json) -> Result<()> {
-        self.data.encode_json(j)?;
+        self.data.write_json(j)?;
         self.finished_append_var()
     }
 
@@ -344,7 +343,7 @@ impl Column {
         let start = self.var_offsets[idx];
         let end = self.var_offsets[idx + 1];
         let mut data = &self.data[start..end];
-        data.decode_json()
+        data.read_json()
     }
 
     /// Return the total rows in the column.
@@ -354,14 +353,13 @@ impl Column {
 
     #[cfg(test)]
     pub fn decode(buf: &mut BytesSlice<'_>, tp: &dyn FieldTypeAccessor) -> Result<Column> {
-        use tikv_util::codec::read_slice;
-        let length = number::decode_u32_le(buf)? as usize;
+        let length = buf.read_u32_le()? as usize;
         let mut col = Column::new(tp, length);
         col.length = length;
-        col.null_cnt = number::decode_u32_le(buf)? as usize;
+        col.null_cnt = buf.read_u32_le()? as usize;
         let null_length = (col.length + 7) / 8 as usize;
         if col.null_cnt > 0 {
-            col.null_bitmap = read_slice(buf, null_length)?.to_vec();
+            col.null_bitmap = buf.read_bytes(null_length)?.to_vec();
         } else {
             col.null_bitmap = vec![0xFF; null_length];
         }
@@ -371,18 +369,18 @@ impl Column {
         } else {
             col.var_offsets.clear();
             for _ in 0..=length {
-                col.var_offsets.push(number::decode_i64_le(buf)? as usize);
+                col.var_offsets.push(buf.read_i64_le()? as usize);
             }
             col.var_offsets[col.length]
         };
-        col.data = read_slice(buf, data_length)?.to_vec();
+        col.data = buf.read_bytes(data_length)?.to_vec();
         Ok(col)
     }
 }
 
 /// `ColumnEncoder` encodes the column.
 pub trait ColumnEncoder: NumberEncoder {
-    fn encode_column(&mut self, col: &Column) -> Result<()> {
+    fn write_column(&mut self, col: &Column) -> Result<()> {
         // length
         self.write_u32_le(col.length as u32)?;
         // null_cnt

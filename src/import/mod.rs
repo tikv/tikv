@@ -14,8 +14,6 @@
 
 mod sst_service;
 
-pub use sst_importer::test_helpers;
-
 pub use self::sst_service::ImportSSTService;
 pub use sst_importer::Config;
 pub use sst_importer::SSTImporter;

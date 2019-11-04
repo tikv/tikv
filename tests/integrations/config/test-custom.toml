@@ -46,6 +46,9 @@ snap-max-total-size = "10GB"
 stats-concurrency = 10
 heavy-load-threshold = 1000
 heavy-load-wait-duration = "2ms"
+enable-request-batch = false
+request-batch-enable-cross-command = false
+request-batch-wait-duration = "10ms"
 
 [server.labels]
 a = "b"
@@ -132,7 +135,7 @@ apply-pool-size = 4
 store-max-batch-size = 21
 store-pool-size = 3
 future-poll-size = 2
-hibernate-regions = true
+hibernate-regions = false
 
 [coprocessor]
 split-region-on-table = true
@@ -432,3 +435,8 @@ cipher-file = "invalid path"
 [import]
 num-threads = 123
 stream-channel-window = 123
+
+[gc]
+ratio-threshold = 1.2
+batch-keys = 256
+max-write-bytes-per-sec = "10MB"
