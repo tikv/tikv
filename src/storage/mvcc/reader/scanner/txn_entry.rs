@@ -163,7 +163,7 @@ impl<S: Snapshot> Scanner<S> {
                         };
                         // TODO: We need to scan locks into batch
                         //       in the future.
-                        result = super::super::util::check_lock(&current_user_key, ts, &lock)
+                        result = super::super::util::check_lock(&current_user_key, ts, lock)
                             .map(|_| None);
                     }
                     IsolationLevel::Rc => {}
