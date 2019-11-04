@@ -1,0 +1,10 @@
+[package]
+name = "multilevel_pool"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+futures-preview = { version = "=0.3.0-alpha.19", features = ["async-await"] }
+crossbeam  = "0.7.2"
+dashmap = "1"
