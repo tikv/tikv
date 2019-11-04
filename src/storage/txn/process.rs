@@ -840,7 +840,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 txn.check_txn_status(primary_key.clone(), caller_start_ts, current_ts)?;
 
             // The lock is possibly resolved here only when the `check_txn_status` cleaned up the
-            // lock.
+            // lock, and this may happen only when it returns `Rollbacked`.
             match txn_status {
                 TxnStatus::Rollbacked => {
                     let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &[&primary_key]);
@@ -854,8 +854,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 }
                 TxnStatus::RollbackedBefore
                 | TxnStatus::Committed { .. }
-                | TxnStatus::Uncommitted { .. }
-                | TxnStatus::NotExist => {}
+                | TxnStatus::Uncommitted { .. } => {}
             };
 
             statistics.add(&txn.take_statistics());

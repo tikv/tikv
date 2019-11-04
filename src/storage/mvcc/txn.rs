@@ -587,7 +587,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 self.put_write(primary_key, ts, write.to_bytes());
                 MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
 
-                Ok(TxnStatus::NotExist)
+                Ok(TxnStatus::Rollbacked)
             }
         }
     }
@@ -632,7 +632,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
                     Ok(false)
                 }
-                TxnStatus::NotExist => Ok(false),
+                TxnStatus::Rollbacked => Ok(false),
                 _ => unreachable!(),
             },
         }
@@ -1975,7 +1975,7 @@ mod tests {
         let uncommitted = TxnStatus::uncommitted;
 
         // Try to check a not exist thing.
-        must_check_txn_status(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), NotExist);
+        must_check_txn_status(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), Rollbacked);
         // A rollback record will be written.
         must_seek_write(
             &engine,
@@ -2044,7 +2044,7 @@ mod tests {
         );
 
         // Check a not existing transaction, gets nothing.
-        must_check_txn_status(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), NotExist);
+        must_check_txn_status(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), Rollbacked);
         // And a rollback record will be written.
         must_seek_write(
             &engine,

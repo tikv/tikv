@@ -111,8 +111,6 @@ pub enum TxnStatus {
     Rollbacked,
     /// The txn was already rolled back before.
     RollbackedBefore,
-    /// The txn doesn't exist.
-    NotExist,
     /// The txn haven't yet been committed.
     Uncommitted { lock_ttl: u64 },
     /// The txn was committed.
@@ -4734,7 +4732,7 @@ mod tests {
                 ts(9, 0),
                 ts(9, 1),
                 ts(9, 1),
-                expect_value_callback(tx.clone(), 0, NotExist),
+                expect_value_callback(tx.clone(), 0, Rollbacked),
             )
             .unwrap();
         rx.recv().unwrap();
