@@ -651,10 +651,7 @@ impl Duration {
     /// If the error is overflow, the result will be returned, too.
     /// Otherwise, only one of result or err will be returned
     pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> Result<Duration> {
-        let fsp = match check_fsp(fsp) {
-            Err(e) => return Err(e),
-            Ok(fsp) => fsp,
-        };
+        let fsp = check_fsp(fsp)?;
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
             return Err(Error::overflow("Duration", n));
