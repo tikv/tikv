@@ -717,7 +717,7 @@ mod tests {
         assert!(check_key_type(&index_key.as_slice(), RECORD_PREFIX_SEP).is_err());
         assert!(check_key_type(&index_key.as_slice(), INDEX_PREFIX_SEP).is_ok());
 
-        let too_small_key = vec![0, 1];
+        let too_small_key = vec![0];
         assert!(check_key_type(&too_small_key.as_slice(), RECORD_PREFIX_SEP).is_err());
         assert!(check_key_type(&too_small_key.as_slice(), INDEX_PREFIX_SEP).is_err());
     }
