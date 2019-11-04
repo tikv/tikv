@@ -349,13 +349,17 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
                 execute_batch_callback(
                     &mut callback,
                     ids.into_iter()
-                        .map(|id| {
-                            (
-                                id.unwrap(),
-                                ProcessResult::Failed {
-                                    err: StorageError::SchedTooBusy,
-                                },
-                            )
+                        .filter_map(|id| {
+                            if let Some(id) = id {
+                                Some((
+                                    id,
+                                    ProcessResult::Failed {
+                                        err: StorageError::SchedTooBusy,
+                                    },
+                                ))
+                            } else {
+                                None
+                            }
                         })
                         .collect(),
                 );
@@ -629,12 +633,12 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         | Command::MvccByKey { .. }
         | Command::MvccByStartTs { .. } => Lock::new(vec![]),
         Command::Batch { ref commands, .. } => {
-            let mut k: Vec<&Key> = vec![];
+            let mut k: Vec<&Key> = Vec::new();
             for cmd in commands {
                 if let Command::Prewrite { ref mutations, .. } = cmd {
-                    k.append(&mut mutations.iter().map(|x| x.key()).collect());
+                    k.extend(mutations.iter().map(|x| x.key()));
                 } else if let Command::Commit { ref keys, .. } = cmd {
-                    k.append(&mut keys.iter().collect());
+                    k.extend(keys.iter())
                 }
             }
             latches.gen_lock(&k)

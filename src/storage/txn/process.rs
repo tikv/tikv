@@ -312,16 +312,16 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 match process_batch_write_impl(cid, cmd, snapshot, &mut statistics) {
                     Ok(BatchWriteResults {
                         ctx,
-                        ids,
+                        mut ids,
                         multi_res,
                         mut results,
                         to_be_write,
                     }) => {
                         if to_be_write.is_empty() {
-                            results.extend(ids.iter().filter_map(move |id| {
-                                if let Some(id) = id {
+                            results.extend(ids.iter_mut().filter_map(move |id| {
+                                if let Some(id) = id.take() {
                                     Some((
-                                        *id,
+                                        id,
                                         Msg::WriteFinished {
                                             cid,
                                             pr: if multi_res {
@@ -412,7 +412,8 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                                     })
                                     .collect();
                                 scheduler.on_batch_msg(results);
-                                scheduler.on_batch_completed(cid);
+                            } else {
+                                return statistics;
                             }
                         }
                     }
@@ -420,6 +421,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                         error!("write command failed at batch write"; "err" => ?e);
                     }
                 }
+                scheduler.on_batch_completed(cid);
                 statistics
             }
             cmd => {
@@ -1061,7 +1063,7 @@ fn process_batch_write_impl<S: Snapshot>(
     } = cmd
     {
         let mut results: Vec<(u64, Msg)> = Vec::new();
-        if tag == CommandKind::commit {
+        if tag == CommandKind::batch_commit {
             results.extend(
                 ids.iter_mut()
                     .zip(commands.iter())
@@ -1089,11 +1091,11 @@ fn process_batch_write_impl<S: Snapshot>(
             Command::Commit { ref ctx, .. } => ctx.clone(),
             _ => unreachable!(),
         };
-        let multi_res = tag == CommandKind::prewrite;
+        let multi_res = tag == CommandKind::batch_prewrite;
         let mut txn = MvccTxn::new(snapshot, 0, false)?;
         // check conflict
         match tag {
-            CommandKind::prewrite => {
+            CommandKind::batch_prewrite => {
                 let len = commands.len();
                 for i in 0..len {
                     if ids[i].is_none() {
@@ -1150,7 +1152,7 @@ fn process_batch_write_impl<S: Snapshot>(
                     }
                 }
             }
-            CommandKind::commit => {
+            CommandKind::batch_commit => {
                 let len = commands.len();
                 for i in 0..len {
                     if ids[i].is_none() {
@@ -1163,6 +1165,20 @@ fn process_batch_write_impl<S: Snapshot>(
                         ..
                     } = &commands[i]
                     {
+                        if *commit_ts <= *lock_ts {
+                            results.push((
+                                ids[i].take().unwrap(),
+                                Msg::FinishedWithErr {
+                                    cid,
+                                    err: Error::InvalidTxnTso {
+                                        start_ts: *lock_ts,
+                                        commit_ts: *commit_ts,
+                                    },
+                                    tag,
+                                },
+                            ));
+                            continue;
+                        }
                         txn.start_ts(*lock_ts);
                         let checkpoint = txn.write_checkpoint();
                         for k in keys {

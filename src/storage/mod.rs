@@ -1339,8 +1339,12 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                     None
                 })
                 .collect();
+            let len = results.len();
             if !results.is_empty() {
                 callback(results);
+            }
+            if len == commands.len() {
+                return Ok(());
             }
         }
         self.schedule(command, StorageCb::BatchBooleans(callback))?;
