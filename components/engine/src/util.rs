@@ -7,7 +7,6 @@ use crate::CF_LOCK;
 use super::Result;
 use super::{IterOption, Iterable};
 use keys::{BasicPhysicalKey, PhysicalKey};
-use tikv_util::keybuilder::KeyBuilder;
 
 // In our tests, we found that if the batch size is too large, running delete_all_in_range will
 // reduce OLTP QPS by 30% ~ 60%. We found that 32K is a proper choice.

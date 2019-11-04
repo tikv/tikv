@@ -144,6 +144,12 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter {
     }
 
     #[inline]
+    fn reset_from_physical_slice(&mut self, pk: &Self::Slice) {
+        self._vec_mut().clear();
+        self.write_bytes(pk.as_physical_std_slice()).unwrap();
+    }
+
+    #[inline]
     fn reset_from_logical_std_slice(&mut self, lk: &[u8]) {
         self._vec_mut().truncate(Self::PHYSICAL_PREFIX.len());
         self.write_bytes(lk).unwrap();
