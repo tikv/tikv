@@ -99,9 +99,10 @@ impl BatchExecutorsRunner<()> {
                 }
                 ExecType::TypeLimit => {}
                 ExecType::TypeTopN => {
-                    let descriptor = ed.get_top_n();
-                    BatchTopNExecutor::check_supported(&descriptor)
-                        .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
+                    unimplemented!()
+                    //     let descriptor = ed.get_top_n();
+                    //     BatchTopNExecutor::check_supported(&descriptor)
+                    //         .map_err(|e| other_err!("BatchTopNExecutor: {}", e))?;
                 }
             }
         }
@@ -262,31 +263,31 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                         .with_summary_collector(C::new(summary_slot_index)),
                 )
             }
-            ExecType::TypeTopN => {
-                COPR_EXECUTOR_COUNT
-                    .with_label_values(&["batch_top_n"])
-                    .inc();
+            // ExecType::TypeTopN => {
+            //     COPR_EXECUTOR_COUNT
+            //         .with_label_values(&["batch_top_n"])
+            //         .inc();
 
-                let mut d = ed.take_top_n();
-                let order_bys = d.get_order_by().len();
-                let mut order_exprs_def = Vec::with_capacity(order_bys);
-                let mut order_is_desc = Vec::with_capacity(order_bys);
-                for mut item in d.take_order_by().into_iter() {
-                    order_exprs_def.push(item.take_expr());
-                    order_is_desc.push(item.get_desc());
-                }
+            //     let mut d = ed.take_top_n();
+            //     let order_bys = d.get_order_by().len();
+            //     let mut order_exprs_def = Vec::with_capacity(order_bys);
+            //     let mut order_is_desc = Vec::with_capacity(order_bys);
+            //     for mut item in d.take_order_by().into_iter() {
+            //         order_exprs_def.push(item.take_expr());
+            //         order_is_desc.push(item.get_desc());
+            //     }
 
-                Box::new(
-                    BatchTopNExecutor::new(
-                        config.clone(),
-                        executor,
-                        order_exprs_def,
-                        order_is_desc,
-                        d.get_limit() as usize,
-                    )?
-                    .with_summary_collector(C::new(summary_slot_index)),
-                )
-            }
+            //     Box::new(
+            //         BatchTopNExecutor::new(
+            //             config.clone(),
+            //             executor,
+            //             order_exprs_def,
+            //             order_is_desc,
+            //             d.get_limit() as usize,
+            //         )?
+            //         .with_summary_collector(C::new(summary_slot_index)),
+            //     )
+            // }
             _ => {
                 return Err(other_err!(
                     "Unexpected non-first executor {:?}",

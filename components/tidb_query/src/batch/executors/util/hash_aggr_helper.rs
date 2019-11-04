@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use bumpalo::Bump;
+
 use super::aggr_executor::*;
 use crate::aggr_fn::AggrFunctionState;
 use crate::batch::interface::*;
@@ -24,47 +26,50 @@ impl HashAggregationHelper {
     ) -> Result<()> {
         let logical_rows_len = input_logical_rows.len();
         let src_schema = entities.src.schema();
+        let arena = Bump::with_capacity(1 << 12);
 
         for idx in 0..entities.each_aggr_fn.len() {
             let aggr_expr = &entities.each_aggr_exprs[idx];
-            let aggr_expr_result = aggr_expr.eval(
+            aggr_expr.eval(
                 &mut entities.context,
                 src_schema,
                 input_physical_columns,
                 input_logical_rows,
                 logical_rows_len,
-            )?;
-            match aggr_expr_result {
-                RpnStackNode::Scalar { value, .. } => {
-                    match_template_evaluable! {
-                        TT, match value {
-                            ScalarValue::TT(scalar_value) => {
-                                for offset in states_offset_each_logical_row {
-                                    let aggr_fn_state = &mut states[*offset + idx];
-                                    aggr_fn_state.update(&mut entities.context, scalar_value)?;
+                &arena,
+                |aggr_expr_result, ctx| {
+                    match aggr_expr_result {
+                        RpnStackNode::Scalar { value, .. } => {
+                            match_template_evaluable! {
+                                TT, match value {
+                                    ScalarValue::TT(scalar_value) => {
+                                        for offset in states_offset_each_logical_row {
+                                            let aggr_fn_state = &mut states[*offset + idx];
+                                            aggr_fn_state.update(ctx, scalar_value)?;
+                                        }
+                                    },
                                 }
-                            },
+                            }
                         }
-                    }
-                }
-                RpnStackNode::Vector { value, .. } => {
-                    let physical_vec = value.as_ref();
-                    let logical_rows = value.logical_rows();
-                    match_template_evaluable! {
-                        TT, match physical_vec {
-                            VectorValue::TT(vec) => {
-                                for (states_offset, physical_idx) in states_offset_each_logical_row
-                                    .iter()
-                                    .zip(logical_rows)
-                                {
-                                    let aggr_fn_state = &mut states[*states_offset + idx];
-                                    aggr_fn_state.update(&mut entities.context, &vec[*physical_idx])?;
+                        RpnStackNode::Vector { value, .. } => {
+                            match_template_evaluable! {
+                                TT, match value.physical_value {
+                                    VectorValueRef::TT(vec) => {
+                                        for (states_offset, physical_idx) in states_offset_each_logical_row
+                                            .iter()
+                                            .zip(value.logical_rows)
+                                        {
+                                            let aggr_fn_state = &mut states[*states_offset + idx];
+                                            aggr_fn_state.update(ctx, &vec[*physical_idx])?;
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
+                    Ok(())
                 }
-            }
+            )?;
         }
 
         Ok(())

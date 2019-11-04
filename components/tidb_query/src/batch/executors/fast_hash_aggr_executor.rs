@@ -3,6 +3,8 @@
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use bumpalo::Bump;
+
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::collections::HashMap;
 use tipb::Aggregation;
@@ -234,37 +236,48 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_logical_row.clear();
 
-        let group_by_result = self.group_by_exp.eval(
+        let arena = Bump::with_capacity(1 << 12);
+        let groups = &mut self.groups;
+        let states = &mut self.states;
+        let states_offset_each_logical_row = &mut self.states_offset_each_logical_row;
+        let each_aggr_fn = &entities.each_aggr_fn;
+
+        self.group_by_exp.eval(
             &mut entities.context,
             entities.src.schema(),
             &mut input_physical_columns,
             input_logical_rows,
             input_logical_rows.len(),
-        )?;
-        // Unwrap is fine because we have verified the group by expression before.
-        let group_by_value = group_by_result.vector_value().unwrap();
-        let group_by_physical_vec = group_by_value.as_ref();
-        let group_by_logical_rows = group_by_value.logical_rows();
+            &arena,
+            |group_by_result, _ctx| {
+                // Unwrap is fine because we have verified the group by expression before.
+                let group_by_value = group_by_result.vector_value().unwrap();
+                let group_by_physical_vec = &group_by_value.physical_value;
+                let group_by_logical_rows = group_by_value.logical_rows;
 
-        match_template_hashable! {
-            TT, match group_by_physical_vec {
-                VectorValue::TT(v) => {
-                    if let Groups::TT(group) = &mut self.groups {
-                        calc_groups_each_row(
-                            v,
-                            group_by_logical_rows,
-                            &entities.each_aggr_fn,
-                            group,
-                            &mut self.states,
-                            &mut self.states_offset_each_logical_row
-                        );
-                    } else {
-                        panic!();
+                match_template_hashable! {
+                    TT, match group_by_physical_vec {
+                        VectorValueRef::TT(v) => {
+                            if let Groups::TT(group) = groups {
+                                calc_groups_each_row(
+                                    v,
+                                    group_by_logical_rows,
+                                    each_aggr_fn,
+                                    group,
+                                    states,
+                                    states_offset_each_logical_row
+                                );
+                            } else {
+                                panic!();
+                            }
+                        },
+                        _ => unreachable!(),
                     }
-                },
-                _ => unreachable!(),
-            }
-        }
+                }
+
+                Ok(())
+            },
+        )?;
 
         // 2. Update states according to the group.
         HashAggregationHelper::update_each_row_states_by_offset(

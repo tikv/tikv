@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use bumpalo::Bump;
+
 use tipb::Expr;
 use tipb::FieldType;
 use tipb::Selection;
@@ -71,43 +73,48 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         // have error, which should be filtered according to predicate in this executor.
         // So we actually don't care whether or not there are errors from src executor.
 
-        // TODO: Avoid allocation.
-        let mut src_logical_rows_copy = Vec::with_capacity(src_result.logical_rows.len());
+        let arena = Bump::with_capacity(1 << 14);
+        let mut src_logical_rows_copy =
+            bumpalo::collections::Vec::with_capacity_in(src_result.logical_rows.len(), &arena);
         let mut condition_index = 0;
         while condition_index < self.conditions.len() && !src_result.logical_rows.is_empty() {
             src_logical_rows_copy.clear();
             src_logical_rows_copy.extend_from_slice(&src_result.logical_rows);
 
-            match self.conditions[condition_index].eval(
+            let src_physical_columns = &mut src_result.physical_columns;
+            let src_logical_rows = &mut src_result.logical_rows;
+
+            self.conditions[condition_index].eval(
                 &mut self.context,
                 self.src.schema(),
-                &mut src_result.physical_columns,
+                src_physical_columns,
                 &src_logical_rows_copy,
                 src_logical_rows_copy.len(),
-            )? {
-                RpnStackNode::Scalar { value, .. } => {
-                    update_logical_rows_by_scalar_value(
-                        &mut src_result.logical_rows,
-                        &mut self.context,
-                        value,
-                    )?;
-                }
-                RpnStackNode::Vector { value, .. } => {
-                    let eval_result_logical_rows = value.logical_rows();
-                    match_template_evaluable! {
-                        TT, match value.as_ref() {
-                            VectorValue::TT(eval_result) => {
-                                update_logical_rows_by_vector_value(
-                                    &mut src_result.logical_rows,
-                                    &mut self.context,
-                                    eval_result,
-                                    eval_result_logical_rows,
-                                )?;
-                            },
+                &arena,
+                |ret, ctx| {
+                    match ret {
+                        RpnStackNode::Scalar { value, .. } => {
+                            update_logical_rows_by_scalar_value(src_logical_rows, ctx, value)?;
+                        }
+                        RpnStackNode::Vector { value, .. } => {
+                            let eval_result_logical_rows = value.logical_rows;
+                            match_template_evaluable! {
+                                TT, match value.physical_value {
+                                    VectorValueRef::TT(eval_result) => {
+                                        update_logical_rows_by_vector_value(
+                                            src_logical_rows,
+                                            ctx,
+                                            eval_result,
+                                            eval_result_logical_rows,
+                                        )?;
+                                    },
+                                }
+                            }
                         }
                     }
-                }
-            }
+                    Ok(())
+                },
+            )?;
 
             condition_index += 1;
         }

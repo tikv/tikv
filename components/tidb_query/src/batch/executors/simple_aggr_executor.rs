@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use bumpalo::Bump;
+
 use tipb::Aggregation;
 use tipb::{Expr, FieldType};
 
@@ -132,51 +134,53 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         mut input_physical_columns: LazyBatchColumnVec,
         input_logical_rows: &[usize],
     ) -> Result<()> {
-        let rows_len = input_logical_rows.len();
-
         assert_eq!(self.states.len(), entities.each_aggr_exprs.len());
+
+        let arena = Bump::with_capacity(1 << 12);
+        let rows_len = input_logical_rows.len();
 
         for idx in 0..self.states.len() {
             let aggr_state = &mut self.states[idx];
             let aggr_expr = &entities.each_aggr_exprs[idx];
-            let aggr_fn_input = aggr_expr.eval(
+            aggr_expr.eval(
                 &mut entities.context,
                 entities.src.schema(),
                 &mut input_physical_columns,
                 input_logical_rows,
                 rows_len,
+                &arena,
+                |aggr_fn_input, ctx| {
+                    match aggr_fn_input {
+                        RpnStackNode::Scalar { value, .. } => {
+                            match_template_evaluable! {
+                                TT, match value {
+                                    ScalarValue::TT(scalar_value) => {
+                                        aggr_state.update_repeat(
+                                            ctx,
+                                            scalar_value,
+                                            rows_len,
+                                        )?;
+                                    },
+                                }
+                            }
+                        }
+                        RpnStackNode::Vector { value, .. } => {
+                            match_template_evaluable! {
+                                TT, match value.physical_value {
+                                    VectorValueRef::TT(vec) => {
+                                        aggr_state.update_vector(
+                                            ctx,
+                                            vec,
+                                            value.logical_rows,
+                                        )?;
+                                    },
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                },
             )?;
-
-            match aggr_fn_input {
-                RpnStackNode::Scalar { value, .. } => {
-                    match_template_evaluable! {
-                        TT, match value {
-                            ScalarValue::TT(scalar_value) => {
-                                aggr_state.update_repeat(
-                                    &mut entities.context,
-                                    scalar_value,
-                                    rows_len,
-                                )?;
-                            },
-                        }
-                    }
-                }
-                RpnStackNode::Vector { value, .. } => {
-                    let physical_vec = value.as_ref();
-                    let logical_rows = value.logical_rows();
-                    match_template_evaluable! {
-                        TT, match physical_vec {
-                            VectorValue::TT(vec) => {
-                                aggr_state.update_vector(
-                                    &mut entities.context,
-                                    vec,
-                                    logical_rows,
-                                )?;
-                            },
-                        }
-                    }
-                }
-            }
         }
 
         Ok(())

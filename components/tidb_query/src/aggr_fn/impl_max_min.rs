@@ -175,6 +175,7 @@ mod tests {
     use crate::aggr_fn::parser::AggrDefinitionParser;
     use crate::aggr_fn::AggrFunction;
     use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+    use crate::rpn_expr::test_util::eval_vector_cloned;
     use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 
     #[test]
@@ -337,26 +338,36 @@ mod tests {
 
         // max
         {
-            let max_result = exp[0]
-                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
-                .unwrap();
-            let max_result = max_result.vector_value().unwrap();
-            let max_slice: &[Option<Int>] = max_result.as_ref().as_ref();
+            let (max_result_phsical_value, max_result_logical_rows, _) = eval_vector_cloned(
+                &exp[0],
+                &mut ctx,
+                &src_schema,
+                &mut columns,
+                &logical_rows,
+                6,
+            )
+            .unwrap();
+            let max_slice: &[Option<Int>] = max_result_phsical_value.as_ref();
             max_state
-                .update_vector(&mut ctx, max_slice, max_result.logical_rows())
+                .update_vector(&mut ctx, max_slice, &max_result_logical_rows)
                 .unwrap();
             max_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }
 
         // min
         {
-            let min_result = exp[0]
-                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
-                .unwrap();
-            let min_result = min_result.vector_value().unwrap();
-            let min_slice: &[Option<Int>] = min_result.as_ref().as_ref();
+            let (min_result_phsical_value, min_result_logical_rows, _) = eval_vector_cloned(
+                &exp[1],
+                &mut ctx,
+                &src_schema,
+                &mut columns,
+                &logical_rows,
+                6,
+            )
+            .unwrap();
+            let min_slice: &[Option<Int>] = min_result_phsical_value.as_ref();
             min_state
-                .update_vector(&mut ctx, min_slice, min_result.logical_rows())
+                .update_vector(&mut ctx, min_slice, &min_result_logical_rows)
                 .unwrap();
             min_state.push_result(&mut ctx, &mut aggr_result).unwrap();
         }

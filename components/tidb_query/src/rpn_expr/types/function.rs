@@ -23,11 +23,13 @@
 use std::convert::TryFrom;
 use std::marker::PhantomData;
 
+use bumpalo::Bump;
+
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, FieldType};
 
 use super::RpnStackNode;
-use crate::codec::data_type::{Evaluable, ScalarValue, ScalarValueRef, VectorValue};
+use crate::codec::data_type::{Evaluable, ScalarValue, ScalarValueRef, VectorValueRef};
 use crate::expr::EvalContext;
 use crate::Result;
 
@@ -42,14 +44,15 @@ pub struct RpnFnMeta {
 
     #[allow(clippy::type_complexity)]
     /// The RPN function.
-    pub fn_ptr: fn(
+    pub fn_ptr: for<'arena> fn(
         // Common arguments
         ctx: &mut EvalContext,
         output_rows: usize,
         args: &[RpnStackNode<'_>],
         // Uncommon arguments are grouped together
         extra: &mut RpnFnCallExtra<'_>,
-    ) -> Result<VectorValue>,
+        arena: &'arena Bump,
+    ) -> Result<VectorValueRef<'arena>>,
 }
 
 impl std::fmt::Debug for RpnFnMeta {
@@ -154,14 +157,15 @@ impl ArgDef for Null {}
 ///   its eval method is the constructed `ArgDef`. Implementors can then extract values from the
 ///   arguments, execute the RPN function and fill the result vector.
 pub trait Evaluator {
-    fn eval(
+    fn eval<'arena>(
         self,
         def: impl ArgDef,
         ctx: &mut EvalContext,
         output_rows: usize,
         args: &[RpnStackNode<'_>],
         extra: &mut RpnFnCallExtra<'_>,
-    ) -> Result<VectorValue>;
+        arena: &'arena Bump,
+    ) -> Result<VectorValueRef<'arena>>;
 }
 
 pub struct ArgConstructor<A: Evaluable, E: Evaluator> {
@@ -182,14 +186,15 @@ impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
 }
 
 impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
-    fn eval(
+    fn eval<'arena>(
         self,
         def: impl ArgDef,
         ctx: &mut EvalContext,
         output_rows: usize,
         args: &[RpnStackNode<'_>],
         extra: &mut RpnFnCallExtra<'_>,
-    ) -> Result<VectorValue> {
+        arena: &'arena Bump,
+    ) -> Result<VectorValueRef<'arena>> {
         match &args[self.arg_index] {
             RpnStackNode::Scalar { value, .. } => {
                 let v = A::borrow_scalar_value(value);
@@ -197,11 +202,12 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
                     arg: ScalarArg(v),
                     rem: def,
                 };
-                self.inner.eval(new_def, ctx, output_rows, args, extra)
+                self.inner
+                    .eval(new_def, ctx, output_rows, args, extra, arena)
             }
             RpnStackNode::Vector { value, .. } => {
-                let logical_rows = value.logical_rows();
-                let v = A::borrow_vector_value(value.as_ref());
+                let logical_rows = value.logical_rows;
+                let v = A::borrow_vector_value_ref(&value.physical_value);
                 let new_def = Arg {
                     arg: VectorArg {
                         physical_col: v,
@@ -209,7 +215,8 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
                     },
                     rem: def,
                 };
-                self.inner.eval(new_def, ctx, output_rows, args, extra)
+                self.inner
+                    .eval(new_def, ctx, output_rows, args, extra, arena)
             }
         }
     }

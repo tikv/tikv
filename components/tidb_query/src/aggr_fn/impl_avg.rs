@@ -162,6 +162,7 @@ mod tests {
 
     use crate::aggr_fn::parser::AggrDefinitionParser;
     use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+    use crate::rpn_expr::test_util::eval_vector_cloned;
 
     #[test]
     fn test_update() {
@@ -247,13 +248,18 @@ mod tests {
         let mut state = aggr_fn.create_state();
         let mut ctx = EvalContext::default();
 
-        let exp_result = exp[0]
-            .eval(&mut ctx, &src_schema, &mut columns, &[4, 1, 2, 3], 4)
-            .unwrap();
-        let exp_result = exp_result.vector_value().unwrap();
-        let slice: &[Option<Decimal>] = exp_result.as_ref().as_ref();
+        let (exp_result_phsical_value, exp_result_logical_rows, _) = eval_vector_cloned(
+            &exp[0],
+            &mut ctx,
+            &src_schema,
+            &mut columns,
+            &[4, 1, 2, 3],
+            4,
+        )
+        .unwrap();
+        let slice: &[Option<Decimal>] = exp_result_phsical_value.as_ref();
         state
-            .update_vector(&mut ctx, slice, exp_result.logical_rows())
+            .update_vector(&mut ctx, slice, &exp_result_logical_rows)
             .unwrap();
 
         let mut aggr_result = [

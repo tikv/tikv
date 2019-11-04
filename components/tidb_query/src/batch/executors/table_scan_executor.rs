@@ -546,7 +546,7 @@ mod tests {
                         .ensure_all_decoded(&Tz::utc(), self.get_field_type(col_idx))
                         .unwrap();
                 }
-                assert_eq!(columns[id].decoded(), &values[col_idx]);
+                assert_eq!(columns[id].decoded(), values[col_idx].as_vector_value_ref());
             }
         }
     }

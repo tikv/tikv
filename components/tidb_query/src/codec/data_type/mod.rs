@@ -14,7 +14,7 @@ pub use crate::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
 // Dynamic eval types.
 pub use self::scalar::{ScalarValue, ScalarValueRef};
-pub use self::vector::{VectorValue, VectorValueExt};
+pub use self::vector::{VectorValue, VectorValueExt, VectorValueRef};
 
 use tidb_query_datatype::{EvalType, FieldTypeTp};
 
@@ -78,9 +78,12 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     /// panics if the varient mismatches.
     fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>];
 
-    /// Converts a vector of this concrete type into a `VectorValue` in the same type;
-    /// panics if the varient mismatches.
+    fn borrow_vector_value_ref<'a>(v: &'a VectorValueRef<'a>) -> &'a [Option<Self>];
+
+    /// Converts a vector of this concrete type into a `VectorValue` in the same type
     fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue;
+
+    fn into_vector_value_ref<'a>(vec: &'a [Option<Self>]) -> VectorValueRef<'a>;
 }
 
 macro_rules! impl_evaluable_type {
@@ -104,8 +107,18 @@ macro_rules! impl_evaluable_type {
             }
 
             #[inline]
+            fn borrow_vector_value_ref<'a>(v: &'a VectorValueRef<'a>) -> &'a [Option<Self>] {
+                v.as_ref()
+            }
+
+            #[inline]
             fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue {
                 VectorValue::from(vec)
+            }
+
+            #[inline]
+            fn into_vector_value_ref<'a>(vec: &'a [Option<Self>]) -> VectorValueRef<'a> {
+                VectorValueRef::from(vec)
             }
         }
     };

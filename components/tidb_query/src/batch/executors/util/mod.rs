@@ -6,6 +6,10 @@ pub mod hash_aggr_helper;
 pub mod mock_executor;
 pub mod scan_executor;
 
+use std::mem;
+
+use bumpalo::Bump;
+
 use tipb::FieldType;
 
 use crate::codec::batch::LazyBatchColumnVec;
@@ -31,26 +35,41 @@ pub fn ensure_columns_decoded(
 
 /// Evaluates expressions and outputs the result into the given Vec. Lifetime of the expressions
 /// are erased.
-pub unsafe fn eval_exprs_decoded_no_lifetime<'a>(
+pub fn eval_exprs_decoded<F>(
     ctx: &mut EvalContext,
     exprs: &[RpnExpression],
     schema: &[FieldType],
     input_physical_columns: &LazyBatchColumnVec,
     input_logical_rows: &[usize],
-    output: &mut Vec<RpnStackNode<'a>>,
-) -> Result<()> {
-    unsafe fn erase_lifetime<'a, T: ?Sized>(v: &T) -> &'a T {
-        &*(v as *const T)
-    }
+    empty_buffer: &mut Vec<RpnStackNode<'static>>,
+    arena: &Bump,
+    f: F,
+) -> Result<()>
+where
+    F: for<'arena> FnOnce(&mut Vec<RpnStackNode<'arena>>, &mut EvalContext) -> Result<()>,
+{
+    empty_buffer.clear();
 
     for expr in exprs {
-        output.push(erase_lifetime(expr).eval_decoded(
+        expr.eval_decoded(
             ctx,
-            erase_lifetime(schema),
-            erase_lifetime(input_physical_columns),
-            erase_lifetime(input_logical_rows),
+            schema,
+            input_physical_columns,
+            input_logical_rows,
             input_logical_rows.len(),
-        )?)
+            arena,
+            |result, _ctx| {
+                let lifetime_erased_result =
+                    unsafe { mem::transmute::<RpnStackNode<'_>, RpnStackNode<'static>>(result) };
+                empty_buffer.push(lifetime_erased_result);
+
+                Ok(())
+            },
+        )?;
     }
+
+    f(empty_buffer, ctx)?;
+    empty_buffer.clear();
+
     Ok(())
 }

@@ -3,6 +3,8 @@
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use bumpalo::Bump;
+
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::Aggregation;
 use tipb::{Expr, FieldType};
@@ -90,12 +92,12 @@ pub struct BatchStreamAggregationImpl {
     /// Stores evaluation results of group by expressions.
     /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
     /// are only valid in the same batch where they are added.
-    group_by_results_unsafe: Vec<RpnStackNode<'static>>,
+    group_by_results_empty_buffer: Vec<RpnStackNode<'static>>,
 
     /// Stores evaluation results of aggregate expressions.
     /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
     /// are only valid in the same batch where they are added.
-    aggr_expr_results_unsafe: Vec<RpnStackNode<'static>>,
+    aggr_expr_results_empty_buffer: Vec<RpnStackNode<'static>>,
 }
 
 impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
@@ -163,8 +165,8 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
             group_by_exps_types,
             keys: Vec::new(),
             states: Vec::new(),
-            group_by_results_unsafe: Vec::with_capacity(group_by_len),
-            aggr_expr_results_unsafe: Vec::with_capacity(aggr_defs.len()),
+            group_by_results_empty_buffer: Vec::with_capacity(group_by_len),
+            aggr_expr_results_empty_buffer: Vec::with_capacity(aggr_defs.len()),
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -195,8 +197,15 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         mut input_physical_columns: LazyBatchColumnVec,
         input_logical_rows: &[usize],
     ) -> Result<()> {
-        let context = &mut entities.context;
+        let arena = Bump::with_capacity(1 << 12);
+        let ctx = &mut entities.context;
         let src_schema = entities.src.schema();
+        let keys = &mut self.keys;
+        let states = &mut self.states;
+        let group_by_results_empty_buffer = &mut self.group_by_results_empty_buffer;
+        let aggr_expr_results_empty_buffer = &mut self.aggr_expr_results_empty_buffer;
+        let each_aggr_fn = &entities.each_aggr_fn;
+        let each_aggr_exprs = &entities.each_aggr_exprs;
 
         let logical_rows_len = input_logical_rows.len();
         let group_by_len = self.group_by_exps.len();
@@ -205,88 +214,90 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         // Decode columns with mutable input first, so subsequent access to input can be immutable
         // (and the borrow checker will be happy)
         ensure_columns_decoded(
-            &context.cfg.tz,
+            &ctx.cfg.tz,
             &self.group_by_exps,
             src_schema,
             &mut input_physical_columns,
             input_logical_rows,
         )?;
         ensure_columns_decoded(
-            &context.cfg.tz,
-            &entities.each_aggr_exprs,
+            &ctx.cfg.tz,
+            each_aggr_exprs,
             src_schema,
             &mut input_physical_columns,
             input_logical_rows,
         )?;
-        assert!(self.group_by_results_unsafe.is_empty());
-        assert!(self.aggr_expr_results_unsafe.is_empty());
-        unsafe {
-            eval_exprs_decoded_no_lifetime(
-                context,
-                &self.group_by_exps,
-                src_schema,
-                &input_physical_columns,
-                input_logical_rows,
-                &mut self.group_by_results_unsafe,
-            )?;
-            eval_exprs_decoded_no_lifetime(
-                context,
-                &entities.each_aggr_exprs,
-                src_schema,
-                &input_physical_columns,
-                input_logical_rows,
-                &mut self.aggr_expr_results_unsafe,
-            )?;
-        }
+        eval_exprs_decoded(
+            ctx,
+            &self.group_by_exps,
+            src_schema,
+            &input_physical_columns,
+            input_logical_rows,
+            group_by_results_empty_buffer,
+            &arena,
+            |group_by_results, ctx| {
+                eval_exprs_decoded(
+                    ctx,
+                    each_aggr_exprs,
+                    src_schema,
+                    &input_physical_columns,
+                    input_logical_rows,
+                    aggr_expr_results_empty_buffer,
+                    &arena,
+                    |aggr_expr_results, ctx| {
+                        // Stores input references, clone them when needed
+                        let mut group_key_ref =
+                            bumpalo::collections::Vec::with_capacity_in(group_by_len, &arena);
+                        let mut group_start_logical_row = 0;
+                        for logical_row_idx in 0..logical_rows_len {
+                            for group_by_result in group_by_results.iter() {
+                                group_key_ref
+                                    .push(group_by_result.get_logical_scalar_ref(logical_row_idx));
+                            }
+                            match keys.rchunks_exact(group_by_len).next() {
+                                Some(current_key) if &group_key_ref[..] == current_key => {
+                                    group_key_ref.clear();
+                                }
+                                _ => {
+                                    // Update the complete group
+                                    if logical_row_idx > 0 {
+                                        update_current_states(
+                                            ctx,
+                                            states,
+                                            aggr_fn_len,
+                                            aggr_expr_results,
+                                            group_start_logical_row,
+                                            logical_row_idx,
+                                        )?;
+                                    }
 
-        // Stores input references, clone them when needed
-        let mut group_key_ref = Vec::with_capacity(group_by_len);
-        let mut group_start_logical_row = 0;
-        for logical_row_idx in 0..logical_rows_len {
-            for group_by_result in &self.group_by_results_unsafe {
-                group_key_ref.push(group_by_result.get_logical_scalar_ref(logical_row_idx));
-            }
-            match self.keys.rchunks_exact(group_by_len).next() {
-                Some(current_key) if &group_key_ref[..] == current_key => {
-                    group_key_ref.clear();
-                }
-                _ => {
-                    // Update the complete group
-                    if logical_row_idx > 0 {
+                                    // create a new group
+                                    group_start_logical_row = logical_row_idx;
+                                    keys.extend(
+                                        group_key_ref.drain(..).map(ScalarValueRef::to_owned),
+                                    );
+                                    for aggr_fn in each_aggr_fn {
+                                        states.push(aggr_fn.create_state());
+                                    }
+                                }
+                            }
+                        }
+
+                        // Update the current group with the remaining data
                         update_current_states(
-                            context,
-                            &mut self.states,
+                            ctx,
+                            states,
                             aggr_fn_len,
-                            &self.aggr_expr_results_unsafe,
+                            aggr_expr_results,
                             group_start_logical_row,
-                            logical_row_idx,
+                            logical_rows_len,
                         )?;
-                    }
-
-                    // create a new group
-                    group_start_logical_row = logical_row_idx;
-                    self.keys
-                        .extend(group_key_ref.drain(..).map(ScalarValueRef::to_owned));
-                    for aggr_fn in &entities.each_aggr_fn {
-                        self.states.push(aggr_fn.create_state());
-                    }
-                }
-            }
-        }
-        // Update the current group with the remaining data
-        update_current_states(
-            context,
-            &mut self.states,
-            aggr_fn_len,
-            &self.aggr_expr_results_unsafe,
-            group_start_logical_row,
-            logical_rows_len,
+                        Ok(())
+                    },
+                )?;
+                Ok(())
+            },
         )?;
-
-        // Remember to remove expression results of the current batch. They are invalid
-        // in the next batch.
-        self.group_by_results_unsafe.clear();
-        self.aggr_expr_results_unsafe.clear();
 
         Ok(())
     }
@@ -387,15 +398,13 @@ fn update_current_states(
                     }
                 }
                 RpnStackNode::Vector { value, .. } => {
-                    let physical_vec = value.as_ref();
-                    let logical_rows = value.logical_rows();
                     match_template_evaluable! {
-                        TT, match physical_vec {
-                            VectorValue::TT(vec) => {
+                        TT, match value.physical_value {
+                            VectorValueRef::TT(vec) => {
                                 state.update_vector(
                                     ctx,
                                     vec,
-                                    &logical_rows[start_logical_row..end_logical_row],
+                                    &value.logical_rows[start_logical_row..end_logical_row],
                                 )?;
                             },
                         }

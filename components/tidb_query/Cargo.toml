@@ -41,6 +41,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+bumpalo = { git = "https://github.com/andylokandy/bumpalo.git", rev = "f8eb1fbaafc253dac7869cf46901819e5efa24b7" }
 
 tipb_helper = { path = "../tipb_helper" }
 tikv_util = { path = "../tikv_util" }

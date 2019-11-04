@@ -144,7 +144,7 @@
 //!             let (text, _) = arg.extract(row);
 //!             result.push(regex_match_impl(&regex, text)?);
 //!         }
-//!         Ok(Evaluable::into_vector_value(result))
+//!         Ok(Evaluable::into_vector_value_ref(result))
 //!     }
 //! }
 //! ```
@@ -535,6 +535,7 @@ impl VargsRpnFn {
             Span::call_site(),
         );
         let (impl_generics, ty_generics, where_clause) = self.item_fn.sig.generics.split_for_impl();
+        let punctuated_generics_params = &self.item_fn.sig.generics.params;
         let ty_generics_turbofish = ty_generics.as_turbofish();
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
@@ -553,18 +554,19 @@ impl VargsRpnFn {
             #where_clause
             {
                 #[inline]
-                fn run #impl_generics (
+                fn run <'arena, #punctuated_generics_params> (
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> #where_clause {
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> #where_clause {
                     crate::rpn_expr::function::VARG_PARAM_BUF.with(|vargs_buf| {
                         use crate::codec::data_type::Evaluable;
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
                         vargs_buf.resize(args_len, 0);
-                        let mut result = Vec::with_capacity(output_rows);
+                        let mut result = bumpalo::collections::Vec::with_capacity_in(output_rows, arena);
                         for row_index in 0..output_rows {
                             for arg_index in 0..args_len {
                                 let scalar_arg = args[arg_index].get_logical_scalar_ref(row_index);
@@ -575,7 +577,7 @@ impl VargsRpnFn {
                                 &*(vargs_buf.as_slice() as *const _ as *const [&Option<#arg_type>])
                             })?);
                         }
-                        Ok(Evaluable::into_vector_value(result))
+                        Ok(Evaluable::into_vector_value_ref(result.into_bump_slice()))
                     })
                 }
 
@@ -643,6 +645,7 @@ impl RawVargsRpnFn {
             Span::call_site(),
         );
         let (impl_generics, ty_generics, where_clause) = self.item_fn.sig.generics.split_for_impl();
+        let punctuated_generics_params = &self.item_fn.sig.generics.params;
         let ty_generics_turbofish = ty_generics.as_turbofish();
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
@@ -659,16 +662,17 @@ impl RawVargsRpnFn {
             #where_clause
             {
                 #[inline]
-                fn run #impl_generics (
+                fn run <'arena, #punctuated_generics_params> (
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> #where_clause {
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> #where_clause {
                     crate::rpn_expr::function::RAW_VARG_PARAM_BUF.with(|mut vargs_buf| {
                         let mut vargs_buf = vargs_buf.borrow_mut();
                         let args_len = args.len();
-                        let mut result = Vec::with_capacity(output_rows);
+                        let mut result = bumpalo::collections::Vec::with_capacity_in(output_rows, arena);
                         for row_index in 0..output_rows {
                             vargs_buf.clear();
                             for arg_index in 0..args_len {
@@ -682,7 +686,7 @@ impl RawVargsRpnFn {
                             }
                             result.push(#fn_ident #ty_generics_turbofish(vargs_buf.as_slice())?);
                         }
-                        Ok(Evaluable::into_vector_value(result))
+                        Ok(Evaluable::into_vector_value_ref(result.into_bump_slice()))
                     })
                 }
 
@@ -761,13 +765,14 @@ impl NormalRpnFn {
         let fn_trait_ident = &self.fn_trait_ident;
         quote! {
             trait #fn_trait_ident #impl_generics #where_clause {
-                fn eval(
+                fn eval<'arena>(
                     self,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue>;
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>>;
             }
         }
     }
@@ -783,13 +788,14 @@ impl NormalRpnFn {
         let (impl_generics, _, where_clause) = generics.split_for_impl();
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp_ident #where_clause {
-                default fn eval(
+                default fn eval<'arena>(
                     self,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> {
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> {
                     unreachable!()
                 }
             }
@@ -824,20 +830,23 @@ impl NormalRpnFn {
 
         quote! {
             impl #impl_generics #fn_trait_ident #ty_generics for #tp #where_clause {
-                default fn eval(
+                default fn eval<'arena>(
                     self,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> {
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> {
                     let arg = &self;
-                    let mut result = Vec::with_capacity(output_rows);
+                    let mut result = bumpalo::collections::Vec::with_capacity_in(output_rows, arena);
                     for row in 0..output_rows {
                         #(let (#extract, arg) = arg.extract(row));*;
                         result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
                     }
-                    Ok(crate::codec::data_type::Evaluable::into_vector_value(result))
+                    Ok(crate::codec::data_type::Evaluable::into_vector_value_ref(
+                        result.into_bump_slice()
+                    ))
                 }
             }
         }
@@ -859,15 +868,16 @@ impl NormalRpnFn {
             impl #impl_generics crate::rpn_expr::function::Evaluator
                 for #evaluator_ident #ty_generics #where_clause {
                 #[inline]
-                fn eval(
+                fn eval<'arena>(
                     self,
                     def: impl crate::rpn_expr::function::ArgDef,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    #fn_trait_ident #ty_generics_turbofish::eval(def, ctx, output_rows, args, extra)
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> {
+                    #fn_trait_ident #ty_generics_turbofish::eval(def, ctx, output_rows, args, extra, arena)
                 }
             }
         }
@@ -879,6 +889,7 @@ impl NormalRpnFn {
             Span::call_site(),
         );
         let (impl_generics, ty_generics, where_clause) = self.item_fn.sig.generics.split_for_impl();
+        let punctuated_generics_params = &self.item_fn.sig.generics.params;
         let ty_generics_turbofish = ty_generics.as_turbofish();
         let evaluator_ident = &self.evaluator_ident;
         let mut evaluator =
@@ -900,14 +911,15 @@ impl NormalRpnFn {
             #where_clause
             {
                 #[inline]
-                fn run #impl_generics (
+                fn run <'arena, #punctuated_generics_params> (
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> #where_clause {
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> #where_clause {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
-                    #evaluator.eval(Null, ctx, output_rows, args, extra)
+                    #evaluator.eval(Null, ctx, output_rows, args, extra, arena)
                 }
 
                 #validator_fn
@@ -944,13 +956,14 @@ mod tests_normal {
         let gen = no_generic_fn();
         let expected: TokenStream = quote! {
             trait Foo_Fn {
-                fn eval(
+                fn eval<'arena>(
                     self,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue>;
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>>;
             }
         };
         assert_eq!(expected.to_string(), gen.generate_fn_trait().to_string());
@@ -961,13 +974,14 @@ mod tests_normal {
         let gen = no_generic_fn();
         let expected: TokenStream = quote! {
             impl<D_: crate::rpn_expr::function::ArgDef> Foo_Fn for D_ {
-                default fn eval(
+                default fn eval<'arena>(
                     self,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> {
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> {
                     unreachable!()
                 }
             }
@@ -983,31 +997,33 @@ mod tests_normal {
         let gen = no_generic_fn();
         let expected: TokenStream = quote! {
             impl<
-                'arg_,
-                Arg1_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Real> > ,
-                Arg0_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Int> >
-            > Foo_Fn for crate::rpn_expr::function::Arg<
-                Arg0_,
-                crate::rpn_expr::function::Arg<
-                    Arg1_,
-                    crate::rpn_expr::function::Null
+                    'arg_,
+                    Arg1_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Real> >,
+                    Arg0_: crate::rpn_expr::function::RpnFnArg<Type = &'arg_ Option<Int> >
+                > Foo_Fn
+                for crate::rpn_expr::function::Arg<
+                    Arg0_,
+                    crate::rpn_expr::function::Arg<Arg1_, crate::rpn_expr::function::Null>
                 >
-            > {
-                default fn eval(
+            {
+                default fn eval<'arena>(
                     self,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> {
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> {
                     let arg = &self;
-                    let mut result = Vec::with_capacity(output_rows);
+                    let mut result = bumpalo::collections::Vec::with_capacity_in(output_rows, arena);
                     for row in 0..output_rows {
                         let (arg0, arg) = arg.extract(row);
                         let (arg1, arg) = arg.extract(row);
                         result.push(foo(arg0, arg1)?);
                     }
-                    Ok(crate::codec::data_type::Evaluable::into_vector_value(result))
+                    Ok(crate::codec::data_type::Evaluable::into_vector_value_ref(
+                        result.into_bump_slice()
+                    ))
                 }
             }
         };
@@ -1025,15 +1041,16 @@ mod tests_normal {
 
             impl crate::rpn_expr::function::Evaluator for Foo_Evaluator {
                 #[inline]
-                fn eval(
+                fn eval<'arena>(
                     self,
                     def: impl crate::rpn_expr::function::ArgDef,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    Foo_Fn::eval(def, ctx, output_rows, args, extra)
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> {
+                    Foo_Fn::eval(def, ctx, output_rows, args, extra, arena)
                 }
             }
         };
@@ -1046,18 +1063,19 @@ mod tests_normal {
         let expected: TokenStream = quote! {
             pub const fn foo_fn_meta() -> crate::rpn_expr::RpnFnMeta {
                 #[inline]
-                fn run(
+                fn run<'arena,>(
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> {
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
                     <ArgConstructor<Real, _>>::new(
                         1usize,
                         <ArgConstructor<Int, _>>::new(0usize, Foo_Evaluator(std::marker::PhantomData))
                     )
-                    .eval(Null, ctx, output_rows, args, extra)
+                    .eval(Null, ctx, output_rows, args, extra, arena)
                 }
                 fn validate(expr: &tipb::Expr) -> crate::Result<()> {
                     use crate::codec::data_type::Evaluable;
@@ -1101,13 +1119,14 @@ mod tests_normal {
             where
                 B: N<A>
             {
-                fn eval(
+                fn eval<'arena>(
                     self,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue>;
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>>;
             }
         };
         assert_eq!(expected.to_string(), gen.generate_fn_trait().to_string());
@@ -1121,13 +1140,14 @@ mod tests_normal {
             where
                 B: N<A>
             {
-                default fn eval(
+                default fn eval<'arena>(
                     self,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> {
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> {
                     unreachable!()
                 }
             }
@@ -1151,20 +1171,23 @@ mod tests_normal {
                 Arg0_,
                 crate::rpn_expr::function::Null
             > where B: N<A> {
-                default fn eval(
+                default fn eval<'arena>(
                     self,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> {
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> {
                     let arg = &self;
-                    let mut result = Vec::with_capacity(output_rows);
+                    let mut result = bumpalo::collections::Vec::with_capacity_in(output_rows, arena);
                     for row in 0..output_rows {
                         let (arg0, arg) = arg.extract(row);
                         result.push(foo :: <A, B> (arg0)?);
                     }
-                    Ok(crate::codec::data_type::Evaluable::into_vector_value(result))
+                    Ok(crate::codec::data_type::Evaluable::into_vector_value_ref(
+                        result.into_bump_slice()
+                    ))
                 }
             }
         };
@@ -1187,15 +1210,16 @@ mod tests_normal {
                 B: N<A>
             {
                 #[inline]
-                fn eval(
+                fn eval<'arena>(
                     self,
                     def: impl crate::rpn_expr::function::ArgDef,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> {
-                    Foo_Fn::<A, B>::eval(def, ctx, output_rows, args, extra)
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> {
+                    Foo_Fn::<A, B>::eval(def, ctx, output_rows, args, extra, arena)
                 }
             }
         };
@@ -1211,18 +1235,19 @@ mod tests_normal {
                 B: N<A>
             {
                 #[inline]
-                fn run<A: M, B>(
+                fn run<'arena, A: M, B>(
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue>
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>>
                 where
                     B: N<A>
                 {
                     use crate::rpn_expr::function::{ArgConstructor, Evaluator, Null};
                     <ArgConstructor<A::X, _>>::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData))
-                                .eval(Null, ctx, output_rows, args, extra)
+                                .eval(Null, ctx, output_rows, args, extra, arena)
                 }
                 fn validate<A: M, B>(expr: &tipb::Expr) -> crate::Result<()>
                 where
@@ -1284,21 +1309,24 @@ mod tests_normal {
                     crate::rpn_expr::function::Null
                 >
             > {
-                default fn eval(
+                default fn eval<'arena>(
                     self,
                     ctx: &mut crate::expr::EvalContext,
                     output_rows: usize,
                     args: &[crate::rpn_expr::RpnStackNode<'_>],
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
-                ) -> crate::Result<crate::codec::data_type::VectorValue> {
+                    arena: &'arena bumpalo::Bump,
+                ) -> crate::Result<crate::codec::data_type::VectorValueRef<'arena>> {
                     let arg = &self;
-                    let mut result = Vec::with_capacity(output_rows);
+                    let mut result = bumpalo::collections::Vec::with_capacity_in(output_rows, arena);
                     for row in 0..output_rows {
                         let (arg0, arg) = arg.extract(row);
                         let (arg1, arg) = arg.extract(row);
                         result.push(foo(ctx, arg0, arg1)?);
                     }
-                    Ok(crate::codec::data_type::Evaluable::into_vector_value(result))
+                    Ok(crate::codec::data_type::Evaluable::into_vector_value_ref(
+                        result.into_bump_slice()
+                    ))
                 }
             }
         };

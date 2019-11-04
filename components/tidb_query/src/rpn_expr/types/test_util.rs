@@ -1,12 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use bumpalo::Bump;
+
 use tipb::{Expr, FieldType, ScalarFuncSig};
 
 use crate::codec::batch::LazyBatchColumnVec;
-use crate::codec::data_type::{Evaluable, ScalarValue};
+use crate::codec::data_type::{Evaluable, ScalarValue, VectorValue};
 use crate::expr::EvalContext;
 use crate::rpn_expr::types::function::RpnFnMeta;
-use crate::rpn_expr::RpnExpressionBuilder;
+use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode};
 use crate::Result;
 
 /// Helper utility to evaluate RPN function over scalar inputs.
@@ -119,8 +121,21 @@ impl RpnFnScalarEvaluator {
             .build();
 
         let mut columns = LazyBatchColumnVec::empty();
-        let ret = expr.eval(&mut context, &[], &mut columns, &[0], 1);
-        let result = ret.map(|ret| ret.get_logical_scalar_ref(0).to_owned());
+        let arena = Bump::new();
+        let mut result = Err(box_err!("dummy"));
+        let eval_result = expr.eval(
+            &mut context,
+            &[],
+            &mut columns,
+            &[0],
+            1,
+            &arena,
+            |ret, _| {
+                result = Ok(ret.get_logical_scalar_ref(0).to_owned());
+                Ok(())
+            },
+        );
+        let result = eval_result.and(result);
 
         (result, context)
     }
@@ -137,4 +152,74 @@ impl RpnFnScalarEvaluator {
         let result = self.evaluate_raw(return_field_type, sig).0;
         result.map(|v| v.into())
     }
+}
+
+pub fn eval_scalar_cloned(
+    expr: &RpnExpression,
+    ctx: &mut EvalContext,
+    schema: &[FieldType],
+    input_physical_columns: &mut LazyBatchColumnVec,
+    input_logical_rows: &[usize],
+    output_rows: usize,
+) -> Result<(ScalarValue, FieldType)> {
+    let arena = Bump::new();
+    let mut value_cloned = None;
+    let mut field_type_cloned = None;
+    expr.eval(
+        ctx,
+        schema,
+        input_physical_columns,
+        input_logical_rows,
+        output_rows,
+        &arena,
+        |ret, _ctx| {
+            match ret {
+                RpnStackNode::Scalar { value, field_type } => {
+                    value_cloned = Some(value.to_owned());
+                    field_type_cloned = Some(field_type.clone());
+                }
+                _ => panic!("expr evaluation result is not a scalar"),
+            }
+            Ok(())
+        },
+    )?;
+    Ok((value_cloned.unwrap(), field_type_cloned.unwrap()))
+}
+
+pub fn eval_vector_cloned(
+    expr: &RpnExpression,
+    ctx: &mut EvalContext,
+    schema: &[FieldType],
+    input_physical_columns: &mut LazyBatchColumnVec,
+    input_logical_rows: &[usize],
+    output_rows: usize,
+) -> Result<(VectorValue, Vec<usize>, FieldType)> {
+    let arena = Bump::new();
+    let mut physical_value_cloned = None;
+    let mut logical_rows_cloned = None;
+    let mut field_type_cloned = None;
+    expr.eval(
+        ctx,
+        schema,
+        input_physical_columns,
+        input_logical_rows,
+        output_rows,
+        &arena,
+        |ret, _ctx| {
+            match ret {
+                RpnStackNode::Vector { value, field_type } => {
+                    physical_value_cloned = Some(value.physical_value.to_owned());
+                    logical_rows_cloned = Some(value.logical_rows.iter().cloned().collect());
+                    field_type_cloned = Some(field_type.clone());
+                }
+                _ => panic!("expr evaluation result is not a vector"),
+            }
+            Ok(())
+        },
+    )?;
+    Ok((
+        physical_value_cloned.unwrap(),
+        logical_rows_cloned.unwrap(),
+        field_type_cloned.unwrap(),
+    ))
 }

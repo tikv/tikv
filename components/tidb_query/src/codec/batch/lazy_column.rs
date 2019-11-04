@@ -6,7 +6,7 @@ use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::FieldType;
 
 use super::BufferVec;
-use crate::codec::data_type::VectorValue;
+use crate::codec::data_type::{VectorValue, VectorValueRef};
 use crate::codec::mysql::Tz;
 use crate::codec::raw_datum::RawDatumDecoder;
 use crate::codec::Result;
@@ -76,10 +76,10 @@ impl LazyBatchColumn {
     }
 
     #[inline]
-    pub fn decoded(&self) -> &VectorValue {
+    pub fn decoded(&self) -> VectorValueRef<'_> {
         match self {
             LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
-            LazyBatchColumn::Decoded(v) => v,
+            LazyBatchColumn::Decoded(v) => v.as_vector_value_ref(),
         }
     }
 

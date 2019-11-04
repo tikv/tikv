@@ -1,13 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use bumpalo::Bump;
 
 use tipb::FieldType;
 
 use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
 use crate::codec::batch::LazyBatchColumnVec;
-use crate::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
+use crate::codec::data_type::{ScalarValue, ScalarValueRef, VectorValueRef};
 use crate::codec::mysql::time::Tz;
 use crate::expr::EvalContext;
 use crate::Result;
@@ -21,34 +21,9 @@ use crate::Result;
 ///
 /// When nodes comes from an evaluated result, it is an owned node.
 #[derive(Debug)]
-pub enum RpnStackNodeVectorValue<'a> {
-    Generated {
-        // TODO: Maybe box it can be faster.
-        physical_value: VectorValue,
-        logical_rows: Arc<[usize]>,
-    },
-    Ref {
-        physical_value: &'a VectorValue,
-        logical_rows: &'a [usize],
-    },
-}
-
-impl<'a> RpnStackNodeVectorValue<'a> {
-    /// Gets a reference to the inner physical vector value.
-    pub fn as_ref(&self) -> &VectorValue {
-        match self {
-            RpnStackNodeVectorValue::Generated { physical_value, .. } => &physical_value,
-            RpnStackNodeVectorValue::Ref { physical_value, .. } => *physical_value,
-        }
-    }
-
-    /// Gets a reference to the logical rows.
-    pub fn logical_rows(&self) -> &[usize] {
-        match self {
-            RpnStackNodeVectorValue::Generated { logical_rows, .. } => &logical_rows,
-            RpnStackNodeVectorValue::Ref { logical_rows, .. } => logical_rows,
-        }
-    }
+pub struct RpnStackNodeVectorValue<'a> {
+    pub physical_value: VectorValueRef<'a>,
+    pub logical_rows: &'a [usize],
 }
 
 /// A type for each node in the RPN evaluation stack. It can be one of a scalar value node or a
@@ -125,8 +100,8 @@ impl<'a> RpnStackNode<'a> {
     pub fn get_logical_scalar_ref(&self, logical_index: usize) -> ScalarValueRef<'_> {
         match self {
             RpnStackNode::Vector { value, .. } => {
-                let physical_vector = value.as_ref();
-                let logical_rows = value.logical_rows();
+                let physical_vector = &value.physical_value;
+                let logical_rows = value.logical_rows;
                 physical_vector.get_scalar_ref(logical_rows[logical_index])
             }
             RpnStackNode::Scalar { value, .. } => value.as_scalar_value_ref(),
@@ -144,14 +119,19 @@ impl RpnExpression {
     /// Panics if the expression is not valid.
     ///
     /// Panics when referenced column does not have equal length as specified in `rows`.
-    pub fn eval<'a>(
-        &'a self,
+    pub fn eval<F>(
+        &self,
         ctx: &mut EvalContext,
-        schema: &'a [FieldType],
-        input_physical_columns: &'a mut LazyBatchColumnVec,
-        input_logical_rows: &'a [usize],
+        schema: &[FieldType],
+        input_physical_columns: &mut LazyBatchColumnVec,
+        input_logical_rows: &[usize],
         output_rows: usize,
-    ) -> Result<RpnStackNode<'a>> {
+        arena: &Bump,
+        f: F,
+    ) -> Result<()>
+    where
+        F: for<'arena> FnOnce(RpnStackNode<'arena>, &mut EvalContext) -> Result<()>,
+    {
         // We iterate two times. The first time we decode all referred columns. The second time
         // we evaluate. This is to make Rust's borrow checker happy because there will be
         // mutable reference during the first iteration and we can't keep these references.
@@ -167,16 +147,18 @@ impl RpnExpression {
             input_physical_columns,
             input_logical_rows,
             output_rows,
+            arena,
+            f,
         )
     }
 
     /// Decodes all referred columns which are not decoded. Then we ensure
     /// all referred columns are decoded.
-    pub fn ensure_columns_decoded<'a>(
-        &'a self,
+    pub fn ensure_columns_decoded(
+        &self,
         tz: &Tz,
-        schema: &'a [FieldType],
-        input_physical_columns: &'a mut LazyBatchColumnVec,
+        schema: &[FieldType],
+        input_physical_columns: &mut LazyBatchColumnVec,
         input_logical_rows: &[usize],
     ) -> Result<()> {
         for node in self.as_ref() {
@@ -204,20 +186,24 @@ impl RpnExpression {
     /// Panics if referred columns are not decoded.
     ///
     /// Panics when referenced column does not have equal length as specified in `rows`.
-    pub fn eval_decoded<'a>(
-        &'a self,
+    pub fn eval_decoded<F>(
+        &self,
         ctx: &mut EvalContext,
-        schema: &'a [FieldType],
-        input_physical_columns: &'a LazyBatchColumnVec,
-        input_logical_rows: &'a [usize],
+        schema: &[FieldType],
+        input_physical_columns: &LazyBatchColumnVec,
+        input_logical_rows: &[usize],
         output_rows: usize,
-    ) -> Result<RpnStackNode<'a>> {
+        arena: &Bump,
+        f: F,
+    ) -> Result<()>
+    where
+        F: for<'arena> FnOnce(RpnStackNode<'arena>, &mut EvalContext) -> Result<()>,
+    {
         assert!(output_rows > 0);
-        let mut stack = Vec::with_capacity(self.len());
-        // Logical rows for generated columns
-        // TODO: Eliminate allocation
-        let identity_logical_rows: Vec<_> = (0..output_rows).collect();
-        let identity_logical_rows = Arc::from(identity_logical_rows);
+        let mut stack = bumpalo::collections::Vec::with_capacity_in(self.len(), arena);
+        // Logical rows for gene    rated columns
+        let mut identity_logical_rows = bumpalo::collections::Vec::new_in(arena);
+        identity_logical_rows.extend(0..output_rows);
 
         for node in self.as_ref() {
             match node {
@@ -229,8 +215,8 @@ impl RpnExpression {
                     let decoded_physical_column = input_physical_columns[*offset].decoded();
                     assert_eq!(input_logical_rows.len(), output_rows);
                     stack.push(RpnStackNode::Vector {
-                        value: RpnStackNodeVectorValue::Ref {
-                            physical_value: &decoded_physical_column,
+                        value: RpnStackNodeVectorValue {
+                            physical_value: decoded_physical_column,
                             logical_rows: input_logical_rows,
                         },
                         field_type,
@@ -254,12 +240,13 @@ impl RpnExpression {
                         ret_field_type,
                         implicit_args,
                     };
-                    let ret = (func_meta.fn_ptr)(ctx, output_rows, stack_slice, &mut call_extra)?;
+                    let ret =
+                        (func_meta.fn_ptr)(ctx, output_rows, stack_slice, &mut call_extra, &arena)?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
-                        value: RpnStackNodeVectorValue::Generated {
+                        value: RpnStackNodeVectorValue {
                             physical_value: ret,
-                            logical_rows: Arc::clone(&identity_logical_rows),
+                            logical_rows: &identity_logical_rows,
                         },
                         field_type: ret_field_type,
                     });
@@ -268,7 +255,8 @@ impl RpnExpression {
         }
 
         assert_eq!(stack.len(), 1);
-        Ok(stack.into_iter().next().unwrap())
+        let result = stack.into_iter().next().unwrap();
+        f(result, ctx)
     }
 }
 
@@ -289,6 +277,7 @@ mod tests {
     use crate::expr::EvalContext;
     use crate::rpn_expr::impl_arithmetic::*;
     use crate::rpn_expr::impl_compare::*;
+    use crate::rpn_expr::test_util::{eval_scalar_cloned, eval_vector_cloned};
     use crate::rpn_expr::{RpnExpressionBuilder, RpnFnMeta};
     use crate::Result;
     use test::{black_box, Bencher};
@@ -299,11 +288,10 @@ mod tests {
         let exp = RpnExpressionBuilder::new().push_constant(1.5f64).build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, &[], &mut columns, &[], 10);
-        let val = result.unwrap();
-        assert!(val.is_scalar());
-        assert_eq!(*val.scalar_value().unwrap().as_real(), Real::new(1.5).ok());
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
+        let (result, field_type) =
+            eval_scalar_cloned(&exp, &mut ctx, &[], &mut columns, &[], 10).unwrap();
+        assert_eq!(*result.as_real(), Real::new(1.5).ok());
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Creates fixture to be used in `test_eval_single_column_node_xxx`.
@@ -342,48 +330,39 @@ mod tests {
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 5);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, &schema, &mut c, &logical_rows, 5).unwrap();
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            result_physical_value.as_int_slice(),
             [Some(1), Some(5), None, None, Some(42)]
         );
-        assert_eq!(
-            val.vector_value().unwrap().logical_rows(),
-            logical_rows.as_slice()
-        );
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(result_logical_rows, logical_rows.as_slice());
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::LongLong);
 
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, &schema, &mut c, &[2, 0, 1], 3);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, &schema, &mut c, &[2, 0, 1], 3).unwrap();
         // Physical column is unchanged
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            result_physical_value.as_int_slice(),
             [Some(1), Some(5), None, None, Some(42)]
         );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[2, 0, 1]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(result_logical_rows, &[2, 0, 1]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::LongLong);
 
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(0).build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 5);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, &schema, &mut c, &logical_rows, 5).unwrap();
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            result_physical_value.as_real_slice(),
             [Real::new(1.0).ok(), None, Real::new(7.5).ok(), None, None]
         );
-        assert_eq!(
-            val.vector_value().unwrap().logical_rows(),
-            logical_rows.as_slice()
-        );
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
+        assert_eq!(result_logical_rows, logical_rows.as_slice());
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Single column node but row numbers in `eval()` does not match column length, should panic.
@@ -395,8 +374,17 @@ mod tests {
         let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
         let hooked_eval = panic_hook::recover_safe(|| {
+            let arena = Bump::new();
             // smaller row number
-            let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 4);
+            let _ = exp.eval(
+                &mut ctx,
+                &schema,
+                &mut c,
+                &logical_rows,
+                4,
+                &arena,
+                |_, _| Ok(()),
+            );
         });
         assert!(hooked_eval.is_err());
 
@@ -404,8 +392,17 @@ mod tests {
         let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
         let hooked_eval = panic_hook::recover_safe(|| {
+            let arena = Bump::new();
             // larger row number
-            let _ = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 6);
+            let _ = exp.eval(
+                &mut ctx,
+                &schema,
+                &mut c,
+                &logical_rows,
+                6,
+                &arena,
+                |_, _| Ok(()),
+            );
         });
         assert!(hooked_eval.is_err());
     }
@@ -423,15 +420,14 @@ mod tests {
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, &[], &mut columns, &[], 4);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, &[], &mut columns, &[], 4).unwrap();
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            result_physical_value.as_int_slice(),
             [Some(42), Some(42), Some(42), Some(42)]
         );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2, 3]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(result_logical_rows, &[0, 1, 2, 3]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Unary function (argument is scalar)
@@ -449,19 +445,18 @@ mod tests {
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, &[], &mut columns, &[], 3).unwrap();
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            result_physical_value.as_real_slice(),
             [
                 Real::new(3.0).ok(),
                 Real::new(3.0).ok(),
                 Real::new(3.0).ok()
             ]
         );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
+        assert_eq!(result_logical_rows, &[0, 1, 2]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Unary function (argument is vector)
@@ -487,15 +482,11 @@ mod tests {
             .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
-        let val = result.unwrap();
-        assert!(val.is_vector());
-        assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
-            [None, Some(6)]
-        );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, schema, &mut columns, &[2, 0], 2).unwrap();
+        assert_eq!(result_physical_value.as_int_slice(), [None, Some(6)]);
+        assert_eq!(result_logical_rows, &[0, 1]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Unary function (argument is raw column). The column should be decoded.
@@ -531,15 +522,14 @@ mod tests {
             .push_fn_call(foo_fn_meta(), 1, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0, 1], 3);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, schema, &mut columns, &[2, 0, 1], 3).unwrap();
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            result_physical_value.as_int_slice(),
             [Some(8), Some(0), Some(-2)]
         );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(result_logical_rows, &[0, 1, 2]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Binary function (arguments are scalar, scalar)
@@ -558,19 +548,18 @@ mod tests {
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, &[], &mut columns, &[], 3).unwrap();
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            result_physical_value.as_real_slice(),
             [
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok(),
                 Real::new(3.5).ok()
             ]
         );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
+        assert_eq!(result_logical_rows, &[0, 1, 2]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Binary function (arguments are vector, scalar)
@@ -597,18 +586,17 @@ mod tests {
             .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, schema, &mut columns, &[2, 0], 2).unwrap();
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            result_physical_value.as_real_slice(),
             [
                 Real::new(-5.8).ok(), // original row 2
                 Real::new(-0.5).ok(), // original row 0
             ]
         );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
+        assert_eq!(result_logical_rows, &[0, 1]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Binary function (arguments are scalar, vector)
@@ -635,18 +623,17 @@ mod tests {
             .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, schema, &mut columns, &[1, 2], 2);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, schema, &mut columns, &[1, 2], 2).unwrap();
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            result_physical_value.as_real_slice(),
             [
                 Real::new(-3.5).ok(), // original row 1
                 Real::new(5.5).ok(),  // original row 2
             ]
         );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
+        assert_eq!(result_logical_rows, &[0, 1]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Binary function (arguments are vector, vector)
@@ -685,19 +672,18 @@ mod tests {
             .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, schema, &mut columns, &[0, 2, 1], 3);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, schema, &mut columns, &[0, 2, 1], 3).unwrap();
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            result_physical_value.as_int_slice(),
             [
                 Some(-2),  // original row 0
                 Some(22),  // original row 2
                 Some(-17), // original row 1
             ]
         );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(result_logical_rows, &[0, 1, 2]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Binary function (arguments are both raw columns). The same column is referred multiple times
@@ -735,15 +721,11 @@ mod tests {
             .push_fn_call(foo_fn_meta(), 2, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, schema, &mut columns, &[1], 1);
-        let val = result.unwrap();
-        assert!(val.is_vector());
-        assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
-            [Some(49)]
-        );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, schema, &mut columns, &[1], 1).unwrap();
+        assert_eq!(result_physical_value.as_int_slice(), [Some(49)]);
+        assert_eq!(result_logical_rows, &[0]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     /// Ternary function (arguments are vector, scalar, vector)
@@ -771,15 +753,14 @@ mod tests {
             .push_fn_call(foo_fn_meta(), 3, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, schema, &mut columns, &[1, 0, 2], 3);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, schema, &mut columns, &[1, 0, 2], 3).unwrap();
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
+            result_physical_value.as_int_slice(),
             [Some(-10), Some(-2), Some(8)]
         );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1, 2]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        assert_eq!(result_logical_rows, &[0, 1, 2]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     // Comprehensive expression:
@@ -860,15 +841,14 @@ mod tests {
         //      => [25.0, 3.8, 146.0]
 
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
-        let val = result.unwrap();
-        assert!(val.is_vector());
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, schema, &mut columns, &[2, 0], 2).unwrap();
         assert_eq!(
-            val.vector_value().unwrap().as_ref().as_real_slice(),
+            result_physical_value.as_real_slice(),
             [Real::new(146.0).ok(), Real::new(25.0).ok(),]
         );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::Double);
+        assert_eq!(result_logical_rows, &[0, 1]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::Double);
     }
 
     /// Unary function, but supplied zero arguments. Should panic.
@@ -885,7 +865,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = panic_hook::recover_safe(|| {
-            let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
+            let arena = Bump::new();
+            let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3, &arena, |_, _| Ok(()));
         });
         assert!(hooked_eval.is_err());
     }
@@ -909,7 +890,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = panic_hook::recover_safe(|| {
-            let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
+            let arena = Bump::new();
+            let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3, &arena, |_, _| Ok(()));
         });
         assert!(hooked_eval.is_err());
     }
@@ -931,7 +913,8 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = panic_hook::recover_safe(|| {
-            let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3);
+            let arena = Bump::new();
+            let _ = exp.eval(&mut ctx, &[], &mut columns, &[], 3, &arena, |_, _| Ok(()));
         });
         assert!(hooked_eval.is_err());
     }
@@ -1031,15 +1014,11 @@ mod tests {
         let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
 
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, schema, &mut columns, &[2, 0], 2);
-        let val = result.unwrap();
-        assert!(val.is_vector());
-        assert_eq!(
-            val.vector_value().unwrap().as_ref().as_int_slice(),
-            [Some(574), Some(-13)]
-        );
-        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
-        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+        let (result_physical_value, result_logical_rows, field_type) =
+            eval_vector_cloned(&exp, &mut ctx, schema, &mut columns, &[2, 0], 2).unwrap();
+        assert_eq!(result_physical_value.as_int_slice(), [Some(574), Some(-13)]);
+        assert_eq!(result_logical_rows, &[0, 1]);
+        assert_eq!(field_type.as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
     #[bench]
@@ -1063,12 +1042,18 @@ mod tests {
 
         profiler::start("bench_eval_plus_1024_rows.profile");
         b.iter(|| {
+            let arena = Bump::with_capacity(1 << 14);
             let result = black_box(&exp).eval(
                 black_box(&mut ctx),
                 black_box(schema),
                 black_box(&mut columns),
                 black_box(&logical_rows),
                 black_box(1024),
+                black_box(&arena),
+                |ret, _| {
+                    black_box(ret);
+                    Ok(())
+                },
             );
             assert!(result.is_ok());
         });
@@ -1100,12 +1085,18 @@ mod tests {
 
         profiler::start("eval_compare_1024_rows.profile");
         b.iter(|| {
+            let arena = Bump::with_capacity(1 << 14);
             let result = black_box(&exp).eval(
                 black_box(&mut ctx),
                 black_box(schema),
                 black_box(&mut columns),
                 black_box(&logical_rows),
                 black_box(1024),
+                black_box(&arena),
+                |ret, _| {
+                    black_box(ret);
+                    Ok(())
+                },
             );
             assert!(result.is_ok());
         });
@@ -1137,12 +1128,18 @@ mod tests {
 
         profiler::start("bench_eval_compare_5_rows.profile");
         b.iter(|| {
+            let arena = Bump::with_capacity(1 << 14);
             let result = black_box(&exp).eval(
                 black_box(&mut ctx),
                 black_box(schema),
                 black_box(&mut columns),
                 black_box(&logical_rows),
                 black_box(5),
+                black_box(&arena),
+                |ret, _| {
+                    black_box(ret);
+                    Ok(())
+                },
             );
             assert!(result.is_ok());
         });

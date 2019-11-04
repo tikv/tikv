@@ -2,7 +2,7 @@
 
 use super::column::{Column, ColumnEncoder};
 use super::Result;
-use crate::codec::data_type::VectorValue;
+use crate::codec::data_type::VectorValueRef;
 use crate::codec::Datum;
 use codec::buffer::BufferWriter;
 use tidb_query_datatype::FieldTypeAccessor;
@@ -65,12 +65,12 @@ impl Chunk {
         &mut self,
         row_indexes: &[usize],
         field_type: &FieldType,
-        vec: &VectorValue,
+        vec: VectorValueRef<'_>,
         column_index: usize,
     ) -> Result<()> {
         let col = &mut self.columns[column_index];
         match vec {
-            VectorValue::Int(ref vec) => {
+            VectorValueRef::Int(vec) => {
                 if field_type
                     .as_accessor()
                     .flag()
@@ -99,7 +99,7 @@ impl Chunk {
                     }
                 }
             }
-            VectorValue::Real(ref vec) => {
+            VectorValueRef::Real(vec) => {
                 if col.get_fixed_len() == 4 {
                     for &row_index in row_indexes {
                         match &vec[row_index] {
@@ -124,7 +124,7 @@ impl Chunk {
                     }
                 }
             }
-            VectorValue::Decimal(ref vec) => {
+            VectorValueRef::Decimal(vec) => {
                 for &row_index in row_indexes {
                     match &vec[row_index] {
                         None => {
@@ -136,7 +136,7 @@ impl Chunk {
                     }
                 }
             }
-            VectorValue::Bytes(ref vec) => {
+            VectorValueRef::Bytes(vec) => {
                 for &row_index in row_indexes {
                     match &vec[row_index] {
                         None => {
@@ -148,7 +148,7 @@ impl Chunk {
                     }
                 }
             }
-            VectorValue::DateTime(ref vec) => {
+            VectorValueRef::DateTime(vec) => {
                 for &row_index in row_indexes {
                     match &vec[row_index] {
                         None => {
@@ -160,7 +160,7 @@ impl Chunk {
                     }
                 }
             }
-            VectorValue::Duration(ref vec) => {
+            VectorValueRef::Duration(vec) => {
                 for &row_index in row_indexes {
                     match &vec[row_index] {
                         None => {
@@ -172,7 +172,7 @@ impl Chunk {
                     }
                 }
             }
-            VectorValue::Json(ref vec) => {
+            VectorValueRef::Json(vec) => {
                 for &row_index in row_indexes {
                     match &vec[row_index] {
                         None => {

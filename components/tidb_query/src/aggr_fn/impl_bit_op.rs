@@ -158,6 +158,7 @@ mod tests {
 
     use crate::aggr_fn::parser::AggrDefinitionParser;
     use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+    use crate::rpn_expr::test_util::eval_vector_cloned;
 
     #[test]
     fn test_bit_and() {
@@ -418,13 +419,19 @@ mod tests {
 
         // bit and
         {
-            let bit_and_result = exp[0]
-                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
+            let (bit_and_result_phsical_value, bit_and_result_logical_rows, _) =
+                eval_vector_cloned(
+                    &exp[0],
+                    &mut ctx,
+                    &src_schema,
+                    &mut columns,
+                    &logical_rows,
+                    6,
+                )
                 .unwrap();
-            let bit_and_result = bit_and_result.vector_value().unwrap();
-            let bit_and_slice: &[Option<Int>] = bit_and_result.as_ref().as_ref();
+            let bit_and_slice: &[Option<Int>] = bit_and_result_phsical_value.as_ref();
             bit_and_state
-                .update_vector(&mut ctx, bit_and_slice, bit_and_result.logical_rows())
+                .update_vector(&mut ctx, bit_and_slice, &bit_and_result_logical_rows)
                 .unwrap();
             bit_and_state
                 .push_result(&mut ctx, &mut aggr_result)
@@ -433,13 +440,18 @@ mod tests {
 
         // bit or
         {
-            let bit_or_result = exp[1]
-                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
-                .unwrap();
-            let bit_or_result = bit_or_result.vector_value().unwrap();
-            let bit_or_slice: &[Option<Int>] = bit_or_result.as_ref().as_ref();
+            let (bit_or_result_phsical_value, bit_or_result_logical_rows, _) = eval_vector_cloned(
+                &exp[1],
+                &mut ctx,
+                &src_schema,
+                &mut columns,
+                &logical_rows,
+                6,
+            )
+            .unwrap();
+            let bit_or_slice: &[Option<Int>] = bit_or_result_phsical_value.as_ref();
             bit_or_state
-                .update_vector(&mut ctx, bit_or_slice, bit_or_result.logical_rows())
+                .update_vector(&mut ctx, bit_or_slice, &bit_or_result_logical_rows)
                 .unwrap();
             bit_or_state
                 .push_result(&mut ctx, &mut aggr_result)
@@ -448,13 +460,19 @@ mod tests {
 
         // bit xor
         {
-            let bit_xor_result = exp[2]
-                .eval(&mut ctx, &src_schema, &mut columns, &logical_rows, 6)
+            let (bit_xor_result_phsical_value, bit_xor_result_logical_rows, _) =
+                eval_vector_cloned(
+                    &exp[2],
+                    &mut ctx,
+                    &src_schema,
+                    &mut columns,
+                    &logical_rows,
+                    6,
+                )
                 .unwrap();
-            let bit_xor_result = bit_xor_result.vector_value().unwrap();
-            let bit_xor_slice: &[Option<Int>] = bit_xor_result.as_ref().as_ref();
+            let bit_xor_slice: &[Option<Int>] = bit_xor_result_phsical_value.as_ref();
             bit_xor_state
-                .update_vector(&mut ctx, bit_xor_slice, bit_xor_result.logical_rows())
+                .update_vector(&mut ctx, bit_xor_slice, &bit_xor_result_logical_rows)
                 .unwrap();
             bit_xor_state
                 .push_result(&mut ctx, &mut aggr_result)

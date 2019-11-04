@@ -57,6 +57,15 @@ impl VectorValue {
         }
     }
 
+    #[inline]
+    pub fn as_vector_value_ref(&self) -> VectorValueRef<'_> {
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(v) => VectorValueRef::TT(v),
+            }
+        }
+    }
+
     /// Returns the number of datums contained in this column.
     #[inline]
     pub fn len(&self) -> usize {
@@ -157,215 +166,45 @@ impl VectorValue {
             }
         }
     }
+}
 
-    /// Returns maximum encoded size in binary format.
-    pub fn maximum_encoded_size(&self, logical_rows: &[usize]) -> Result<usize> {
-        match self {
-            VectorValue::Int(_) => Ok(logical_rows.len() * 9),
+#[derive(Debug, PartialEq, Clone)]
+pub enum VectorValueRef<'a> {
+    Int(&'a [Option<Int>]),
+    Real(&'a [Option<Real>]),
+    Decimal(&'a [Option<Decimal>]),
+    // TODO: We need to improve its performance, i.e. store strings in adjacent memory places
+    Bytes(&'a [Option<Bytes>]),
+    DateTime(&'a [Option<DateTime>]),
+    Duration(&'a [Option<Duration>]),
+    Json(&'a [Option<Json>]),
+}
 
-            // Some elements might be NULLs which encoded size is 1 byte. However it's fine because
-            // this function only calculates a maximum encoded size (for constructing buffers), not
-            // actual encoded size.
-            VectorValue::Real(_) => Ok(logical_rows.len() * 9),
-            VectorValue::Decimal(vec) => {
-                let mut size = 0;
-                for idx in logical_rows {
-                    let el = &vec[*idx];
-                    match el {
-                        Some(v) => {
-                            // FIXME: We don't need approximate size. Maximum size is enough (so
-                            // that we don't need to iterate each value).
-                            size += 1 /* FLAG */ + v.approximate_encoded_size();
-                        }
-                        None => {
-                            size += 1;
-                        }
-                    }
-                }
-                Ok(size)
-            }
-            VectorValue::Bytes(vec) => {
-                let mut size = 0;
-                for idx in logical_rows {
-                    let el = &vec[*idx];
-                    match el {
-                        Some(v) => {
-                            size += 1 /* FLAG */ + 10 /* MAX VARINT LEN */ + v.len();
-                        }
-                        None => {
-                            size += 1;
-                        }
-                    }
-                }
-                Ok(size)
-            }
-            VectorValue::DateTime(_) => Ok(logical_rows.len() * 9),
-            VectorValue::Duration(_) => Ok(logical_rows.len() * 9),
-            VectorValue::Json(vec) => {
-                let mut size = 0;
-                for idx in logical_rows {
-                    let el = &vec[*idx];
-                    match el {
-                        Some(v) => {
-                            size += 1 /* FLAG */ + v.binary_len();
-                        }
-                        None => {
-                            size += 1;
-                        }
-                    }
-                }
-                Ok(size)
+impl<'a> VectorValueRef<'a> {
+    #[inline]
+    #[allow(clippy::clone_on_copy)]
+    pub fn to_owned(self) -> VectorValue {
+        match_template_evaluable! {
+            TT, match self {
+                VectorValueRef::TT(v) => VectorValue::TT(v.iter().map(Clone::clone).collect()),
             }
         }
     }
 
-    /// Returns maximum encoded size in arrow format.
-    pub fn maximum_encoded_size_arrow(&self, logical_rows: &[usize]) -> Result<usize> {
-        match self {
-            VectorValue::Int(_) => Ok(logical_rows.len() * 9 + 10),
-            VectorValue::Real(_) => Ok(logical_rows.len() * 9 + 10),
-            VectorValue::Decimal(_) => Ok(logical_rows.len() * (DECIMAL_STRUCT_SIZE + 1) + 10),
-            VectorValue::DateTime(_) => Ok(logical_rows.len() * 21 + 10),
-            VectorValue::Duration(_) => Ok(logical_rows.len() * 9 + 10),
-            VectorValue::Bytes(vec) => {
-                let mut size = logical_rows.len() + 10;
-                for idx in logical_rows {
-                    let el = &vec[*idx];
-                    match el {
-                        Some(v) => {
-                            size += 8 /* Offset */ + v.len();
-                        }
-                        None => {
-                            size +=  8 /* Offset */;
-                        }
-                    }
-                }
-                Ok(size)
-            }
-            VectorValue::Json(vec) => {
-                let mut size = logical_rows.len() + 10;
-                for idx in logical_rows {
-                    let el = &vec[*idx];
-                    match el {
-                        Some(v) => {
-                            size += 8 /* Offset */ + v.binary_len();
-                        }
-                        None => {
-                            size += 8 /* Offset */;
-                        }
-                    }
-                }
-                Ok(size)
+    #[inline]
+    pub fn eval_type(&self) -> EvalType {
+        match_template_evaluable! {
+            TT, match self {
+                VectorValueRef::TT(_) => EvalType::TT,
             }
         }
     }
 
-    /// Encodes a single element into binary format.
-    pub fn encode(
-        &self,
-        row_index: usize,
-        field_type: &FieldType,
-        output: &mut Vec<u8>,
-    ) -> Result<()> {
-        use crate::codec::mysql::DecimalEncoder;
-        use crate::codec::mysql::JsonEncoder;
-        use codec::prelude::{CompactByteEncoder, NumberEncoder};
-
-        match self {
-            VectorValue::Int(ref vec) => {
-                match vec[row_index] {
-                    None => {
-                        output.push(datum::NIL_FLAG);
-                    }
-                    Some(val) => {
-                        // Always encode to INT / UINT instead of VAR INT to be efficient.
-                        if field_type
-                            .as_accessor()
-                            .flag()
-                            .contains(FieldTypeFlag::UNSIGNED)
-                        {
-                            output.push(datum::UINT_FLAG);
-                            output.write_u64(val as u64)?;
-                        } else {
-                            output.push(datum::INT_FLAG);
-                            output.write_i64(val)?;
-                        }
-                    }
-                }
-                Ok(())
-            }
-            VectorValue::Real(ref vec) => {
-                match vec[row_index] {
-                    None => {
-                        output.push(datum::NIL_FLAG);
-                    }
-                    Some(val) => {
-                        output.push(datum::FLOAT_FLAG);
-                        output.write_f64(val.into_inner())?;
-                    }
-                }
-                Ok(())
-            }
-            VectorValue::Decimal(ref vec) => {
-                match &vec[row_index] {
-                    None => {
-                        output.push(datum::NIL_FLAG);
-                    }
-                    Some(val) => {
-                        output.push(datum::DECIMAL_FLAG);
-                        let (prec, frac) = val.prec_and_frac();
-                        output.write_decimal(val, prec, frac)?;
-                    }
-                }
-                Ok(())
-            }
-            VectorValue::Bytes(ref vec) => {
-                match &vec[row_index] {
-                    None => {
-                        output.push(datum::NIL_FLAG);
-                    }
-                    Some(ref val) => {
-                        output.push(datum::COMPACT_BYTES_FLAG);
-                        output.write_compact_bytes(val)?;
-                    }
-                }
-                Ok(())
-            }
-            VectorValue::DateTime(ref vec) => {
-                match &vec[row_index] {
-                    None => {
-                        output.push(datum::NIL_FLAG);
-                    }
-                    Some(ref val) => {
-                        output.push(datum::UINT_FLAG);
-                        output.write_u64(val.to_packed_u64())?;
-                    }
-                }
-                Ok(())
-            }
-            VectorValue::Duration(ref vec) => {
-                match &vec[row_index] {
-                    None => {
-                        output.push(datum::NIL_FLAG);
-                    }
-                    Some(ref val) => {
-                        output.push(datum::DURATION_FLAG);
-                        output.write_i64(val.to_nanos())?;
-                    }
-                }
-                Ok(())
-            }
-            VectorValue::Json(ref vec) => {
-                match &vec[row_index] {
-                    None => {
-                        output.push(datum::NIL_FLAG);
-                    }
-                    Some(ref val) => {
-                        output.push(datum::JSON_FLAG);
-                        output.write_json(val)?;
-                    }
-                }
-                Ok(())
+    #[inline]
+    pub fn get_scalar_ref(&self, index: usize) -> ScalarValueRef<'_> {
+        match_template_evaluable! {
+            TT, match self {
+                VectorValueRef::TT(v) => ScalarValueRef::TT(&v[index]),
             }
         }
     }
@@ -411,6 +250,32 @@ macro_rules! impl_as_slice {
                         other.eval_type()
                     ),
                 }
+            }
+        }
+
+        impl<'a> VectorValueRef<'a> {
+            /// Extracts a slice of values in specified concrete type from current column.
+            ///
+            /// # Panics
+            ///
+            /// Panics if the current column does not match the type.
+            #[inline]
+            pub fn $name(&self) -> &'a [Option<$ty>] {
+                match self {
+                    VectorValueRef::$ty(slice) => slice,
+                    other => panic!(
+                        "Cannot call `{}` over a {} column",
+                        stringify!($name),
+                        other.eval_type()
+                    ),
+                }
+            }
+        }
+
+        impl<'a> AsRef<[Option<$ty>]> for VectorValueRef<'a> {
+            #[inline]
+            fn as_ref(&self) -> &[Option<$ty>] {
+                self.$name()
             }
         }
     };
@@ -481,6 +346,13 @@ macro_rules! impl_from {
                 VectorValue::$ty(s)
             }
         }
+
+        impl<'a> From<&'a [Option<$ty>]> for VectorValueRef<'a> {
+            #[inline]
+            fn from(s: &'a [Option<$ty>]) -> VectorValueRef<'a> {
+                VectorValueRef::$ty(s)
+            }
+        }
     };
 }
 
@@ -491,6 +363,230 @@ impl_from! { Bytes }
 impl_from! { DateTime }
 impl_from! { Duration }
 impl_from! { Json }
+
+macro_rules! impl_encode_fn {
+    ($ty:tt) => {
+        /// Returns maximum encoded size in binary format.
+        pub fn maximum_encoded_size(&self, logical_rows: &[usize]) -> Result<usize> {
+            match self {
+                $ty::Int(_) => Ok(logical_rows.len() * 9),
+
+                // Some elements might be NULLs which encoded size is 1 byte. However it's fine because
+                // this function only calculates a maximum encoded size (for constructing buffers), not
+                // actual encoded size.
+                $ty::Real(_) => Ok(logical_rows.len() * 9),
+                $ty::Decimal(vec) => {
+                    let mut size = 0;
+                    for idx in logical_rows {
+                        let el = &vec[*idx];
+                        match el {
+                            Some(v) => {
+                                // FIXME: We don't need approximate size. Maximum size is enough (so
+                                // that we don't need to iterate each value).
+                                size += 1 /* FLAG */ + v.approximate_encoded_size();
+                            }
+                            None => {
+                                size += 1;
+                            }
+                        }
+                    }
+                    Ok(size)
+                }
+                $ty::Bytes(vec) => {
+                    let mut size = 0;
+                    for idx in logical_rows {
+                        let el = &vec[*idx];
+                        match el {
+                            Some(v) => {
+                                size += 1 /* FLAG */ + 10 /* MAX VARINT LEN */ + v.len();
+                            }
+                            None => {
+                                size += 1;
+                            }
+                        }
+                    }
+                    Ok(size)
+                }
+                $ty::DateTime(_) => Ok(logical_rows.len() * 9),
+                $ty::Duration(_) => Ok(logical_rows.len() * 9),
+                $ty::Json(vec) => {
+                    let mut size = 0;
+                    for idx in logical_rows {
+                        let el = &vec[*idx];
+                        match el {
+                            Some(v) => {
+                                size += 1 /* FLAG */ + v.binary_len();
+                            }
+                            None => {
+                                size += 1;
+                            }
+                        }
+                    }
+                    Ok(size)
+                }
+            }
+        }
+
+        /// Returns maximum encoded size in arrow format.
+        pub fn maximum_encoded_size_arrow(&self, logical_rows: &[usize]) -> Result<usize> {
+            match self {
+                $ty::Int(_) => Ok(logical_rows.len() * 9 + 10),
+                $ty::Real(_) => Ok(logical_rows.len() * 9 + 10),
+                $ty::Decimal(_) => Ok(logical_rows.len() * (DECIMAL_STRUCT_SIZE + 1) + 10),
+                $ty::DateTime(_) => Ok(logical_rows.len() * 21 + 10),
+                $ty::Duration(_) => Ok(logical_rows.len() * 9 + 10),
+                $ty::Bytes(vec) => {
+                    let mut size = logical_rows.len() + 10;
+                    for idx in logical_rows {
+                        let el = &vec[*idx];
+                        match el {
+                            Some(v) => {
+                                size += 8 /* Offset */ + v.len();
+                            }
+                            None => {
+                                size +=  8 /* Offset */;
+                            }
+                        }
+                    }
+                    Ok(size)
+                }
+                $ty::Json(vec) => {
+                    let mut size = logical_rows.len() + 10;
+                    for idx in logical_rows {
+                        let el = &vec[*idx];
+                        match el {
+                            Some(v) => {
+                                size += 8 /* Offset */ + v.binary_len();
+                            }
+                            None => {
+                                size += 8 /* Offset */;
+                            }
+                        }
+                    }
+                    Ok(size)
+                }
+            }
+        }
+
+        /// Encodes a single element into binary format.
+        pub fn encode(
+            &self,
+            row_index: usize,
+            field_type: &FieldType,
+            output: &mut Vec<u8>,
+        ) -> Result<()> {
+            use crate::codec::mysql::DecimalEncoder;
+            use crate::codec::mysql::JsonEncoder;
+            use codec::prelude::{CompactByteEncoder, NumberEncoder};
+
+            match self {
+                $ty::Int(vec) => {
+                    match vec[row_index] {
+                        None => {
+                            output.push(datum::NIL_FLAG);
+                        }
+                        Some(val) => {
+                            // Always encode to INT / UINT instead of VAR INT to be efficient.
+                            if field_type
+                                .as_accessor()
+                                .flag()
+                                .contains(FieldTypeFlag::UNSIGNED)
+                            {
+                                output.push(datum::UINT_FLAG);
+                                output.write_u64(val as u64)?;
+                            } else {
+                                output.push(datum::INT_FLAG);
+                                output.write_i64(val)?;
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+                $ty::Real(vec) => {
+                    match vec[row_index] {
+                        None => {
+                            output.push(datum::NIL_FLAG);
+                        }
+                        Some(val) => {
+                            output.push(datum::FLOAT_FLAG);
+                            output.write_f64(val.into_inner())?;
+                        }
+                    }
+                    Ok(())
+                }
+                $ty::Decimal(vec) => {
+                    match &vec[row_index] {
+                        None => {
+                            output.push(datum::NIL_FLAG);
+                        }
+                        Some(val) => {
+                            output.push(datum::DECIMAL_FLAG);
+                            let (prec, frac) = val.prec_and_frac();
+                            output.write_decimal(val, prec, frac)?;
+                        }
+                    }
+                    Ok(())
+                }
+                $ty::Bytes(vec) => {
+                    match &vec[row_index] {
+                        None => {
+                            output.push(datum::NIL_FLAG);
+                        }
+                        Some(ref val) => {
+                            output.push(datum::COMPACT_BYTES_FLAG);
+                            output.write_compact_bytes(val)?;
+                        }
+                    }
+                    Ok(())
+                }
+                $ty::DateTime(vec) => {
+                    match &vec[row_index] {
+                        None => {
+                            output.push(datum::NIL_FLAG);
+                        }
+                        Some(ref val) => {
+                            output.push(datum::UINT_FLAG);
+                            output.write_u64(val.to_packed_u64())?;
+                        }
+                    }
+                    Ok(())
+                }
+                $ty::Duration(vec) => {
+                    match &vec[row_index] {
+                        None => {
+                            output.push(datum::NIL_FLAG);
+                        }
+                        Some(ref val) => {
+                            output.push(datum::DURATION_FLAG);
+                            output.write_i64(val.to_nanos())?;
+                        }
+                    }
+                    Ok(())
+                }
+                $ty::Json(vec) => {
+                    match &vec[row_index] {
+                        None => {
+                            output.push(datum::NIL_FLAG);
+                        }
+                        Some(ref val) => {
+                            output.push(datum::JSON_FLAG);
+                            output.write_json(val)?;
+                        }
+                    }
+                    Ok(())
+                }
+            }
+        }
+    };
+}
+
+impl VectorValue {
+    impl_encode_fn!(VectorValue);
+}
+
+impl<'a> VectorValueRef<'a> {
+    impl_encode_fn!(VectorValueRef);
+}
 
 #[cfg(test)]
 mod tests {

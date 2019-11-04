@@ -4,6 +4,8 @@ use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+use bumpalo::Bump;
+
 use tikv_util::collections::HashMap;
 use tikv_util::collections::HashMapEntry;
 use tipb::Aggregation;
@@ -143,7 +145,7 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
             states_offset_each_logical_row: Vec::with_capacity(
                 crate::batch::runner::BATCH_MAX_SIZE,
             ),
-            group_by_results_unsafe: Vec::with_capacity(group_by_len),
+            group_by_results_empty_buffer: Vec::with_capacity(group_by_len),
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -183,7 +185,7 @@ pub struct SlowHashAggregationImpl {
     /// Stores evaluation results of group by expressions.
     /// It is just used to reduce allocations. The lifetime is not really 'static. The elements
     /// are only valid in the same batch where they are added.
-    group_by_results_unsafe: Vec<RpnStackNode<'static>>,
+    group_by_results_empty_buffer: Vec<RpnStackNode<'static>>,
 }
 
 unsafe impl Send for SlowHashAggregationImpl {}
@@ -209,80 +211,86 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_logical_row.clear();
 
-        let context = &mut entities.context;
+        let arena = Bump::with_capacity(1 << 12);
+        let ctx = &mut entities.context;
         let src_schema = entities.src.schema();
         let logical_rows_len = input_logical_rows.len();
         let group_by_len = self.group_by_exps.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
+        let groups = &mut self.groups;
+        let states = &mut self.states;
+        let each_aggr_fn = &entities.each_aggr_fn;
+        let group_key_buffer = &mut self.group_key_buffer;
+        let group_key_offsets = &mut self.group_key_offsets;
+        let states_offset_each_logical_row = &mut self.states_offset_each_logical_row;
 
         // Decode columns with mutable input first, so subsequent access to input can be immutable
         // (and the borrow checker will be happy)
         ensure_columns_decoded(
-            &context.cfg.tz,
+            &ctx.cfg.tz,
             &self.group_by_exps,
             src_schema,
             &mut input_physical_columns,
             input_logical_rows,
         )?;
-        assert!(self.group_by_results_unsafe.is_empty());
-        unsafe {
-            eval_exprs_decoded_no_lifetime(
-                context,
-                &self.group_by_exps,
-                src_schema,
-                &input_physical_columns,
-                input_logical_rows,
-                &mut self.group_by_results_unsafe,
-            )?;
-        }
+        eval_exprs_decoded(
+            ctx,
+            &self.group_by_exps,
+            src_schema,
+            &input_physical_columns,
+            input_logical_rows,
+            &mut self.group_by_results_empty_buffer,
+            &arena,
+            |group_by_results, _ctx| {
+                let buffer_ptr = (&**group_key_buffer).into();
+                for logical_row_idx in 0..logical_rows_len {
+                    let offset_begin = group_key_buffer.len();
 
-        let buffer_ptr = (&*self.group_key_buffer).into();
-        for logical_row_idx in 0..logical_rows_len {
-            let offset_begin = self.group_key_buffer.len();
-
-            // always encode group keys to the buffer first
-            // we'll then remove them if the group already exists
-            for group_by_result in &self.group_by_results_unsafe {
-                match group_by_result {
-                    RpnStackNode::Vector { value, field_type } => {
-                        value.as_ref().encode(
-                            value.logical_rows()[logical_row_idx],
-                            field_type,
-                            &mut self.group_key_buffer,
-                        )?;
-                        self.group_key_offsets.push(self.group_key_buffer.len());
+                    // always encode group keys to the buffer first
+                    // we'll then remove them if the group already exists
+                    for group_by_result in group_by_results.iter() {
+                        match group_by_result {
+                            RpnStackNode::Vector { value, field_type } => {
+                                value.physical_value.encode(
+                                    value.logical_rows[logical_row_idx],
+                                    field_type,
+                                    group_key_buffer,
+                                )?;
+                                group_key_offsets.push(group_key_buffer.len());
+                            }
+                            // we have checked that group by cannot be a scalar
+                            _ => unreachable!(),
+                        }
                     }
-                    // we have checked that group by cannot be a scalar
-                    _ => unreachable!(),
-                }
-            }
-            let group_key_ref_unsafe = GroupKeyRefUnsafe {
-                buffer_ptr,
-                begin: offset_begin,
-                end: self.group_key_buffer.len(),
-            };
+                    let group_key_ref_unsafe = GroupKeyRefUnsafe {
+                        buffer_ptr,
+                        begin: offset_begin,
+                        end: group_key_buffer.len(),
+                    };
 
-            let group_len = self.groups.len();
-            let group_index = match self.groups.entry(group_key_ref_unsafe) {
-                HashMapEntry::Vacant(entry) => {
-                    // if it's a new group, the group index is the current group count
-                    entry.insert(group_len);
-                    for aggr_fn in &entities.each_aggr_fn {
-                        self.states.push(aggr_fn.create_state());
-                    }
-                    group_len
+                    let group_len = groups.len();
+                    let group_index = match groups.entry(group_key_ref_unsafe) {
+                        HashMapEntry::Vacant(entry) => {
+                            // if it's a new group, the group index is the current group count
+                            entry.insert(group_len);
+                            for aggr_fn in each_aggr_fn {
+                                states.push(aggr_fn.create_state());
+                            }
+                            group_len
+                        }
+                        HashMapEntry::Occupied(entry) => {
+                            // remove the duplicated group key
+                            group_key_buffer.truncate(offset_begin);
+                            group_key_offsets.truncate(group_key_offsets.len() - group_by_len);
+                            *entry.get()
+                        }
+                    };
+                    states_offset_each_logical_row.push(group_index * aggr_fn_len);
                 }
-                HashMapEntry::Occupied(entry) => {
-                    // remove the duplicated group key
-                    self.group_key_buffer.truncate(offset_begin);
-                    self.group_key_offsets
-                        .truncate(self.group_key_offsets.len() - group_by_len);
-                    *entry.get()
-                }
-            };
-            self.states_offset_each_logical_row
-                .push(group_index * aggr_fn_len);
-        }
+
+                Ok(())
+            },
+        )?;
 
         // 2. Update states according to the group.
         HashAggregationHelper::update_each_row_states_by_offset(
@@ -292,10 +300,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             &mut self.states,
             &self.states_offset_each_logical_row,
         )?;
-
-        // Remember to remove expression results of the current batch. They are invalid
-        // in the next batch.
-        self.group_by_results_unsafe.clear();
 
         Ok(())
     }
