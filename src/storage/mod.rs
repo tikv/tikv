@@ -931,13 +931,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
                             let mut statistics = Statistics::default();
-                            let mut snap_store = SnapshotStore::new(
+                            let snap_store = SnapshotStore::new(
                                 snapshot,
                                 start_ts,
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
+                                bypass_locks,
                             );
-                            snap_store.set_bypass_locks(bypass_locks);
                             let result = snap_store
                                 .get(&key, &mut statistics)
                                 // map storage::txn::Error -> storage::Error
@@ -990,6 +990,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 0,
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
+                                Default::default(),
                             );
                             let mut results = vec![];
                             // TODO: optimize using seek.
@@ -1041,13 +1042,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
                             let mut statistics = Statistics::default();
-                            let mut snap_store = SnapshotStore::new(
+                            let snap_store = SnapshotStore::new(
                                 snapshot,
                                 start_ts,
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
+                                bypass_locks,
                             );
-                            snap_store.set_bypass_locks(bypass_locks);
                             let result = snap_store
                                 .batch_get(&keys, &mut statistics)
                                 .map_err(Error::from)
@@ -1112,13 +1113,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
-                            let mut snap_store = SnapshotStore::new(
+                            let snap_store = SnapshotStore::new(
                                 snapshot,
                                 start_ts,
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
+                                bypass_locks,
                             );
-                            snap_store.set_bypass_locks(bypass_locks);
 
                             let mut scanner;
                             if !options.reverse_scan {

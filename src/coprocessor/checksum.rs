@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use crc::crc64::{self, Digest, Hasher64};
 
 use kvproto::coprocessor::{KeyRange, Response};
@@ -31,6 +33,7 @@ impl<S: Snapshot> ChecksumContext<S> {
             req.get_start_ts(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
+            Arc::clone(&req_ctx.bypass_locks),
         );
         let scanner = RangesScanner::new(RangesScannerOptions {
             storage: store.into(),

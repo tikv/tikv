@@ -32,6 +32,7 @@ pub fn compose_ts(physical: u64, logical: u64) -> u64 {
     (physical << TSO_PHYSICAL_SHIFT_BITS) + logical
 }
 
+#[derive(Debug)]
 pub enum TsSet {
     Vec(Vec<u64>),
     Set(HashSet<u64>),

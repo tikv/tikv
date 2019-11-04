@@ -306,13 +306,14 @@ impl<S: Snapshot> SnapshotStore<S> {
         start_ts: u64,
         isolation_level: IsolationLevel,
         fill_cache: bool,
+        bypass_locks: Arc<TsSet>,
     ) -> Self {
         SnapshotStore {
             snapshot,
             start_ts,
             isolation_level,
             fill_cache,
-            bypass_locks: Default::default(),
+            bypass_locks,
 
             point_getter_cache: None,
         }
@@ -594,6 +595,7 @@ mod tests {
                 COMMIT_TS + 1,
                 IsolationLevel::Si,
                 true,
+                Default::default(),
             )
         }
     }
@@ -811,7 +813,7 @@ mod tests {
     fn test_scanner_verify_bound() {
         // Store with a limited range
         let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
-        let store = SnapshotStore::new(snap, 0, IsolationLevel::Si, true);
+        let store = SnapshotStore::new(snap, 0, IsolationLevel::Si, true, Default::default());
         let bound_a = Key::from_encoded(b"a".to_vec());
         let bound_b = Key::from_encoded(b"b".to_vec());
         let bound_c = Key::from_encoded(b"c".to_vec());
@@ -832,7 +834,7 @@ mod tests {
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
-        let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::Si, true);
+        let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::Si, true, Default::default());
         assert!(store2.scanner(false, false, None, None).is_ok());
         assert!(store2
             .scanner(false, false, Some(bound_a.clone()), None)
