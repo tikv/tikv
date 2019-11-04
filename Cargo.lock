@@ -1996,6 +1996,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72d5370d90f49f70bd033c3d75e87fc529fbfff9d6f7cccef07d6170079d91ea"
 
 [[package]]
+name = "pprof"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "086d83ba09f8fd4bec0cacb7d050d765dc463b7cc618bf410f8077c70e779bd9"
+dependencies = [
+ "backtrace",
+ "inferno",
+ "lazy_static",
+ "libc",
+ "log",
+ "memmap",
+ "nix 0.15.0",
+ "quick-error",
+ "rustc-demangle",
+ "spin",
+ "tempfile",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2525,25 +2544,6 @@ dependencies = [
  "crc",
  "libc",
  "librocksdb_sys",
-]
-
-[[package]]
-name = "rsperftools"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d247cd7c29ad325b42a7b4016b7fce3b9d436f36d3d261fa0f640adfbf0b647"
-dependencies = [
- "backtrace",
- "inferno",
- "lazy_static",
- "libc",
- "log",
- "memmap",
- "nix 0.15.0",
- "quick-error",
- "rustc-demangle",
- "spin",
- "tempfile",
 ]
 
 [[package]]
@@ -3267,6 +3267,7 @@ dependencies = [
  "nix 0.11.1",
  "panic_hook",
  "pd_client",
+ "pprof",
  "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs)",
  "profiler",
  "prometheus",
@@ -3277,7 +3278,6 @@ dependencies = [
  "rand 0.6.5",
  "rand_xorshift",
  "regex",
- "rsperftools",
  "serde",
  "serde_derive",
  "serde_json",
