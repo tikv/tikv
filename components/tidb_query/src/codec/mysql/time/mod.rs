@@ -135,6 +135,11 @@ fn chrono_naive_datetime(
 
 /// Round `frac` with `fsp`, return if there is a carry and the result.
 /// NOTE: we assume that `frac` is less than `100_000_000` and `fsp` is valid.
+/// ```ignore
+/// assert_eq!(123460, round_frac(123456, 5));
+/// assert_eq!(1_000_000, round_frac(999999, 5));
+/// assert_eq!(1230, round_frac(1234, 5)); // .001234, fsp = 5 => .001230
+/// ```
 fn round_frac(frac: u32, fsp: u8) -> (bool, u32) {
     debug_assert!(frac < 100_000_000);
     debug_assert!(fsp < 7);
@@ -263,9 +268,10 @@ mod parser {
     }
 
     /// Match at least one digit and return the rest of the slice.
-    /// e.g.:
-    ///     digit(&[b"12:32"]) == Some((b":32", b"12"))
-    ///     digit(&[b":32"]) == None
+    /// ```ignore
+    ///  digit1(b"12:32") == Some((b":32", b"12"))
+    ///  digit1(b":32") == None
+    /// ```
     fn digit1(input: &[u8]) -> Option<(&[u8], &[u8])> {
         let end = input
             .iter()
@@ -275,6 +281,11 @@ mod parser {
         Some((&input[end..], &input[..end]))
     }
 
+    /// Match at least one space and return the rest of the slice.
+    /// ```ignore
+    ///  space1(b"    12:32") == Some(b"12:32")
+    ///  space1(b":32") == None
+    /// ```
     fn space1(input: &[u8]) -> Option<&[u8]> {
         let end = input
             .iter()
@@ -375,6 +386,7 @@ mod parser {
     /// true.
     /// NOTE: This function assumes that `fsp` is in range: [0, 6].
     fn parse_frac(input: &[u8], fsp: u8, round: bool) -> Option<(bool, u32)> {
+        debug_assert!(fsp < 7);
         let fsp = usize::from(fsp);
         let len = input.len();
 
