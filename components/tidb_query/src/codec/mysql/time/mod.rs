@@ -61,7 +61,16 @@ fn last_day_of_month(year: u32, month: u32) -> u32 {
     }
 }
 
-/// When year, month or day is zero, there can not have a carry."
+/// Round each component.
+/// ```ignore
+/// let mut parts = [2019, 12, 1, 23, 59, 59, 1000000];
+/// round_components(&mut parts);
+/// assert_eq!([2019, 12, 2, 0, 0, 0, 0], parts);
+/// ```
+/// When year, month or day is zero, there can not have a carry.
+/// e.g.: `"1998-11-00 23:59:59.999" (fsp = 2, round = true)`, in `hms` it contains a carry,
+/// however, the `day` is 0, which is invalid in `MySQL`. When thoese cases encountered, return
+/// None.
 fn round_components(parts: &mut [u32]) -> Option<()> {
     debug_assert_eq!(parts.len(), 7);
     let modulus = [
