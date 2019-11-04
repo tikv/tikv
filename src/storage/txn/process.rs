@@ -17,7 +17,7 @@ use crate::storage::mvcc::{
 use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
 use crate::storage::{
     metrics::*, Command, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
-    ScanMode, Snapshot, Statistics, StorageCb, Value,
+    ScanMode, Snapshot, Statistics, StorageCb, TxnStatus, Value,
 };
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
@@ -33,7 +33,7 @@ pub enum ProcessResult {
     MvccKey { mvcc: MvccInfo },
     MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
     Locks { locks: Vec<LockInfo> },
-    TxnStatus { lock_ttl: u64, commit_ts: u64 },
+    TxnStatus { txn_status: TxnStatus },
     NextCommand { cmd: Command },
     Failed { err: StorageError },
 }
@@ -67,10 +67,7 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
             _ => panic!("process result mismatch"),
         },
         StorageCb::TxnStatus(cb) => match pr {
-            ProcessResult::TxnStatus {
-                lock_ttl,
-                commit_ts,
-            } => cb(Ok((lock_ttl, commit_ts))),
+            ProcessResult::TxnStatus { txn_status } => cb(Ok(txn_status)),
             ProcessResult::Failed { err } => cb(Err(err)),
             _ => panic!("process result mismatch"),
         },
@@ -821,8 +818,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
-                lock_ttl,
-                commit_ts: 0,
+                txn_status: TxnStatus::uncommitted(lock_ttl),
             };
             (pr, txn.into_modifies(), 1, ctx, None)
         }
@@ -834,20 +830,29 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             current_ts,
         } => {
             let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !ctx.get_not_fill_cache())?;
-            let (lock_ttl, commit_ts, is_pessimistic_txn) =
+            let (txn_status, is_pessimistic_txn) =
                 txn.check_txn_status(primary_key.clone(), caller_start_ts, current_ts)?;
 
-            // The lock is possibly resolved here only when lock_ttl and commit_ts are both 0.
-            if lock_ttl == 0 && commit_ts == 0 {
-                let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &[&primary_key]);
-                wake_up_waiters_if_needed(&lock_mgr, lock_ts, key_hashes, 0, is_pessimistic_txn);
-            }
+            // The lock is possibly resolved here only when the `check_txn_status` cleaned up the
+            // lock, and this may happen only when it returns `Rollbacked`.
+            match txn_status {
+                TxnStatus::Rollbacked => {
+                    let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &[&primary_key]);
+                    wake_up_waiters_if_needed(
+                        &lock_mgr,
+                        lock_ts,
+                        key_hashes,
+                        0,
+                        is_pessimistic_txn,
+                    );
+                }
+                TxnStatus::RollbackedBefore
+                | TxnStatus::Committed { .. }
+                | TxnStatus::Uncommitted { .. } => {}
+            };
 
             statistics.add(&txn.take_statistics());
-            let pr = ProcessResult::TxnStatus {
-                lock_ttl,
-                commit_ts,
-            };
+            let pr = ProcessResult::TxnStatus { txn_status };
             (pr, txn.into_modifies(), 1, ctx, None)
         }
         Command::Pause { ctx, duration, .. } => {
