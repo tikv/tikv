@@ -11,9 +11,9 @@ use tipb::IndexScan;
 use super::util::scan_executor::*;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::codec::table::check_index_key;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::storage::{IntervalRange, Storage};
-use crate::util::check_index_key;
 use crate::Result;
 
 pub struct BatchIndexScanExecutor<S: Storage>(ScanExecutor<S, IndexScanExecutorImpl>);

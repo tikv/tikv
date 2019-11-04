@@ -8,9 +8,8 @@ use tipb::ColumnInfo;
 use tipb::TableScan;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
-use crate::codec::table;
+use crate::codec::table::{self, check_record_key};
 use crate::storage::Storage;
-use crate::util::check_record_key;
 use crate::Result;
 
 pub struct TableInnerExecutor {

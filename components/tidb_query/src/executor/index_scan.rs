@@ -7,9 +7,8 @@ use tipb::ColumnInfo;
 use tipb::IndexScan;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
-use crate::codec::table;
+use crate::codec::table::{self, check_index_key};
 use crate::storage::Storage;
-use crate::util::check_index_key;
 use crate::Result;
 
 pub struct IndexInnerExecutor {
