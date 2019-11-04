@@ -113,10 +113,20 @@ pub enum TxnStatus {
     RollbackedBefore,
     /// The txn doesn't exist.
     NotExist,
-    /// The txn haven't yet been committed. Carries the primary lock's TTL.
-    Uncommitted(u64),
-    /// The txn was committed. Carries the commit_ts.
-    Committed(u64),
+    /// The txn haven't yet been committed.
+    Uncommitted { lock_ttl: u64 },
+    /// The txn was committed.
+    Committed { commit_ts: u64 },
+}
+
+impl TxnStatus {
+    pub fn uncommitted(lock_ttl: u64) -> Self {
+        Self::Uncommitted { lock_ttl }
+    }
+
+    pub fn committed(commit_ts: u64) -> Self {
+        Self::Committed { commit_ts }
+    }
 }
 
 pub enum StorageCb {
@@ -4631,7 +4641,7 @@ mod tests {
         let k = Key::from_raw(b"k");
         let v = b"v".to_vec();
 
-        use TxnStatus::Uncommitted;
+        let uncommitted = TxnStatus::uncommitted;
 
         // No lock.
         storage
@@ -4669,7 +4679,7 @@ mod tests {
                 k.clone(),
                 10,
                 90,
-                expect_value_callback(tx.clone(), 0, Uncommitted(100)),
+                expect_value_callback(tx.clone(), 0, uncommitted(100)),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4682,7 +4692,7 @@ mod tests {
                 k.clone(),
                 10,
                 110,
-                expect_value_callback(tx.clone(), 0, Uncommitted(110)),
+                expect_value_callback(tx.clone(), 0, uncommitted(110)),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4713,6 +4723,8 @@ mod tests {
 
         let ts = mvcc::compose_ts;
         use TxnStatus::*;
+        let uncommitted = TxnStatus::uncommitted;
+        let committed = TxnStatus::committed;
 
         // No lock and no commit info. Gets nothing.
         storage
@@ -4765,7 +4777,7 @@ mod tests {
                 ts(10, 0),
                 ts(12, 0),
                 ts(15, 0),
-                expect_value_callback(tx.clone(), 0, Uncommitted(100)),
+                expect_value_callback(tx.clone(), 0, uncommitted(100)),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4791,7 +4803,7 @@ mod tests {
                 ts(10, 0),
                 ts(12, 0),
                 ts(15, 0),
-                expect_value_callback(tx.clone(), 0, Committed(ts(20, 0))),
+                expect_value_callback(tx.clone(), 0, committed(ts(20, 0))),
             )
             .unwrap();
         rx.recv().unwrap();

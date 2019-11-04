@@ -824,7 +824,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
-                txn_status: TxnStatus::Uncommitted(lock_ttl),
+                txn_status: TxnStatus::uncommitted(lock_ttl),
             };
             (pr, txn.into_modifies(), 1, ctx, None)
         }
@@ -836,7 +836,6 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             current_ts,
         } => {
             let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !ctx.get_not_fill_cache())?;
-            // let (lock_ttl, commit_ts, is_pessimistic_txn) =
             let (txn_status, is_pessimistic_txn) =
                 txn.check_txn_status(primary_key.clone(), caller_start_ts, current_ts)?;
 
@@ -854,8 +853,8 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                     );
                 }
                 TxnStatus::RollbackedBefore
-                | TxnStatus::Committed(_)
-                | TxnStatus::Uncommitted(_)
+                | TxnStatus::Committed { .. }
+                | TxnStatus::Uncommitted { .. }
                 | TxnStatus::NotExist => {}
             };
 

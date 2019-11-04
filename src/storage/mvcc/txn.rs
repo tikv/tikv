@@ -565,7 +565,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 if write_type == WriteType::Rollback {
                     Ok(TxnStatus::RollbackedBefore)
                 } else {
-                    Ok(TxnStatus::Committed(ts))
+                    Ok(TxnStatus::committed(ts))
                 }
             }
             None => {
@@ -623,9 +623,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 Ok(is_pessimistic_txn)
             }
             _ => match self.check_txn_status_missing_lock(key)? {
-                TxnStatus::Committed(ts) => {
+                TxnStatus::Committed { commit_ts } => {
                     MVCC_CONFLICT_COUNTER.rollback_committed.inc();
-                    Err(Error::Committed { commit_ts: ts })
+                    Err(Error::Committed { commit_ts })
                 }
                 TxnStatus::RollbackedBefore => {
                     // Return Ok on Rollback already exist.
@@ -741,7 +741,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
                 }
 
-                Ok((TxnStatus::Uncommitted(lock_ttl), is_pessimistic_txn))
+                Ok((TxnStatus::uncommitted(lock_ttl), is_pessimistic_txn))
             }
             _ => self
                 .check_txn_status_missing_lock(primary_key)
@@ -1141,8 +1141,11 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let (k, v) = (b"k", b"v");
+
+        // Shortcuts
         let ts = super::super::compose_ts;
-        use super::TxnStatus::*;
+        use super::TxnStatus;
+        let uncommitted = TxnStatus::uncommitted;
 
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(10, 0), 100, 0);
         must_check_txn_status(
@@ -1151,7 +1154,7 @@ mod tests {
             ts(10, 0),
             ts(20, 0),
             ts(20, 0),
-            Uncommitted(100),
+            uncommitted(100),
         );
         // The the min_commit_ts should be ts(20, 1)
         must_commit_err(&engine, k, ts(10, 0), ts(15, 0));
@@ -1165,7 +1168,7 @@ mod tests {
             ts(30, 0),
             ts(40, 0),
             ts(40, 0),
-            Uncommitted(100),
+            uncommitted(100),
         );
         must_commit(&engine, k, ts(30, 0), ts(50, 0));
     }
@@ -1967,7 +1970,9 @@ mod tests {
 
         let ts = super::super::compose_ts;
 
-        use super::TxnStatus::*;
+        use super::TxnStatus::{self, *};
+        let committed = TxnStatus::committed;
+        let uncommitted = TxnStatus::uncommitted;
 
         // Try to check a not exist thing.
         must_check_txn_status(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), NotExist);
@@ -1987,29 +1992,29 @@ mod tests {
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(5, 1), false);
 
         // Update min_commit_ts to current_ts.
-        must_check_txn_status(&engine, k, ts(5, 0), ts(6, 0), ts(7, 0), Uncommitted(100));
+        must_check_txn_status(&engine, k, ts(5, 0), ts(6, 0), ts(7, 0), uncommitted(100));
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(7, 0), false);
 
         // Update min_commit_ts to caller_start_ts + 1 if current_ts < caller_start_ts.
         // This case should be impossible. But if it happens, we prevents it.
-        must_check_txn_status(&engine, k, ts(5, 0), ts(9, 0), ts(8, 0), Uncommitted(100));
+        must_check_txn_status(&engine, k, ts(5, 0), ts(9, 0), ts(8, 0), uncommitted(100));
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
         // caller_start_ts < lock.min_commit_ts < current_ts
         // When caller_start_ts < lock.min_commit_ts, no need to update it.
-        must_check_txn_status(&engine, k, ts(5, 0), ts(8, 0), ts(10, 0), Uncommitted(100));
+        must_check_txn_status(&engine, k, ts(5, 0), ts(8, 0), ts(10, 0), uncommitted(100));
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
         // current_ts < lock.min_commit_ts < caller_start_ts
-        must_check_txn_status(&engine, k, ts(5, 0), ts(11, 0), ts(9, 0), Uncommitted(100));
+        must_check_txn_status(&engine, k, ts(5, 0), ts(11, 0), ts(9, 0), uncommitted(100));
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(11, 1), false);
 
         // For same caller_start_ts and current_ts, update min_commit_ts to caller_start_ts + 1
-        must_check_txn_status(&engine, k, ts(5, 0), ts(12, 0), ts(12, 0), Uncommitted(100));
+        must_check_txn_status(&engine, k, ts(5, 0), ts(12, 0), ts(12, 0), uncommitted(100));
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(12, 1), false);
 
         // Logical time is also considered in the comparing
-        must_check_txn_status(&engine, k, ts(5, 0), ts(13, 1), ts(13, 3), Uncommitted(100));
+        must_check_txn_status(&engine, k, ts(5, 0), ts(13, 1), ts(13, 3), uncommitted(100));
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(13, 3), false);
 
         must_commit(&engine, k, ts(5, 0), ts(15, 0));
@@ -2022,7 +2027,7 @@ mod tests {
             ts(5, 0),
             ts(12, 0),
             ts(12, 0),
-            Committed(ts(15, 0)),
+            committed(ts(15, 0)),
         );
         must_unlocked(&engine, k);
 
@@ -2035,7 +2040,7 @@ mod tests {
             ts(5, 0),
             ts(12, 0),
             ts(12, 0),
-            Committed(ts(15, 0)),
+            committed(ts(15, 0)),
         );
 
         // Check a not existing transaction, gets nothing.
@@ -2058,7 +2063,7 @@ mod tests {
             ts(20, 0),
             ts(21, 105),
             ts(21, 105),
-            Uncommitted(100),
+            uncommitted(100),
         );
         must_large_txn_locked(&engine, k, ts(20, 0), 100, ts(21, 106), false);
 
@@ -2078,7 +2083,7 @@ mod tests {
         must_large_txn_locked(&engine, k, ts(4, 0), 100, 0, true);
 
         // Pessimistic lock do not have the min_commit_ts field, so it will not be updated.
-        must_check_txn_status(&engine, k, ts(4, 0), ts(10, 0), ts(10, 0), Uncommitted(100));
+        must_check_txn_status(&engine, k, ts(4, 0), ts(10, 0), ts(10, 0), uncommitted(100));
         must_large_txn_locked(&engine, k, ts(4, 0), 100, 0, true);
 
         // Commit the key.
@@ -2097,7 +2102,7 @@ mod tests {
             ts(4, 0),
             ts(10, 0),
             ts(10, 0),
-            Committed(ts(140, 0)),
+            committed(ts(140, 0)),
         );
         must_check_txn_status(
             &engine,
@@ -2105,7 +2110,7 @@ mod tests {
             ts(5, 0),
             ts(10, 0),
             ts(10, 0),
-            Committed(ts(15, 0)),
+            committed(ts(15, 0)),
         );
         must_check_txn_status(
             &engine,
@@ -2124,7 +2129,7 @@ mod tests {
             ts(150, 0),
             ts(160, 0),
             ts(160, 0),
-            Uncommitted(100),
+            uncommitted(100),
         );
         must_large_txn_locked(&engine, k, ts(150, 0), 100, 0, true);
         must_check_txn_status(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), Rollbacked);

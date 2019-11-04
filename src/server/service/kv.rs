@@ -2190,8 +2190,8 @@ fn future_txn_heart_beat<E: Engine, L: LockMgr>(
         } else {
             match v {
                 Ok(txn_status) => {
-                    if let TxnStatus::Uncommitted(ttl) = txn_status {
-                        resp.set_lock_ttl(ttl);
+                    if let TxnStatus::Uncommitted { lock_ttl } = txn_status {
+                        resp.set_lock_ttl(lock_ttl);
                     } else {
                         unreachable!();
                     }
@@ -2226,8 +2226,8 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
         } else {
             match v {
                 Ok(txn_status) => match txn_status {
-                    TxnStatus::Committed(commit_ts) => resp.set_commit_version(commit_ts),
-                    TxnStatus::Uncommitted(ttl) => resp.set_lock_ttl(ttl),
+                    TxnStatus::Committed { commit_ts } => resp.set_commit_version(commit_ts),
+                    TxnStatus::Uncommitted { lock_ttl } => resp.set_lock_ttl(lock_ttl),
                     TxnStatus::Rollbacked | TxnStatus::RollbackedBefore | TxnStatus::NotExist => {}
                 },
                 Err(e) => resp.set_error(extract_key_error(&e)),
