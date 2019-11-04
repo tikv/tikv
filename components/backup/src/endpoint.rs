@@ -156,7 +156,7 @@ impl BackupRange {
             }
             debug!("backup scan entries"; "len" => batch.len());
             // Build sst files.
-            if let Err(e) = writer.write(batch.drain()) {
+            if let Err(e) = writer.write(batch.drain(), true) {
                 error!("backup build sst failed"; "error" => ?e);
                 return Err(e);
             }
