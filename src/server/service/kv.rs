@@ -18,7 +18,9 @@ use crate::storage::kv::Error as EngineError;
 use crate::storage::lock_manager::LockMgr;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
-use crate::storage::{self, Engine, Key, Mutation, Options, PointGetCommand, Storage, Value};
+use crate::storage::{
+    self, Engine, Key, Mutation, Options, PointGetCommand, Storage, TxnStatus, Value,
+};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
@@ -2188,7 +2190,13 @@ fn future_txn_heart_beat<E: Engine, L: LockMgr>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok((ttl, _)) => resp.set_lock_ttl(ttl),
+                Ok(txn_status) => {
+                    if let TxnStatus::Uncommitted { lock_ttl } = txn_status {
+                        resp.set_lock_ttl(lock_ttl);
+                    } else {
+                        unreachable!();
+                    }
+                }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -2218,10 +2226,11 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok((lock_ttl, commit_ts)) => {
-                    resp.set_lock_ttl(lock_ttl);
-                    resp.set_commit_version(commit_ts);
-                }
+                Ok(txn_status) => match txn_status {
+                    TxnStatus::Committed { commit_ts } => resp.set_commit_version(commit_ts),
+                    TxnStatus::Uncommitted { lock_ttl } => resp.set_lock_ttl(lock_ttl),
+                    TxnStatus::Rollbacked | TxnStatus::RollbackedBefore => {}
+                },
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
