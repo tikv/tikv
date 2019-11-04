@@ -45,14 +45,9 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        KeyIsLocked { key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64, txn_size: u64 } {
+        KeyIsLocked(info: kvproto::kvrpcpb::LockInfo) {
             description("key is locked (backoff or cleanup)")
-            display("key is locked (backoff or cleanup) {}-{}@{} ttl {} txn_size {}",
-                        hex::encode_upper(key),
-                        hex::encode_upper(primary),
-                        ts,
-                        ttl,
-                        txn_size)
+            display("key is locked (backoff or cleanup) {:?}", info)
         }
         BadFormatLock { description("bad format lock data") }
         BadFormatWrite { description("bad format write data") }
@@ -109,19 +104,7 @@ impl Error {
         match *self {
             Error::Engine(ref e) => e.maybe_clone().map(Error::Engine),
             Error::Codec(ref e) => e.maybe_clone().map(Error::Codec),
-            Error::KeyIsLocked {
-                ref key,
-                ref primary,
-                ts,
-                ttl,
-                txn_size,
-            } => Some(Error::KeyIsLocked {
-                key: key.clone(),
-                primary: primary.clone(),
-                ts,
-                ttl,
-                txn_size,
-            }),
+            Error::KeyIsLocked(ref info) => Some(Error::KeyIsLocked(info.clone())),
             Error::BadFormatLock => Some(Error::BadFormatLock),
             Error::BadFormatWrite => Some(Error::BadFormatWrite),
             Error::TxnLockNotFound {
@@ -285,22 +268,20 @@ pub mod tests {
         Ok(())
     }
 
-    fn must_prewrite_put_impl<E: Engine>(
+    pub fn must_prewrite_put_impl<E: Engine>(
         engine: &E,
         key: &[u8],
         value: &[u8],
         pk: &[u8],
         ts: u64,
-        for_update_ts: u64,
         is_pessimistic_lock: bool,
+        options: Options,
     ) {
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts;
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
-        if for_update_ts == 0 {
+        if options.for_update_ts == 0 {
             txn.prewrite(mutation, pk, &options).unwrap();
         } else {
             txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
@@ -310,7 +291,8 @@ pub mod tests {
     }
 
     pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
-        must_prewrite_put_impl(engine, key, value, pk, ts, 0, false);
+        let options = Options::default();
+        must_prewrite_put_impl(engine, key, value, pk, ts, false, options);
     }
 
     pub fn must_pessimistic_prewrite_put<E: Engine>(
@@ -322,15 +304,9 @@ pub mod tests {
         for_update_ts: u64,
         is_pessimistic_lock: bool,
     ) {
-        must_prewrite_put_impl(
-            engine,
-            key,
-            value,
-            pk,
-            ts,
-            for_update_ts,
-            is_pessimistic_lock,
-        );
+        let mut options = Options::default();
+        options.for_update_ts = for_update_ts;
+        must_prewrite_put_impl(engine, key, value, pk, ts, is_pessimistic_lock, options);
     }
 
     fn must_prewrite_put_err_impl<E: Engine>(
@@ -341,7 +317,7 @@ pub mod tests {
         ts: u64,
         for_update_ts: u64,
         is_pessimistic_lock: bool,
-    ) {
+    ) -> Error {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
@@ -349,10 +325,10 @@ pub mod tests {
         options.for_update_ts = for_update_ts;
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         if for_update_ts == 0 {
-            txn.prewrite(mutation, pk, &options).unwrap_err();
+            txn.prewrite(mutation, pk, &options).unwrap_err()
         } else {
             txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
-                .unwrap_err();
+                .unwrap_err()
         }
     }
 
@@ -362,8 +338,8 @@ pub mod tests {
         value: &[u8],
         pk: &[u8],
         ts: u64,
-    ) {
-        must_prewrite_put_err_impl(engine, key, value, pk, ts, 0, false);
+    ) -> Error {
+        must_prewrite_put_err_impl(engine, key, value, pk, ts, 0, false)
     }
 
     pub fn must_pessimistic_prewrite_put_err<E: Engine>(
@@ -374,7 +350,7 @@ pub mod tests {
         ts: u64,
         for_update_ts: u64,
         is_pessimistic_lock: bool,
-    ) {
+    ) -> Error {
         must_prewrite_put_err_impl(
             engine,
             key,
@@ -383,7 +359,7 @@ pub mod tests {
             ts,
             for_update_ts,
             is_pessimistic_lock,
-        );
+        )
     }
 
     fn must_prewrite_delete_impl<E: Engine>(
@@ -497,14 +473,14 @@ pub mod tests {
         pk: &[u8],
         start_ts: u64,
         for_update_ts: u64,
-    ) {
+    ) -> Error {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         let mut options = Options::default();
         options.for_update_ts = for_update_ts;
         txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
-            .unwrap_err();
+            .unwrap_err()
     }
 
     pub fn must_pessimistic_rollback<E: Engine>(
@@ -568,11 +544,16 @@ pub mod tests {
         write(engine, &ctx, txn.into_modifies());
     }
 
-    pub fn must_cleanup_err<E: Engine>(engine: &E, key: &[u8], start_ts: u64, current_ts: u64) {
+    pub fn must_cleanup_err<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: u64,
+        current_ts: u64,
+    ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
-        assert!(txn.cleanup(Key::from_raw(key), current_ts).is_err());
+        txn.cleanup(Key::from_raw(key), current_ts).unwrap_err()
     }
 
     pub fn must_txn_heart_beat<E: Engine>(

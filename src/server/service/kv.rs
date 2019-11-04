@@ -1453,6 +1453,7 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockMgr>(
     options.lock_ttl = req.get_lock_ttl();
     options.is_first_lock = req.get_is_first_lock();
     options.for_update_ts = req.get_for_update_ts();
+    options.wait_timeout = req.get_wait_timeout();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_acquire_pessimistic_lock(
@@ -1982,20 +1983,8 @@ fn extract_committed(err: &storage::Error) -> Option<u64> {
 fn extract_key_error(err: &storage::Error) -> KeyError {
     let mut key_error = KeyError::new();
     match *err {
-        storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked {
-            ref key,
-            ref primary,
-            ts,
-            ttl,
-            txn_size,
-        })) => {
-            let mut lock_info = LockInfo::new();
-            lock_info.set_key(key.to_owned());
-            lock_info.set_primary_lock(primary.to_owned());
-            lock_info.set_lock_version(ts);
-            lock_info.set_lock_ttl(ttl);
-            lock_info.set_txn_size(txn_size);
-            key_error.set_locked(lock_info);
+        storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(ref info))) => {
+            key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock
         storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict {
