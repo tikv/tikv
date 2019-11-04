@@ -178,7 +178,7 @@ impl<S: Snapshot> PointGetter<S> {
         if let Some(ref lock_value) = lock_value {
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
-            super::util::check_lock(user_key, self.ts, &lock, &self.bypass_locks)
+            super::util::check_lock(user_key, self.ts, lock, &self.bypass_locks)
         } else {
             Ok(())
         }

@@ -166,7 +166,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                         result = super::super::util::check_lock(
                             &current_user_key,
                             ts,
-                            &lock,
+                            lock,
                             &self.cfg.bypass_locks,
                         )
                         .map(|_| None);
