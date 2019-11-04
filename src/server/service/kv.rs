@@ -2028,6 +2028,7 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockMgr>(
     options.lock_ttl = req.get_lock_ttl();
     options.is_first_lock = req.get_is_first_lock();
     options.for_update_ts = req.get_for_update_ts();
+    options.wait_timeout = req.get_wait_timeout();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_acquire_pessimistic_lock(
