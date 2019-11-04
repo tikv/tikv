@@ -762,7 +762,7 @@ impl ConvertTo<f64> for &[u8] {
                 debug_assert!(false, "parse str[{}] to float failed, the err is {}, origin str is: {:?}, this is a bug.", vs, err, self);
                 let err: Error = box_err!("parse str[{}] to float failed, the err is {}, origin str is: {:?}, this is a bug.", vs, err, self);
                 debug!("{:?}", err);
-                Ok(0.0)
+                Err(box_err!("parse '{}' to float failed, err: {:?}", vs, err))
             }
         }
     }
