@@ -1813,10 +1813,7 @@ impl ConvertTo<Decimal> for &[u8] {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         let r = match Decimal::from_bytes(self) {
-            Err(e) => {
-                debug!("Decimal::from_bytes failed, err is {:?}", e);
-                return Ok(Decimal::zero());
-            }
+            Err(e) => return Ok(Decimal::zero()),
             Ok(x) => x,
         };
         let err = Error::overflow("DECIMAL", "");
