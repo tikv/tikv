@@ -17,7 +17,7 @@ use std::str::FromStr;
 
 use super::Result;
 use crate::config::TiKvConfig;
-use rsperftools;
+use pprof;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
@@ -212,7 +212,7 @@ impl StatusServer {
         Box::new(ok(res))
     }
 
-    fn frames_post_processor() -> impl Fn(&mut rsperftools::Frames) {
+    fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
         let thread_rename = [
             (Regex::new(r"^grpc-server-\d*$").unwrap(), "grpc-server"),
             (Regex::new(r"^cop-high\d*$").unwrap(), "cop-high"),
@@ -246,8 +246,8 @@ impl StatusServer {
     pub fn dump_rsprof(
         seconds: u64,
         frequency: i32,
-    ) -> Box<dyn Future<Item = rsperftools::Report, Error = rsperftools::Error> + Send> {
-        match rsperftools::ProfilerGuard::new(frequency) {
+    ) -> Box<dyn Future<Item = pprof::Report, Error = pprof::Error> + Send> {
+        match pprof::ProfilerGuard::new(frequency) {
             Ok(guard) => {
                 info!(
                     "start profiling {} seconds with frequency {} /s",
@@ -260,7 +260,7 @@ impl StatusServer {
                         .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
                         .then(
                             move |_| -> Box<
-                                dyn Future<Item = rsperftools::Report, Error = rsperftools::Error>
+                                dyn Future<Item = pprof::Report, Error = pprof::Error>
                                     + Send,
                             > {
                                 let _ = guard;

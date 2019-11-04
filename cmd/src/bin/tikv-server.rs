@@ -7,11 +7,12 @@ use std::process;
 
 use clap::{crate_authors, App, Arg};
 use cmd::setup::validate_and_persist_config;
-use rsperftools;
+use pprof;
 use tikv::config::TiKvConfig;
 
 fn main() {
-    let guard = rsperftools::ProfilerGuard::new(99);
+    let guard = pprof::ProfilerGuard::new(99).unwrap();
+
     let version_info = tikv::tikv_version_info();
 
     let matches = App::new("TiKV")
