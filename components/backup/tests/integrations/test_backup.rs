@@ -1,7 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::*;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use futures::sync::mpsc as future_mpsc;
 use futures::{Future, Stream};
@@ -38,10 +39,31 @@ struct TestSuite {
     _env: Arc<Environment>,
 }
 
+// Retry if encounter error
+macro_rules! retry_req {
+    ($call_req: expr, $check_resp: expr, $resp:ident, $retry:literal, $timeout:literal) => {
+        let start = Instant::now();
+        let timeout = Duration::from_millis($timeout);
+        let mut tried_times = 0;
+        while tried_times < $retry || start.elapsed() < timeout {
+            if $check_resp {
+                break;
+            } else {
+                thread::sleep(Duration::from_millis(200));
+                tried_times += 1;
+                $resp = $call_req;
+                continue;
+            }
+        }
+    };
+}
+
 impl TestSuite {
     fn new(count: usize) -> TestSuite {
         super::init();
         let mut cluster = new_server_cluster(1, count);
+        // Increase the Raft tick interval to make this test case running reliably.
+        configure_for_lease_read(&mut cluster, Some(100), None);
         cluster.run();
 
         let mut endpoints = HashMap::default();
@@ -59,6 +81,8 @@ impl TestSuite {
             endpoints.insert(*id, worker);
         }
 
+        // Make sure there is a leader.
+        cluster.must_put(b"foo", b"foo");
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
         let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
@@ -102,7 +126,14 @@ impl TestSuite {
         prewrite_req.primary_lock = pk;
         prewrite_req.start_version = ts;
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
-        let prewrite_resp = self.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
+        let mut prewrite_resp = self.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
+        retry_req!(
+            self.tikv_cli.kv_prewrite(&prewrite_req).unwrap(),
+            !prewrite_resp.has_region_error() && prewrite_resp.errors.is_empty(),
+            prewrite_resp,
+            5,    // retry 5 times
+            5000  // 5s timeout
+        );
         assert!(
             !prewrite_resp.has_region_error(),
             "{:?}",
@@ -121,7 +152,14 @@ impl TestSuite {
         commit_req.start_version = start_ts;
         commit_req.set_keys(keys.into_iter().collect());
         commit_req.commit_version = commit_ts;
-        let commit_resp = self.tikv_cli.kv_commit(&commit_req).unwrap();
+        let mut commit_resp = self.tikv_cli.kv_commit(&commit_req).unwrap();
+        retry_req!(
+            self.tikv_cli.kv_commit(&commit_req).unwrap(),
+            !commit_resp.has_region_error() && !commit_resp.has_error(),
+            commit_resp,
+            5,    // retry 5 times
+            5000  // 5s timeout
+        );
         assert!(
             !commit_resp.has_region_error(),
             "{:?}",
@@ -360,4 +398,6 @@ fn test_backup_meta() {
     assert_eq!(total_kvs, admin_total_kvs);
     assert_eq!(total_bytes, admin_total_bytes);
     assert_eq!(checksum, admin_checksum);
+
+    suite.stop();
 }
