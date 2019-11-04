@@ -35,6 +35,7 @@ pub struct Builder {
     after_start_func: Arc<dyn Fn() + Send + Sync + 'static>,
     max_tasks: usize,
     workers: usize,
+    pool_size: usize,
 }
 
 impl Builder {
@@ -46,6 +47,7 @@ impl Builder {
             after_start_func: Arc::new(|| {}),
             max_tasks: std::usize::MAX,
             workers: num_cpus::get_physical(),
+            pool_size: num_cpus::get_physical(),
         }
     }
 
@@ -60,6 +62,7 @@ impl Builder {
 
     pub fn pool_size(&mut self, val: usize) -> &mut Self {
         self.workers = val;
+        self.pool_size = val;
         self
     }
 
@@ -125,6 +128,7 @@ impl Builder {
         super::FuturePool {
             pool,
             env,
+            pool_size: self.pool_size,
             max_tasks: self.max_tasks,
         }
     }

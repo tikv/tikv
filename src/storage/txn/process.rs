@@ -368,8 +368,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             let result = find_mvcc_infos_by_key(&mut reader, key, u64::MAX);
@@ -388,8 +386,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             match reader.seek_ts(start_ts)? {
@@ -423,8 +419,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             let result = reader.scan_locks(start_key.as_ref(), |lock| lock.ts <= max_ts, limit);
@@ -455,8 +449,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             let result = reader.scan_locks(

@@ -96,6 +96,8 @@ pub struct FuturePool {
     // pool: TokioPool2,
     pool: TexnPool,
     env: Arc<Env>,
+    // for accessing pool_size config since Tokio doesn't offer such getter.
+    pool_size: usize,
     max_tasks: usize,
 }
 
@@ -109,6 +111,12 @@ impl crate::AssertSend for FuturePool {}
 impl crate::AssertSync for FuturePool {}
 
 impl FuturePool {
+    /// Gets inner thread pool size.
+    #[inline]
+    pub fn get_pool_size(&self) -> usize {
+        self.pool_size
+    }
+
     /// Gets current running task count.
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
