@@ -1569,11 +1569,12 @@ impl Decimal {
         }
     }
 
+    /// Return Err only when the `s` is empty or can not convert to decimal.
     pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
         Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
     }
 
-    /// Return Err only whne the `s` is empty or can not convert to decimal
+    /// Return Err only when the `s` is empty or can not convert to decimal.
     fn from_bytes_with_word_buf(s: &[u8], word_buf_len: u8) -> Result<Res<Decimal>> {
         // trim whitespace
         let mut bs = match s.iter().position(|c| !c.is_ascii_whitespace()) {
@@ -1813,7 +1814,7 @@ impl ConvertTo<Decimal> for &[u8] {
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
         let r = match Decimal::from_bytes(self) {
-            Err(e) => return Ok(Decimal::zero()),
+            Err(_) => return Ok(Decimal::zero()),
             Ok(x) => x,
         };
         let err = Error::overflow("DECIMAL", "");
