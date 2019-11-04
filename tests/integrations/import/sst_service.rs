@@ -161,7 +161,7 @@ fn test_download_sst() {
     let result = import.download(&download).unwrap();
     assert!(!result.get_is_empty());
     assert_eq!(result.get_range().get_start(), &[sst_range.0]);
-    assert_eq!(result.get_range().get_end(), &[sst_range.1]);
+    assert_eq!(result.get_range().get_end(), &[sst_range.1 - 1]);
 
     // Do an ingest and verify the result is correct.
 
