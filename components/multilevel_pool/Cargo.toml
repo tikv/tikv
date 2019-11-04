@@ -7,4 +7,14 @@ publish = false
 [dependencies]
 futures-preview = { version = "=0.3.0-alpha.19", features = ["async-await"] }
 crossbeam  = "0.7.2"
-dashmap = "1"
+dashmap = "1.2.0"
+num_cpus = "1"
+rand = "0.7.2"
+once_cell = "1.2.0"
+
+tikv_util = { path = "../tikv_util" }
+
+[dependencies.prometheus]
+git = "https://github.com/pingcap/rust-prometheus.git"
+rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
+features = ["nightly", "push", "process"]

@@ -195,6 +195,7 @@ members = [
   "components/backup",
   "components/keys",
   "components/sst_importer",
+  "components/multilevel_pool",
   "cmd",
 ]
 default-members = ["cmd"]

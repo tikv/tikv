@@ -1,3 +1,5 @@
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -7,7 +9,7 @@ use crossbeam::epoch::{self, Atomic};
 
 use dashmap::DashMap;
 
-// swap interval (in secs)
+// Swap interval (in secs)
 const SWAP_INTERVAL: u64 = 20;
 
 #[derive(Debug, Default)]
