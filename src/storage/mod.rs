@@ -55,7 +55,7 @@ pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
 pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
-const BATCH_GET_SORTED_LIMIT: usize = 25;
+const BATCH_GET_SORTED_LIMIT: usize = 10;
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 use tikv_util::future_pool::FuturePool;
