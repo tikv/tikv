@@ -1,12 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::any::Any;
+
 use tipb::FieldType;
 
 use super::super::function::RpnFnMeta;
 use crate::codec::data_type::ScalarValue;
 
 /// A type for each node in the RPN expression list.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum RpnExpressionNode {
     /// Represents a function call.
     FnCall {
@@ -14,6 +16,7 @@ pub enum RpnExpressionNode {
         args_len: usize,
         field_type: FieldType,
         implicit_args: Vec<ScalarValue>,
+        metadata: Box<dyn Any + Send>,
     },
 
     /// Represents a scalar constant value.
@@ -59,7 +62,7 @@ impl RpnExpressionNode {
 /// An expression in Reverse Polish notation, which is simply a list of RPN expression nodes.
 ///
 /// You may want to build it using `RpnExpressionBuilder`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RpnExpression(Vec<RpnExpressionNode>);
 
 impl std::ops::Deref for RpnExpression {
