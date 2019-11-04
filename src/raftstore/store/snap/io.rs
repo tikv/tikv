@@ -156,6 +156,7 @@ mod tests {
     use crate::raftstore::store::snap::tests::*;
     use engine::CF_DEFAULT;
     use tempfile::Builder;
+    use engine_rocks::RocksIOLimiter;
 
     struct TestStaleDetector;
     impl StaleDetector for TestStaleDetector {
@@ -220,7 +221,7 @@ mod tests {
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let sst_file_path = snap_cf_dir.path().join("sst");
-                let stats = build_sst_cf_file(
+                let stats = build_sst_cf_file::<RocksIOLimiter>(
                     &sst_file_path.to_str().unwrap(),
                     &DbSnapshot::new(Arc::clone(&db)),
                     CF_DEFAULT,
