@@ -165,10 +165,17 @@ pub struct LocalReader<C: ProposalRouter> {
     // A channel to raftstore.
     router: C,
     tag: String,
+    executor: RefCell<ReadExecutor>,
 }
 
 impl LocalReader<RaftRouter> {
     pub fn new(kv_engine: Arc<DB>, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter) -> Self {
+        let executor = RefCell::new(ReadExecutor::new(
+            kv_engine.clone(),
+            false, /* dont check region epoch */
+            true,  /* we need snapshot time */
+        ));
+
         LocalReader {
             store_meta,
             kv_engine,
@@ -177,6 +184,7 @@ impl LocalReader<RaftRouter> {
             metrics: Default::default(),
             delegates: RefCell::new(HashMap::default()),
             tag: "[local_reader]".to_string(),
+            executor,
         }
     }
 }
@@ -289,19 +297,15 @@ impl<C: ProposalRouter> LocalReader<C> {
     // It can only handle read command.
     pub fn propose_raft_command(&self, cmd: RaftCommand) {
         let region_id = cmd.request.get_header().get_region_id();
-        let mut executor = ReadExecutor::new(
-            self.kv_engine.clone(),
-            false, /* dont check region epoch */
-            true,  /* we need snapshot time */
-        );
-
         loop {
             match self.pre_propose_raft_command(&cmd.request) {
                 Ok(Some(delegate)) => {
                     let mut metrics = self.metrics.borrow_mut();
-                    if let Some(resp) =
-                        delegate.handle_read(&cmd.request, &mut executor, &mut *metrics)
-                    {
+                    if let Some(resp) = delegate.handle_read(
+                        &cmd.request,
+                        &mut self.executor.borrow_mut(),
+                        &mut *metrics,
+                    ) {
                         cmd.callback.invoke_read(resp);
                         self.delegates
                             .borrow_mut()
@@ -389,6 +393,7 @@ impl<C: ProposalRouter + Clone> Clone for LocalReader<C> {
             metrics: Default::default(),
             delegates: RefCell::new(HashMap::default()),
             tag: self.tag.clone(),
+            executor: self.executor.clone(),
         }
     }
 }

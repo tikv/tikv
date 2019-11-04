@@ -2578,7 +2578,7 @@ impl RequestInspector for Peer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReadExecutor {
     check_epoch: bool,
     engine: Arc<DB>,
