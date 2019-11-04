@@ -351,7 +351,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         }
         if let Some(u) = upper_bound {
             if let Some(b) = self.snapshot.upper_bound() {
-                if !b.is_empty() && u > b {
+                if !b.is_empty() && (u > b || u.is_empty()) {
                     REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::InvalidReqRange {
                         start: lower_bound.as_ref().map(|ref b| b.as_std_slice().to_vec()),
