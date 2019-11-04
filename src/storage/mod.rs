@@ -1846,7 +1846,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             let key = <<E::Snap as Snapshot>::Key as PhysicalKey>::copy_from_logical_vec(
                 end.into_encoded(),
             );
-            option.set_upper_bound(key);
+            option.set_lower_bound(key);
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
         let statistics = statistics.mut_cf_statistics(cf);

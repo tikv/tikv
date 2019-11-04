@@ -105,10 +105,14 @@ impl<Key: PhysicalKey> IterOption<Key> {
             opts.set_prefix_same_as_start(true);
         }
         if let Some(key) = self.lower_bound {
-            opts.set_iterate_lower_bound(key.into_physical_vec());
+            if key.logical_len() > 0 {
+                opts.set_iterate_lower_bound(key.into_physical_vec());
+            }
         }
         if let Some(key) = self.upper_bound {
-            opts.set_iterate_upper_bound(key.into_physical_vec());
+            if key.logical_len() > 0 {
+                opts.set_iterate_upper_bound(key.into_physical_vec());
+            }
         }
         opts
     }
