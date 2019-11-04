@@ -757,12 +757,10 @@ impl ConvertTo<f64> for &[u8] {
                 }
                 Ok(val)
             }
-            // if reaches here, it means our code has bug
+            // if reaches here, it means our code has bug.
             Err(err) => {
                 debug_assert!(false, "parse str[{}] to float failed, the err is {}, origin str is: {:?}, this is a bug.", vs, err, self);
-                let err: Error = box_err!("parse str[{}] to float failed, the err is {}, origin str is: {:?}, this is a bug.", vs, err, self);
-                debug!("{:?}", err);
-                Err(box_err!("parse '{}' to float failed, err: {:?}", vs, err))
+                Err(box_err!("Parse '{}' to err: {:?}", vs, err))
             }
         }
     }
