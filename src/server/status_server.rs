@@ -260,8 +260,7 @@ impl StatusServer {
                         .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
                         .then(
                             move |_| -> Box<
-                                dyn Future<Item = pprof::Report, Error = pprof::Error>
-                                    + Send,
+                                dyn Future<Item = pprof::Report, Error = pprof::Error> + Send,
                             > {
                                 let _ = guard;
                                 Box::new(
