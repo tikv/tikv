@@ -497,7 +497,7 @@ pub mod tests {
         must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
     }
 
-    fn must_acquire_pessimistic_lock_impl<E: Engine>(
+    pub fn must_acquire_pessimistic_lock_impl<E: Engine>(
         engine: &E,
         key: &[u8],
         pk: &[u8],

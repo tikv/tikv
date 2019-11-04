@@ -272,13 +272,14 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
                 if let Some(lock_info) = lock_info {
-                    let (lock, is_first_lock) = lock_info;
+                    let (lock, is_first_lock, wait_timeout) = lock_info;
                     Msg::WaitForLock {
                         cid,
                         start_ts: ts,
                         pr,
                         lock,
                         is_first_lock,
+                        wait_timeout,
                     }
                 } else if to_be_write.is_empty() {
                     Msg::WriteFinished {
@@ -498,8 +499,8 @@ struct WriteResult {
     to_be_write: Vec<Modify>,
     rows: usize,
     pr: ProcessResult,
-    // (lock, is_first_lock)
-    lock_info: Option<(lock_manager::Lock, bool)>,
+    // (lock, is_first_lock, wait_timeout)
+    lock_info: Option<(lock_manager::Lock, bool, i64)>,
 }
 
 fn process_write_impl<S: Snapshot, L: LockMgr>(
@@ -592,8 +593,9 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             } else {
                 let lock = lock_manager::extract_lock_from_result(&locks[0]);
                 let pr = ProcessResult::MultiRes { results: locks };
+                let lock_info = Some((lock, options.is_first_lock, options.wait_timeout));
                 // Wait for lock released
-                (pr, vec![], 0, ctx, Some((lock, options.is_first_lock)))
+                (pr, vec![], 0, ctx, lock_info)
             }
         }
         Command::Commit {
