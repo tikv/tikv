@@ -527,6 +527,8 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
         };
         let batch = self.router.entry(ver).or_default();
         if !batch.key_set.is_empty() {
+            // only batch one command
+            return false;
             for key in &keys {
                 if batch.key_set.contains(key.as_encoded()) {
                     return false;
@@ -599,7 +601,9 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
                     let res = storage.async_batch_prewrite_command(
                         command,
                         Box::new(move |res: Vec<(u64, _)>| {
+                            info!("calling batch-response prewrite");
                             for (id, v) in res {
+                                info!("batch-response prewrite {}:{:?}", id, v);
                                 let mut resp = PrewriteResponse::default();
                                 if let Some(err) = extract_region_error(&v) {
                                     resp.set_region_error(err);
@@ -627,7 +631,9 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
                     let res = storage.async_batch_commit_command(
                         command,
                         Box::new(move |res: Vec<(u64, _)>| {
+                            info!("calling batch-response commit");
                             for (id, v) in res {
+                                info!("batch-response commit {}:{:?}", id, v);
                                 let mut resp = CommitResponse::default();
                                 if let Some(err) = extract_region_error(&v) {
                                     resp.set_region_error(err);
@@ -689,18 +695,18 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
                 Box::new(ReadBatcher::new()),
             ),
         );
-        inners.insert(
-            // TODO(tabokie): maybe share one batcher
-            BatchableRequestKind::Prewrite,
-            (
-                BatchLimiter::with_thread_load(
-                    BatchableRequestKind::Prewrite,
-                    timeout,
-                    sched_pool_thread_load.clone(),
-                ),
-                Box::new(WriteBatcher::new(BatchableRequestKind::Prewrite)),
-            ),
-        );
+        // inners.insert(
+        //     // TODO(tabokie): maybe share one batcher
+        //     BatchableRequestKind::Prewrite,
+        //     (
+        //         BatchLimiter::with_thread_load(
+        //             BatchableRequestKind::Prewrite,
+        //             timeout,
+        //             sched_pool_thread_load.clone(),
+        //         ),
+        //         Box::new(WriteBatcher::new(BatchableRequestKind::Prewrite)),
+        //     ),
+        // );
         inners.insert(
             BatchableRequestKind::Commit,
             (
