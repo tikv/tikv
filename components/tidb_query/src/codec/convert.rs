@@ -758,10 +758,7 @@ impl ConvertTo<f64> for &[u8] {
                 Ok(val)
             }
             // if reaches here, it means our code has bug.
-            Err(err) => {
-                debug_assert!(false, "parse str[{}] to float failed, the err is {}, origin str is: {:?}, this is a bug.", vs, err, self);
-                Err(box_err!("Parse '{}' to err: {:?}", vs, err))
-            }
+            Err(err) => Err(box_err!("Parse '{}' to float err: {:?}", vs, err)),
         }
     }
 }
@@ -792,7 +789,7 @@ pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&
     let mut e_idx = 0;
     for (i, c) in s.chars().enumerate() {
         if c == '+' || c == '-' {
-            if i != 0 && i != e_idx + 1 {
+            if i != 0 && (e_idx == 0 || i != e_idx + 1) {
                 // "1e+1" is valid.
                 break;
             }
@@ -1832,6 +1829,9 @@ mod tests {
             ("", "0"),
             ("123e+", "123"),
             ("123.e", "123."),
+            ("1-1-", "1"),
+            ("11-1-", "11"),
+            ("-1-1-", "-1"),
         ];
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
