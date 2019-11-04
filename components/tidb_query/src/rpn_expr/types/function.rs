@@ -20,6 +20,7 @@
 //! For more information on the procedural macro, see the documentation in
 //! `components/tidb_query_codegen/src/rpn_function`.
 
+use std::any::Any;
 use std::convert::TryFrom;
 use std::marker::PhantomData;
 
@@ -40,6 +41,9 @@ pub struct RpnFnMeta {
     /// Validator against input expression tree.
     pub validator_ptr: fn(expr: &Expr) -> Result<()>,
 
+    /// The metadata constructor of the RPN function.
+    pub metadata_ctor_ptr: fn(expr: &mut Expr) -> Box<dyn Any + Send>,
+
     #[allow(clippy::type_complexity)]
     /// The RPN function.
     pub fn_ptr: fn(
@@ -49,6 +53,7 @@ pub struct RpnFnMeta {
         args: &[RpnStackNode<'_>],
         // Uncommon arguments are grouped together
         extra: &mut RpnFnCallExtra<'_>,
+        metadata: &(dyn Any + Send),
     ) -> Result<VectorValue>,
 }
 
@@ -161,6 +166,7 @@ pub trait Evaluator {
         output_rows: usize,
         args: &[RpnStackNode<'_>],
         extra: &mut RpnFnCallExtra<'_>,
+        metadata: &(dyn Any + Send),
     ) -> Result<VectorValue>;
 }
 
@@ -189,6 +195,7 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
         output_rows: usize,
         args: &[RpnStackNode<'_>],
         extra: &mut RpnFnCallExtra<'_>,
+        metadata: &(dyn Any + Send),
     ) -> Result<VectorValue> {
         match &args[self.arg_index] {
             RpnStackNode::Scalar { value, .. } => {
@@ -197,7 +204,8 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
                     arg: ScalarArg(v),
                     rem: def,
                 };
-                self.inner.eval(new_def, ctx, output_rows, args, extra)
+                self.inner
+                    .eval(new_def, ctx, output_rows, args, extra, metadata)
             }
             RpnStackNode::Vector { value, .. } => {
                 let logical_rows = value.logical_rows();
@@ -209,7 +217,8 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
                     },
                     rem: def,
                 };
-                self.inner.eval(new_def, ctx, output_rows, args, extra)
+                self.inner
+                    .eval(new_def, ctx, output_rows, args, extra, metadata)
             }
         }
     }
