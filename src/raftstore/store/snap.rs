@@ -28,7 +28,8 @@ use crate::raftstore::errors::Error as RaftStoreError;
 use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
-use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
+use engine_traits::{IOLimiter, LimitWriter};
+use engine_rocks::RocksIOLimiter;
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size, sync_dir};
 use tikv_util::time::duration_to_sec;
@@ -306,7 +307,7 @@ pub struct Snap {
     cf_index: usize,
     meta_file: MetaFile,
     size_track: Arc<AtomicU64>,
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Option<Arc<RocksIOLimiter>>,
     hold_tmp_files: bool,
 }
 
@@ -318,7 +319,7 @@ impl Snap {
         is_sending: bool,
         to_build: bool,
         deleter: Box<dyn SnapshotDeleter>,
-        limiter: Option<Arc<IOLimiter>>,
+        limiter: Option<Arc<RocksIOLimiter>>,
     ) -> RaftStoreResult<Snap> {
         let dir_path = dir.into();
         if !dir_path.exists() {
@@ -398,7 +399,7 @@ impl Snap {
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
-        limiter: Option<Arc<IOLimiter>>,
+        limiter: Option<Arc<RocksIOLimiter>>,
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, true, true, deleter, limiter)?;
         s.init_for_building()?;
@@ -433,7 +434,7 @@ impl Snap {
         snapshot_meta: SnapshotMeta,
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
-        limiter: Option<Arc<IOLimiter>>,
+        limiter: Option<Arc<RocksIOLimiter>>,
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, false, false, deleter, limiter)?;
         s.set_snapshot_meta(snapshot_meta)?;
@@ -1003,7 +1004,7 @@ pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
     router: Option<RaftRouter>,
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Option<Arc<RocksIOLimiter>>,
     max_total_size: u64,
 }
 
@@ -1329,7 +1330,7 @@ impl SnapManagerBuilder {
     }
     pub fn build<T: Into<String>>(&self, path: T, router: Option<RaftRouter>) -> SnapManager {
         let limiter = if self.max_write_bytes_per_sec > 0 {
-            Some(Arc::new(IOLimiter::new(self.max_write_bytes_per_sec)))
+            Some(Arc::new(RocksIOLimiter::new(self.max_write_bytes_per_sec)))
         } else {
             None
         };
