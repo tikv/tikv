@@ -676,6 +676,9 @@ pub struct Options {
     // How many keys this transaction involved.
     pub txn_size: u64,
     pub min_commit_ts: u64,
+    // Time to wait for lock released in milliseconds when encountering locks.
+    // 0 means using default timeout. Negative means no wait.
+    pub wait_timeout: i64,
 }
 
 impl Options {
@@ -684,12 +687,7 @@ impl Options {
             lock_ttl,
             skip_constraint_check,
             key_only,
-            reverse_scan: false,
-            is_first_lock: false,
-            for_update_ts: 0,
-            is_pessimistic_lock: vec![],
-            txn_size: 0,
-            min_commit_ts: 0,
+            ..Default::default()
         }
     }
 

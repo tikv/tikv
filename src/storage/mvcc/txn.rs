@@ -221,13 +221,9 @@ impl<S: Snapshot> MvccTxn<S> {
         // abort. Resolve it immediately.
         // Optimistic lock's for_update_ts is zero.
         if for_update_ts > lock.for_update_ts {
-            let mut info = kvproto::kvrpcpb::LockInfo::default();
-            info.set_primary_lock(lock.primary);
-            info.set_lock_version(lock.ts);
-            info.set_key(key.into_raw()?);
+            let mut info = lock.into_lock_info(key.into_raw()?);
             // Set ttl to 0 so TiDB will resolve lock immediately.
             info.set_lock_ttl(0);
-            info.set_txn_size(lock.txn_size);
             Err(Error::KeyIsLocked(info))
         } else {
             Err(Error::Other("stale request".into()))
@@ -244,13 +240,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let for_update_ts = options.for_update_ts;
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
-                let mut info = kvproto::kvrpcpb::LockInfo::default();
-                info.set_primary_lock(lock.primary);
-                info.set_lock_version(lock.ts);
-                info.set_key(key.into_raw()?);
-                info.set_lock_ttl(lock.ttl);
-                info.set_txn_size(lock.txn_size);
-                return Err(Error::KeyIsLocked(info));
+                return Err(Error::KeyIsLocked(lock.into_lock_info(key.into_raw()?)));
             }
             if lock.lock_type != LockType::Pessimistic {
                 return Err(Error::LockTypeNotMatch {
@@ -432,13 +422,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // Check whether the current key is locked at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
-                let mut info = kvproto::kvrpcpb::LockInfo::default();
-                info.set_primary_lock(lock.primary);
-                info.set_lock_version(lock.ts);
-                info.set_key(key.into_raw()?);
-                info.set_lock_ttl(lock.ttl);
-                info.set_txn_size(lock.txn_size);
-                return Err(Error::KeyIsLocked(info));
+                return Err(Error::KeyIsLocked(lock.into_lock_info(key.into_raw()?)));
             }
             // TODO: remove it in future
             if lock.lock_type == LockType::Pessimistic {
@@ -553,22 +537,15 @@ impl<S: Snapshot> MvccTxn<S> {
     /// committed.
     pub fn cleanup(&mut self, key: Key, current_ts: u64) -> Result<bool> {
         match self.reader.load_lock(&key)? {
-            Some(ref mut lock) if lock.ts == self.start_ts => {
+            Some(ref lock) if lock.ts == self.start_ts => {
                 // If current_ts is not 0, check the Lock's TTL.
                 // If the lock is not expired, do not rollback it but report key is locked.
                 if current_ts > 0
                     && extract_physical(lock.ts) + lock.ttl >= extract_physical(current_ts)
                 {
-                    // The `lock.primary` field will not be accessed again. Use mem::replace to
-                    // avoid cloning.
-                    let primary = ::std::mem::replace(&mut lock.primary, Default::default());
-                    let mut info = kvproto::kvrpcpb::LockInfo::default();
-                    info.set_primary_lock(primary);
-                    info.set_lock_version(lock.ts);
-                    info.set_key(key.into_raw()?);
-                    info.set_lock_ttl(lock.ttl);
-                    info.set_txn_size(lock.txn_size);
-                    return Err(Error::KeyIsLocked(info));
+                    return Err(Error::KeyIsLocked(
+                        lock.clone().into_lock_info(key.into_raw()?),
+                    ));
                 }
 
                 let is_pessimistic_txn = lock.for_update_ts != 0;
@@ -2124,6 +2101,8 @@ mod tests {
 
     #[test]
     fn test_lock_info_validation() {
+        use kvproto::kvrpcpb::{LockInfo, Op};
+
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let k = b"k";
@@ -2133,19 +2112,21 @@ mod tests {
         options.lock_ttl = 3;
         options.txn_size = 10;
 
-        let mut expected_lock_info = kvproto::kvrpcpb::LockInfo::default();
+        let mut expected_lock_info = LockInfo::default();
         expected_lock_info.set_primary_lock(k.to_vec());
         expected_lock_info.set_lock_version(10);
         expected_lock_info.set_key(k.to_vec());
         expected_lock_info.set_lock_ttl(options.lock_ttl);
         expected_lock_info.set_txn_size(options.txn_size);
+        expected_lock_info.set_lock_type(Op::Put);
 
         let assert_lock_info_eq = |e, expected_lock_info: &kvproto::kvrpcpb::LockInfo| match e {
             Error::KeyIsLocked(info) => assert_eq!(info, *expected_lock_info),
             _ => panic!("unexpected error"),
         };
 
-        must_prewrite_put_impl(&engine, k, v, k, 10, false, options);
+        // Write a optimistic lock.
+        must_prewrite_put_impl(&engine, k, v, k, 10, false, options.clone());
 
         assert_lock_info_eq(
             must_prewrite_put_err(&engine, k, v, k, 20),
@@ -2157,11 +2138,25 @@ mod tests {
             &expected_lock_info,
         );
 
+        // If the lock is not expired, cleanup will return the lock info.
         assert_lock_info_eq(must_cleanup_err(&engine, k, 10, 1), &expected_lock_info);
 
         expected_lock_info.set_lock_ttl(0);
         assert_lock_info_eq(
             must_pessimistic_prewrite_put_err(&engine, k, v, k, 40, 40, false),
+            &expected_lock_info,
+        );
+
+        // Write a pessimistic lock.
+        must_rollback(&engine, k, 10);
+        options.for_update_ts = 50;
+        must_acquire_pessimistic_lock_impl(&engine, k, k, 50, options.clone());
+
+        expected_lock_info.set_lock_version(50);
+        expected_lock_info.set_lock_ttl(options.lock_ttl);
+        expected_lock_info.set_lock_type(Op::PessimisticLock);
+        assert_lock_info_eq(
+            must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60),
             &expected_lock_info,
         );
     }
