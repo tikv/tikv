@@ -690,19 +690,13 @@ impl Duration {
         err.map_or_else(
             || {
                 debug_assert!(dur.is_some());
-                dur.ok_or_else(|_|{
-                    debug!("{}", box_err!("Expect a not none result here, this is a bug"));
-                    Ok(Duration::zero())
-                })
+                dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
             },
             |e| {
                 if e.is_overflow() {
                     ctx.handle_overflow_err(e)?;
                     debug_assert!(dur.is_some());
-                    dur.ok_or_else(|_|{
-                        debug!("{}", box_err!("Expect a not none result here, this is a bug"));
-                        Ok(Duration::zero())
-                    })
+                    dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
                 } else {
                     Err(e)
                 }

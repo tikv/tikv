@@ -30,7 +30,7 @@ pub fn div_u64_with_i64(a: u64, b: i64) -> Result<u64> {
     if b < 0 {
         if a != 0 && (b.overflowing_neg().0 as u64) <= a {
             Err(Error::overflow(
-                "BIGINT UNSIGNED",
+                "UNSIGNED BIGINT",
                 &format!("({} / {})", a, b),
             ))
         } else {
@@ -52,7 +52,7 @@ pub fn div_i64_with_u64(a: i64, b: u64) -> Result<u64> {
     if a < 0 {
         if a.overflowing_neg().0 as u64 >= b {
             Err(Error::overflow(
-                "BIGINT UNSIGNED",
+                "UNSIGNED BIGINT",
                 &format!("({} / {})", a, b),
             ))
         } else {
