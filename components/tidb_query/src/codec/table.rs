@@ -95,7 +95,7 @@ pub fn check_key_type(key: &[u8], wanted_type: &[u8]) -> Result<()> {
         ));
     }
 
-    buf.advance(ID_LEN);
+    buf.read_bytes(ID_LEN)?;
     if buf.read_bytes(SEP_LEN)? != wanted_type {
         Err(invalid_type!(
             "expected key sep type {}, but got key {})",
