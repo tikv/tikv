@@ -666,7 +666,7 @@ pub struct TxnDBConfig {
 impl Default for TxnDBConfig {
     fn default() -> TxnDBConfig {
         TxnDBConfig {
-            enabled: true,
+            enabled: false,
             max_num_locks: -1,
             num_stripes: 16,
             transaction_lock_timeout: 1000,
@@ -821,7 +821,9 @@ impl DbConfig {
                 && !self.transaction_db.enabled,
         );
         opts.enable_unordered_write(self.enable_unordered_write);
-        opts.enable_two_write_queue(self.enable_unordered_write);
+        if self.transaction_db.enabled {
+            opts.enable_two_write_queue(self.enable_unordered_write);
+        }
         opts.add_event_listener(EventListener::new("kv"));
 
         if self.titan.enabled {
@@ -864,9 +866,9 @@ impl DbConfig {
         self.writecf.validate()?;
         self.raftcf.validate()?;
         self.titan.validate()?;
-        if !self.transaction_db.enabled && self.enable_unordered_write {
-            return Err("only transaction db support unodered_write".into());
-        }
+        //        if !self.transaction_db.enabled && self.enable_unordered_write {
+        //            return Err("only transaction db support unodered_write".into());
+        //        }
         Ok(())
     }
 
