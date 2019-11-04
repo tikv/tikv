@@ -2709,7 +2709,6 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "crc",
- "engine",
  "engine_traits",
  "external_storage",
  "futures",
