@@ -62,3 +62,66 @@ impl IOLimiter for RocksIOLimiter {
         self.inner.get_total_requests(PRIORITY_HIGH)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs::{self, File};
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+    use tempfile::Builder;
+    use engine_traits::{LimitReader, LimitWriter};
+
+    use super::*;
+
+    #[test]
+    fn test_io_limiter() {
+        let limiter = RocksIOLimiter::new(10 * 1024 * 1024);
+        assert!(limiter.get_max_bytes_per_time() <= SNAP_MAX_BYTES_PER_TIME);
+
+        limiter.set_bytes_per_second(20 * 1024 * 1024);
+        assert_eq!(limiter.get_bytes_per_second(), 20 * 1024 * 1024);
+
+        assert_eq!(limiter.get_total_bytes_through(), 0);
+
+        limiter.request(1024 * 1024);
+        assert_eq!(limiter.get_total_bytes_through(), 1024 * 1024);
+
+        assert_eq!(limiter.get_total_requests(), 1);
+    }
+
+    #[test]
+    fn test_limit_writer() {
+        let dir = Builder::new()
+            .prefix("_test_limit_writer")
+            .tempdir()
+            .unwrap();
+        let path = dir.path().join("test-file");
+        let mut file = File::create(&path).unwrap();
+        let mut limit_writer = LimitWriter::new(Some(Arc::new(RocksIOLimiter::new(1024))), &mut file);
+
+        let mut s = String::new();
+        for _ in 0..100 {
+            s.push_str("Hello, World!");
+        }
+        limit_writer.write_all(s.as_bytes()).unwrap();
+        limit_writer.flush().unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, s);
+    }
+
+    #[test]
+    fn test_limit_reader() {
+        let mut buf = Vec::with_capacity(512);
+        let bytes_per_sec = 10 * 1024 * 1024; // 10MB/s
+        for c in 0..1024usize {
+            let mut source = std::io::repeat(b'7').take(c as _);
+            let mut limit_reader =
+                LimitReader::new(Some(Arc::new(RocksIOLimiter::new(bytes_per_sec))), &mut source);
+            let count = limit_reader.read_to_end(&mut buf).unwrap();
+            assert_eq!(count, c);
+            assert_eq!(count, buf.len());
+            buf.clear();
+        }
+    }
+}
