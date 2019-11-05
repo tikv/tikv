@@ -2,7 +2,7 @@
 
 use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::{Error, Result};
-use crate::storage::mvcc::{Lock, LockType, Write};
+use crate::storage::mvcc::{Lock, LockType};
 use crate::storage::{Cursor, Iterator, Key, Statistics, Value};
 
 /// Checks whether the lock conflicts with the given `ts`. If `ts == MaxU64`, the primary lock will be ignored.
@@ -41,21 +41,19 @@ pub fn check_lock(key: &Key, ts: u64, lock: Lock) -> Result<()> {
 pub fn near_load_data_by_write<I>(
     default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     user_key: &Key,
-    write: Write,
+    write_start_ts: u64,
     statistics: &mut Statistics,
 ) -> Result<Value>
 where
     I: Iterator,
 {
-    assert!(write.short_value.is_none());
-    let seek_key = user_key.clone().append_ts(write.start_ts);
+    let seek_key = user_key.clone().append_ts(write_start_ts);
     default_cursor.near_seek(&seek_key, &mut statistics.data)?;
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
             user_key.to_raw()?,
-            write,
             "near_load_data_by_write",
         ));
     }
@@ -68,21 +66,19 @@ where
 pub fn near_reverse_load_data_by_write<I>(
     default_cursor: &mut Cursor<I>, // TODO: make it `BackwardCursor`.
     user_key: &Key,
-    write: Write,
+    write_start_ts: u64,
     statistics: &mut Statistics,
 ) -> Result<Value>
 where
     I: Iterator,
 {
-    assert!(write.short_value.is_none());
-    let seek_key = user_key.clone().append_ts(write.start_ts);
+    let seek_key = user_key.clone().append_ts(write_start_ts);
     default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
             user_key.to_raw()?,
-            write,
             "near_reverse_load_data_by_write",
         ));
     }

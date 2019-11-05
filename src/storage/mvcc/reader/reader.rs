@@ -2,10 +2,10 @@
 
 use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::Lock;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
+use crate::storage::mvcc::{default_not_found_error, WriteRef};
 use crate::storage::{Key, Value};
 use engine::IterOption;
 use engine::{CF_LOCK, CF_WRITE};
@@ -149,7 +149,7 @@ impl<S: Snapshot> MvccReader<S> {
         if !Key::is_user_key_eq(write_key, key.as_encoded()) {
             return Ok(None);
         }
-        let write = Write::parse(cursor.value(&mut self.statistics.write))?;
+        let write = WriteRef::parse(cursor.value(&mut self.statistics.write))?.to_owned();
         self.statistics.write.processed += 1;
         Ok(Some((commit_ts, write)))
     }
@@ -178,7 +178,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
             match self.load_data(key, write.start_ts)? {
                 None => {
-                    return Err(default_not_found_error(key.to_raw()?, write, "get"));
+                    return Err(default_not_found_error(key.to_raw()?, "get"));
                 }
                 Some(v) => return Ok(Some(v)),
             }
@@ -266,7 +266,7 @@ impl<S: Snapshot> MvccReader<S> {
         let mut ok = cursor.seek_to_first(&mut self.statistics.write);
 
         while ok {
-            if Write::parse(cursor.value(&mut self.statistics.write))?.start_ts == ts {
+            if WriteRef::parse(cursor.value(&mut self.statistics.write))?.start_ts == ts {
                 return Ok(Some(
                     Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec())
                         .truncate_ts()?,

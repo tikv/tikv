@@ -326,7 +326,8 @@ mod tests {
         let cf = get_cf_handle(db, CF_WRITE).unwrap();
         let k = MvccKey::from_encoded(data_key(k)).append_ts(commit_ts);
         let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
-        db.put_cf(cf, k.as_encoded(), &w.to_bytes()).unwrap();
+        db.put_cf(cf, k.as_encoded(), &w.as_ref().to_bytes())
+            .unwrap();
     }
 
     fn delete(db: &DB, k: &[u8], commit_ts: u64) {

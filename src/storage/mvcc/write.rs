@@ -4,8 +4,8 @@ use super::super::types::Value;
 use super::lock::LockType;
 use super::{Error, Result};
 use crate::storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use byteorder::ReadBytesExt;
-use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use codec::prelude::NumberDecoder;
+use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
@@ -79,6 +79,7 @@ impl std::fmt::Debug for Write {
 
 impl Write {
     /// Creates a new `Write` record.
+    #[inline]
     pub fn new(write_type: WriteType, start_ts: u64, short_value: Option<Value>) -> Write {
         Write {
             write_type,
@@ -87,6 +88,7 @@ impl Write {
         }
     }
 
+    #[inline]
     pub fn new_rollback(start_ts: u64, protected: bool) -> Write {
         let short_value = if protected {
             Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec())
@@ -101,32 +103,46 @@ impl Write {
         }
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2);
-        b.push(self.write_type.to_u8());
-        b.encode_var_u64(self.start_ts).unwrap();
-        if let Some(ref v) = self.short_value {
-            b.push(SHORT_VALUE_PREFIX);
-            b.push(v.len() as u8);
-            b.extend_from_slice(v);
-        }
-        b
+    #[inline]
+    pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
+        let write_type_bytes = b.read_u8().map_err(|_| Error::BadFormatWrite)?;
+        WriteType::from_u8(write_type_bytes).ok_or(Error::BadFormatWrite)
     }
 
-    pub fn parse(mut b: &[u8]) -> Result<Write> {
-        if b.is_empty() {
-            return Err(Error::BadFormatWrite);
+    #[inline]
+    pub fn as_ref(&self) -> WriteRef<'_> {
+        WriteRef {
+            write_type: self.write_type,
+            start_ts: self.start_ts,
+            short_value: self.short_value.as_ref().map(|v| v.as_slice()),
         }
-        let write_type = WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)?;
-        let start_ts = number::decode_var_u64(&mut b)?;
+    }
+}
+
+#[derive(PartialEq, Clone)]
+pub struct WriteRef<'a> {
+    pub write_type: WriteType,
+    pub start_ts: u64,
+    pub short_value: Option<&'a [u8]>,
+}
+
+impl WriteRef<'_> {
+    pub fn parse(mut b: &[u8]) -> Result<WriteRef<'_>> {
+        let write_type_bytes = b.read_u8().map_err(|_| Error::BadFormatWrite)?;
+        let write_type = WriteType::from_u8(write_type_bytes).ok_or(Error::BadFormatWrite)?;
+        let start_ts = b.read_var_u64().map_err(|_| Error::BadFormatWrite)?;
         if b.is_empty() {
-            return Ok(Write::new(write_type, start_ts, None));
+            return Ok(WriteRef {
+                write_type,
+                start_ts,
+                short_value: None,
+            });
         }
 
-        let flag = b.read_u8()?;
+        let flag = b.read_u8().map_err(|_| Error::BadFormatWrite)?;
         assert_eq!(flag, SHORT_VALUE_PREFIX, "invalid flag [{}] in write", flag);
 
-        let len = b.read_u8()?;
+        let len = b.read_u8().map_err(|_| Error::BadFormatWrite)?;
         if len as usize != b.len() {
             panic!(
                 "short value len [{}] not equal to content len [{}]",
@@ -134,13 +150,27 @@ impl Write {
                 b.len()
             );
         }
-        Ok(Write::new(write_type, start_ts, Some(b.to_vec())))
+
+        Ok(WriteRef {
+            write_type,
+            start_ts,
+            short_value: Some(b),
+        })
     }
 
-    pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
-        WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2);
+        b.push(self.write_type.to_u8());
+        b.encode_var_u64(self.start_ts).unwrap();
+        if let Some(v) = self.short_value {
+            b.push(SHORT_VALUE_PREFIX);
+            b.push(v.len() as u8);
+            b.extend_from_slice(v);
+        }
+        b
     }
 
+    #[inline]
     pub fn is_protected(&self) -> bool {
         self.write_type == WriteType::Rollback
             && self
@@ -148,6 +178,15 @@ impl Write {
                 .as_ref()
                 .map(|v| *v == PROTECTED_ROLLBACK_SHORT_VALUE)
                 .unwrap_or_default()
+    }
+
+    #[inline]
+    pub fn to_owned(&self) -> Write {
+        Write::new(
+            self.write_type,
+            self.start_ts,
+            self.short_value.map(|v| v.to_owned()),
+        )
     }
 }
 
@@ -198,30 +237,33 @@ mod tests {
             Write::new(WriteType::Rollback, 1 << 41, None),
         ];
         for (i, write) in writes.drain(..).enumerate() {
-            let v = write.to_bytes();
-            let w = Write::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
+            let v = write.as_ref().to_bytes();
+            let w = WriteRef::parse(&v[..])
+                .unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e))
+                .to_owned();
             assert_eq!(w, write, "#{} expect {:?}, but got {:?}", i, write, w);
             assert_eq!(Write::parse_type(&v).unwrap(), w.write_type);
         }
 
         // Test `Write::parse()` handles incorrect input.
-        assert!(Write::parse(b"").is_err());
+        assert!(WriteRef::parse(b"").is_err());
 
         let lock = Write::new(WriteType::Lock, 1, Some(b"short_value".to_vec()));
-        let v = lock.to_bytes();
-        assert!(Write::parse(&v[..1]).is_err());
+        let v = lock.as_ref().to_bytes();
+        assert!(WriteRef::parse(&v[..1]).is_err());
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
     }
 
     #[test]
     fn test_is_protected() {
-        assert!(Write::new_rollback(1, true).is_protected());
-        assert!(!Write::new_rollback(2, false).is_protected());
+        assert!(Write::new_rollback(1, true).as_ref().is_protected());
+        assert!(!Write::new_rollback(2, false).as_ref().is_protected());
         assert!(!Write::new(
             WriteType::Put,
             3,
             Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec())
         )
+        .as_ref()
         .is_protected());
     }
 }
