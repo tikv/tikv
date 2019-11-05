@@ -170,17 +170,9 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter + 
         self._vec_mut().truncate(len - 8);
     }
 
-    // FIXME: This is a MVCC knowledge.
     #[inline]
-    fn call_with_ts<T, F>(&mut self, ts: u64, f: F) -> T
-    where
-        T: 'static,
-        F: FnOnce(&mut Self) -> T,
-    {
-        self.append_ts(ts);
-        let r = f(self);
-        self.shrink_ts();
-        r
+    fn with_ts_temporarily(&mut self, ts: u64) -> PhysicalKeyTsGuard<'_, Self> {
+        PhysicalKeyTsGuard::new(self, ts)
     }
 
     #[inline]
@@ -210,6 +202,34 @@ pub trait PhysicalKey: Sized + Clone + KeyLike + NumberEncoder + BufferWriter + 
     fn reset_from_user_std_slice(&mut self, uk: &[u8]) {
         self._vec_mut().truncate(Self::PHYSICAL_PREFIX.len());
         self.write_comparable_bytes(uk).unwrap();
+    }
+}
+
+pub struct PhysicalKeyTsGuard<'a, Key: PhysicalKey> {
+    key: &'a mut Key,
+}
+
+impl<'a, Key: PhysicalKey> PhysicalKeyTsGuard<'a, Key> {
+    #[inline]
+    pub fn new(key: &'a mut Key, ts: u64) -> Self {
+        key.append_ts(ts);
+        Self { key }
+    }
+}
+
+impl<'a, Key: PhysicalKey> Deref for PhysicalKeyTsGuard<'a, Key> {
+    type Target = Key;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.key
+    }
+}
+
+impl<'a, Key: PhysicalKey> Drop for PhysicalKeyTsGuard<'a, Key> {
+    #[inline]
+    fn drop(&mut self) {
+        self.key.shrink_ts()
     }
 }
 
@@ -295,7 +315,7 @@ impl BufferWriter for BasicPhysicalKey {
     }
 
     #[inline]
-    fn write_bytes(&mut self, values: &[u8]) -> Result<(), Box<codec::Error>> {
+    fn write_bytes(&mut self, values: &[u8]) -> codec::Result<()> {
         self.0.write_bytes(values)
     }
 }

@@ -192,6 +192,12 @@ impl Error {
     }
 }
 
+impl From<codec::Error> for Error {
+    fn from(err: codec::Error) -> Self {
+        box_err!("{}", err)
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Generates `DefaultNotFound` error or panic directly based on config.

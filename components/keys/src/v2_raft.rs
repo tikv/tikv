@@ -58,7 +58,7 @@ impl BufferWriter for RaftPhysicalKey {
     }
 
     #[inline]
-    fn write_bytes(&mut self, values: &[u8]) -> std::result::Result<(), Box<codec::Error>> {
+    fn write_bytes(&mut self, values: &[u8]) -> codec::Result<()> {
         self.0.write_bytes(values)
     }
 }
