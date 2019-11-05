@@ -49,6 +49,9 @@
 //! - Port methods directly from the existing `engine` crate by re-implementing
 //!   it in engine_traits and engine_rocks, replacing all the callers with calls
 //!   into the traits, then delete the versions in the `engine` crate.
+//!
+//! - Use the .c() method from engine_rocks::compat::EngineCompat to get a
+//!   KvEngine reference from Arc<DB> in the fewest characters.
 
 #![recursion_limit = "200"]
 
