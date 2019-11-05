@@ -43,3 +43,6 @@ pub use crate::engine_iterator::*;
 
 mod options;
 pub mod util;
+
+mod compat;
+pub use compat::*;
