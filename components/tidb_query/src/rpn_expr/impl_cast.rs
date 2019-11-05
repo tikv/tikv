@@ -195,6 +195,7 @@ pub fn get_cast_fn_rpn_node(
         args_len: 1,
         field_type: to_field_type,
         implicit_args: Vec::new(),
+        metadata: Box::new(()),
     })
 }
 
@@ -800,26 +801,16 @@ fn cast_int_as_duration(
         None => Ok(None),
         Some(val) => {
             let fsp = extra.ret_field_type.get_decimal() as i8;
-            let (dur, err) = Duration::from_i64_without_ctx(*val, fsp);
-            match err {
-                // in TiDB, if there is overflow err and overflow as warning,
-                // then it will return isNull==true
-                Some(err) => {
+            Duration::from_i64_without_ctx(*val, fsp)
+                .map(Some)
+                .or_else(|err| {
                     if err.is_overflow() {
                         ctx.handle_overflow_err(err)?;
                         Ok(None)
                     } else {
                         Err(err.into())
                     }
-                }
-                None => {
-                    if let Some(dur) = dur {
-                        Ok(Some(dur))
-                    } else {
-                        Err(other_err!("Expect a not none result here, this is a bug"))
-                    }
-                }
-            }
+                })
         }
     }
 }
