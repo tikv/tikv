@@ -22,12 +22,13 @@ pub fn build_handler<S: Store + 'static>(
     is_streaming: bool,
     enable_batch_if_possible: bool,
 ) -> Result<Box<dyn RequestHandler>> {
-    let mut is_batch = false;
     // TODO: support batch executor while handling server-side streaming requests
-    if enable_batch_if_possible && !is_streaming {
+    let is_batch = if enable_batch_if_possible && !is_streaming {
         tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors())?;
-        is_batch = true;
-    }
+        true
+    } else {
+        false
+    };
 
     if is_batch {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
