@@ -970,7 +970,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn async_batch_get_command(
         &self,
-        mut gets: Vec<PointGetCommand>,
+        gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         const CMD: &str = "batch_get_command";
         // all requests in a batch have the same region, epoch, term, replica_read
@@ -1010,17 +1010,14 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                     results.push(MaybeUninit::uninit());
                                 }
                                 for (original_order, get) in order_and_keys {
+                                    snap_store.set_start_ts(get.ts.unwrap());
+                                    snap_store.set_isolation_level(get.ctx.get_isolation_level());
                                     let value =
                                         snap_store.incremental_get(&get.key).map_err(Error::from);
                                     unsafe {
                                         results[original_order].as_mut_ptr().write(value);
                                     }
                                 }
-
-                                gets.sort_by(|a, b| match a.key.cmp(&b.key) {
-                                    cmp::Ordering::Equal => b.ts.cmp(&a.ts),
-                                    ord => ord,
-                                });
                                 unsafe {
                                     mem::transmute::<Vec<MaybeUninit<Element>>, Vec<Element>>(
                                         results,
