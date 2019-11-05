@@ -1113,7 +1113,8 @@ fn process_batch_write_impl<S: Snapshot>(
                         if options.for_update_ts != 0 {
                             panic!("batch command does not accept pessimistic prewrite request");
                         }
-                        let mut txn = MvccTxn::new(snapshot.clone(), *start_ts, !ctx.get_not_fill_cache())?;
+                        let mut txn =
+                            MvccTxn::new(snapshot.clone(), *start_ts, !ctx.get_not_fill_cache())?;
                         let mut locks = Vec::new();
                         let mut failed = false;
                         let mutations = std::mem::replace(mutations, vec![]);
@@ -1186,7 +1187,8 @@ fn process_batch_write_impl<S: Snapshot>(
                             ));
                             continue;
                         }
-                        let mut txn = MvccTxn::new(snapshot.clone(), *lock_ts, !ctx.get_not_fill_cache())?;
+                        let mut txn =
+                            MvccTxn::new(snapshot.clone(), *lock_ts, !ctx.get_not_fill_cache())?;
                         let mut failed = false;
                         for k in keys {
                             if let Err(e) = txn.commit(k.clone(), *commit_ts) {
