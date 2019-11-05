@@ -12,7 +12,6 @@ use scheduler::Scheduler;
 use stats::StatsMap;
 use task::ArcTask;
 
-use futures::channel::oneshot;
 use futures::FutureExt;
 use prometheus::{IntCounter, IntGauge};
 use tikv_util::time::Instant;
@@ -55,7 +54,7 @@ impl std::error::Error for Full {
 }
 
 #[derive(Clone)]
-pub struct MultilevelPool {
+pub struct MultiLevelPool {
     scheduler: Scheduler,
     stats_map: StatsMap,
     env: Arc<Env>,
@@ -63,13 +62,17 @@ pub struct MultilevelPool {
     max_tasks: usize,
 }
 
-impl MultilevelPool {
+impl MultiLevelPool {
     /// Gets current running task count.
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
         // As long as different future pool has different name prefix, we can safely use the value
         // in metrics.
         self.env.metrics_running_task_count.get() as usize
+    }
+
+    pub fn get_pool_size(&self) -> usize {
+        self.pool_size
     }
 
     fn gate_spawn(&self) -> Result<(), Full> {
@@ -104,6 +107,7 @@ impl MultilevelPool {
             self.scheduler.clone(),
             stats.clone(),
         ));
+        Ok(())
     }
 
     pub fn spawn_handle<F, R>(&self, task: F, token: u64) -> Result<impl Future<Output = R>, Full>
@@ -114,13 +118,13 @@ impl MultilevelPool {
         self.gate_spawn()?;
         let env = self.env.clone();
         env.metrics_running_task_count.inc();
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = tokio_sync::oneshot::channel();
         let wrapped_task = async move {
             let res = task.await;
             env.metrics_handled_task_count.inc();
             env.metrics_running_task_count.dec();
             try_tick_thread(&env);
-            tx.send(res).ok();
+            let _ = tx.send(res);
         };
         let stats = self.stats_map.get_stats(token);
         self.scheduler.add_task(ArcTask::new(
@@ -128,7 +132,38 @@ impl MultilevelPool {
             self.scheduler.clone(),
             stats.clone(),
         ));
-        rx.map(|res| res.expect("oneshot channel cancelled"))
+        Ok(rx.map(|res| res.expect("oneshot channel cancelled")))
+    }
+
+    pub fn spawn_handle_legacy<F, T, E>(
+        &self,
+        task: F,
+        token: u64,
+    ) -> Result<impl futures01::Future<Item = T, Error = E>, Full>
+    where
+        F: Future<Output = Result<T, E>> + Send + 'static,
+        T: Send + 'static,
+        E: Send + 'static,
+    {
+        use futures01::Future;
+        self.gate_spawn()?;
+        let env = self.env.clone();
+        env.metrics_running_task_count.inc();
+        let (tx, rx) = tokio01_sync::oneshot::channel();
+        let wrapped_task = async move {
+            let res = task.await;
+            env.metrics_handled_task_count.inc();
+            env.metrics_running_task_count.dec();
+            try_tick_thread(&env);
+            let _ = tx.send(res);
+        };
+        let stats = self.stats_map.get_stats(token);
+        self.scheduler.add_task(ArcTask::new(
+            wrapped_task,
+            self.scheduler.clone(),
+            stats.clone(),
+        ));
+        Ok(rx.then(|res| res.expect("oneshot channel cancelled")))
     }
 }
 

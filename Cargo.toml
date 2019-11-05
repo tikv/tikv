@@ -84,6 +84,7 @@ backtrace = "0.3.9"
 url = "2"
 sys-info = "0.5.7"
 futures = "0.1"
+futures03 = { package = "futures-preview", version = "0.3.0-alpha.6", features = ["async-await"]}
 futures-cpupool = "0.1"
 futures-locks = "0.1"
 tokio-core = "0.1"
@@ -124,7 +125,7 @@ keys = { path = "components/keys" }
 engine_traits = { path = "components/engine_traits" }
 sst_importer = { path = "components/sst_importer" }
 engine_rocks = { path = "components/engine_rocks" }
-multilevel_pool = { path = "components/multilevel_pool" }
+multi_level_pool = { path = "components/multi_level_pool" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -196,7 +197,7 @@ members = [
   "components/backup",
   "components/keys",
   "components/sst_importer",
-  "components/multilevel_pool",
+  "components/multi_level_pool",
   "cmd",
 ]
 default-members = ["cmd"]

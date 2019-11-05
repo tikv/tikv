@@ -175,11 +175,16 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let engine = RaftKv::new(raft_router.clone());
 
-    let storage_read_pool = storage::readpool_impl::build_read_pool(
-        &cfg.readpool.storage,
-        pd_sender.clone(),
-        engine.clone(),
-    );
+    let reporter = pd_sender.clone();
+    let engine2 = Arc::new(Mutex::new(engine.clone()));
+    let read_pool = multi_level_pool::Builder::new()
+        .pool_size((num_cpus::get() as f32 * 0.8) as usize + 1)
+        .on_tick(move || {
+            storage::readpool_impl::tls_flush(&reporter);
+            coprocessor::readpool_impl::tls_flush(&reporter);
+        })
+        .after_start(move || tikv::storage::kv::set_tls_engine(engine2.lock().unwrap().clone()))
+        .build();
 
     let mut lock_mgr = if cfg.pessimistic_txn.enabled {
         Some(LockManager::new())
@@ -200,7 +205,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let storage = create_raft_storage(
         engine.clone(),
         &cfg.storage,
-        storage_read_pool,
+        read_pool.clone(),
         lock_mgr.clone(),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));

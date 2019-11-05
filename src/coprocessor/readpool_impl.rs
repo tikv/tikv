@@ -96,7 +96,7 @@ pub fn build_read_pool_for_test<E: Engine>(
         .collect()
 }
 
-fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
+pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics
         let mut m = m.borrow_mut();

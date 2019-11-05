@@ -5,7 +5,7 @@ use crate::park::Parker;
 use crate::scheduler::Scheduler;
 use crate::stats::StatsMap;
 use crate::worker::Worker;
-use crate::MultilevelPool;
+use crate::MultiLevelPool;
 
 use crossbeam::deque::Worker as LocalQueue;
 
@@ -96,11 +96,11 @@ impl Builder {
         self
     }
 
-    pub fn build(&mut self) -> MultilevelPool {
+    pub fn build(&mut self) -> MultiLevelPool {
         let name = if let Some(name) = &self.name_prefix {
             name.as_str()
         } else {
-            "multilevel_pool"
+            "multi_level_pool"
         };
         let env = Arc::new(super::Env {
             on_tick: self.on_tick.take(),
@@ -138,7 +138,7 @@ impl Builder {
                 .stack_size(self.stack_size);
             worker.start(thread_builder);
         }
-        MultilevelPool {
+        MultiLevelPool {
             scheduler,
             stats_map: StatsMap::new(),
             env,
