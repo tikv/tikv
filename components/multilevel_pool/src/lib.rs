@@ -2,14 +2,17 @@
 
 mod builder;
 mod metrics;
+mod park;
 mod stats;
 mod task;
 mod worker;
 
+use park::Unparker;
 use stats::{StatsMap, TaskStats};
 use task::{ArcTask, Task};
 
 use crossbeam::deque::{Injector, Steal, Stealer, Worker as LocalQueue};
+use crossbeam::queue::ArrayQueue;
 use prometheus::{IntCounter, IntGauge};
 use rand::prelude::*;
 use tikv_util::time::Instant;
@@ -39,6 +42,7 @@ struct Env {
 pub struct MultilevelPool {
     injectors: Arc<[Injector<ArcTask>]>,
     stats: StatsMap,
+    sleepers: Arc<ArrayQueue<Unparker>>,
     env: Arc<Env>,
     pool_size: usize,
     max_tasks: usize,
@@ -59,12 +63,14 @@ impl MultilevelPool {
         injector.push(ArcTask::new(
             task,
             self.injectors.clone(),
-            // self.parker.clone(),
+            self.sleepers.clone(),
             stat.clone(),
             nice,
             token,
         ));
-        // self.parker.notify_one();
+        if let Ok(unparker) = self.sleepers.pop() {
+            unparker.unpark();
+        }
     }
 }
 

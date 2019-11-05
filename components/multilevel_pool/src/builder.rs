@@ -1,13 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::metrics::*;
+use crate::park::Parker;
 use crate::stats::StatsMap;
-use crate::task::{ArcTask, Task};
+use crate::task::ArcTask;
 use crate::worker::Worker;
 use crate::MultilevelPool;
 
-use crossbeam::deque::{Injector, Steal, Stealer, Worker as LocalQueue};
-use once_cell::sync::Lazy;
+use crossbeam::deque::{Injector, Worker as LocalQueue};
+use crossbeam::queue::ArrayQueue;
 use prometheus::{IntCounter, IntGauge};
 use rand::prelude::*;
 use tikv_util::time::Instant;
@@ -112,6 +113,7 @@ impl Builder {
             metrics_running_task_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name]),
             metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
         });
+        let sleepers = Arc::new(ArrayQueue::new(self.pool_size));
 
         // Create workers
         let mut injectors = Vec::with_capacity(self.pool_size);
@@ -137,7 +139,7 @@ impl Builder {
                 local,
                 stealers,
                 injectors: injectors.clone(),
-                // parker: parker.clone(),
+                parker: Parker::new(sleepers.clone()),
                 after_start: self.after_start_func.clone(),
             };
             workers.push(worker);
@@ -151,7 +153,7 @@ impl Builder {
         MultilevelPool {
             injectors,
             stats: StatsMap::new(),
-            // parker,
+            sleepers,
             env,
             pool_size: self.pool_size,
             max_tasks: self.max_tasks,

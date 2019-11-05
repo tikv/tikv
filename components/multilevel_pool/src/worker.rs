@@ -1,3 +1,4 @@
+use crate::park::Parker;
 use crate::stats::{StatsMap, TaskStats};
 use crate::task::{ArcTask, Task};
 
@@ -12,8 +13,8 @@ pub struct Worker {
     pub local: LocalQueue<ArcTask>,
     pub stealers: Vec<Stealer<ArcTask>>,
     pub injectors: Arc<[Injector<ArcTask>]>,
-    // parker: Arc<Parker>,
     pub after_start: Arc<dyn Fn() + Send + Sync + 'static>,
+    pub parker: Parker,
 }
 
 impl Worker {
@@ -38,7 +39,7 @@ impl Worker {
                         step += 1;
                     }
                     _ => {
-                        // self.parker.wait();
+                        self.parker.park();
                         step = 0;
                     }
                 }
@@ -83,5 +84,5 @@ impl Worker {
 }
 
 fn poll_task(task: ArcTask) {
-    unimplemented!()
+    unsafe { task.poll() }
 }

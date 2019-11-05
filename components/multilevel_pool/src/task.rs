@@ -1,8 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::park::Unparker;
 use crate::stats::TaskStats;
 
 use crossbeam::deque::Injector;
+use crossbeam::queue::ArrayQueue;
 use futures::future::{BoxFuture, FutureExt};
 use rand::prelude::*;
 
@@ -16,6 +18,7 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 pub struct Task {
     task: UnsafeCell<BoxFuture<'static, ()>>,
     injectors: Arc<[Injector<ArcTask>]>,
+    sleepers: Arc<ArrayQueue<Unparker>>,
     status: AtomicU8,
     // this token's total elapsed time
     stats: Arc<TaskStats>,
@@ -38,7 +41,7 @@ impl ArcTask {
     pub fn new<F>(
         future: F,
         injectors: Arc<[Injector<ArcTask>]>,
-        // parker: Arc<Parker>,
+        sleepers: Arc<ArrayQueue<Unparker>>,
         stats: Arc<TaskStats>,
         nice: u8,
         token: u64,
@@ -49,7 +52,7 @@ impl ArcTask {
         let future = Arc::new(Task {
             task: UnsafeCell::new(future.boxed()),
             injectors,
-            // parker,
+            sleepers,
             status: AtomicU8::new(WAITING),
             stats,
             nice,
@@ -59,7 +62,7 @@ impl ArcTask {
         unsafe { task(future) }
     }
 
-    unsafe fn poll(self) {
+    pub unsafe fn poll(self) {
         self.0.status.store(POLLING, Ordering::SeqCst);
         let waker = ManuallyDrop::new(waker(&*self.0));
         let mut cx = Context::from_waker(&waker);
@@ -114,6 +117,9 @@ unsafe fn wake_raw(this: *const ()) {
                     Ok(_) => {
                         let index = thread_rng().gen::<usize>() % 3;
                         task.0.injectors[index].push(clone_task(&*task.0));
+                        if let Ok(unparker) = task.0.sleepers.pop() {
+                            unparker.unpark();
+                        }
                         // task.0.parker.notify_one();
                         break;
                     }
@@ -151,6 +157,9 @@ unsafe fn wake_ref_raw(this: *const ()) {
                     Ok(_) => {
                         let index = thread_rng().gen::<usize>() % 3;
                         task.0.injectors[index].push(clone_task(&*task.0));
+                        if let Ok(unparker) = task.0.sleepers.pop() {
+                            unparker.unpark();
+                        }
                         // task.0.parker.notify_one();
                         break;
                     }
