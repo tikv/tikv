@@ -23,7 +23,6 @@ impl RpnExpressionBuilder {
         // TODO: This logic relies on the correctness of the passed in GROUP BY eval type. However
         // it can be different from the one we calculated (e.g. pass a column / fn with different
         // type).
-        dbg!(c);
         box_try!(EvalType::try_from(c.get_field_type().as_accessor().tp()));
 
         match c.get_tp() {
