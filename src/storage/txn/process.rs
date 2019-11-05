@@ -1092,7 +1092,7 @@ fn process_batch_write_impl<S: Snapshot>(
             _ => unreachable!(),
         };
         let multi_res = tag == CommandKind::batch_prewrite;
-        let mut txn = MvccTxn::new(snapshot, 0, false)?;
+        let mut to_be_write = Vec::new();
         // check conflict
         match tag {
             CommandKind::batch_prewrite => {
@@ -1102,6 +1102,7 @@ fn process_batch_write_impl<S: Snapshot>(
                         continue;
                     }
                     if let Command::Prewrite {
+                        ctx,
                         mutations,
                         primary,
                         start_ts,
@@ -1112,7 +1113,7 @@ fn process_batch_write_impl<S: Snapshot>(
                         if options.for_update_ts != 0 {
                             panic!("batch command does not accept pessimistic prewrite request");
                         }
-                        txn.start_ts(*start_ts);
+                        let mut txn = MvccTxn::new(snapshot.clone(), *start_ts, !ctx.get_not_fill_cache())?;
                         let mut locks = Vec::new();
                         let mut failed = false;
                         let mutations = std::mem::replace(mutations, vec![]);
@@ -1136,16 +1137,21 @@ fn process_batch_write_impl<S: Snapshot>(
                                 _ => {}
                             }
                         }
-                        if !failed && !locks.is_empty() {
-                            results.push((
-                                ids[i].take().unwrap(),
-                                Msg::WriteFinished {
-                                    cid,
-                                    pr: ProcessResult::MultiRes { results: locks },
-                                    result: Ok(()),
-                                    tag,
-                                },
-                            ));
+                        if !failed {
+                            if !locks.is_empty() {
+                                results.push((
+                                    ids[i].take().unwrap(),
+                                    Msg::WriteFinished {
+                                        cid,
+                                        pr: ProcessResult::MultiRes { results: locks },
+                                        result: Ok(()),
+                                        tag,
+                                    },
+                                ));
+                            } else {
+                                statistics.add(&txn.take_statistics());
+                                to_be_write.append(&mut txn.into_modifies());
+                            }
                         }
                     } else {
                         unreachable!();
@@ -1159,6 +1165,7 @@ fn process_batch_write_impl<S: Snapshot>(
                         continue;
                     }
                     if let Command::Commit {
+                        ctx,
                         keys,
                         commit_ts,
                         lock_ts,
@@ -1179,8 +1186,8 @@ fn process_batch_write_impl<S: Snapshot>(
                             ));
                             continue;
                         }
-                        txn.start_ts(*lock_ts);
-                        let checkpoint = txn.write_checkpoint();
+                        let mut txn = MvccTxn::new(snapshot.clone(), *lock_ts, !ctx.get_not_fill_cache())?;
+                        let mut failed = false;
                         for k in keys {
                             if let Err(e) = txn.commit(k.clone(), *commit_ts) {
                                 results.push((
@@ -1191,9 +1198,13 @@ fn process_batch_write_impl<S: Snapshot>(
                                         tag,
                                     },
                                 ));
-                                txn.write_reset(checkpoint);
+                                failed = true;
                                 break;
                             }
+                        }
+                        if !failed {
+                            statistics.add(&txn.take_statistics());
+                            to_be_write.append(&mut txn.into_modifies());
                         }
                     } else {
                         unreachable!();
@@ -1202,13 +1213,12 @@ fn process_batch_write_impl<S: Snapshot>(
             }
             _ => unreachable!(),
         };
-        statistics.add(&txn.take_statistics());
         Ok(BatchWriteResults {
             ctx,
             ids,
             multi_res,
             results,
-            to_be_write: txn.into_modifies(),
+            to_be_write,
         })
     } else {
         unreachable!();
