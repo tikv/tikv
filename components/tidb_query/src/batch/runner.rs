@@ -10,6 +10,7 @@ use tikv_util::deadline::Deadline;
 
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
+use crate::codec::batch::LazyBatchColumnVec;
 use crate::execute_stats::*;
 use crate::expr::EvalConfig;
 use crate::metrics::*;
@@ -388,6 +389,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     self.out_most_executor.schema().len()
                 );
                 let mut chunk = Chunk::default();
+                if !LazyBatchColumnVec::is_arrow_encodable(self.out_most_executor.schema()) {
+                    self.encode_type = EncodeType::TypeDefault;
+                }
                 {
                     let data = chunk.mut_rows_data();
                     // Although `schema()` can be deeply nested, it is ok since we process data in
