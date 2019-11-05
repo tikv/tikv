@@ -21,18 +21,22 @@ use std::io::Error as IoError;
 use std::sync::{atomic, Arc};
 use std::{cmp, error, u64};
 
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine::{
+    CfName, IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_KEY_PREFIX_LEN,
+};
 use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
 
 use tikv_util::collections::HashMap;
+use tikv_util::future_pool::FuturePool;
 
+use self::kv::with_tls_engine;
 use self::metrics::*;
 use self::mvcc::Lock;
+use self::txn::scheduler::Scheduler as TxnScheduler;
 
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use self::kv::with_tls_engine;
 pub use self::kv::{
     CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics,
     FlowStatsReporter, Iterator, Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot,
@@ -41,7 +45,6 @@ pub use self::kv::{
 pub use self::lock_manager::{DummyLockMgr, LockMgr};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
-use self::txn::scheduler::Scheduler as TxnScheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
@@ -54,9 +57,6 @@ pub const SHORT_VALUE_PREFIX: u8 = b'v';
 pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
 pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
-
-use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
-use tikv_util::future_pool::FuturePool;
 
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
