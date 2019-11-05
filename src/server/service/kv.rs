@@ -527,8 +527,6 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
         };
         let batch = self.router.entry(ver).or_default();
         if !batch.key_set.is_empty() {
-            // only batch one command
-            return false;
             for key in &keys {
                 if batch.key_set.contains(key.as_encoded()) {
                     return false;
@@ -695,18 +693,18 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
                 Box::new(ReadBatcher::new()),
             ),
         );
-        // inners.insert(
-        //     // TODO(tabokie): maybe share one batcher
-        //     BatchableRequestKind::Prewrite,
-        //     (
-        //         BatchLimiter::with_thread_load(
-        //             BatchableRequestKind::Prewrite,
-        //             timeout,
-        //             sched_pool_thread_load.clone(),
-        //         ),
-        //         Box::new(WriteBatcher::new(BatchableRequestKind::Prewrite)),
-        //     ),
-        // );
+        inners.insert(
+            // TODO(tabokie): maybe share one batcher
+            BatchableRequestKind::Prewrite,
+            (
+                BatchLimiter::with_thread_load(
+                    BatchableRequestKind::Prewrite,
+                    timeout,
+                    sched_pool_thread_load.clone(),
+                ),
+                Box::new(WriteBatcher::new(BatchableRequestKind::Prewrite)),
+            ),
+        );
         inners.insert(
             BatchableRequestKind::Commit,
             (
