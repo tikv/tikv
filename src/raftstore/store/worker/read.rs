@@ -568,17 +568,24 @@ mod tests {
         Receiver<RaftCommand>,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
-        let db =
-            rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        let db = Arc::new(
+            rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
+        );
         let (ch, rx) = sync_channel(1);
+        let executor = RefCell::new(ReadExecutor::new(
+            db.clone(),
+            false, /* dont check region epoch */
+            true,  /* we need snapshot time */
+        ));
         let reader = LocalReader {
             store_meta,
             store_id: Cell::new(Some(store_id)),
             router: ch,
-            kv_engine: Arc::new(db),
+            kv_engine: db,
             delegates: RefCell::new(HashMap::default()),
             metrics: Default::default(),
             tag: "foo".to_owned(),
+            executor,
         };
         (path, reader, rx)
     }
