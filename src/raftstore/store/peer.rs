@@ -54,7 +54,7 @@ use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
-struct ReadIndexRequest {
+pub struct ReadIndexRequest {
     id: Uuid,
     cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
@@ -88,6 +88,16 @@ impl ReadIndexRequest {
             read_index: None,
         }
     }
+
+    pub fn heartbeat(id: Uuid, renew_lease_time: Timespec) -> Self {
+        RAFT_READ_INDEX_PENDING_COUNT.inc();
+        ReadIndexRequest {
+            id,
+            cmds: MustConsumeVec::with_capacity("heartbeat_read_index", 1),
+            renew_lease_time,
+            read_index: None,
+        }
+    }
 }
 
 impl Drop for ReadIndexRequest {
@@ -100,8 +110,8 @@ impl Drop for ReadIndexRequest {
 }
 
 #[derive(Default)]
-struct ReadIndexQueue {
-    reads: VecDeque<ReadIndexRequest>,
+pub struct ReadIndexQueue {
+    pub reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
 }
 
@@ -279,7 +289,7 @@ pub struct Peer {
 
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
-    pending_reads: ReadIndexQueue,
+    pub pending_reads: ReadIndexQueue,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,

@@ -30,9 +30,10 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::duration_to_sec;
+use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{escape, is_zero_duration};
+use uuid::Uuid;
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
@@ -44,7 +45,9 @@ use crate::raftstore::store::fsm::{
 use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::Callback;
-use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
+use crate::raftstore::store::peer::{
+    ConsistencyState, Peer, ReadIndexRequest, StaleState, WaitApplyResultState,
+};
 use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::KeysInfoFormatter;
@@ -784,6 +787,28 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         if self.fsm.peer.raft_group.tick() {
             self.fsm.has_ready = true;
+        }
+
+        // Send a read index to renew heartbeat
+        if self.fsm.peer.is_leader() {
+            let last_pending_read_count = self.fsm.peer.raft_group.raft.pending_read_count();
+            let last_ready_read_count = self.fsm.peer.raft_group.raft.ready_read_count();
+
+            let id = Uuid::new_v4();
+            self.fsm.peer.raft_group.read_index(id.as_bytes().to_vec());
+
+            let pending_read_count = self.fsm.peer.raft_group.raft.pending_read_count();
+            let ready_read_count = self.fsm.peer.raft_group.raft.ready_read_count();
+            // MsgReadIndex may be dropped silently
+            if pending_read_count != last_pending_read_count
+                || ready_read_count != last_ready_read_count
+            {
+                if self.ctx.current_time.is_none() {
+                    self.ctx.current_time = Some(monotonic_raw_now());
+                }
+                let read_proposal = ReadIndexRequest::heartbeat(id, self.ctx.current_time.unwrap());
+                self.fsm.peer.pending_reads.reads.push_back(read_proposal);
+            }
         }
 
         self.fsm.peer.mut_store().flush_cache_metrics();
