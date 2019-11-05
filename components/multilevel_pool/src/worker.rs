@@ -1,9 +1,8 @@
 use crate::park::Parker;
-use crate::stats::{StatsMap, TaskStats};
-use crate::task::{ArcTask, Task};
+use crate::scheduler::Scheduler;
+use crate::task::ArcTask;
 
-use crossbeam::deque::{Injector, Steal, Stealer, Worker as LocalQueue};
-use prometheus::{IntCounter, IntGauge};
+use crossbeam::deque::{Steal, Stealer, Worker as LocalQueue};
 use rand::prelude::*;
 
 use std::sync::Arc;
@@ -12,9 +11,9 @@ use std::thread;
 pub struct Worker {
     pub local: LocalQueue<ArcTask>,
     pub stealers: Vec<Stealer<ArcTask>>,
-    pub injectors: Arc<[Injector<ArcTask>]>,
-    pub after_start: Arc<dyn Fn() + Send + Sync + 'static>,
+    pub scheduler: Scheduler,
     pub parker: Parker,
+    pub after_start: Arc<dyn Fn() + Send + Sync + 'static>,
 }
 
 impl Worker {
@@ -31,7 +30,9 @@ impl Worker {
         loop {
             if let Some(task) = self.find_task(&mut rng) {
                 step = 0;
-                poll_task(task);
+                unsafe {
+                    task.poll();
+                }
             } else {
                 match step {
                     0..=2 => {
@@ -39,7 +40,7 @@ impl Worker {
                         step += 1;
                     }
                     _ => {
-                        self.parker.park();
+                        self.parker.park(self.scheduler.sleepers());
                         step = 0;
                     }
                 }
@@ -55,10 +56,18 @@ impl Worker {
         while retry {
             retry = false;
             // Local is empty, steal from injector
-            let i = rng.gen::<usize>() % 3;
+            let i = match rng.next_u32() {
+                0..=4160749567 => 0,
+                4160749568..=4261412863 => 1,
+                _ => 2,
+            };
             for j in 0..3 {
                 let idx = (i + j) % 3;
-                match self.injectors[idx].steal_batch_and_pop(&self.local) {
+                match self
+                    .scheduler
+                    .injector(idx)
+                    .steal_batch_and_pop(&self.local)
+                {
                     Steal::Success(task) => {
                         return Some(task);
                     }
@@ -81,8 +90,4 @@ impl Worker {
         }
         None
     }
-}
-
-fn poll_task(task: ArcTask) {
-    unsafe { task.poll() }
 }

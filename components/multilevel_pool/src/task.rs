@@ -1,12 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::park::Unparker;
+use crate::scheduler::Scheduler;
 use crate::stats::TaskStats;
 
-use crossbeam::deque::Injector;
-use crossbeam::queue::ArrayQueue;
 use futures::future::{BoxFuture, FutureExt};
-use rand::prelude::*;
+use tikv_util::time::Instant;
 
 use std::cell::UnsafeCell;
 use std::future::Future;
@@ -17,17 +15,15 @@ use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 pub struct Task {
     task: UnsafeCell<BoxFuture<'static, ()>>,
-    injectors: Arc<[Injector<ArcTask>]>,
-    sleepers: Arc<ArrayQueue<Unparker>>,
+    scheduler: Scheduler,
     status: AtomicU8,
     // this token's total elapsed time
-    stats: Arc<TaskStats>,
-    nice: u8,
-    _token: u64,
+    pub task_stats: Arc<TaskStats>,
+    level: usize,
 }
 
 #[derive(Clone)]
-pub struct ArcTask(Arc<Task>);
+pub struct ArcTask(pub Arc<Task>);
 
 const WAITING: u8 = 0; // --> POLLING
 const POLLING: u8 = 1; // --> WAITING, REPOLL, or COMPLETE
@@ -38,25 +34,16 @@ unsafe impl Send for Task {}
 unsafe impl Sync for Task {}
 
 impl ArcTask {
-    pub fn new<F>(
-        future: F,
-        injectors: Arc<[Injector<ArcTask>]>,
-        sleepers: Arc<ArrayQueue<Unparker>>,
-        stats: Arc<TaskStats>,
-        nice: u8,
-        token: u64,
-    ) -> ArcTask
+    pub fn new<F>(future: F, scheduler: Scheduler, task_stats: Arc<TaskStats>) -> ArcTask
     where
         F: Future<Output = ()> + Send + 'static,
     {
         let future = Arc::new(Task {
             task: UnsafeCell::new(future.boxed()),
-            injectors,
-            sleepers,
+            scheduler,
             status: AtomicU8::new(WAITING),
-            stats,
-            nice,
-            _token: token,
+            task_stats,
+            level: 0,
         });
         let future: *const Task = Arc::into_raw(future) as *const Task;
         unsafe { task(future) }
@@ -67,9 +54,16 @@ impl ArcTask {
         let waker = ManuallyDrop::new(waker(&*self.0));
         let mut cx = Context::from_waker(&waker);
         loop {
+            let begin = Instant::now();
             if let Poll::Ready(_) = (&mut *self.0.task.get()).poll_unpin(&mut cx) {
                 break self.0.status.store(COMPLETE, Ordering::SeqCst);
             }
+            let elapsed = begin.elapsed().as_micros() as u64;
+            self.0
+                .task_stats
+                .elapsed
+                .fetch_add(elapsed, Ordering::SeqCst);
+            self.0.scheduler.add_level_elapsed(self.0.level, elapsed);
             match self.0.status.compare_exchange(
                 POLLING,
                 WAITING,
@@ -115,12 +109,7 @@ unsafe fn wake_raw(this: *const ()) {
                     Ordering::SeqCst,
                 ) {
                     Ok(_) => {
-                        let index = thread_rng().gen::<usize>() % 3;
-                        task.0.injectors[index].push(clone_task(&*task.0));
-                        if let Ok(unparker) = task.0.sleepers.pop() {
-                            unparker.unpark();
-                        }
-                        // task.0.parker.notify_one();
+                        task.0.scheduler.add_task(clone_task(&*task.0));
                         break;
                     }
                     Err(cur) => status = cur,
@@ -155,12 +144,7 @@ unsafe fn wake_ref_raw(this: *const ()) {
                     Ordering::SeqCst,
                 ) {
                     Ok(_) => {
-                        let index = thread_rng().gen::<usize>() % 3;
-                        task.0.injectors[index].push(clone_task(&*task.0));
-                        if let Ok(unparker) = task.0.sleepers.pop() {
-                            unparker.unpark();
-                        }
-                        // task.0.parker.notify_one();
+                        task.0.scheduler.add_task(clone_task(&*task.0));
                         break;
                     }
                     Err(cur) => status = cur,

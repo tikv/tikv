@@ -3,11 +3,12 @@
 mod builder;
 mod metrics;
 mod park;
+mod scheduler;
 mod stats;
 mod task;
 mod worker;
 
-use park::Unparker;
+use scheduler::Scheduler;
 use stats::{StatsMap, TaskStats};
 use task::{ArcTask, Task};
 
@@ -40,9 +41,8 @@ struct Env {
 
 #[derive(Clone)]
 pub struct MultilevelPool {
-    injectors: Arc<[Injector<ArcTask>]>,
-    stats: StatsMap,
-    sleepers: Arc<ArrayQueue<Unparker>>,
+    scheduler: Scheduler,
+    stats_map: StatsMap,
     env: Arc<Env>,
     pool_size: usize,
     max_tasks: usize,
@@ -54,30 +54,8 @@ impl MultilevelPool {
         F: Future<Output = ()> + Send + 'static,
     {
         // at begin a token has top priority
-        let stat = self.stats.get_stats(token);
-        let injector = match stat.elapsed.load(Ordering::SeqCst) {
-            0..=999 => &self.injectors[0],
-            1000..=299_999 => &self.injectors[1],
-            _ => &self.injectors[2],
-        };
-        injector.push(ArcTask::new(
-            task,
-            self.injectors.clone(),
-            self.sleepers.clone(),
-            stat.clone(),
-            nice,
-            token,
-        ));
-        if let Ok(unparker) = self.sleepers.pop() {
-            unparker.unpark();
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+        let stats = self.stats_map.get_stats(token);
+        self.scheduler
+            .add_task(ArcTask::new(task, self.scheduler.clone(), stats.clone()));
     }
 }

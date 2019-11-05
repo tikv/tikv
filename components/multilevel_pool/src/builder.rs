@@ -2,21 +2,15 @@
 
 use crate::metrics::*;
 use crate::park::Parker;
+use crate::scheduler::Scheduler;
 use crate::stats::StatsMap;
-use crate::task::ArcTask;
 use crate::worker::Worker;
 use crate::MultilevelPool;
 
-use crossbeam::deque::{Injector, Worker as LocalQueue};
-use crossbeam::queue::ArrayQueue;
-use prometheus::{IntCounter, IntGauge};
-use rand::prelude::*;
-use tikv_util::time::Instant;
+use crossbeam::deque::Worker as LocalQueue;
 
-use std::cell::Cell;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -113,16 +107,10 @@ impl Builder {
             metrics_running_task_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name]),
             metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
         });
-        let sleepers = Arc::new(ArrayQueue::new(self.pool_size));
+        let scheduler = Scheduler::new(self.pool_size);
 
         // Create workers
-        let mut injectors = Vec::with_capacity(self.pool_size);
         let mut workers: Vec<Worker> = Vec::with_capacity(self.pool_size);
-        for _ in 0..self.pool_size {
-            let injector = Injector::new();
-            injectors.push(injector);
-        }
-        let injectors: Arc<[Injector<ArcTask>]> = Arc::from(injectors);
         let mut local_queues = Vec::new();
         for _ in 0..self.pool_size {
             local_queues.push(LocalQueue::new_fifo());
@@ -138,8 +126,8 @@ impl Builder {
             let worker = Worker {
                 local,
                 stealers,
-                injectors: injectors.clone(),
-                parker: Parker::new(sleepers.clone()),
+                scheduler: scheduler.clone(),
+                parker: Parker::new(),
                 after_start: self.after_start_func.clone(),
             };
             workers.push(worker);
@@ -151,9 +139,8 @@ impl Builder {
             worker.start(thread_builder);
         }
         MultilevelPool {
-            injectors,
-            stats: StatsMap::new(),
-            sleepers,
+            scheduler,
+            stats_map: StatsMap::new(),
             env,
             pool_size: self.pool_size,
             max_tasks: self.max_tasks,
