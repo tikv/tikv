@@ -9,8 +9,9 @@ use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::util::io_limiter::IOLimiter;
 use engine::rocks::DB;
+use engine_traits::IOLimiter;
+use engine_rocks::RocksIOLimiter;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
@@ -166,7 +167,7 @@ struct GCRunner<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     /// Used to limit the write flow of GC.
-    limiter: Option<IOLimiter>,
+    limiter: Option<RocksIOLimiter>,
 
     cfg: GCConfig,
 
@@ -181,7 +182,7 @@ impl<E: Engine> GCRunner<E> {
         cfg: GCConfig,
     ) -> Self {
         let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
-            Some(IOLimiter::new(cfg.max_write_bytes_per_sec.0))
+            Some(RocksIOLimiter::new(cfg.max_write_bytes_per_sec.0))
         } else {
             None
         };
