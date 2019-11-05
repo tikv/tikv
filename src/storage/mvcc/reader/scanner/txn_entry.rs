@@ -166,7 +166,7 @@ impl<S: Snapshot> Scanner<S> {
                         result = super::super::util::check_lock(
                             current_user_key.as_logical_key_slice(),
                             ts,
-                            &lock,
+                            lock,
                         )
                         .map(|_| None);
                     }

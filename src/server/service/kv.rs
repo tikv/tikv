@@ -18,7 +18,9 @@ use crate::storage::kv::Error as EngineError;
 use crate::storage::lock_manager::LockMgr;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
-use crate::storage::{self, Engine, Key, Mutation, Options, PointGetCommand, Storage, Value};
+use crate::storage::{
+    self, Engine, Key, Mutation, Options, PointGetCommand, Storage, TxnStatus, Value,
+};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
@@ -2028,6 +2030,7 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockMgr>(
     options.lock_ttl = req.get_lock_ttl();
     options.is_first_lock = req.get_is_first_lock();
     options.for_update_ts = req.get_for_update_ts();
+    options.wait_timeout = req.get_wait_timeout();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_acquire_pessimistic_lock(
@@ -2187,7 +2190,13 @@ fn future_txn_heart_beat<E: Engine, L: LockMgr>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok((ttl, _)) => resp.set_lock_ttl(ttl),
+                Ok(txn_status) => {
+                    if let TxnStatus::Uncommitted { lock_ttl } = txn_status {
+                        resp.set_lock_ttl(lock_ttl);
+                    } else {
+                        unreachable!();
+                    }
+                }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -2208,6 +2217,7 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
         req.get_lock_ts(),
         req.get_caller_start_ts(),
         req.get_current_ts(),
+        req.get_rollback_if_not_exist(),
         cb,
     );
 
@@ -2217,10 +2227,11 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok((lock_ttl, commit_ts)) => {
-                    resp.set_lock_ttl(lock_ttl);
-                    resp.set_commit_version(commit_ts);
-                }
+                Ok(txn_status) => match txn_status {
+                    TxnStatus::Committed { commit_ts } => resp.set_commit_version(commit_ts),
+                    TxnStatus::Uncommitted { lock_ttl } => resp.set_lock_ttl(lock_ttl),
+                    TxnStatus::Rollbacked | TxnStatus::RollbackedBefore => {}
+                },
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -2685,6 +2696,12 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts"; "err" => ?err);
             key_error.set_retryable(format!("{:?}", err));
+        }
+        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnNotFound { start_ts, key })) => {
+            let mut txn_not_found = TxnNotFound::default();
+            txn_not_found.set_start_ts(*start_ts);
+            txn_not_found.set_primary_key(key.to_owned());
+            key_error.set_txn_not_found(txn_not_found);
         }
         storage::Error::Txn(TxnError::Mvcc(MvccError::Deadlock {
             lock_ts,
