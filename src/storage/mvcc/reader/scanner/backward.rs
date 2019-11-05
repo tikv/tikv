@@ -138,8 +138,12 @@ impl<S: Snapshot> BackwardScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        result = super::super::util::check_lock(&current_user_key, ts, &lock)
-                            .map(|_| None);
+                        result = super::super::util::check_lock(
+                            current_user_key.as_logical_key_slice(),
+                            ts,
+                            &lock,
+                        )
+                        .map(|_| None);
                     }
                     IsolationLevel::Rc => {}
                 }

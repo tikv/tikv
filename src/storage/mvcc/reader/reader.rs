@@ -157,7 +157,7 @@ impl<S: Snapshot> MvccReader<S> {
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: u64) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            return super::util::check_lock(key, ts, &lock);
+            return super::util::check_lock(key.as_logical_key_slice(), ts, &lock);
         }
         Ok(())
     }

@@ -1,10 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use keys::{PhysicalKey, PhysicalKeySlice, ToPhysicalKeySlice};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{default_not_found_error, Lock, Result};
-use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value, CF_LOCK};
+use crate::storage::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics, Value, CF_LOCK};
 use crate::storage::{CF_DEFAULT, CF_WRITE};
 
 /// `PointGetter` factory.
@@ -92,6 +93,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             statistics: Statistics::default(),
 
             write_cursor,
+            key_buffer: S::Key::alloc_new(),
 
             drained: false,
         })
@@ -112,6 +114,7 @@ pub struct PointGetter<S: Snapshot> {
     statistics: Statistics,
 
     write_cursor: Cursor<S::Iter>,
+    key_buffer: S::Key,
 
     /// Indicating whether or not this structure can serve more requests. It is meaningful only
     /// when `multi == false`, to protect from producing undefined values when trying to get
@@ -129,7 +132,12 @@ impl<S: Snapshot> PointGetter<S> {
     /// Get the value of a user key.
     ///
     /// If `multi == false`, this function must be called only once. Future calls return nothing.
-    pub fn get(&mut self, user_key: &Key) -> Result<Option<Value>> {
+    pub fn get(
+        &mut self,
+        key_without_ts: impl ToPhysicalKeySlice<<S::Key as PhysicalKey>::Slice>, //&<S::Key as PhysicalKey>::Slice,
+    ) -> Result<Option<Value>> {
+        let key_without_ts = key_without_ts.to_physical_slice_container();
+
         if !self.multi {
             // Protect from calling `get()` multiple times when `multi == false`.
             if self.drained {
@@ -142,12 +150,12 @@ impl<S: Snapshot> PointGetter<S> {
         match self.isolation_level {
             IsolationLevel::Si => {
                 // Check for locks that signal concurrent writes in Si.
-                self.load_and_check_lock(user_key)?;
+                self.load_and_check_lock(&*key_without_ts)?;
             }
             IsolationLevel::Rc => {}
         }
 
-        self.load_data(user_key)
+        self.load_data(&*key_without_ts)
     }
 
     /// Get a lock of a user key in the lock CF. If lock exists, it will be checked to
@@ -156,14 +164,17 @@ impl<S: Snapshot> PointGetter<S> {
     /// In common cases we expect to get nothing in lock cf. Using a `get_cf` instead of `seek`
     /// is fast in such cases due to no need for RocksDB to continue move and skip deleted entries
     /// until find a user key.
-    fn load_and_check_lock(&mut self, user_key: &Key) -> Result<()> {
+    fn load_and_check_lock(
+        &mut self,
+        key_without_ts: &<S::Key as PhysicalKey>::Slice,
+    ) -> Result<()> {
         self.statistics.lock.get += 1;
-        let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
+        let lock_value = self.snapshot.get_cf(CF_LOCK, key_without_ts)?;
 
         if let Some(ref lock_value) = lock_value {
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
-            super::util::check_lock(user_key, self.ts, &lock)
+            super::util::check_lock(key_without_ts.as_logical_slice(), self.ts, &lock)
         } else {
             Ok(())
         }
@@ -173,19 +184,27 @@ impl<S: Snapshot> PointGetter<S> {
     ///
     /// First, a correct version info in the Write CF will be sought. Then, value will be loaded
     /// from Default CF if necessary.
-    fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
-        if !self.write_cursor.seek(
-            &user_key.clone().append_ts(self.ts),
-            &mut self.statistics.write,
-        )? {
-            return Ok(None);
+    fn load_data(
+        &mut self,
+        key_without_ts: &<S::Key as PhysicalKey>::Slice,
+    ) -> Result<Option<Value>> {
+        self.key_buffer.reset_from_physical_slice(key_without_ts);
+        {
+            let key = self.key_buffer.with_ts_temporarily(self.ts);
+            if !self
+                .write_cursor
+                .seek(key.as_physical_slice(), &mut self.statistics.write)?
+            {
+                return Ok(None);
+            }
         }
 
         loop {
             // We may seek to another key. In this case, it means we cannot find the specified key.
             {
-                let cursor_key = self.write_cursor.key(&mut self.statistics.write);
-                if !Key::is_user_key_eq(cursor_key, user_key.as_encoded().as_slice()) {
+                let cursor_key = self.write_cursor.physical_key(&mut self.statistics.write);
+                if cursor_key.as_physical_slice_without_ts() != self.key_buffer.as_physical_slice()
+                {
                     return Ok(None);
                 }
             }
@@ -195,7 +214,7 @@ impl<S: Snapshot> PointGetter<S> {
 
             match write.write_type {
                 WriteType::Put => {
-                    return Ok(Some(self.load_data_by_write(write, user_key)?));
+                    return Ok(Some(self.load_data_by_write(write)?));
                 }
                 WriteType::Delete => {
                     return Ok(None);
@@ -213,7 +232,7 @@ impl<S: Snapshot> PointGetter<S> {
 
     /// Load the value by the given `write`. If value is carried in `write`, it will be returned
     /// directly. Otherwise there will be a default CF look up.
-    fn load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
+    fn load_data_by_write(&mut self, write: Write) -> Result<Value> {
         if self.omit_value {
             return Ok(vec![]);
         }
@@ -222,7 +241,7 @@ impl<S: Snapshot> PointGetter<S> {
                 // Value is carried in `write`.
                 Ok(value)
             }
-            None => self.load_data_from_default_cf(write, user_key),
+            None => self.load_data_from_default_cf(write),
         }
     }
 
@@ -231,20 +250,21 @@ impl<S: Snapshot> PointGetter<S> {
     /// We assume that mostly the keys given to batch get keys are not very close to each other.
     /// `near_seek` will likely fall back to `seek` in such scenario, which takes 2x time
     /// compared to `get_cf`. Thus we use `get_cf` directly here.
-    fn load_data_from_default_cf(&mut self, write: Write, user_key: &Key) -> Result<Value> {
+    fn load_data_from_default_cf(&mut self, write: Write) -> Result<Value> {
         // TODO: Not necessary to receive a `Write`.
         self.statistics.data.get += 1;
-        // TODO: We can avoid this clone.
-        let value = self
-            .snapshot
-            .get_cf(CF_DEFAULT, &user_key.clone().append_ts(write.start_ts))?;
+
+        let value = {
+            let key = self.key_buffer.with_ts_temporarily(write.start_ts);
+            self.snapshot.get_cf(CF_DEFAULT, key.as_physical_slice())?
+        };
 
         if let Some(value) = value {
             self.statistics.data.processed += 1;
             Ok(value)
         } else {
             Err(default_not_found_error(
-                user_key.to_raw()?,
+                self.key_buffer.as_logical_slice().alloc_to_user_vec()?,
                 write,
                 "load_data_from_default_cf",
             ))

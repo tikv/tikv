@@ -922,6 +922,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         const CMD: &str = "get";
         let priority = get_priority_tag(ctx.get_priority());
 
+        let key = <E::Snap as Snapshot>::Key::copy_from_logical_vec(key.into_encoded());
+
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
@@ -938,7 +940,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 !ctx.get_not_fill_cache(),
                             );
                             let result = snap_store
-                                .get(&key, &mut statistics)
+                                .get(key.as_physical_slice(), &mut statistics)
                                 // map storage::txn::Error -> storage::Error
                                 .map_err(Error::from)
                                 .map(|r| {
@@ -991,13 +993,15 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 !ctx.get_not_fill_cache(),
                             );
                             let mut results = vec![];
+                            let mut key = <E::Snap as Snapshot>::Key::alloc_new();
                             // TODO: optimize using seek.
                             for get in gets {
+                                key.reset_from_logical_std_slice(get.key.as_encoded());
                                 snap_store.set_start_ts(get.ts.unwrap());
                                 snap_store.set_isolation_level(get.ctx.get_isolation_level());
                                 results.push(
                                     snap_store
-                                        .get(&get.key, &mut statistics)
+                                        .get(key.as_physical_slice(), &mut statistics)
                                         .map_err(Error::from),
                                 );
                             }
