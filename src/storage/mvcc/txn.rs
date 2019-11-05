@@ -530,7 +530,11 @@ impl<S: Snapshot> MvccTxn<S> {
         self.cleanup(key, 0)
     }
 
-    fn check_txn_status_missing_lock(&mut self, primary_key: Key) -> Result<TxnStatus> {
+    fn check_txn_status_missing_lock(
+        &mut self,
+        primary_key: Key,
+        rollback_if_not_exist: bool,
+    ) -> Result<TxnStatus> {
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.get_commit_info.inc();
         match self
             .reader
@@ -544,25 +548,32 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
             None => {
-                let ts = self.start_ts;
+                if rollback_if_not_exist {
+                    let ts = self.start_ts;
 
-                // collapse previous rollback if exist.
-                if self.collapse_rollback {
-                    self.collapse_prev_rollback(primary_key.clone())?;
+                    // collapse previous rollback if exist.
+                    if self.collapse_rollback {
+                        self.collapse_prev_rollback(primary_key.clone())?;
+                    }
+
+                    // Insert a Rollback to Write CF in case that a stale prewrite command
+                    // is received after a cleanup command.
+                    // Pessimistic transactions prewrite successfully only if all its
+                    // pessimistic locks exist. So collapsing the rollback of a pessimistic
+                    // lock is safe. After a pessimistic transaction acquires all its locks,
+                    // it is impossible that neither a lock nor a write record is found.
+                    // Therefore, we don't need to protect the rollback here.
+                    let write = Write::new_rollback(ts, false);
+                    self.put_write(primary_key, ts, write.to_bytes());
+                    MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
+
+                    Ok(TxnStatus::Rollbacked)
+                } else {
+                    Err(Error::TxnNotFound {
+                        start_ts: self.start_ts,
+                        key: primary_key.into_raw()?,
+                    })
                 }
-
-                // Insert a Rollback to Write CF in case that a stale prewrite command
-                // is received after a cleanup command.
-                // Pessimistic transactions prewrite successfully only if all its
-                // pessimistic locks exist. So collapsing the rollback of a pessimistic
-                // lock is safe. After a pessimistic transaction acquires all its locks,
-                // it is impossible that neither a lock nor a write record is found.
-                // Therefore, we don't need to protect the rollback here.
-                let write = Write::new_rollback(ts, false);
-                self.put_write(primary_key, ts, write.to_bytes());
-                MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-
-                Ok(TxnStatus::Rollbacked)
             }
         }
     }
@@ -590,7 +601,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 self.rollback_lock(key, lock, is_pessimistic_txn)?;
                 Ok(is_pessimistic_txn)
             }
-            _ => match self.check_txn_status_missing_lock(key)? {
+            _ => match self.check_txn_status_missing_lock(key, true)? {
                 TxnStatus::Committed { commit_ts } => {
                     MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                     Err(Error::Committed { commit_ts })
@@ -683,6 +694,7 @@ impl<S: Snapshot> MvccTxn<S> {
         primary_key: Key,
         caller_start_ts: u64,
         current_ts: u64,
+        rollback_if_not_exist: bool,
     ) -> Result<(TxnStatus, bool)> {
         match self.reader.load_lock(&primary_key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
@@ -712,7 +724,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 Ok((TxnStatus::uncommitted(lock_ttl), is_pessimistic_txn))
             }
             _ => self
-                .check_txn_status_missing_lock(primary_key)
+                .check_txn_status_missing_lock(primary_key, rollback_if_not_exist)
                 .map(|s| (s, false)),
         }
     }
@@ -1122,6 +1134,7 @@ mod tests {
             ts(10, 0),
             ts(20, 0),
             ts(20, 0),
+            true,
             uncommitted(100),
         );
         // The the min_commit_ts should be ts(20, 1)
@@ -1136,6 +1149,7 @@ mod tests {
             ts(30, 0),
             ts(40, 0),
             ts(40, 0),
+            true,
             uncommitted(100),
         );
         must_commit(&engine, k, ts(30, 0), ts(50, 0));
@@ -1918,29 +1932,34 @@ mod tests {
         must_pessimistic_locked(&engine, k, 8, 15);
     }
 
-    #[test]
-    fn test_check_txn_status() {
+    fn test_check_txn_status_impl(rollback_if_not_exist: bool) {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let (k, v) = (b"k1", b"v1");
 
         let ts = super::super::compose_ts;
 
+        // Shortcuts
         use super::TxnStatus::{self, *};
         let committed = TxnStatus::committed;
         let uncommitted = TxnStatus::uncommitted;
+        let r = rollback_if_not_exist;
 
         // Try to check a not exist thing.
-        must_check_txn_status(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), Rollbacked);
-        // A rollback record will be written.
-        must_seek_write(
-            &engine,
-            k,
-            u64::max_value(),
-            ts(3, 0),
-            ts(3, 0),
-            WriteType::Rollback,
-        );
+        if r {
+            must_check_txn_status(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, Rollbacked);
+            // A rollback record will be written.
+            must_seek_write(
+                &engine,
+                k,
+                u64::max_value(),
+                ts(3, 0),
+                ts(3, 0),
+                WriteType::Rollback,
+            );
+        } else {
+            must_check_txn_status_err(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r);
+        }
 
         // Lock the key with TTL=100.
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(5, 0), 100, 0);
@@ -1948,29 +1967,77 @@ mod tests {
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(5, 1), false);
 
         // Update min_commit_ts to current_ts.
-        must_check_txn_status(&engine, k, ts(5, 0), ts(6, 0), ts(7, 0), uncommitted(100));
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(5, 0),
+            ts(6, 0),
+            ts(7, 0),
+            r,
+            uncommitted(100),
+        );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(7, 0), false);
 
         // Update min_commit_ts to caller_start_ts + 1 if current_ts < caller_start_ts.
         // This case should be impossible. But if it happens, we prevents it.
-        must_check_txn_status(&engine, k, ts(5, 0), ts(9, 0), ts(8, 0), uncommitted(100));
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(5, 0),
+            ts(9, 0),
+            ts(8, 0),
+            r,
+            uncommitted(100),
+        );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
         // caller_start_ts < lock.min_commit_ts < current_ts
         // When caller_start_ts < lock.min_commit_ts, no need to update it.
-        must_check_txn_status(&engine, k, ts(5, 0), ts(8, 0), ts(10, 0), uncommitted(100));
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(5, 0),
+            ts(8, 0),
+            ts(10, 0),
+            r,
+            uncommitted(100),
+        );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
         // current_ts < lock.min_commit_ts < caller_start_ts
-        must_check_txn_status(&engine, k, ts(5, 0), ts(11, 0), ts(9, 0), uncommitted(100));
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(5, 0),
+            ts(11, 0),
+            ts(9, 0),
+            r,
+            uncommitted(100),
+        );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(11, 1), false);
 
         // For same caller_start_ts and current_ts, update min_commit_ts to caller_start_ts + 1
-        must_check_txn_status(&engine, k, ts(5, 0), ts(12, 0), ts(12, 0), uncommitted(100));
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(5, 0),
+            ts(12, 0),
+            ts(12, 0),
+            r,
+            uncommitted(100),
+        );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(12, 1), false);
 
         // Logical time is also considered in the comparing
-        must_check_txn_status(&engine, k, ts(5, 0), ts(13, 1), ts(13, 3), uncommitted(100));
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(5, 0),
+            ts(13, 1),
+            ts(13, 3),
+            r,
+            uncommitted(100),
+        );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(13, 3), false);
 
         must_commit(&engine, k, ts(5, 0), ts(15, 0));
@@ -1983,6 +2050,7 @@ mod tests {
             ts(5, 0),
             ts(12, 0),
             ts(12, 0),
+            r,
             committed(ts(15, 0)),
         );
         must_unlocked(&engine, k);
@@ -1996,20 +2064,26 @@ mod tests {
             ts(5, 0),
             ts(12, 0),
             ts(12, 0),
+            r,
             committed(ts(15, 0)),
         );
 
-        // Check a not existing transaction, gets nothing.
-        must_check_txn_status(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), Rollbacked);
-        // And a rollback record will be written.
-        must_seek_write(
-            &engine,
-            k,
-            ts(6, 0),
-            ts(6, 0),
-            ts(6, 0),
-            WriteType::Rollback,
-        );
+        // Check a not existing transaction, the result depends on whether `rollback_if_not_exist`
+        // is set.
+        if r {
+            must_check_txn_status(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, Rollbacked);
+            // And a rollback record will be written.
+            must_seek_write(
+                &engine,
+                k,
+                ts(6, 0),
+                ts(6, 0),
+                ts(6, 0),
+                WriteType::Rollback,
+            );
+        } else {
+            must_check_txn_status_err(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r);
+        }
 
         // TTL check is based on physical time (in ms). When logical time's difference is larger
         // than TTL, the lock won't be resolved.
@@ -2019,12 +2093,13 @@ mod tests {
             ts(20, 0),
             ts(21, 105),
             ts(21, 105),
+            r,
             uncommitted(100),
         );
         must_large_txn_locked(&engine, k, ts(20, 0), 100, ts(21, 106), false);
 
         // If physical time's difference exceeds TTL, lock will be resolved.
-        must_check_txn_status(&engine, k, ts(20, 0), ts(121, 0), ts(121, 0), Rollbacked);
+        must_check_txn_status(&engine, k, ts(20, 0), ts(121, 0), ts(121, 0), r, Rollbacked);
         must_unlocked(&engine, k);
         must_seek_write(
             &engine,
@@ -2039,7 +2114,15 @@ mod tests {
         must_large_txn_locked(&engine, k, ts(4, 0), 100, 0, true);
 
         // Pessimistic lock do not have the min_commit_ts field, so it will not be updated.
-        must_check_txn_status(&engine, k, ts(4, 0), ts(10, 0), ts(10, 0), uncommitted(100));
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(4, 0),
+            ts(10, 0),
+            ts(10, 0),
+            r,
+            uncommitted(100),
+        );
         must_large_txn_locked(&engine, k, ts(4, 0), 100, 0, true);
 
         // Commit the key.
@@ -2058,6 +2141,7 @@ mod tests {
             ts(4, 0),
             ts(10, 0),
             ts(10, 0),
+            r,
             committed(ts(140, 0)),
         );
         must_check_txn_status(
@@ -2066,6 +2150,7 @@ mod tests {
             ts(5, 0),
             ts(10, 0),
             ts(10, 0),
+            r,
             committed(ts(15, 0)),
         );
         must_check_txn_status(
@@ -2074,6 +2159,7 @@ mod tests {
             ts(20, 0),
             ts(10, 0),
             ts(10, 0),
+            r,
             RollbackedBefore,
         );
 
@@ -2085,10 +2171,19 @@ mod tests {
             ts(150, 0),
             ts(160, 0),
             ts(160, 0),
+            r,
             uncommitted(100),
         );
         must_large_txn_locked(&engine, k, ts(150, 0), 100, 0, true);
-        must_check_txn_status(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), Rollbacked);
+        must_check_txn_status(
+            &engine,
+            k,
+            ts(150, 0),
+            ts(160, 0),
+            ts(260, 0),
+            r,
+            Rollbacked,
+        );
         must_unlocked(&engine, k);
         // Rolling back a pessimistic lock should leave Rollback mark.
         must_seek_write(
@@ -2109,6 +2204,7 @@ mod tests {
             ts(270, 0),
             ts(271, 0),
             u64::max_value(),
+            r,
             Rollbacked,
         );
         must_unlocked(&engine, k);
@@ -2129,6 +2225,7 @@ mod tests {
             ts(280, 0),
             ts(281, 0),
             u64::max_value(),
+            r,
             Rollbacked,
         );
         must_unlocked(&engine, k);
@@ -2140,6 +2237,12 @@ mod tests {
             ts(280, 0),
             WriteType::Rollback,
         );
+    }
+
+    #[test]
+    fn test_check_txn_status() {
+        test_check_txn_status_impl(false);
+        test_check_txn_status_impl(true);
     }
 
     #[test]

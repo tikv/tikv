@@ -285,6 +285,9 @@ pub enum Command {
         caller_start_ts: u64,
         /// The approximate current_ts when the command is invoked.
         current_ts: u64,
+        /// Specifies the behavior when neither commit/rollback record nor lock is found. If true,
+        /// rollbacks that transaction; otherwise returns an error.
+        rollback_if_not_exist: bool,
     },
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     ScanLock {
@@ -451,6 +454,7 @@ impl Display for Command {
                 lock_ts,
                 caller_start_ts,
                 current_ts,
+                ..
             } => write!(
                 f,
                 "kv::command::check_txn_status {} @ {} curr({}, {}) | {:?}",
@@ -1448,6 +1452,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         lock_ts: u64,
         caller_start_ts: u64,
         current_ts: u64,
+        rollback_if_not_exist: bool,
         callback: Callback<TxnStatus>,
     ) -> Result<()> {
         let cmd = Command::CheckTxnStatus {
@@ -1456,6 +1461,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             lock_ts,
             caller_start_ts,
             current_ts,
+            rollback_if_not_exist,
         };
         self.schedule(cmd, StorageCb::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.check_txn_status.inc();
@@ -4722,7 +4728,7 @@ mod tests {
         let uncommitted = TxnStatus::uncommitted;
         let committed = TxnStatus::committed;
 
-        // No lock and no commit info. Gets nothing.
+        // No lock and no commit info. Gets an error.
         storage
             .async_check_txn_status(
                 Context::default(),
@@ -4730,6 +4736,25 @@ mod tests {
                 ts(9, 0),
                 ts(9, 1),
                 ts(9, 1),
+                false,
+                expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnNotFound { .. })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // No lock and no commit info. If specified rollback_if_not_exist, the key will be rolled
+        // back.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                k.clone(),
+                ts(9, 0),
+                ts(9, 1),
+                ts(9, 1),
+                true,
                 expect_value_callback(tx.clone(), 0, Rollbacked),
             )
             .unwrap();
@@ -4773,6 +4798,7 @@ mod tests {
                 ts(10, 0),
                 ts(12, 0),
                 ts(15, 0),
+                true,
                 expect_value_callback(tx.clone(), 0, uncommitted(100)),
             )
             .unwrap();
@@ -4799,6 +4825,7 @@ mod tests {
                 ts(10, 0),
                 ts(12, 0),
                 ts(15, 0),
+                true,
                 expect_value_callback(tx.clone(), 0, committed(ts(20, 0))),
             )
             .unwrap();
@@ -4824,6 +4851,7 @@ mod tests {
                 ts(25, 0),
                 ts(126, 0),
                 ts(127, 0),
+                true,
                 expect_value_callback(tx.clone(), 0, Rollbacked),
             )
             .unwrap();

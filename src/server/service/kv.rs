@@ -2217,6 +2217,7 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
         req.get_lock_ts(),
         req.get_caller_start_ts(),
         req.get_current_ts(),
+        req.get_rollback_if_not_exist(),
         cb,
     );
 
@@ -2695,6 +2696,12 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts"; "err" => ?err);
             key_error.set_retryable(format!("{:?}", err));
+        }
+        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnNotFound { start_ts, key })) => {
+            let mut txn_not_found = TxnNotFound::default();
+            txn_not_found.set_start_ts(*start_ts);
+            txn_not_found.set_primary_key(key.to_owned());
+            key_error.set_txn_not_found(txn_not_found);
         }
         storage::Error::Txn(TxnError::Mvcc(MvccError::Deadlock {
             lock_ts,

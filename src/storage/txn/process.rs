@@ -828,10 +828,15 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             lock_ts,
             caller_start_ts,
             current_ts,
+            rollback_if_not_exist,
         } => {
             let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !ctx.get_not_fill_cache())?;
-            let (txn_status, is_pessimistic_txn) =
-                txn.check_txn_status(primary_key.clone(), caller_start_ts, current_ts)?;
+            let (txn_status, is_pessimistic_txn) = txn.check_txn_status(
+                primary_key.clone(),
+                caller_start_ts,
+                current_ts,
+                rollback_if_not_exist,
+            )?;
 
             // The lock is possibly resolved here only when the `check_txn_status` cleaned up the
             // lock, and this may happen only when it returns `Rollbacked`.
