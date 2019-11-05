@@ -221,7 +221,7 @@ pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error 
 pub mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot};
+    use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
     use engine::CF_WRITE;
 
     use super::*;
@@ -675,17 +675,15 @@ pub mod tests {
         lock_ts: u64,
         caller_start_ts: u64,
         current_ts: u64,
-        expect_lock_ttl: u64,
-        expect_commit_ts: u64,
+        expect_status: TxnStatus,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, lock_ts, true).unwrap();
-        let (lock_ttl, commit_ts, _) = txn
+        let (txn_status, _) = txn
             .check_txn_status(Key::from_raw(primary_key), caller_start_ts, current_ts)
             .unwrap();
-        assert_eq!(lock_ttl, expect_lock_ttl);
-        assert_eq!(commit_ts, expect_commit_ts);
+        assert_eq!(txn_status, expect_status);
         write(engine, &ctx, txn.into_modifies());
     }
 
