@@ -155,6 +155,12 @@ dist_release:
 # additional sanity checks and file movement.
 build_dist_release:
 	make x-build-dist
+	# Reduce binary size by compressing binaries.
+	# Currently errors with `Couldn't find DIE referenced by DW_AT_abstract_origin`
+	# dwz ${CARGO_TARGET_DIR}/release/tikv-server
+	dwz ${CARGO_TARGET_DIR}/release/tikv-ctl
+	objcopy --compress-debug-sections=zlib ${CARGO_TARGET_DIR}/release/tikv-server
+	objcopy --compress-debug-sections=zlib ${CARGO_TARGET_DIR}/release/tikv-ctl
 
 # Distributable bins with SSE4.2 optimizations
 dist_unportable_release:
