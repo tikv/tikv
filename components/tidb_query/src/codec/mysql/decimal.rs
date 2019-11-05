@@ -1825,7 +1825,7 @@ impl ConvertTo<Decimal> for &[u8] {
     //  TiDB's seems has bug, fix this after fix TiDB's
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let r = Decimal::from_bytes(self).unwrap_or(Res::Ok(Decimal::zero()));
+        let r = Decimal::from_bytes(self).unwrap_or_else(|_| Res::Ok(Decimal::zero()));
         let err = Error::overflow("DECIMAL", "");
         r.into_result_with_overflow_err(ctx, err)
     }
