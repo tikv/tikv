@@ -743,23 +743,19 @@ impl ConvertTo<f64> for &[u8] {
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let s = str::from_utf8(self)?.trim();
         let vs = get_valid_float_prefix(ctx, s)?;
-        match vs.parse::<f64>() {
-            Ok(val) => {
-                // In rust's parse, if the number is out of range,
-                // it will return Ok but the res is inf
-                if val.is_infinite() {
-                    ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", &vs))?;
-                    if val.is_sign_negative() {
-                        return Ok(std::f64::MIN);
-                    } else {
-                        return Ok(std::f64::MAX);
-                    }
-                }
-                Ok(val)
+        let val = vs
+            .parse::<f64>()
+            .map_err(|err| -> Error { box_err!("Parse '{}' to float err: {:?}", vs, err) })?;
+        // The `parse` will return Ok(inf) if the float string literal out of range
+        if val.is_infinite() {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", &vs))?;
+            if val.is_sign_negative() {
+                return Ok(std::f64::MIN);
+            } else {
+                return Ok(std::f64::MAX);
             }
-            // if reaches here, it means our code has bug.
-            Err(err) => Err(box_err!("Parse '{}' to float err: {:?}", vs, err)),
         }
+        Ok(val)
     }
 }
 

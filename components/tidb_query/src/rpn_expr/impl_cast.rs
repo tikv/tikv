@@ -801,19 +801,16 @@ fn cast_int_as_duration(
         None => Ok(None),
         Some(val) => {
             let fsp = extra.ret_field_type.get_decimal() as i8;
-            match Duration::from_i64_without_ctx(*val, fsp) {
-                // in TiDB, if there is overflow err and overflow as warning,
-                // it will return isNull==true
-                Ok(dur) => Ok(Some(dur)),
-                Err(err) => {
+            Duration::from_i64_without_ctx(*val, fsp)
+                .map(Some)
+                .or_else(|err| {
                     if err.is_overflow() {
                         ctx.handle_overflow_err(err)?;
                         Ok(None)
                     } else {
                         Err(err.into())
                     }
-                }
-            }
+                })
         }
     }
 }

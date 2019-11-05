@@ -679,19 +679,22 @@ impl Duration {
     }
 
     pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
-        match Duration::from_i64_without_ctx(n, fsp) {
-            Ok(dur) => Ok(dur),
-            Err(e) => {
-                if e.is_overflow() {
-                    ctx.handle_overflow_err(e)?;
-                    let max =
-                        Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp as u8);
-                    Ok(max)
-                } else {
-                    Err(e)
-                }
+        Duration::from_i64_without_ctx(n, fsp).or_else(|e| {
+            if e.is_overflow() {
+                ctx.handle_overflow_err(e)?;
+                // Returns max duration if overflow occurred
+                Ok(Duration::new(
+                    n < 0,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    fsp as u8,
+                ))
+            } else {
+                Err(e)
             }
-        }
+        })
     }
 }
 
