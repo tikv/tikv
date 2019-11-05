@@ -226,7 +226,7 @@ dependencies = [
 [[package]]
 name = "bzip2-sys"
 version = "0.1.7"
-source = "git+https://github.com/alexcrichton/bzip2-rs.git#93c465c7a6991668ca8062f454431f65545f4d96"
+source = "git+https://github.com/alexcrichton/bzip2-rs.git#96cc4909a1a180a62ca8e3716785dc6f7a7f9ac0"
 dependencies = [
  "cc",
  "libc",
@@ -1392,7 +1392,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#51073a7579966d8ab75d4b88046ebe42fa3bde2d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1409,7 +1409,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#51073a7579966d8ab75d4b88046ebe42fa3bde2d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1465,8 +1465,8 @@ dependencies = [
 
 [[package]]
 name = "lz4-sys"
-version = "1.8.0"
-source = "git+https://github.com/busyjay/lz4-rs.git?branch=adjust-build#41509fea212e9ca55c1f6c53d4fd1ddf28cdf689"
+version = "1.8.3"
+source = "git+https://github.com/busyjay/lz4-rs.git?branch=adjust-build#5a8afe4010c67899fc7af876a58d67fd6269bf81"
 dependencies = [
  "cc",
  "libc",
@@ -2395,7 +2395,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#4a8748c5f8dee2192236d21d2ad6394034b9b44d"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#51073a7579966d8ab75d4b88046ebe42fa3bde2d"
 dependencies = [
  "crc",
  "libc",
@@ -3770,7 +3770,7 @@ dependencies = [
 [[package]]
 name = "zstd-sys"
 version = "1.4.14+zstd.1.4.3"
-source = "git+https://github.com/gyscos/zstd-rs.git#8656e6baedb61f71abba458ecd88f363ff6458f5"
+source = "git+https://github.com/gyscos/zstd-rs.git#c30683df11255ca219422957e0ab59501634e70d"
 dependencies = [
  "cc",
  "glob",
