@@ -147,7 +147,7 @@ impl ScalarFunc {
 
     pub fn cast_json_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val: Cow<Json> = try_opt!(self.children[0].eval_json(ctx, row));
-        let res = if self.is_ret_type_unsigned() {
+        let res = if self.field_type.is_unsigned() {
             val.to_uint(ctx, FieldTypeTp::LongLong)? as i64
         } else {
             val.to_int(ctx, FieldTypeTp::LongLong)?
@@ -756,10 +756,6 @@ impl ScalarFunc {
         )?;
         t.set_time_type(self.field_type.as_accessor().tp().try_into()?)?;
         Ok(Cow::Owned(t))
-    }
-
-    fn is_ret_type_unsigned(&self) -> bool {
-        self.field_type.flag().contains(FieldTypeFlag::UNSIGNED)
     }
 }
 
