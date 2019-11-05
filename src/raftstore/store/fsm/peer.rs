@@ -1781,11 +1781,22 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let entries = if low > state.get_commit() {
                 vec![]
             } else {
-                self.fsm
+                match self
+                    .fsm
                     .peer
                     .get_store()
                     .entries(low, state.get_commit() + 1, NO_LIMIT)
-                    .unwrap()
+                {
+                    Ok(ents) => ents,
+                    Err(e) => panic!(
+                        "[region {}] {} failed to get merge entires: {:?}, low:{}, commit: {}",
+                        self.fsm.region_id(),
+                        self.fsm.peer_id(),
+                        e,
+                        low,
+                        state.get_commit()
+                    ),
+                }
             };
 
             let sibling_peer = util::find_peer(&sibling_region, self.store_id()).unwrap();
