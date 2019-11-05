@@ -227,6 +227,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::FloorDecToInt => floor_fn_meta::<FloorDecToInt>(),
         ScalarFuncSig::FloorDecToDec => floor_fn_meta::<FloorDecToDec>(),
         ScalarFuncSig::FloorIntToInt => floor_fn_meta::<FloorIntToInt>(),
+        ScalarFuncSig::Pi => pi_fn_meta(),
         ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
         ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),
         ScalarFuncSig::CoalesceString => coalesce_fn_meta::<Bytes>(),

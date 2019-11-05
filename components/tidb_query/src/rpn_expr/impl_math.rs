@@ -5,6 +5,12 @@ use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::Result;
 
+#[rpn_fn]
+#[inline]
+pub fn pi(_arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(Some(Real::from(std::f64::consts::PI)))
+}
+
 #[inline]
 #[rpn_fn(capture = [ctx])]
 pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: &Option<C::Input>) -> Result<Option<C::Output>> {
@@ -187,6 +193,27 @@ mod tests {
     use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+    use std::f64::consts::PI;
+
+    #[test]
+    fn test_pi() {
+        let test_cases = vec![
+            (1.1, PI),
+            (0.0, PI),
+            (-1.1, PI),
+            (std::f64::MAX, PI),
+            (std::f64::MIN, PI),
+        ];
+        for (arg, expect) in test_cases {
+            let arg = Real::from(arg);
+            let expect = Real::new(expect).ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::Pi)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", arg);
+        }
+    }
 
     #[test]
     fn test_abs_int() {
