@@ -3,6 +3,7 @@
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -74,14 +75,17 @@ impl SSTImporter {
     // This method is blocking. It performs the following transformations before
     // writing to disk:
     //
-    //  1. only KV pairs in the half-inclusive range (`[start, end)`) are used.
-    //     (set the range to `["", "")` to import everything).
+    //  1. only KV pairs in the *inclusive* range (`[start, end]`) are used.
+    //     (set the range to `["", ""]` to import everything).
     //  2. keys are rewritten according to the given rewrite rule.
     //
     // Both the range and rewrite keys are specified using origin keys. However,
     // the SST itself should be data keys (contain the `z` prefix). The range
     // should be specified using keys after rewriting, to be consistent with the
     // region info in PD.
+    //
+    // This method returns the *inclusive* key range (`[start, end]`) of SST
+    // file created, or returns None if the SST is empty.
     pub fn download(
         &self,
         meta: &SSTMeta,
@@ -163,38 +167,22 @@ impl SSTImporter {
         let range_start = meta.get_range().get_start();
         let range_end = meta.get_range().get_end();
 
-        let range_start = keys::rewrite::rewrite_prefix(new_prefix, old_prefix, range_start)
-            .or_else(|_| {
-                if range_start.is_empty() {
-                    Ok(if old_prefix.is_empty() {
-                        new_prefix.to_vec()
-                    } else {
-                        Vec::new()
-                    })
-                } else {
-                    Err(Error::WrongKeyPrefix(
-                        "SST start range",
-                        range_start.to_vec(),
-                        new_prefix.to_vec(),
-                    ))
-                }
-            })?;
-        let range_end = keys::rewrite::rewrite_prefix_of_end_key(new_prefix, old_prefix, range_end)
-            .or_else(|_| {
-                if range_end.is_empty() {
-                    Ok(if old_prefix.is_empty() {
-                        keys::next_key(new_prefix)
-                    } else {
-                        Vec::new()
-                    })
-                } else {
-                    Err(Error::WrongKeyPrefix(
-                        "SST end range",
-                        range_end.to_vec(),
-                        new_prefix.to_vec(),
-                    ))
-                }
-            })?;
+        let range_start = keys::rewrite::rewrite_prefix_of_start_bound(
+            new_prefix,
+            old_prefix,
+            key_to_bound(range_start),
+        )
+        .map_err(|_| {
+            Error::WrongKeyPrefix("SST start range", range_start.to_vec(), new_prefix.to_vec())
+        })?;
+        let range_end = keys::rewrite::rewrite_prefix_of_end_bound(
+            new_prefix,
+            old_prefix,
+            key_to_bound(range_end),
+        )
+        .map_err(|_| {
+            Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
+        })?;
 
         // read and first and last keys from the SST, determine if we could
         // simply move the entire SST instead of iterating and generate a new one.
@@ -209,7 +197,7 @@ impl SSTImporter {
                 return Some(meta.get_range().clone());
             }
             let start_key = keys::origin_key(iter.key());
-            if *start_key < *range_start {
+            if is_before_start_bound(start_key, &range_start) {
                 // SST's start is before the range to consume, so needs to iterate to skip over
                 return None;
             }
@@ -217,8 +205,8 @@ impl SSTImporter {
 
             // seek to end and fetch the last (inclusive) key of the SST.
             iter.seek(SeekKey::End);
-            let last_key = keys::origin_end_key(iter.key());
-            if !range_end.is_empty() && *last_key >= *range_end {
+            let last_key = keys::origin_key(iter.key());
+            if is_after_end_bound(last_key, &range_end) {
                 // SST's end is after the range to consume
                 return None;
             }
@@ -226,7 +214,7 @@ impl SSTImporter {
             // range contained the entire SST, no need to iterate, just moving the file is ok
             let mut range = Range::default();
             range.set_start(start_key);
-            range.set_end(keys::next_key(last_key));
+            range.set_end(last_key.to_vec());
             Some(range)
         })();
 
@@ -242,10 +230,14 @@ impl SSTImporter {
         let new_prefix_data_key_len = key.len();
         let mut first_key = None;
 
-        iter.seek(SeekKey::Key(&keys::data_key(&range_start)));
+        match range_start {
+            Bound::Unbounded => iter.seek(SeekKey::Start),
+            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s))),
+            Bound::Excluded(_) => unreachable!(),
+        };
         while iter.valid() {
             let old_key = keys::origin_key(iter.key());
-            if !range_end.is_empty() && *old_key >= *range_end {
+            if is_after_end_bound(old_key, &range_end) {
                 break;
             }
             if !old_key.starts_with(old_prefix) {
@@ -271,7 +263,7 @@ impl SSTImporter {
             sst_writer.finish()?;
             let mut final_range = Range::default();
             final_range.set_start(start_key);
-            final_range.set_end(keys::next_key(keys::origin_key(&key)));
+            final_range.set_end(keys::origin_key(&key).to_vec());
             Ok(Some(final_range))
         } else {
             // nothing is written: prevents finishing the SST at all.
@@ -535,6 +527,30 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
     Ok(meta)
 }
 
+fn key_to_bound(key: &[u8]) -> Bound<&[u8]> {
+    if key.is_empty() {
+        Bound::Unbounded
+    } else {
+        Bound::Included(key)
+    }
+}
+
+fn is_before_start_bound(value: &[u8], bound: &Bound<Vec<u8>>) -> bool {
+    match bound {
+        Bound::Unbounded => false,
+        Bound::Included(b) => *value < **b,
+        Bound::Excluded(b) => *value <= **b,
+    }
+}
+
+fn is_after_end_bound(value: &[u8], bound: &Bound<Vec<u8>>) -> bool {
+    match bound {
+        Bound::Unbounded => false,
+        Bound::Included(b) => *value > **b,
+        Bound::Excluded(b) => *value >= **b,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,7 +742,7 @@ mod tests {
         dbg!(&range);
 
         assert_eq!(range.get_start(), b"t123_r01");
-        assert_eq!(range.get_end(), b"t123_r14");
+        assert_eq!(range.get_end(), b"t123_r13");
 
         // verifies that the file is saved to the correct place.
         let sst_file_path = importer.dir.join(&meta).unwrap().save;
@@ -771,7 +787,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(range.get_start(), b"t567_r01");
-        assert_eq!(range.get_end(), b"t567_r14");
+        assert_eq!(range.get_end(), b"t567_r13");
 
         // verifies that the file is saved to the correct place.
         // (the file size may be changed, so not going to check the file size)
@@ -815,7 +831,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(range.get_start(), b"t9102_r01");
-        assert_eq!(range.get_end(), b"t9102_r14");
+        assert_eq!(range.get_end(), b"t9102_r13");
 
         // performs the ingest
         let ingest_dir = TempDir::new("ingest_dir").unwrap();
@@ -853,7 +869,7 @@ mod tests {
 
         // note: the range doesn't contain the DATA_PREFIX 'z'.
         meta.mut_range().set_start(b"t123_r02".to_vec());
-        meta.mut_range().set_end(b"t123_r13".to_vec());
+        meta.mut_range().set_end(b"t123_r12".to_vec());
 
         let range = importer
             .download(
@@ -867,7 +883,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(range.get_start(), b"t123_r04");
-        assert_eq!(range.get_end(), b"t123_r08");
+        assert_eq!(range.get_end(), b"t123_r07");
 
         // verifies that the file is saved to the correct place.
         // (the file size is changed, so not going to check the file size)
@@ -895,7 +911,7 @@ mod tests {
         let importer = SSTImporter::new(importer_dir.path()).unwrap();
 
         meta.mut_range().set_start(b"t5_r02".to_vec());
-        meta.mut_range().set_end(b"t5_r13".to_vec());
+        meta.mut_range().set_end(b"t5_r12".to_vec());
 
         let range = importer
             .download(
@@ -909,7 +925,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(range.get_start(), b"t5_r04");
-        assert_eq!(range.get_end(), b"t5_r08");
+        assert_eq!(range.get_end(), b"t5_r07");
 
         // verifies that the file is saved to the correct place.
         let sst_file_path = importer.dir.join(&meta).unwrap().save;
