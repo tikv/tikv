@@ -1062,9 +1062,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 }
                             }
                             let results = unsafe {
-                                mem::transmute::<Vec<MaybeUninit<Element>>, Vec<Element>>(
-                                    results,
-                                )
+                                mem::transmute::<Vec<MaybeUninit<Element>>, Vec<Element>>(results)
                             };
                             statistics.add(&snap_store.incremental_get_take_statistics());
                             future::ok(results)
