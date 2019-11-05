@@ -36,6 +36,24 @@ struct Env {
     metrics_handled_task_count: IntCounter,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Full {
+    pub current_tasks: usize,
+    pub max_tasks: usize,
+}
+
+impl std::fmt::Display for Full {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(fmt, "multilevel pool is full")
+    }
+}
+
+impl std::error::Error for Full {
+    fn description(&self) -> &str {
+        "multilevel pool is full"
+    }
+}
+
 #[derive(Clone)]
 pub struct MultilevelPool {
     scheduler: Scheduler,
@@ -46,10 +64,31 @@ pub struct MultilevelPool {
 }
 
 impl MultilevelPool {
-    pub fn spawn<F>(&self, task: F, token: u64)
+    /// Gets current running task count.
+    #[inline]
+    pub fn get_running_task_count(&self) -> usize {
+        // As long as different future pool has different name prefix, we can safely use the value
+        // in metrics.
+        self.env.metrics_running_task_count.get() as usize
+    }
+
+    fn gate_spawn(&self) -> Result<(), Full> {
+        let current_tasks = self.get_running_task_count();
+        if current_tasks >= self.max_tasks {
+            Err(Full {
+                current_tasks,
+                max_tasks: self.max_tasks,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn spawn<F>(&self, task: F, token: u64) -> Result<(), Full>
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        self.gate_spawn()?;
         let env = self.env.clone();
         env.metrics_running_task_count.inc();
         let wrapped_task = async move {
@@ -67,11 +106,12 @@ impl MultilevelPool {
         ));
     }
 
-    pub fn spawn_handle<F, R>(&self, task: F, token: u64) -> impl Future<Output = R>
+    pub fn spawn_handle<F, R>(&self, task: F, token: u64) -> Result<impl Future<Output = R>, Full>
     where
         F: Future<Output = R> + Send + 'static,
         R: Send + 'static,
     {
+        self.gate_spawn()?;
         let env = self.env.clone();
         env.metrics_running_task_count.inc();
         let (tx, rx) = oneshot::channel();
@@ -82,7 +122,6 @@ impl MultilevelPool {
             try_tick_thread(&env);
             tx.send(res).ok();
         };
-        // at begin a token has top priority
         let stats = self.stats_map.get_stats(token);
         self.scheduler.add_task(ArcTask::new(
             wrapped_task,

@@ -53,6 +53,7 @@ tikv_util = { path = "../components/tikv_util" }
 engine = { path = "../components/engine" }
 pd_client = { path = "../components/pd_client" }
 backup = { path = "../components/backup" }
+multilevel_pool = { path = "components/multilevel_pool" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

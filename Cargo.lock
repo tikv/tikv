@@ -3337,6 +3337,7 @@ dependencies = [
  "log_wrappers",
  "mime",
  "more-asserts",
+ "multilevel_pool",
  "murmur3",
  "nix",
  "panic_hook",
