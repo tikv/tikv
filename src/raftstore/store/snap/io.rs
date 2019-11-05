@@ -4,10 +4,10 @@ use std::io::{self, BufReader};
 use std::{fs, usize};
 
 use engine::rocks::util::get_cf_handle;
-use engine_traits::IOLimiter;
 use engine::rocks::{IngestExternalFileOptions, Snapshot as DbSnapshot, Writable, WriteBatch, DB};
 use engine::{CfName, Iterable};
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+use engine_traits::IOLimiter;
 use engine_traits::{SstWriter, SstWriterBuilder};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
@@ -155,8 +155,8 @@ mod tests {
     use super::*;
     use crate::raftstore::store::snap::tests::*;
     use engine::CF_DEFAULT;
-    use tempfile::Builder;
     use engine_rocks::RocksIOLimiter;
+    use tempfile::Builder;
 
     struct TestStaleDetector;
     impl StaleDetector for TestStaleDetector {

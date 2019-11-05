@@ -7,9 +7,9 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine_traits::IOLimiter;
-use engine_rocks::RocksIOLimiter;
 use engine::DB;
+use engine_rocks::RocksIOLimiter;
+use engine_traits::IOLimiter;
 use external_storage::*;
 use futures::lazy;
 use futures::prelude::Future;

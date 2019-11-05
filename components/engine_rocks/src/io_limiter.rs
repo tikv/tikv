@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
+use engine_traits::{IOLimiter, IOLimiterExt};
 use rocksdb::RateLimiter;
-use engine_traits::{IOLimiterExt, IOLimiter};
 
 const PRIORITY_HIGH: u8 = 1;
 const REFILL_PERIOD: i64 = 100 * 1000;
@@ -65,11 +65,11 @@ impl IOLimiter for RocksIOLimiter {
 
 #[cfg(test)]
 mod tests {
+    use engine_traits::{LimitReader, LimitWriter};
     use std::fs::{self, File};
     use std::io::{Read, Write};
     use std::sync::Arc;
     use tempfile::Builder;
-    use engine_traits::{LimitReader, LimitWriter};
 
     use super::*;
 
@@ -97,7 +97,8 @@ mod tests {
             .unwrap();
         let path = dir.path().join("test-file");
         let mut file = File::create(&path).unwrap();
-        let mut limit_writer = LimitWriter::new(Some(Arc::new(RocksIOLimiter::new(1024))), &mut file);
+        let mut limit_writer =
+            LimitWriter::new(Some(Arc::new(RocksIOLimiter::new(1024))), &mut file);
 
         let mut s = String::new();
         for _ in 0..100 {
@@ -116,8 +117,10 @@ mod tests {
         let bytes_per_sec = 10 * 1024 * 1024; // 10MB/s
         for c in 0..1024usize {
             let mut source = std::io::repeat(b'7').take(c as _);
-            let mut limit_reader =
-                LimitReader::new(Some(Arc::new(RocksIOLimiter::new(bytes_per_sec))), &mut source);
+            let mut limit_reader = LimitReader::new(
+                Some(Arc::new(RocksIOLimiter::new(bytes_per_sec))),
+                &mut source,
+            );
             let count = limit_reader.read_to_end(&mut buf).unwrap();
             assert_eq!(count, c);
             assert_eq!(count, buf.len());

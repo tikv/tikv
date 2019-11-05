@@ -411,8 +411,8 @@ mod tests {
     use engine::Engines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
-    use engine_rocks::RocksSstWriterBuilder;
     use engine_rocks::RocksIOLimiter;
+    use engine_rocks::RocksSstWriterBuilder;
     use engine_traits::{SstWriter, SstWriterBuilder};
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;

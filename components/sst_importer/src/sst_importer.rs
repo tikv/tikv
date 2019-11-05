@@ -11,8 +11,8 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use engine_traits::{IOLimiter, LimitReader};
 use engine_traits::Iterator;
+use engine_traits::{IOLimiter, LimitReader};
 use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::{SeekKey, SstReader, SstWriter, SstWriterBuilder};
 use external_storage::create_storage;
