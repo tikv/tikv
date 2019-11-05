@@ -3,7 +3,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
+use engine_traits::LimitReader;
+use engine_rocks::{RocksIOLimiter};
 use engine::{CF_DEFAULT, CF_WRITE, DB};
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{SstWriter, SstWriterBuilder};
@@ -60,7 +61,7 @@ impl Writer {
         name: &str,
         cf: &'static str,
         buf: &mut Vec<u8>,
-        limiter: Option<Arc<IOLimiter>>,
+        limiter: Option<Arc<RocksIOLimiter>>,
         storage: &dyn ExternalStorage,
     ) -> Result<File> {
         buf.reserve(self.writer.file_size() as _);
@@ -93,12 +94,12 @@ pub struct BackupWriter {
     name: String,
     default: Writer,
     write: Writer,
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Option<Arc<RocksIOLimiter>>,
 }
 
 impl BackupWriter {
     /// Create a new BackupWriter.
-    pub fn new(db: Arc<DB>, name: &str, limiter: Option<Arc<IOLimiter>>) -> Result<BackupWriter> {
+    pub fn new(db: Arc<DB>, name: &str, limiter: Option<Arc<RocksIOLimiter>>) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
