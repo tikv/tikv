@@ -60,8 +60,21 @@ impl<S: Snapshot> MvccTxn<S> {
         })
     }
 
+    pub fn start_ts(&mut self, start_ts: u64) {
+        self.start_ts = start_ts;
+    }
+
     pub fn collapse_rollback(&mut self, collapse: bool) {
         self.collapse_rollback = collapse;
+    }
+
+    pub fn get_checkpoint(&self) -> (usize, usize) {
+        (self.writes.len(), self.write_size)
+    }
+
+    pub fn reset_to_checkpoint(&mut self, checkpoint: (usize, usize)) {
+        self.writes.truncate(checkpoint.0);
+        self.write_size = checkpoint.1;
     }
 
     pub fn into_modifies(self) -> Vec<Modify> {

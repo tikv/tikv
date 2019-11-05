@@ -599,9 +599,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
                     let res = storage.async_batch_prewrite_command(
                         command,
                         Box::new(move |res: Vec<(u64, _)>| {
-                            info!("calling batch-response prewrite");
                             for (id, v) in res {
-                                info!("batch-response prewrite {}:{:?}", id, v);
                                 let mut resp = PrewriteResponse::default();
                                 if let Some(err) = extract_region_error(&v) {
                                     resp.set_region_error(err);
@@ -629,9 +627,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
                     let res = storage.async_batch_commit_command(
                         command,
                         Box::new(move |res: Vec<(u64, _)>| {
-                            info!("calling batch-response commit");
                             for (id, v) in res {
-                                info!("batch-response commit {}:{:?}", id, v);
                                 let mut resp = CommitResponse::default();
                                 if let Some(err) = extract_region_error(&v) {
                                     resp.set_region_error(err);
