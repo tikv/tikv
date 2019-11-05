@@ -53,25 +53,48 @@ impl ArcTask {
         self.0.status.store(POLLING, Ordering::SeqCst);
         let waker = ManuallyDrop::new(waker(&*self.0));
         let mut cx = Context::from_waker(&waker);
+        let begin = Instant::now();
+        let poll_res = (&mut *self.0.task.get()).poll_unpin(&mut cx);
+        let elapsed = begin.elapsed().as_micros() as u64;
+        self.0.scheduler.add_level_elapsed(self.0.level, elapsed);
+        if let Poll::Ready(_) = poll_res {
+            self.0.status.store(COMPLETE, Ordering::SeqCst);
+            return;
+        }
+
+        self.0
+            .task_stats
+            .elapsed
+            .fetch_add(elapsed, Ordering::SeqCst);
+        let mut status = self.0.status.load(Ordering::SeqCst);
         loop {
-            let begin = Instant::now();
-            if let Poll::Ready(_) = (&mut *self.0.task.get()).poll_unpin(&mut cx) {
-                break self.0.status.store(COMPLETE, Ordering::SeqCst);
-            }
-            let elapsed = begin.elapsed().as_micros() as u64;
-            self.0
-                .task_stats
-                .elapsed
-                .fetch_add(elapsed, Ordering::SeqCst);
-            self.0.scheduler.add_level_elapsed(self.0.level, elapsed);
-            match self.0.status.compare_exchange(
-                POLLING,
-                WAITING,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => break,
-                Err(_) => self.0.status.store(POLLING, Ordering::SeqCst),
+            match status {
+                POLLING => {
+                    match self.0.status.compare_exchange(
+                        POLLING,
+                        WAITING,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    ) {
+                        Ok(_) => break,
+                        Err(cur) => status = cur,
+                    }
+                }
+                REPOLL => {
+                    match self.0.status.compare_exchange(
+                        REPOLL,
+                        POLLING,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    ) {
+                        Ok(_) => {
+                            self.0.scheduler.add_task(self.clone());
+                            break;
+                        }
+                        Err(cur) => status = cur,
+                    }
+                }
+                _ => break,
             }
         }
     }
