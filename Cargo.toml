@@ -151,7 +151,7 @@ protobuf = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 
 [patch."https://github.com/pingcap/rust-rocksdb.git"]
-rocksdb = { git = "https://github.com/brson/rust-rocksdb", branch = "sst-rc" }
+rocksdb = { git = "https://github.com/brson/rust-rocksdb", rev = "548c2ef4696784232425aab09ac4841f2d81a0bb" }
 
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
