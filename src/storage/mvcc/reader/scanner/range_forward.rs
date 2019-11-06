@@ -108,7 +108,7 @@ impl<S: Snapshot> RangeForwardScanner<S> {
             super::super::util::check_lock(
                 &Key::from_encoded_slice(self.lock_cursor.key(&mut self.statistics.lock)),
                 self.cfg.ts,
-                &lock,
+                lock,
             )?;
 
             if !self.lock_cursor.next(&mut self.statistics.lock) {
