@@ -309,7 +309,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
         let lock_mgr = self.take_lock_mgr();
         match task.cmd {
             cmd @ Command::Batch { .. } => {
-                match process_batch_write_impl(cid, cmd, snapshot, &mut statistics) {
+                match process_batch_write_impl(cid, cmd, snapshot, lock_mgr, &mut statistics) {
                     Ok(BatchWriteResults {
                         ctx,
                         mut ids,
@@ -1055,10 +1055,11 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
     })
 }
 
-fn process_batch_write_impl<S: Snapshot>(
+fn process_batch_write_impl<S: Snapshot, L: LockMgr>(
     cid: u64,
     cmd: Command,
     snapshot: S,
+    lock_mgr: Option<L>,
     statistics: &mut Statistics,
 ) -> Result<BatchWriteResults> {
     let tag = cmd.tag();
@@ -1192,20 +1193,35 @@ fn process_batch_write_impl<S: Snapshot>(
                         txn.start_ts(*lock_ts);
                         let checkpoint = txn.get_checkpoint();
                         let mut failed = false;
+                        // Pessimistic txn needs key_hashes to wake up waiters
+                        let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
+                        let mut is_pessimistic_txn = false;
                         for k in keys {
-                            if let Err(e) = txn.commit(k.clone(), *commit_ts) {
-                                results.push((
-                                    ids[i].take().unwrap(),
-                                    Msg::FinishedWithErr {
-                                        cid,
-                                        err: Error::from(e),
-                                        tag,
-                                    },
-                                ));
-                                failed = true;
-                                break;
+                            match txn.commit(k.clone(), *commit_ts) {
+                                Ok(pessimistic) => {
+                                    is_pessimistic_txn = pessimistic;
+                                }
+                                Err(e) => {
+                                    results.push((
+                                        ids[i].take().unwrap(),
+                                        Msg::FinishedWithErr {
+                                            cid,
+                                            err: Error::from(e),
+                                            tag,
+                                        },
+                                    ));
+                                    failed = true;
+                                    break;
+                                }
                             }
                         }
+                        wake_up_waiters_if_needed(
+                            &lock_mgr,
+                            *lock_ts,
+                            key_hashes,
+                            *commit_ts,
+                            is_pessimistic_txn,
+                        );
                         if failed {
                             txn.reset_to_checkpoint(checkpoint);
                         }

@@ -2407,10 +2407,37 @@ mod tests {
         }
     }
 
+    fn expect_repeatable_error<T, F>(err_matcher: &F, x: Result<T>)
+    where
+        F: Fn(Error) + Send + 'static,
+    {
+        match x {
+            Err(e) => err_matcher(e),
+            _ => panic!("expect result to be an error"),
+        }
+    }
+
     fn expect_ok_callback<T: Debug>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             x.unwrap();
             done.send(id).unwrap();
+        })
+    }
+
+    fn expect_ok_batch_callback<T: Debug>(
+        done: Sender<i32>,
+        id: i32,
+        count: usize,
+    ) -> BatchCallback<T> {
+        let counter = Arc::new(atomic::AtomicUsize::new(count));
+        Box::new(move |x: BatchResults<T>| {
+            let len = x.len();
+            for (_, x) in x {
+                x.unwrap();
+            }
+            if counter.fetch_sub(len, atomic::Ordering::Relaxed) == len {
+                done.send(id).unwrap();
+            }
         })
     }
 
@@ -2424,6 +2451,27 @@ mod tests {
         })
     }
 
+    fn expect_fail_batch_callback<T, F>(
+        done: Sender<i32>,
+        id: i32,
+        count: usize,
+        err_matcher: F,
+    ) -> BatchCallback<T>
+    where
+        F: Fn(Error) + Send + 'static,
+    {
+        let counter = Arc::new(atomic::AtomicUsize::new(count));
+        Box::new(move |x: BatchResults<T>| {
+            let len = x.len();
+            for (_, x) in x {
+                expect_repeatable_error(&err_matcher, x);
+            }
+            if counter.fetch_sub(len, atomic::Ordering::Relaxed) == len {
+                done.send(id).unwrap();
+            }
+        })
+    }
+
     fn expect_too_busy_callback<T>(done: Sender<i32>, id: i32) -> Callback<T> {
         Box::new(move |x: Result<T>| {
             expect_error(
@@ -2434,6 +2482,29 @@ mod tests {
                 x,
             );
             done.send(id).unwrap();
+        })
+    }
+
+    fn expect_too_busy_batch_callback<T>(
+        done: Sender<i32>,
+        id: i32,
+        count: usize,
+    ) -> BatchCallback<T> {
+        let counter = Arc::new(atomic::AtomicUsize::new(count));
+        Box::new(move |x: BatchResults<T>| {
+            let len = x.len();
+            for (_, x) in x {
+                expect_error(
+                    |err| match err {
+                        Error::SchedTooBusy => {}
+                        e => panic!("unexpected error chain: {:?}, expect too busy", e),
+                    },
+                    x,
+                );
+            }
+            if counter.fetch_sub(len, atomic::Ordering::Relaxed) == len {
+                done.send(id).unwrap();
+            }
         })
     }
 
@@ -2501,6 +2572,79 @@ mod tests {
     }
 
     #[test]
+    fn test_get_put_batch_command() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+        let x: Vec<Option<Vec<u8>>> = storage
+            .async_batch_get_command(vec![PointGetCommand::from_key_ts(
+                Key::from_raw(b"x"),
+                Some(100),
+            )])
+            .wait()
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(x, vec![None]);
+        storage
+            .async_batch_prewrite_command(
+                Command::Batch {
+                    ids: vec![Some(1)],
+                    commands: vec![Command::Prewrite {
+                        ctx: Context::default(),
+                        mutations: vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                        primary: b"x".to_vec(),
+                        start_ts: 100,
+                        options: Options::default(),
+                    }],
+                },
+                expect_ok_batch_callback(tx.clone(), 0, 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let mut x = storage
+            .async_batch_get_command(vec![PointGetCommand::from_key_ts(
+                Key::from_raw(b"x"),
+                Some(101),
+            )])
+            .wait()
+            .unwrap();
+        expect_error(
+            |e| match e {
+                Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { .. })) => (),
+                e => panic!("unexpected error chain: {:?}", e),
+            },
+            x.remove(0),
+        );
+        storage
+            .async_batch_commit_command(
+                Command::Batch {
+                    ids: vec![Some(1)],
+                    commands: vec![Command::Commit {
+                        ctx: Context::default(),
+                        keys: vec![Key::from_raw(b"x")],
+                        lock_ts: 100,
+                        commit_ts: 101,
+                    }],
+                },
+                expect_ok_batch_callback(tx.clone(), 2, 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let x: Vec<Option<Vec<u8>>> = storage
+            .async_batch_get_command(vec![
+                PointGetCommand::from_key_ts(Key::from_raw(b"x"), Some(100)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"x"), Some(101)),
+            ])
+            .wait()
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(x, vec![None, Some(b"100".to_vec())]);
+    }
+
+    #[test]
     fn test_cf_error() {
         // New engine lacks normal column families.
         let engine = TestEngineBuilder::new().cfs(["foo"]).build().unwrap();
@@ -2518,6 +2662,30 @@ mod tests {
                 1,
                 Options::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
+                    }
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_batch_prewrite_command(
+                Command::Batch {
+                    ids: vec![Some(1)],
+                    commands: vec![Command::Prewrite {
+                        ctx: Context::default(),
+                        mutations: vec![
+                            Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
+                            Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
+                            Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                        ],
+                        primary: b"a".to_vec(),
+                        start_ts: 1,
+                        options: Options::default(),
+                    }],
+                },
+                expect_fail_batch_callback(tx.clone(), 1, 1, |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
                     }
                     e => panic!("unexpected error chain: {:?}", e),
@@ -3017,6 +3185,90 @@ mod tests {
     }
 
     #[test]
+    fn test_txn_batch_command() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+        storage
+            .async_batch_prewrite_command(
+                Command::Batch {
+                    ids: vec![Some(1), Some(2)],
+                    commands: vec![
+                        Command::Prewrite {
+                            ctx: Context::default(),
+                            mutations: vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                            primary: b"x".to_vec(),
+                            start_ts: 100,
+                            options: Options::default(),
+                        },
+                        Command::Prewrite {
+                            ctx: Context::default(),
+                            mutations: vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
+                            primary: b"y".to_vec(),
+                            start_ts: 101,
+                            options: Options::default(),
+                        },
+                    ],
+                },
+                expect_ok_batch_callback(tx.clone(), 0, 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_batch_commit_command(
+                Command::Batch {
+                    ids: vec![Some(1), Some(2)],
+                    commands: vec![
+                        Command::Commit {
+                            ctx: Context::default(),
+                            keys: vec![Key::from_raw(b"x")],
+                            lock_ts: 100,
+                            commit_ts: 110,
+                        },
+                        Command::Commit {
+                            ctx: Context::default(),
+                            keys: vec![Key::from_raw(b"y")],
+                            lock_ts: 101,
+                            commit_ts: 111,
+                        },
+                    ],
+                },
+                expect_ok_batch_callback(tx.clone(), 1, 2),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let x: Vec<Option<Vec<u8>>> = storage
+            .async_batch_get_command(vec![
+                PointGetCommand::from_key_ts(Key::from_raw(b"x"), Some(120)),
+                PointGetCommand::from_key_ts(Key::from_raw(b"y"), Some(120)),
+            ])
+            .wait()
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(x, vec![Some(b"100".to_vec()), Some(b"101".to_vec())]);
+        storage
+            .async_batch_prewrite_command(
+                Command::Batch {
+                    ids: vec![Some(1)],
+                    commands: vec![Command::Prewrite {
+                        ctx: Context::default(),
+                        mutations: vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec()))],
+                        primary: b"x".to_vec(),
+                        start_ts: 105,
+                        options: Options::default(),
+                    }],
+                },
+                expect_fail_batch_callback(tx.clone(), 2, 1, |e| match e {
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => (),
+                    e => panic!("unexpected error chain: {:?}", e),
+                }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    #[test]
     fn test_sched_too_busy() {
         let mut config = Config::default();
         config.scheduler_pending_write_threshold = ReadableSize(1);
@@ -3055,6 +3307,66 @@ mod tests {
                 102,
                 Options::default(),
                 expect_ok_callback(tx.clone(), 3),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_sched_too_busy_batch_command() {
+        let mut config = Config::default();
+        config.scheduler_pending_write_threshold = ReadableSize(1);
+        let storage = TestStorageBuilder::new().config(config).build().unwrap();
+        let (tx, rx) = channel();
+        let x: Vec<Option<Vec<u8>>> = storage
+            .async_batch_get_command(vec![PointGetCommand::from_key_ts(
+                Key::from_raw(b"x"),
+                Some(100),
+            )])
+            .wait()
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(x, vec![None]);
+        storage
+            .async_pause(
+                Context::default(),
+                vec![Key::from_raw(b"x")],
+                1000,
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        storage
+            .async_batch_prewrite_command(
+                Command::Batch {
+                    ids: vec![Some(1)],
+                    commands: vec![Command::Prewrite {
+                        ctx: Context::default(),
+                        mutations: vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
+                        primary: b"y".to_vec(),
+                        start_ts: 101,
+                        options: Options::default(),
+                    }],
+                },
+                expect_too_busy_batch_callback(tx.clone(), 2, 1),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        rx.recv().unwrap();
+        storage
+            .async_batch_prewrite_command(
+                Command::Batch {
+                    ids: vec![Some(1)],
+                    commands: vec![Command::Prewrite {
+                        ctx: Context::default(),
+                        mutations: vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec()))],
+                        primary: b"y".to_vec(),
+                        start_ts: 102,
+                        options: Options::default(),
+                    }],
+                },
+                expect_ok_batch_callback(tx.clone(), 3, 1),
             )
             .unwrap();
         rx.recv().unwrap();
