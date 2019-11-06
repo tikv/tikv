@@ -7,31 +7,17 @@ mod txn_entry;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
+use self::backward::BackwardScanner;
+use self::forward::ForwardScanner;
 use crate::storage::mvcc::Result;
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
     Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics, Value,
 };
 
-use self::backward::BackwardScanner;
-use self::forward::ForwardScanner;
 pub use self::txn_entry::Scanner as EntryScanner;
 
-/// `Scanner` factory.
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
-
-impl<S: Snapshot> std::ops::Deref for ScannerBuilder<S> {
-    type Target = ScannerConfig<S>;
-    fn deref(&self) -> &ScannerConfig<S> {
-        &self.0
-    }
-}
-
-impl<S: Snapshot> std::ops::DerefMut for ScannerBuilder<S> {
-    fn deref_mut(&mut self) -> &mut ScannerConfig<S> {
-        &mut self.0
-    }
-}
 
 impl<S: Snapshot> ScannerBuilder<S> {
     /// Initialize a new `ScannerBuilder`
@@ -44,7 +30,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// Defaults to `true`.
     #[inline]
     pub fn fill_cache(mut self, fill_cache: bool) -> Self {
-        self.fill_cache = fill_cache;
+        self.0.fill_cache = fill_cache;
         self
     }
 
@@ -56,7 +42,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// Defaults to `false`.
     #[inline]
     pub fn omit_value(mut self, omit_value: bool) -> Self {
-        self.omit_value = omit_value;
+        self.0.omit_value = omit_value;
         self
     }
 
@@ -65,7 +51,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// Defaults to `IsolationLevel::Si`.
     #[inline]
     pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
-        self.isolation_level = isolation_level;
+        self.0.isolation_level = isolation_level;
         self
     }
 
@@ -75,16 +61,16 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// Default is `(None, None)`.
     #[inline]
     pub fn range(mut self, lower_bound: Option<Key>, upper_bound: Option<Key>) -> Self {
-        self.lower_bound = lower_bound;
-        self.upper_bound = upper_bound;
+        self.0.lower_bound = lower_bound;
+        self.0.upper_bound = upper_bound;
         self
     }
 
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
-        let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
-        let write_cursor = self.create_cf_cursor(CF_WRITE)?;
-        if self.desc {
+        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
+        let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
+        if self.0.desc {
             Ok(Scanner::Backward(BackwardScanner::new(
                 self.0,
                 lock_cursor,
@@ -100,12 +86,12 @@ impl<S: Snapshot> ScannerBuilder<S> {
     }
 
     pub fn build_entry_scanner(mut self) -> Result<EntryScanner<S>> {
-        let lower_bound = self.lower_bound.clone();
-        let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
-        let write_cursor = self.create_cf_cursor(CF_WRITE)?;
+        let lower_bound = self.0.lower_bound.clone();
+        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
+        let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         // Note: Create a default cf cursor will take key range, so we need to
         //       ensure the default cursor is created after lock and write.
-        let default_cursor = self.create_cf_cursor(CF_DEFAULT)?;
+        let default_cursor = self.0.create_cf_cursor(CF_DEFAULT)?;
         Ok(EntryScanner::new(
             self.0,
             lock_cursor,

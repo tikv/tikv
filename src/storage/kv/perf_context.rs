@@ -1,7 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::{Deref, DerefMut};
-
 use engine::rocks::PerfContext;
 
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign, KV)]
@@ -48,20 +46,6 @@ impl PerfStatisticsInstant {
     }
 }
 
-impl Deref for PerfStatisticsInstant {
-    type Target = PerfStatisticsFields;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for PerfStatisticsInstant {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 /// Store statistics we need. Data comes from RocksDB's `PerfContext`.
 /// This this statistics store delta values between two instant statistics.
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign)]
@@ -74,20 +58,6 @@ impl slog::KV for PerfStatisticsDelta {
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         slog::KV::serialize(&self.0, record, serializer)
-    }
-}
-
-impl Deref for PerfStatisticsDelta {
-    type Target = PerfStatisticsFields;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for PerfStatisticsDelta {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
     }
 }
 
@@ -143,8 +113,8 @@ mod tests {
             block_read_count: 4,
             block_read_byte: 5,
         });
-        assert_eq!(stats.block_cache_hit_count, 3);
-        stats.block_cache_hit_count = 6;
-        assert_eq!(stats.block_cache_hit_count, 6);
+        assert_eq!(stats.0.block_cache_hit_count, 3);
+        stats.0.block_cache_hit_count = 6;
+        assert_eq!(stats.0.block_cache_hit_count, 6);
     }
 }
