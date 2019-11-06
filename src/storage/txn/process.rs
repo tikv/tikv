@@ -206,7 +206,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                                             *id,
                                             Msg::FinishedWithErr {
                                                 cid,
-                                                err: Error::from(err.maybe_clone().unwrap()),
+                                                err: Error::from(err.must_clone()),
                                                 tag,
                                             },
                                         ))
@@ -371,7 +371,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                                                                     e,
                                                                 ) = &res
                                                                 {
-                                                                    Err(e.maybe_clone().unwrap())
+                                                                    Err(e.must_clone())
                                                                 } else {
                                                                     Ok(())
                                                                 },
@@ -402,7 +402,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                                                 *id,
                                                 Msg::FinishedWithErr {
                                                     cid,
-                                                    err: Error::Engine(e.maybe_clone().unwrap()),
+                                                    err: Error::Engine(e.must_clone()),
                                                     tag,
                                                 },
                                             ))

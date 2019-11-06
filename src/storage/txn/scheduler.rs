@@ -408,7 +408,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
                                     Some((
                                         id,
                                         ProcessResult::Failed {
-                                            err: e.maybe_clone().unwrap().into(),
+                                            err: e.must_clone().into(),
                                         },
                                     ))
                                 } else {

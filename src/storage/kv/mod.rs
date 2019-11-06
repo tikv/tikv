@@ -694,6 +694,10 @@ quick_error! {
             description(err.description())
             display("unknown error {:?}", err)
         }
+        OtherFlattened(description: String) {
+            description(description)
+            display("unknown error {:?}", description)
+        }
     }
 }
 
@@ -709,7 +713,17 @@ impl Error {
             Error::Request(ref e) => Some(Error::Request(e.clone())),
             Error::Timeout(d) => Some(Error::Timeout(d)),
             Error::EmptyRequest => Some(Error::EmptyRequest),
-            Error::Other(_) => None,
+            Error::Other(_) | Error::OtherFlattened(_) => None,
+        }
+    }
+
+    pub fn must_clone(&self) -> Error {
+        match *self {
+            Error::Request(ref e) => Error::Request(e.clone()),
+            Error::Timeout(d) => Error::Timeout(d),
+            Error::EmptyRequest => Error::EmptyRequest,
+            Error::Other(ref e) => Error::OtherFlattened(e.description().to_owned()),
+            Error::OtherFlattened(ref d) => Error::OtherFlattened(d.clone()),
         }
     }
 }
