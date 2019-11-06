@@ -73,6 +73,40 @@ pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
     Ok(())
 }
 
+#[inline]
+pub fn check_record_key(key: &[u8]) -> Result<()> {
+    check_key_type(key, RECORD_PREFIX_SEP)
+}
+
+#[inline]
+pub fn check_index_key(key: &[u8]) -> Result<()> {
+    check_key_type(key, INDEX_PREFIX_SEP)
+}
+
+/// `check_key_type` checks if the key is the type we want, `wanted_type` should be
+/// `table::RECORD_PREFIX_SEP` or `table::INDEX_PREFIX_SEP` .
+#[inline]
+fn check_key_type(key: &[u8], wanted_type: &[u8]) -> Result<()> {
+    let mut buf = key;
+    if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
+        return Err(invalid_type!(
+            "record or index key expected, but got {}",
+            hex::encode_upper(key)
+        ));
+    }
+
+    buf.read_bytes(ID_LEN)?;
+    if buf.read_bytes(SEP_LEN)? != wanted_type {
+        Err(invalid_type!(
+            "expected key sep type {}, but got key {})",
+            hex::encode_upper(wanted_type),
+            hex::encode_upper(key)
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Decodes table ID from the key.
 pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     let mut buf = key;
@@ -411,10 +445,14 @@ mod tests {
     use tipb::ColumnInfo;
 
     use crate::codec::datum::{self, Datum};
+    use crate::executor::tests::generate_index_data;
     use tikv_util::collections::{HashMap, HashSet};
     use tikv_util::map;
 
     use super::*;
+
+    const TABLE_ID: i64 = 1;
+    const INDEX_ID: i64 = 1;
 
     #[test]
     fn test_row_key_codec() {
@@ -667,5 +705,20 @@ mod tests {
             assert_eq!(tid, decode_table_id(&k).unwrap());
             assert!(decode_table_id(b"xxx").is_err());
         }
+    }
+
+    #[test]
+    fn test_check_key_type() {
+        let record_key = encode_row_key(TABLE_ID, 1);
+        assert!(check_key_type(&record_key.as_slice(), RECORD_PREFIX_SEP).is_ok());
+        assert!(check_key_type(&record_key.as_slice(), INDEX_PREFIX_SEP).is_err());
+
+        let (_, index_key) = generate_index_data(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
+        assert!(check_key_type(&index_key.as_slice(), RECORD_PREFIX_SEP).is_err());
+        assert!(check_key_type(&index_key.as_slice(), INDEX_PREFIX_SEP).is_ok());
+
+        let too_small_key = vec![0];
+        assert!(check_key_type(&too_small_key.as_slice(), RECORD_PREFIX_SEP).is_err());
+        assert!(check_key_type(&too_small_key.as_slice(), INDEX_PREFIX_SEP).is_err());
     }
 }
