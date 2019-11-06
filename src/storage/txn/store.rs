@@ -1,6 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use keys::LogicalKeySlice;
+use keys::{
+    BasicPhysicalKey, BasicPhysicalKeySlice, LogicalKeySlice, PhysicalKey, PhysicalKeySlice,
+    ToPhysicalKeySlice,
+};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
@@ -15,12 +18,20 @@ use super::{Error, Result};
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
     type Scanner: Scanner;
+    type Key: PhysicalKey;
 
     /// Fetch the provided key.
-    fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
+    fn get(
+        &self,
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+        statistics: &mut Statistics,
+    ) -> Result<Option<Value>>;
 
     /// Re-use last cursor to incrementally (if possible) fetch the provided key.
-    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>>;
+    fn incremental_get(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+    ) -> Result<Option<Value>>;
 
     /// Take the statistics. Currently only available for `incremental_get`.
     fn incremental_get_take_statistics(&mut self) -> Statistics;
@@ -180,19 +191,29 @@ pub struct SnapshotStore<S: Snapshot> {
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
+    type Key = S::Key;
 
-    fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
+    fn get(
+        &self,
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+        statistics: &mut Statistics,
+    ) -> Result<Option<Value>> {
+        let key = key.to_physical_slice_container();
         let mut point_getter = PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .multi(false)
             .build()?;
-        let v = point_getter.get(key)?;
+        let v = point_getter.get(&*key)?;
         statistics.add(&point_getter.take_statistics());
         Ok(v)
     }
 
-    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
+    fn incremental_get(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+    ) -> Result<Option<Value>> {
+        let key = key.to_physical_slice_container();
         if self.point_getter_cache.is_none() {
             self.point_getter_cache = Some(
                 PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
@@ -202,7 +223,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     .build()?,
             );
         }
-        Ok(self.point_getter_cache.as_mut().unwrap().get(key)?)
+        Ok(self.point_getter_cache.as_mut().unwrap().get(&*key)?)
     }
 
     fn incremental_get_take_statistics(&mut self) -> Statistics {
@@ -401,10 +422,17 @@ impl FixtureStore {
 
 impl Store for FixtureStore {
     type Scanner = FixtureStoreScanner;
+    type Key = BasicPhysicalKey;
 
     #[inline]
-    fn get(&self, key: &Key, _statistics: &mut Statistics) -> Result<Option<Vec<u8>>> {
-        let r = self.data.get(key);
+    fn get(
+        &self,
+        key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>,
+        _statistics: &mut Statistics,
+    ) -> Result<Option<Vec<u8>>> {
+        let key =
+            Key::from_encoded_slice(key.to_physical_slice_container().as_physical_std_slice());
+        let r = self.data.get(&key);
         match r {
             None => Ok(None),
             Some(Ok(v)) => Ok(Some(v.clone())),
@@ -413,7 +441,10 @@ impl Store for FixtureStore {
     }
 
     #[inline]
-    fn incremental_get(&mut self, key: &Key) -> Result<Option<Vec<u8>>> {
+    fn incremental_get(
+        &mut self,
+        key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>,
+    ) -> Result<Option<Vec<u8>>> {
         let mut s = Statistics::default();
         self.get(key, &mut s)
     }
