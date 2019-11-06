@@ -69,6 +69,7 @@ pub enum Msg {
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
+        wait_timeout: i64,
     },
 }
 
@@ -447,15 +448,19 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
+        wait_timeout: i64,
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).lock_wait.inc();
-        self.inner
-            .lock_mgr
-            .as_ref()
-            .unwrap()
-            .wait_for(start_ts, tctx.cb, pr, lock, is_first_lock);
+        self.inner.lock_mgr.as_ref().unwrap().wait_for(
+            start_ts,
+            tctx.cb,
+            pr,
+            lock,
+            is_first_lock,
+            wait_timeout,
+        );
         self.release_lock(&tctx.lock, cid);
     }
 }
@@ -477,7 +482,8 @@ impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
                 pr,
                 lock,
                 is_first_lock,
-            } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock),
+                wait_timeout,
+            } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock, wait_timeout),
             _ => unreachable!(),
         }
     }
@@ -506,6 +512,9 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
         Command::Pause { ref keys, .. } => latches.gen_lock(keys),
         Command::TxnHeartBeat {
+            ref primary_key, ..
+        } => latches.gen_lock(&[primary_key]),
+        Command::CheckTxnStatus {
             ref primary_key, ..
         } => latches.gen_lock(&[primary_key]),
 
@@ -596,7 +605,7 @@ mod tests {
                 scan_key: None,
                 key_locks: vec![(
                     Key::from_raw(b"k"),
-                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, 0, 0),
+                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, 0, 0, 0),
                 )],
             },
             Command::ResolveLockLite {

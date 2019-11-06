@@ -219,6 +219,9 @@ impl<T: RaftStoreRouter> RaftClient<T> {
     pub fn flush(&mut self) {
         let (mut counter, mut delay_counter) = (0, 0);
         for conn in self.conns.values_mut() {
+            if conn.stream.is_empty() {
+                continue;
+            }
             if let Some(notifier) = conn.stream.get_notifier() {
                 if !self.grpc_thread_load.in_heavy_load() {
                     notifier.notify();

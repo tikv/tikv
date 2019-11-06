@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
+use engine_traits::util::check_key_in_range;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -132,25 +133,66 @@ impl Clone for RegionSnapshot {
 
 impl Peekable for RegionSnapshot {
     fn get_value(&self, key: &[u8]) -> EngineResult<Option<DBVector>> {
-        engine::util::check_key_in_range(
+        check_key_in_range(
             key,
             self.region.get_id(),
             self.region.get_start_key(),
             self.region.get_end_key(),
-        )?;
+        )
+        .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
-        self.snap.get_value(&data_key)
+        self.snap.get_value(&data_key).map_err(|e| {
+            CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
+            if panic_when_unexpected_key_or_data() {
+                set_panic_mark();
+                panic!(
+                    "failed to get value of key {} in region {}: {:?}",
+                    hex::encode_upper(&key),
+                    self.region.get_id(),
+                    e,
+                );
+            } else {
+                error!(
+                    "failed to get value of key";
+                    "key" => hex::encode_upper(&key),
+                    "region" => self.region.get_id(),
+                    "error" => ?e,
+                );
+                e
+            }
+        })
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
-        engine::util::check_key_in_range(
+        check_key_in_range(
             key,
             self.region.get_id(),
             self.region.get_start_key(),
             self.region.get_end_key(),
-        )?;
+        )
+        .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
-        self.snap.get_value_cf(cf, &data_key)
+        self.snap.get_value_cf(cf, &data_key).map_err(|e| {
+            CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
+            if panic_when_unexpected_key_or_data() {
+                set_panic_mark();
+                panic!(
+                    "failed to get value of key {} in region {}: {:?}",
+                    hex::encode_upper(&key),
+                    self.region.get_id(),
+                    e,
+                );
+            } else {
+                error!(
+                    "failed to get value of key in cf";
+                    "key" => hex::encode_upper(&key),
+                    "region" => self.region.get_id(),
+                    "cf" => cf,
+                    "error" => ?e,
+                );
+                e
+            }
+        })
     }
 }
 

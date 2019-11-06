@@ -94,6 +94,7 @@ futures-locks = "0.1"
 tokio-core = "0.1"
 tokio-timer = "0.2"
 tokio-executor = "0.1"
+tokio-sync = "0.1.7"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
@@ -136,12 +137,12 @@ git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
+rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
 features = ["nightly", "push", "process"]
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
+rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
 
 [replace]
 # TODO: remove this when new raft-rs is published.
@@ -153,7 +154,8 @@ rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.
-criterion = { version = "0.2.11", features=['real_blackbox'] }
+criterion = "0.3"
+criterion-cpu-time = "0.1"
 arrow = "0.10.0"
 rand_xorshift = "0.1"
 callgrind = "1.1"
@@ -166,12 +168,14 @@ test_util = { path = "components/test_util" }
 test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
 test_coprocessor = { path = "components/test_coprocessor" }
+test_sst_importer = { path = "components/test_sst_importer" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }
+criterion-papi = "0.1"
 
 [workspace]
 members = [
@@ -182,6 +186,7 @@ members = [
   "components/test_raftstore",
   "components/test_storage",
   "components/test_coprocessor",
+  "components/test_sst_importer",
   "components/test_util",
   "components/tikv_alloc",
   "components/match_template",

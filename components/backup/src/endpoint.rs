@@ -17,6 +17,7 @@ use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
+use tidb_query::codec::table::decode_table_id;
 use tikv::raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, RegionInfoProvider};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
@@ -155,7 +156,7 @@ impl BackupRange {
             }
             debug!("backup scan entries"; "len" => batch.len());
             // Build sst files.
-            if let Err(e) = writer.write(batch.drain()) {
+            if let Err(e) = writer.write(batch.drain(), true) {
                 error!("backup build sst failed"; "error" => ?e);
                 return Err(e);
             }
@@ -216,6 +217,7 @@ impl<R: RegionInfoProvider> Progress<R> {
             .next_start
             .clone()
             .map_or_else(Vec::new, |k| k.into_encoded());
+
         let start_key = self.next_start.clone();
         let end_key = self.end_key.clone();
         let res = self.region_info.seek_region(
@@ -263,7 +265,7 @@ impl<R: RegionInfoProvider> Progress<R> {
             // The region's end key is empty means it is the last
             // region, we need to set the `finished` flag here in case
             // we run with `next_start` set to None
-            if b.region.get_end_key().is_empty() {
+            if b.region.get_end_key().is_empty() || b.end_key == self.end_key {
                 self.finished = true;
             }
             self.next_start = b.end_key.clone();
@@ -373,7 +375,11 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     warn!("backup task has canceled"; "range" => ?brange);
                     return Ok(());
                 }
-                let name = backup_file_name(store_id, &brange.region);
+                let table_id = brange
+                    .start_key
+                    .clone()
+                    .and_then(|k| decode_table_id(&k.into_raw().unwrap()).ok());
+                let name = backup_file_name(store_id, &brange.region, table_id);
                 let mut writer = match BackupWriter::new(db.clone(), &name, storage.limiter.clone())
                 {
                     Ok(w) => w,
@@ -557,13 +563,22 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
 
 /// Construct an backup file name based on the given store id and region.
 /// A name consists with three parts: store id, region_id and a epoch version.
-fn backup_file_name(store_id: u64, region: &Region) -> String {
-    format!(
-        "{}_{}_{}",
-        store_id,
-        region.get_id(),
-        region.get_region_epoch().get_version()
-    )
+fn backup_file_name(store_id: u64, region: &Region, table_id: Option<i64>) -> String {
+    match table_id {
+        Some(t_id) => format!(
+            "{}_{}_{}_{}",
+            store_id,
+            region.get_id(),
+            region.get_region_epoch().get_version(),
+            t_id
+        ),
+        None => format!(
+            "{}_{}_{}",
+            store_id,
+            region.get_id(),
+            region.get_region_epoch().get_version()
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -765,6 +780,7 @@ pub mod tests {
             (b"4", b"6", vec![]),
             (b"4", b"5", vec![]),
             (b"2", b"7", vec![(b"3", b"4")]),
+            (b"7", b"8", vec![(b"7", b"8")]),
             (b"3", b"", vec![(b"3", b"4"), (b"7", b"9"), (b"9", b"")]),
             (b"5", b"", vec![(b"7", b"9"), (b"9", b"")]),
             (b"7", b"", vec![(b"7", b"9"), (b"9", b"")]),

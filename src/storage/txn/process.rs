@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Borrow;
 use std::marker::PhantomData;
 use std::time::Duration;
 use std::{mem, thread, u64};
@@ -16,7 +17,7 @@ use crate::storage::mvcc::{
 use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
 use crate::storage::{
     metrics::*, Command, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
-    ScanMode, Snapshot, Statistics, StorageCb, Value,
+    ScanMode, Snapshot, Statistics, StorageCb, TxnStatus, Value,
 };
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
@@ -32,7 +33,7 @@ pub enum ProcessResult {
     MvccKey { mvcc: MvccInfo },
     MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
     Locks { locks: Vec<LockInfo> },
-    TxnStatus { lock_ttl: u64, commit_ts: u64 },
+    TxnStatus { txn_status: TxnStatus },
     NextCommand { cmd: Command },
     Failed { err: StorageError },
 }
@@ -66,10 +67,7 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
             _ => panic!("process result mismatch"),
         },
         StorageCb::TxnStatus(cb) => match pr {
-            ProcessResult::TxnStatus {
-                lock_ttl,
-                commit_ts,
-            } => cb(Ok((lock_ttl, commit_ts))),
+            ProcessResult::TxnStatus { txn_status } => cb(Ok(txn_status)),
             ProcessResult::Failed { err } => cb(Err(err)),
             _ => panic!("process result mismatch"),
         },
@@ -271,13 +269,14 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
                 if let Some(lock_info) = lock_info {
-                    let (lock, is_first_lock) = lock_info;
+                    let (lock, is_first_lock, wait_timeout) = lock_info;
                     Msg::WaitForLock {
                         cid,
                         start_ts: ts,
                         pr,
                         lock,
                         is_first_lock,
+                        wait_timeout,
                     }
                 } else if to_be_write.is_empty() {
                     Msg::WriteFinished {
@@ -348,8 +347,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             let result = find_mvcc_infos_by_key(&mut reader, key, u64::MAX);
@@ -368,8 +365,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             match reader.seek_ts(start_ts)? {
@@ -403,8 +398,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             let result = reader.scan_locks(start_key.as_ref(), |lock| lock.ts <= max_ts, limit);
@@ -416,6 +409,8 @@ fn process_read_impl<E: Engine>(
                 lock_info.set_primary_lock(lock.primary);
                 lock_info.set_lock_version(lock.ts);
                 lock_info.set_key(key.into_raw()?);
+                lock_info.set_lock_ttl(lock.ttl);
+                lock_info.set_txn_size(lock.txn_size);
                 locks.push(lock_info);
             }
 
@@ -433,8 +428,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             let result = reader.scan_locks(
@@ -472,7 +465,10 @@ fn process_read_impl<E: Engine>(
 
 // If lock_mgr has waiters, there may be some transactions waiting for these keys,
 // so calculates keys' hashes to wake up them.
-fn gen_key_hashes_if_needed<L: LockMgr>(lock_mgr: &Option<L>, keys: &[Key]) -> Option<Vec<u64>> {
+fn gen_key_hashes_if_needed<L: LockMgr, K: Borrow<Key>>(
+    lock_mgr: &Option<L>,
+    keys: &[K],
+) -> Option<Vec<u64>> {
     lock_mgr.as_ref().and_then(|lm| {
         if lm.has_waiter() {
             Some(lock_manager::gen_key_hashes(keys))
@@ -500,8 +496,8 @@ struct WriteResult {
     to_be_write: Vec<Modify>,
     rows: usize,
     pr: ProcessResult,
-    // (lock, is_first_lock)
-    lock_info: Option<(lock_manager::Lock, bool)>,
+    // (lock, is_first_lock, wait_timeout)
+    lock_info: Option<(lock_manager::Lock, bool, i64)>,
 }
 
 fn process_write_impl<S: Snapshot, L: LockMgr>(
@@ -594,8 +590,9 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             } else {
                 let lock = lock_manager::extract_lock_from_result(&locks[0]);
                 let pr = ProcessResult::MultiRes { results: locks };
+                let lock_info = Some((lock, options.is_first_lock, options.wait_timeout));
                 // Wait for lock released
-                (pr, vec![], 0, ctx, Some((lock, options.is_first_lock)))
+                (pr, vec![], 0, ctx, lock_info)
             }
         }
         Command::Commit {
@@ -821,9 +818,46 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
-                lock_ttl,
-                commit_ts: 0,
+                txn_status: TxnStatus::uncommitted(lock_ttl),
             };
+            (pr, txn.into_modifies(), 1, ctx, None)
+        }
+        Command::CheckTxnStatus {
+            ctx,
+            primary_key,
+            lock_ts,
+            caller_start_ts,
+            current_ts,
+            rollback_if_not_exist,
+        } => {
+            let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !ctx.get_not_fill_cache())?;
+            let (txn_status, is_pessimistic_txn) = txn.check_txn_status(
+                primary_key.clone(),
+                caller_start_ts,
+                current_ts,
+                rollback_if_not_exist,
+            )?;
+
+            // The lock is possibly resolved here only when the `check_txn_status` cleaned up the
+            // lock, and this may happen only when it returns `Rollbacked`.
+            match txn_status {
+                TxnStatus::Rollbacked => {
+                    let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &[&primary_key]);
+                    wake_up_waiters_if_needed(
+                        &lock_mgr,
+                        lock_ts,
+                        key_hashes,
+                        0,
+                        is_pessimistic_txn,
+                    );
+                }
+                TxnStatus::RollbackedBefore
+                | TxnStatus::Committed { .. }
+                | TxnStatus::Uncommitted { .. } => {}
+            };
+
+            statistics.add(&txn.take_statistics());
+            let pr = ProcessResult::TxnStatus { txn_status };
             (pr, txn.into_modifies(), 1, ctx, None)
         }
         Command::Pause { ctx, duration, .. } => {

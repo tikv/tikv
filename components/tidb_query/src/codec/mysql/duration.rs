@@ -650,11 +650,11 @@ impl Duration {
 
     /// If the error is overflow, the result will be returned, too.
     /// Otherwise, only one of result or err will be returned
-    pub fn from_i64_without_ctx(mut n: i64, fsp: u8) -> (Option<Duration>, Option<Error>) {
+    pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> Result<Duration> {
+        let fsp = check_fsp(fsp)?;
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
-            let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp);
-            return (Some(max), Some(Error::overflow("Duration", n)));
+            return Err(Error::overflow("Duration", n));
         }
 
         let negative = n < 0;
@@ -662,13 +662,10 @@ impl Duration {
             n = -n;
         }
         if n / 10000 > i64::from(MAX_HOURS) || n % 100 >= 60 || (n / 100) % 100 >= 60 {
-            return (
-                None,
-                Some(Error::Eval(
-                    format!("invalid time format: '{}'", n),
-                    ERR_TRUNCATE_WRONG_VALUE,
-                )),
-            );
+            return Err(Error::Eval(
+                format!("invalid time format: '{}'", n),
+                ERR_TRUNCATE_WRONG_VALUE,
+            ));
         }
         let dur = Duration::new(
             negative,
@@ -678,26 +675,26 @@ impl Duration {
             0,
             fsp,
         );
-        (Some(dur), None)
+        Ok(dur)
     }
 
-    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: u8) -> Result<Duration> {
-        let (dur, err) = Duration::from_i64_without_ctx(n, fsp);
-        err.map_or_else(
-            || {
-                debug_assert!(dur.is_some());
-                dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
-            },
-            |e| {
-                if e.is_overflow() {
-                    ctx.handle_overflow_err(e)?;
-                    debug_assert!(dur.is_some());
-                    dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
-                } else {
-                    Err(e)
-                }
-            },
-        )
+    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
+        Duration::from_i64_without_ctx(n, fsp).or_else(|e| {
+            if e.is_overflow() {
+                ctx.handle_overflow_err(e)?;
+                // Returns max duration if overflow occurred
+                Ok(Duration::new(
+                    n < 0,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    fsp as u8,
+                ))
+            } else {
+                Err(e)
+            }
+        })
     }
 }
 
@@ -809,11 +806,11 @@ impl crate::codec::data_type::AsMySQLBool for Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::EPSILON;
-
     use super::*;
     use crate::codec::data_type::DateTime;
+    use crate::codec::mysql::UNSPECIFIED_FSP;
     use crate::expr::{EvalConfig, EvalContext, Flag};
+    use std::f64::EPSILON;
     use std::sync::Arc;
 
     #[test]
@@ -1146,8 +1143,15 @@ mod tests {
 
     #[test]
     fn test_from_i64() {
-        let cs: Vec<(i64, u8, Result<Duration>, bool)> = vec![
+        let cs: Vec<(i64, i8, Result<Duration>, bool)> = vec![
             // (input, fsp, expect, overflow)
+            // UNSPECIFIED_FSP
+            (
+                8385959,
+                UNSPECIFIED_FSP as i8,
+                Ok(Duration::parse(b"838:59:59", 0).unwrap()),
+                false,
+            ),
             (
                 101010,
                 0,

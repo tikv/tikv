@@ -389,7 +389,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
     pub fn handle_request(&mut self) -> Result<SelectResponse> {
         let mut chunks = vec![];
-        let mut batch_data: Vec<u8> = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
 
@@ -423,20 +422,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     // Although `schema()` can be deeply nested, it is ok since we process data in
                     // batch.
                     match self.encode_type {
-                        EncodeType::TypeDefault => {
-                            data.reserve(result.physical_columns.maximum_encoded_size(
-                                &result.logical_rows,
-                                &self.output_offsets,
-                            )?);
-                            result.physical_columns.encode(
-                                &result.logical_rows,
-                                &self.output_offsets,
-                                self.out_most_executor.schema(),
-                                data,
-                            )?;
-                            chunks.push(chunk);
-                        }
                         EncodeType::TypeArrow => {
+                            self.encode_type = EncodeType::TypeArrow;
                             data.reserve(result.physical_columns.maximum_encoded_size_arrow(
                                 &result.logical_rows,
                                 &self.output_offsets,
@@ -448,9 +435,23 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                                 data,
                                 &self.config.tz,
                             )?;
-                            batch_data.extend_from_slice(data);
+                        }
+                        _ => {
+                            // For the default or unsupported encode type, use datum format.
+                            self.encode_type = EncodeType::TypeDefault;
+                            data.reserve(result.physical_columns.maximum_encoded_size(
+                                &result.logical_rows,
+                                &self.output_offsets,
+                            )?);
+                            result.physical_columns.encode(
+                                &result.logical_rows,
+                                &self.output_offsets,
+                                self.out_most_executor.schema(),
+                                data,
+                            )?;
                         }
                     }
+                    chunks.push(chunk);
                 }
             }
 
@@ -459,14 +460,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     .collect_exec_stats(&mut self.exec_stats);
 
                 let mut sel_resp = SelectResponse::default();
-                match self.encode_type {
-                    EncodeType::TypeDefault => {
-                        sel_resp.set_chunks(chunks.into());
-                    }
-                    EncodeType::TypeArrow => {
-                        sel_resp.set_row_batch_data(batch_data);
-                    }
-                }
+                sel_resp.set_chunks(chunks.into());
+                sel_resp.set_encode_type(self.encode_type);
+
                 // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
                 sel_resp.set_output_counts(
                     self.exec_stats

@@ -12,7 +12,7 @@ use kvproto::kvrpcpb::{Context, LockInfo};
 
 use engine::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
-use tikv::storage::gc_worker::GC_BATCH_SIZE;
+use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use tikv::storage::{Engine, Key, Mutation};
@@ -684,7 +684,7 @@ fn test_txn_store_gc2_with_less_keys() {
 
 #[test]
 fn test_txn_store_gc2_with_many_keys() {
-    test_txn_store_gc_multiple_keys(1, GC_BATCH_SIZE + 1);
+    test_txn_store_gc_multiple_keys(1, DEFAULT_GC_BATCH_KEYS + 1);
 }
 
 #[test]
