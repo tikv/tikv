@@ -13,7 +13,7 @@ pub fn check_lock(key: &Key, ts: u64, lock: Lock, bypass_locks: &TsSet) -> Resul
         return Ok(());
     }
 
-    if bypass_locks.contains(ts) {
+    if bypass_locks.contains(lock.ts) {
         return Ok(());
     }
 
@@ -104,24 +104,36 @@ mod tests {
         let mut lock = Lock::new(LockType::Put, vec![], 100, 3, None, 0, 1, 0);
 
         // Ignore the lock if read ts is less than the lock version
-        assert!(check_lock(&key, 50, lock.clone(), &Default::default()).is_ok());
+        check_lock(&key, 50, lock.clone(), &Default::default()).unwrap();
 
         // Returns the lock if read ts >= lock version
-        assert!(check_lock(&key, 110, lock.clone(), &Default::default()).is_err());
+        check_lock(&key, 110, lock.clone(), &Default::default()).unwrap_err();
+
+        // Ignore locks that occurs in the `bypass_locks` set.
+        check_lock(&key, 110, lock.clone(), &TsSet::new(vec![109])).unwrap_err();
+        check_lock(&key, 110, lock.clone(), &TsSet::new(vec![110])).unwrap_err();
+        check_lock(&key, 110, lock.clone(), &TsSet::new(vec![100])).unwrap();
+        check_lock(
+            &key,
+            110,
+            lock.clone(),
+            &TsSet::new(vec![99, 101, 102, 100, 80]),
+        )
+        .unwrap();
 
         // Ignore the lock if it is Lock or Pessimistic.
         lock.lock_type = LockType::Lock;
-        assert!(check_lock(&key, 110, lock.clone(), &Default::default()).is_ok());
+        check_lock(&key, 110, lock.clone(), &Default::default()).unwrap();
         lock.lock_type = LockType::Pessimistic;
-        assert!(check_lock(&key, 110, lock.clone(), &Default::default()).is_ok());
+        check_lock(&key, 110, lock.clone(), &Default::default()).unwrap();
 
         // Ignore the primary lock when reading the latest committed version by setting u64::MAX as ts
         lock.lock_type = LockType::Put;
         lock.primary = b"foo".to_vec();
-        assert!(check_lock(&key, std::u64::MAX, lock.clone(), &Default::default()).is_ok());
+        check_lock(&key, std::u64::MAX, lock.clone(), &Default::default()).unwrap();
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();
-        assert!(check_lock(&key, std::u64::MAX, lock.clone(), &Default::default()).is_err());
+        check_lock(&key, std::u64::MAX, lock.clone(), &Default::default()).unwrap_err();
     }
 }

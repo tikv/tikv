@@ -33,7 +33,7 @@ pub fn compose_ts(physical: u64, logical: u64) -> u64 {
     (physical << TSO_PHYSICAL_SHIFT_BITS) + logical
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TsSet {
     // When the set is empty, avoid the useless clone of Arc.
     Empty,
@@ -963,7 +963,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_ts() {
+    fn test_ts_calculation() {
         let physical = 1568700549751;
         let logical = 108;
         let ts = compose_ts(physical, logical);
@@ -971,5 +971,37 @@ pub mod tests {
 
         let extracted_physical = extract_physical(ts);
         assert_eq!(extracted_physical, physical);
+    }
+
+    #[test]
+    fn test_ts_set() {
+        let s = TsSet::new(vec![]);
+        assert_eq!(s, TsSet::Empty);
+        assert!(!s.contains(1));
+
+        let s = TsSet::vec(vec![]);
+        assert_eq!(s, TsSet::Empty);
+
+        let s = TsSet::new(vec![1, 2]);
+        assert_eq!(s, TsSet::Vec(Arc::new(vec![1, 2])));
+        assert!(s.contains(1));
+        assert!(s.contains(2));
+        assert!(!s.contains(3));
+
+        let s2 = TsSet::vec(vec![1, 2]);
+        assert_eq!(s2, s);
+
+        let big_ts_list: Vec<_> = (0..=TS_SET_USE_VEC_LIMIT as u64).collect();
+        let s = TsSet::new(big_ts_list.clone());
+        assert_eq!(
+            s,
+            TsSet::Set(Arc::new(big_ts_list.clone().into_iter().collect()))
+        );
+        assert!(s.contains(1));
+        assert!(s.contains(TS_SET_USE_VEC_LIMIT as u64));
+        assert!(!s.contains(TS_SET_USE_VEC_LIMIT as u64 + 1));
+
+        let s = TsSet::vec(big_ts_list.clone());
+        assert_eq!(s, TsSet::Vec(Arc::new(big_ts_list)));
     }
 }
