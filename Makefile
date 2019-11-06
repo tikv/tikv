@@ -156,9 +156,10 @@ dist_release:
 build_dist_release:
 	make x-build-dist
 	# Reduce binary size by compressing binaries.
-	# Currently errors with `Couldn't find DIE referenced by DW_AT_abstract_origin`
+	# FIXME: Currently errors with `Couldn't find DIE referenced by DW_AT_abstract_origin`
 	# dwz ${CARGO_TARGET_DIR}/release/tikv-server
-	dwz ${CARGO_TARGET_DIR}/release/tikv-ctl
+	# FIXME: https://sourceware.org/bugzilla/show_bug.cgi?id=24764
+	# dwz ${CARGO_TARGET_DIR}/release/tikv-ctl
 	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-server
 	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-ctl
 
