@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{thread, u64};
@@ -9,12 +8,15 @@ use rand::RngCore;
 use tempfile::{Builder, TempDir};
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
+use kvproto::pdpb::{
+    ChangePeer, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader,
+};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
+use engine::rocks::util::config::BlobRunMode;
 use engine::rocks::{CompactionJobInfo, DB};
 use engine::*;
 use tikv::config::*;
@@ -23,7 +25,7 @@ use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::kv::CompactionListener;
-use tikv::storage::Config as StorageConfig;
+use tikv::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::config::*;
 use tikv_util::escape;
 
@@ -349,8 +351,10 @@ pub fn new_pd_change_peer(
     resp
 }
 
-pub fn new_half_split_region() -> RegionHeartbeatResponse {
-    let split_region = SplitRegion::default();
+pub fn new_split_region(policy: CheckPolicy, keys: Vec<Vec<u8>>) -> RegionHeartbeatResponse {
+    let mut split_region = SplitRegion::default();
+    split_region.set_policy(policy);
+    split_region.set_keys(keys.into());
     let mut resp = RegionHeartbeatResponse::default();
     resp.set_split_region(split_region);
     resp
@@ -458,7 +462,7 @@ pub fn must_read_on_peer<T: Simulator>(
     key: &[u8],
     value: &[u8],
 ) {
-    let timeout = Duration::from_secs(1);
+    let timeout = Duration::from_secs(5);
     match read_on_peer(cluster, peer, region, key, false, timeout) {
         Ok(ref resp) if value == must_get_value(resp).as_slice() => (),
         other => panic!(
@@ -519,15 +523,12 @@ pub fn create_test_engine(
             ));
             let cache = cfg.storage.block_cache.build_shared_cache();
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
+            let kv_path = path.as_ref().unwrap().path().join(DEFAULT_ROCKSDB_SUB_DIR);
             let engine = Arc::new(
-                rocks::util::new_engine_opt(
-                    path.as_ref().unwrap().path().to_str().unwrap(),
-                    kv_db_opt,
-                    kv_cfs_opt,
-                )
-                .unwrap(),
+                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                    .unwrap(),
             );
-            let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
+            let raft_path = path.as_ref().unwrap().path().join("raft");
             let raft_engine = Arc::new(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
@@ -593,6 +594,22 @@ pub fn configure_for_lease_read<T: Simulator>(
     cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration(election_timeout * 5);
 
     election_timeout
+}
+
+pub fn configure_for_enable_titan<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    min_blob_size: ReadableSize,
+) {
+    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
+    cluster.cfg.rocksdb.titan.max_background_gc = 10;
+    cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = min_blob_size;
+    cluster.cfg.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
+    cluster.cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize::kb(0);
+}
+
+pub fn configure_for_disable_titan<T: Simulator>(cluster: &mut Cluster<T>) {
+    cluster.cfg.rocksdb.titan.enabled = false;
 }
 
 /// Keep putting random kvs until specified size limit is reached.

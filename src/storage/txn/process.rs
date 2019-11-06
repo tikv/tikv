@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Borrow;
 use std::marker::PhantomData;
 use std::time::Duration;
 use std::{mem, thread, u64};
@@ -16,7 +17,7 @@ use crate::storage::mvcc::{
 use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
 use crate::storage::{
     metrics::*, Command, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
-    ScanMode, Snapshot, Statistics, StorageCb, Value,
+    ScanMode, Snapshot, Statistics, StorageCb, TxnStatus, Value,
 };
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
@@ -32,7 +33,7 @@ pub enum ProcessResult {
     MvccKey { mvcc: MvccInfo },
     MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
     Locks { locks: Vec<LockInfo> },
-    TxnStatus { lock_ttl: u64, commit_ts: u64 },
+    TxnStatus { txn_status: TxnStatus },
     NextCommand { cmd: Command },
     Failed { err: StorageError },
 }
@@ -66,10 +67,7 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
             _ => panic!("process result mismatch"),
         },
         StorageCb::TxnStatus(cb) => match pr {
-            ProcessResult::TxnStatus {
-                lock_ttl,
-                commit_ts,
-            } => cb(Ok((lock_ttl, commit_ts))),
+            ProcessResult::TxnStatus { txn_status } => cb(Ok(txn_status)),
             ProcessResult::Failed { err } => cb(Err(err)),
             _ => panic!("process result mismatch"),
         },
@@ -271,13 +269,14 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
                 if let Some(lock_info) = lock_info {
-                    let (lock, is_first_lock) = lock_info;
+                    let (lock, is_first_lock, wait_timeout) = lock_info;
                     Msg::WaitForLock {
                         cid,
                         start_ts: ts,
                         pr,
                         lock,
                         is_first_lock,
+                        wait_timeout,
                     }
                 } else if to_be_write.is_empty() {
                     Msg::WriteFinished {
@@ -348,8 +347,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             let result = find_mvcc_infos_by_key(&mut reader, key, u64::MAX);
@@ -368,8 +365,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             match reader.seek_ts(start_ts)? {
@@ -403,8 +398,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             let result = reader.scan_locks(start_key.as_ref(), |lock| lock.ts <= max_ts, limit);
@@ -416,6 +409,8 @@ fn process_read_impl<E: Engine>(
                 lock_info.set_primary_lock(lock.primary);
                 lock_info.set_lock_version(lock.ts);
                 lock_info.set_key(key.into_raw()?);
+                lock_info.set_lock_ttl(lock.ttl);
+                lock_info.set_txn_size(lock.txn_size);
                 locks.push(lock_info);
             }
 
@@ -433,8 +428,6 @@ fn process_read_impl<E: Engine>(
                 snapshot,
                 Some(ScanMode::Forward),
                 !ctx.get_not_fill_cache(),
-                None,
-                None,
                 ctx.get_isolation_level(),
             );
             let result = reader.scan_locks(
@@ -472,7 +465,10 @@ fn process_read_impl<E: Engine>(
 
 // If lock_mgr has waiters, there may be some transactions waiting for these keys,
 // so calculates keys' hashes to wake up them.
-fn gen_key_hashes_if_needed<L: LockMgr>(lock_mgr: &Option<L>, keys: &[Key]) -> Option<Vec<u64>> {
+fn gen_key_hashes_if_needed<L: LockMgr, K: Borrow<Key>>(
+    lock_mgr: &Option<L>,
+    keys: &[K],
+) -> Option<Vec<u64>> {
     lock_mgr.as_ref().and_then(|lm| {
         if lm.has_waiter() {
             Some(lock_manager::gen_key_hashes(keys))
@@ -500,8 +496,8 @@ struct WriteResult {
     to_be_write: Vec<Modify>,
     rows: usize,
     pr: ProcessResult,
-    // (lock, is_first_lock)
-    lock_info: Option<(lock_manager::Lock, bool)>,
+    // (lock, is_first_lock, wait_timeout)
+    lock_info: Option<(lock_manager::Lock, bool, i64)>,
 }
 
 fn process_write_impl<S: Snapshot, L: LockMgr>(
@@ -594,8 +590,9 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             } else {
                 let lock = lock_manager::extract_lock_from_result(&locks[0]);
                 let pr = ProcessResult::MultiRes { results: locks };
+                let lock_info = Some((lock, options.is_first_lock, options.wait_timeout));
                 // Wait for lock released
-                (pr, vec![], 0, ctx, Some((lock, options.is_first_lock)))
+                (pr, vec![], 0, ctx, lock_info)
             }
         }
         Command::Commit {
@@ -632,13 +629,17 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
         Command::Cleanup {
-            ctx, key, start_ts, ..
+            ctx,
+            key,
+            start_ts,
+            current_ts,
+            ..
         } => {
             let mut keys = vec![key];
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
-            let is_pessimistic_txn = txn.rollback(keys.pop().unwrap())?;
+            let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts)?;
 
             wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
             statistics.add(&txn.take_statistics());
@@ -817,9 +818,46 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
-                lock_ttl,
-                commit_ts: 0,
+                txn_status: TxnStatus::uncommitted(lock_ttl),
             };
+            (pr, txn.into_modifies(), 1, ctx, None)
+        }
+        Command::CheckTxnStatus {
+            ctx,
+            primary_key,
+            lock_ts,
+            caller_start_ts,
+            current_ts,
+            rollback_if_not_exist,
+        } => {
+            let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !ctx.get_not_fill_cache())?;
+            let (txn_status, is_pessimistic_txn) = txn.check_txn_status(
+                primary_key.clone(),
+                caller_start_ts,
+                current_ts,
+                rollback_if_not_exist,
+            )?;
+
+            // The lock is possibly resolved here only when the `check_txn_status` cleaned up the
+            // lock, and this may happen only when it returns `Rollbacked`.
+            match txn_status {
+                TxnStatus::Rollbacked => {
+                    let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &[&primary_key]);
+                    wake_up_waiters_if_needed(
+                        &lock_mgr,
+                        lock_ts,
+                        key_hashes,
+                        0,
+                        is_pessimistic_txn,
+                    );
+                }
+                TxnStatus::RollbackedBefore
+                | TxnStatus::Committed { .. }
+                | TxnStatus::Uncommitted { .. } => {}
+            };
+
+            statistics.add(&txn.take_statistics());
+            let pr = ProcessResult::TxnStatus { txn_status };
             (pr, txn.into_modifies(), 1, ctx, None)
         }
         Command::Pause { ctx, duration, .. } => {
@@ -871,9 +909,12 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 #[cfg(test)]
 mod tests {
     use crate::storage::lock_manager::{gen_key_hash, gen_key_hashes, Lock};
+    use crate::storage::tests::{expect_ok_callback, expect_value_callback};
     use crate::storage::txn::ProcessResult;
     use crate::storage::*;
+
     use kvproto::kvrpcpb::Context;
+
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::*,
@@ -888,6 +929,7 @@ mod tests {
             pr: ProcessResult,
             lock: Lock,
             is_first_lock: bool,
+            timeout: i64,
         },
 
         WakeUp {
@@ -927,6 +969,7 @@ mod tests {
             pr: ProcessResult,
             lock: Lock,
             is_first_lock: bool,
+            timeout: i64,
         ) {
             self.tx
                 .send(Msg::WaitFor {
@@ -935,6 +978,7 @@ mod tests {
                     pr,
                     lock,
                     is_first_lock,
+                    timeout,
                 })
                 .unwrap();
         }
@@ -961,11 +1005,80 @@ mod tests {
         }
     }
 
-    fn expect_ok_callback<T>(done: Sender<()>) -> Callback<T> {
-        Box::new(move |x: Result<T>| {
-            x.unwrap();
-            done.send(()).unwrap();
-        })
+    #[test]
+    fn test_wait_for_validation() {
+        let (msg_tx, msg_rx) = channel();
+        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
+            .lock_mgr(ProxyLockMgr::new(msg_tx))
+            .build()
+            .unwrap();
+
+        let key = Key::from_raw(b"a");
+        let (tx, rx) = channel();
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![(key.clone(), false)],
+                key.to_raw().unwrap(),
+                10,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        // No wait for msg
+        assert!(msg_rx.try_recv().is_err());
+
+        let mut options = Options::default();
+        options.is_first_lock = true;
+        options.wait_timeout = -1;
+        storage
+            .async_acquire_pessimistic_lock(
+                Context::default(),
+                vec![(key.clone(), false)],
+                key.to_raw().unwrap(),
+                20,
+                options,
+                expect_ok_callback(tx.clone(), 1),
+            )
+            .unwrap();
+        // The transaction should be waiting for lock released so cb won't be called.
+        rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+        let msg = msg_rx.try_recv().unwrap();
+        // Check msg validation.
+        match msg {
+            Msg::WaitFor {
+                start_ts,
+                pr,
+                lock,
+                is_first_lock,
+                timeout,
+                ..
+            } => {
+                assert_eq!(start_ts, 20);
+                assert_eq!(
+                    lock,
+                    Lock {
+                        ts: 10,
+                        hash: gen_key_hash(&key)
+                    }
+                );
+                assert_eq!(is_first_lock, true);
+                assert_eq!(timeout, -1);
+                match pr {
+                    ProcessResult::MultiRes { results } => {
+                        assert_eq!(results.len(), 1);
+                        match results[0] {
+                            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(_)))) => (),
+                            _ => panic!("unexpected error"),
+                        }
+                    }
+                    _ => panic!("unexpected process result"),
+                };
+            }
+
+            _ => panic!("unexpected msg"),
+        }
     }
 
     fn expect_no_key_hashes(msg: Msg) {
@@ -992,7 +1105,7 @@ mod tests {
                 key.to_raw().unwrap(),
                 10,
                 Options::default(),
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1002,7 +1115,7 @@ mod tests {
                 vec![key.clone()],
                 10,
                 20,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1013,7 +1126,8 @@ mod tests {
                 Context::default(),
                 key.clone(),
                 20,
-                expect_ok_callback(tx.clone()),
+                0,
+                expect_ok_callback(tx.clone(), 2),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1024,7 +1138,7 @@ mod tests {
                 Context::default(),
                 vec![key.clone()],
                 30,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 3),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1036,7 +1150,7 @@ mod tests {
                 vec![key.clone()],
                 40,
                 40,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 4),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1053,7 +1167,7 @@ mod tests {
                 b"a".to_vec(),
                 50,
                 Options::default(),
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 5),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1063,7 +1177,7 @@ mod tests {
                 50,
                 0,
                 vec![Key::from_raw(b"b")],
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 6),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1074,84 +1188,26 @@ mod tests {
             .async_resolve_lock(
                 Context::default(),
                 txn_status,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 7),
             )
             .unwrap();
         rx.recv().unwrap();
         expect_no_key_hashes(msg_rx.try_recv().unwrap());
-    }
 
-    #[test]
-    fn test_wait_for_validation() {
-        let (msg_tx, msg_rx) = channel();
-        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
-            .lock_mgr(ProxyLockMgr::new(msg_tx))
-            .build()
-            .unwrap();
-
-        let key = Key::from_raw(b"a");
         let (tx, rx) = channel();
         storage
-            .async_acquire_pessimistic_lock(
+            .async_check_txn_status(
                 Context::default(),
-                vec![(key.clone(), false)],
-                key.to_raw().unwrap(),
-                10,
-                Options::default(),
-                expect_ok_callback(tx.clone()),
+                key.clone(),
+                60,
+                70,
+                80,
+                true,
+                expect_value_callback(tx.clone(), 8, TxnStatus::Rollbacked),
             )
             .unwrap();
         rx.recv().unwrap();
-        // No wait for msg
-        assert!(msg_rx.try_recv().is_err());
-
-        let mut options = Options::default();
-        options.is_first_lock = true;
-        storage
-            .async_acquire_pessimistic_lock(
-                Context::default(),
-                vec![(key.clone(), false)],
-                key.to_raw().unwrap(),
-                20,
-                options,
-                expect_ok_callback(tx.clone()),
-            )
-            .unwrap();
-        // The transaction should be waiting for lock released so cb won't be called.
-        rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
-        let msg = msg_rx.try_recv().unwrap();
-        // Check msg validation.
-        match msg {
-            Msg::WaitFor {
-                start_ts,
-                pr,
-                lock,
-                is_first_lock,
-                ..
-            } => {
-                assert_eq!(start_ts, 20);
-                assert_eq!(
-                    lock,
-                    Lock {
-                        ts: 10,
-                        hash: gen_key_hash(&key)
-                    }
-                );
-                assert_eq!(is_first_lock, true);
-                match pr {
-                    ProcessResult::MultiRes { results } => {
-                        assert_eq!(results.len(), 1);
-                        match results[0] {
-                            Err(Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(_)))) => (),
-                            _ => panic!("unexpected error"),
-                        }
-                    }
-                    _ => panic!("unexpected process result"),
-                };
-            }
-
-            _ => panic!("unexpected msg"),
-        }
+        expect_no_key_hashes(msg_rx.try_recv().unwrap());
     }
 
     fn expected_wake_up_msg(
@@ -1205,7 +1261,7 @@ mod tests {
                 keys[0].to_raw().unwrap(),
                 10,
                 Options::default(),
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1215,7 +1271,7 @@ mod tests {
                 keys.clone(),
                 10,
                 20,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1227,7 +1283,8 @@ mod tests {
                 Context::default(),
                 keys[0].clone(),
                 30,
-                expect_ok_callback(tx.clone()),
+                0,
+                expect_ok_callback(tx.clone(), 2),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1239,7 +1296,7 @@ mod tests {
                 Context::default(),
                 keys.clone(),
                 40,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 3),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1252,7 +1309,7 @@ mod tests {
                 keys.clone(),
                 50,
                 50,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 4),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1265,13 +1322,14 @@ mod tests {
                 60,
                 0,
                 keys.clone(),
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 5),
             )
             .unwrap();
         rx.recv().unwrap();
         let msg = msg_rx.try_recv().unwrap();
         expected_wake_up_msg(msg, 60, Some(gen_key_hashes(&keys)), 0, false);
 
+        // Write a lock with ts 70
         storage
             .async_prewrite(
                 Context::default(),
@@ -1279,10 +1337,11 @@ mod tests {
                 keys[0].to_raw().unwrap(),
                 70,
                 Options::default(),
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 6),
             )
             .unwrap();
         rx.recv().unwrap();
+        // Write a pessimistic lock with ts 80
         let mut options = Options::default();
         options.for_update_ts = 80;
         storage
@@ -1292,11 +1351,11 @@ mod tests {
                 keys[1].to_raw().unwrap(),
                 80,
                 options,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 7),
             )
             .unwrap();
         rx.recv().unwrap();
-        // Commit txn-70 and rollback txn-80
+        // Commit txn 70 and rollback txn 80
         let mut txn_status = HashMap::default();
         txn_status.insert(70, 71);
         txn_status.insert(80, 0);
@@ -1304,7 +1363,7 @@ mod tests {
             .async_resolve_lock(
                 Context::default(),
                 txn_status,
-                expect_ok_callback(tx.clone()),
+                expect_ok_callback(tx.clone(), 8),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1330,11 +1389,76 @@ mod tests {
                 Context::default(),
                 keys[0].clone(),
                 30,
-                expect_ok_callback(tx.clone()),
+                0,
+                expect_ok_callback(tx.clone(), 9),
             )
             .unwrap();
         rx.recv().unwrap();
         let msg = msg_rx.try_recv().unwrap();
         expect_no_key_hashes(msg);
+    }
+
+    #[test]
+    fn test_process_check_txn_status() {
+        use crate::storage::mvcc::compose_ts;
+
+        let (msg_tx, msg_rx) = channel();
+        let mut lock_mgr = ProxyLockMgr::new(msg_tx);
+        lock_mgr.set_has_waiter(true);
+
+        let storage = TestStorageBuilder::from_engine(TestEngineBuilder::new().build().unwrap())
+            .lock_mgr(lock_mgr.clone())
+            .build()
+            .unwrap();
+        let key = Key::from_raw(b"a");
+
+        // Write a lock with ttl 100
+        let (tx, rx) = channel();
+        let mut options = Options::default();
+        options.lock_ttl = 100;
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((key.clone(), b"v".to_vec()))],
+                key.to_raw().unwrap(),
+                compose_ts(10, 0),
+                options,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Lock is not expired, so no wake-up msg.
+        let (tx, rx) = channel();
+        let start_ts = compose_ts(10, 0);
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                key.clone(),
+                start_ts,
+                compose_ts(20, 0),
+                compose_ts(30, 0),
+                true,
+                expect_value_callback(tx.clone(), 8, TxnStatus::uncommitted(100)),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        assert!(msg_rx.try_recv().is_err());
+
+        // Lock is expired.
+        storage
+            .async_check_txn_status(
+                Context::default(),
+                key.clone(),
+                start_ts,
+                compose_ts(20, 0),
+                compose_ts(120, 0),
+                true,
+                expect_value_callback(tx.clone(), 8, TxnStatus::Rollbacked),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+        let msg = msg_rx.try_recv().unwrap();
+        expected_wake_up_msg(msg, start_ts, Some(vec![gen_key_hash(&key)]), 0, false);
     }
 }

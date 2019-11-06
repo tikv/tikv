@@ -6,6 +6,7 @@ use tipb::FieldType;
 use super::*;
 use crate::codec::data_type::scalar::ScalarValueRef;
 use crate::codec::datum;
+use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::Result;
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
@@ -218,8 +219,48 @@ impl VectorValue {
         }
     }
 
+    /// Returns maximum encoded size in arrow format.
+    pub fn maximum_encoded_size_arrow(&self, logical_rows: &[usize]) -> Result<usize> {
+        match self {
+            VectorValue::Int(_) => Ok(logical_rows.len() * 9 + 10),
+            VectorValue::Real(_) => Ok(logical_rows.len() * 9 + 10),
+            VectorValue::Decimal(_) => Ok(logical_rows.len() * (DECIMAL_STRUCT_SIZE + 1) + 10),
+            VectorValue::DateTime(_) => Ok(logical_rows.len() * 21 + 10),
+            VectorValue::Duration(_) => Ok(logical_rows.len() * 9 + 10),
+            VectorValue::Bytes(vec) => {
+                let mut size = logical_rows.len() + 10;
+                for idx in logical_rows {
+                    let el = &vec[*idx];
+                    match el {
+                        Some(v) => {
+                            size += 8 /* Offset */ + v.len();
+                        }
+                        None => {
+                            size +=  8 /* Offset */;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+            VectorValue::Json(vec) => {
+                let mut size = logical_rows.len() + 10;
+                for idx in logical_rows {
+                    let el = &vec[*idx];
+                    match el {
+                        Some(v) => {
+                            size += 8 /* Offset */ + v.binary_len();
+                        }
+                        None => {
+                            size += 8 /* Offset */;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+        }
+    }
+
     /// Encodes a single element into binary format.
-    // FIXME: Use BufferWriter.
     pub fn encode(
         &self,
         row_index: usize,
@@ -228,8 +269,7 @@ impl VectorValue {
     ) -> Result<()> {
         use crate::codec::mysql::DecimalEncoder;
         use crate::codec::mysql::JsonEncoder;
-        use tikv_util::codec::bytes::BytesEncoder;
-        use tikv_util::codec::number::NumberEncoder;
+        use codec::prelude::{CompactByteEncoder, NumberEncoder};
 
         match self {
             VectorValue::Int(ref vec) => {
@@ -245,10 +285,10 @@ impl VectorValue {
                             .contains(FieldTypeFlag::UNSIGNED)
                         {
                             output.push(datum::UINT_FLAG);
-                            output.encode_u64(val as u64)?;
+                            output.write_u64(val as u64)?;
                         } else {
                             output.push(datum::INT_FLAG);
-                            output.encode_i64(val)?;
+                            output.write_i64(val)?;
                         }
                     }
                 }
@@ -261,7 +301,7 @@ impl VectorValue {
                     }
                     Some(val) => {
                         output.push(datum::FLOAT_FLAG);
-                        output.encode_f64(val.into_inner())?;
+                        output.write_f64(val.into_inner())?;
                     }
                 }
                 Ok(())
@@ -274,7 +314,7 @@ impl VectorValue {
                     Some(val) => {
                         output.push(datum::DECIMAL_FLAG);
                         let (prec, frac) = val.prec_and_frac();
-                        output.encode_decimal(val, prec, frac)?;
+                        output.write_decimal(val, prec, frac)?;
                     }
                 }
                 Ok(())
@@ -286,7 +326,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::COMPACT_BYTES_FLAG);
-                        output.encode_compact_bytes(val)?;
+                        output.write_compact_bytes(val)?;
                     }
                 }
                 Ok(())
@@ -298,7 +338,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::UINT_FLAG);
-                        output.encode_u64(val.to_packed_u64())?;
+                        output.write_u64(val.to_packed_u64())?;
                     }
                 }
                 Ok(())
@@ -310,7 +350,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::DURATION_FLAG);
-                        output.encode_i64(val.to_nanos())?;
+                        output.write_i64(val.to_nanos())?;
                     }
                 }
                 Ok(())
@@ -322,7 +362,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::JSON_FLAG);
-                        output.encode_json(val)?;
+                        output.write_json(val)?;
                     }
                 }
                 Ok(())

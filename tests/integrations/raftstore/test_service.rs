@@ -505,8 +505,8 @@ fn test_split_region() {
     ctx.set_region_epoch(resp.get_right().get_region_epoch().to_owned());
     let mut req = SplitRegionRequest::default();
     req.set_context(ctx);
-    let mut split_keys = vec![b"c".to_vec(), b"d".to_vec(), b"e".to_vec()];
-    req.set_split_keys(split_keys.clone().into());
+    let split_keys = vec![b"e".to_vec(), b"c".to_vec(), b"d".to_vec()];
+    req.set_split_keys(split_keys.into());
     let resp = client.split_region(&req).unwrap();
     let result_split_keys: Vec<_> = resp
         .get_regions()
@@ -517,8 +517,10 @@ fn test_split_region() {
                 .unwrap()
         })
         .collect();
-    split_keys.insert(0, b"b".to_vec());
-    assert_eq!(result_split_keys, split_keys);
+    assert_eq!(
+        result_split_keys,
+        vec![b"b".to_vec(), b"c".to_vec(), b"d".to_vec(), b"e".to_vec()]
+    );
 }
 
 #[test]
@@ -783,7 +785,7 @@ fn test_debug_scan_mvcc() {
         keys::data_key(b"meta_lock_2"),
     ];
     for k in &keys {
-        let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 0, 0).to_bytes();
+        let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 0, 0, 0).to_bytes();
         let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
         engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
     }

@@ -20,6 +20,9 @@ const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
 
+/// The short value for rollback records which are protected from being collapsed.
+const PROTECTED_ROLLBACK_SHORT_VALUE: &[u8] = b"p";
+
 impl WriteType {
     pub fn from_lock_type(tp: LockType) -> Option<WriteType> {
         match tp {
@@ -75,9 +78,24 @@ impl std::fmt::Debug for Write {
 }
 
 impl Write {
+    /// Creates a new `Write` record.
     pub fn new(write_type: WriteType, start_ts: u64, short_value: Option<Value>) -> Write {
         Write {
             write_type,
+            start_ts,
+            short_value,
+        }
+    }
+
+    pub fn new_rollback(start_ts: u64, protected: bool) -> Write {
+        let short_value = if protected {
+            Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec())
+        } else {
+            None
+        };
+
+        Write {
+            write_type: WriteType::Rollback,
             start_ts,
             short_value,
         }
@@ -122,6 +140,15 @@ impl Write {
     pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
         WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)
     }
+
+    pub fn is_protected(&self) -> bool {
+        self.write_type == WriteType::Rollback
+            && self
+                .short_value
+                .as_ref()
+                .map(|v| *v == PROTECTED_ROLLBACK_SHORT_VALUE)
+                .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -165,8 +192,10 @@ mod tests {
     fn test_write() {
         // Test `Write::to_bytes()` and `Write::parse()` works as a pair.
         let mut writes = vec![
-            Write::new(WriteType::Put, 0, None),
-            Write::new(WriteType::Delete, 0, Some(b"short_value".to_vec())),
+            Write::new(WriteType::Put, 0, Some(b"short_value".to_vec())),
+            Write::new(WriteType::Delete, 1 << 20, None),
+            Write::new_rollback(1 << 40, true),
+            Write::new(WriteType::Rollback, 1 << 41, None),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.to_bytes();
@@ -182,5 +211,17 @@ mod tests {
         let v = lock.to_bytes();
         assert!(Write::parse(&v[..1]).is_err());
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
+    }
+
+    #[test]
+    fn test_is_protected() {
+        assert!(Write::new_rollback(1, true).is_protected());
+        assert!(!Write::new_rollback(2, false).is_protected());
+        assert!(!Write::new(
+            WriteType::Put,
+            3,
+            Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec())
+        )
+        .is_protected());
     }
 }

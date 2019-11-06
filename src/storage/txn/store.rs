@@ -5,8 +5,8 @@ use kvproto::kvrpcpb::IsolationLevel;
 use crate::storage::metrics::*;
 use crate::storage::mvcc::EntryScanner;
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::mvcc::PointGetterBuilder;
-use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
+use crate::storage::mvcc::{PointGetter, PointGetterBuilder};
+use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder, Write};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
@@ -17,6 +17,12 @@ pub trait Store: Send {
 
     /// Fetch the provided key.
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
+
+    /// Re-use last cursor to incrementally (if possible) fetch the provided key.
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>>;
+
+    /// Take the statistics. Currently only available for `incremental_get`.
+    fn incremental_get_take_statistics(&mut self) -> Statistics;
 
     /// Fetch the provided set of keys.
     fn batch_get(
@@ -108,6 +114,31 @@ pub enum TxnEntry {
     // TOOD: Add more entry if needed.
 }
 
+impl TxnEntry {
+    /// This method will return a kv pair whose
+    /// content and encode are same as a kv pair
+    /// reture by ```StoreScanner::next```
+    pub fn into_kvpair(self) -> Result<(Vec<u8>, Vec<u8>)> {
+        match self {
+            TxnEntry::Commit { default, write } => {
+                if !default.0.is_empty() {
+                    let k = Key::from_encoded(default.0).truncate_ts()?;
+                    let k = k.into_raw()?;
+                    Ok((k, default.1))
+                } else {
+                    let k = Key::from_encoded(write.0).truncate_ts()?;
+                    let k = k.into_raw()?;
+                    let v = Write::parse(&write.1)?;
+                    let v = v.short_value.unwrap();
+                    Ok((k, v))
+                }
+            }
+            // Prewrite are not support
+            _ => unreachable!(),
+        }
+    }
+}
+
 /// A batch of transaction entries.
 pub struct EntryBatch {
     entries: Vec<TxnEntry>,
@@ -142,6 +173,8 @@ pub struct SnapshotStore<S: Snapshot> {
     start_ts: u64,
     isolation_level: IsolationLevel,
     fill_cache: bool,
+
+    point_getter_cache: Option<PointGetter<S>>,
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
@@ -158,6 +191,27 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         Ok(v)
     }
 
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Value>> {
+        if self.point_getter_cache.is_none() {
+            self.point_getter_cache = Some(
+                PointGetterBuilder::new(self.snapshot.clone(), self.start_ts)
+                    .fill_cache(self.fill_cache)
+                    .isolation_level(self.isolation_level)
+                    .multi(true)
+                    .build()?,
+            );
+        }
+        Ok(self.point_getter_cache.as_mut().unwrap().get(key)?)
+    }
+
+    fn incremental_get_take_statistics(&mut self) -> Statistics {
+        if self.point_getter_cache.is_none() {
+            Statistics::default()
+        } else {
+            self.point_getter_cache.as_mut().unwrap().take_statistics()
+        }
+    }
+
     fn batch_get(
         &self,
         keys: &[Key],
@@ -165,6 +219,10 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     ) -> Result<Vec<Result<Option<Value>>>> {
         use std::mem::{self, MaybeUninit};
         type Element = Result<Option<Value>>;
+
+        if keys.len() == 1 {
+            return Ok(vec![self.get(&keys[0], statistics)]);
+        }
 
         let mut order_and_keys: Vec<_> = keys.iter().enumerate().collect();
         order_and_keys.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
@@ -246,7 +304,19 @@ impl<S: Snapshot> SnapshotStore<S> {
             start_ts,
             isolation_level,
             fill_cache,
+
+            point_getter_cache: None,
         }
+    }
+
+    #[inline]
+    pub fn set_start_ts(&mut self, start_ts: u64) {
+        self.start_ts = start_ts;
+    }
+
+    #[inline]
+    pub fn set_isolation_level(&mut self, isolation_level: IsolationLevel) {
+        self.isolation_level = isolation_level;
     }
 
     fn verify_range(&self, lower_bound: &Option<Key>, upper_bound: &Option<Key>) -> Result<()> {
@@ -321,6 +391,17 @@ impl Store for FixtureStore {
             Some(Ok(v)) => Ok(Some(v.clone())),
             Some(Err(e)) => Err(e.maybe_clone().unwrap()),
         }
+    }
+
+    #[inline]
+    fn incremental_get(&mut self, key: &Key) -> Result<Option<Vec<u8>>> {
+        let mut s = Statistics::default();
+        self.get(key, &mut s)
+    }
+
+    #[inline]
+    fn incremental_get_take_statistics(&mut self) -> Statistics {
+        Statistics::default()
     }
 
     #[inline]

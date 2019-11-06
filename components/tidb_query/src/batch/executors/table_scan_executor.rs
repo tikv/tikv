@@ -13,6 +13,7 @@ use tipb::TableScan;
 use super::util::scan_executor::*;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::codec::table::check_record_key;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::storage::{IntervalRange, Storage};
 use crate::Result;
@@ -204,8 +205,9 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use crate::codec::{datum, table};
-        use tikv_util::codec::number;
+        use codec::prelude::NumberDecoder;
 
+        check_record_key(&key)?;
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
@@ -236,7 +238,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
                     ));
                 }
                 remaining = &remaining[1..];
-                let column_id = box_try!(number::decode_var_i64(&mut remaining));
+                let column_id = box_try!(remaining.read_var_i64());
                 let (val, new_remaining) = datum::split_datum(remaining, false)?;
                 // Note: The produced columns may be not in the same length if there is error due
                 // to corrupted data. It will be handled in `ScanExecutor`.

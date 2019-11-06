@@ -2,8 +2,8 @@
 
 use std::convert::{TryFrom, TryInto};
 
+use codec::prelude::NumberDecoder;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::codec::number;
 use tipb::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFnMeta;
@@ -14,7 +14,7 @@ use crate::codec::{datum, Datum};
 use crate::Result;
 
 /// Helper to build an `RpnExpression`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 
 impl RpnExpressionBuilder {
@@ -128,6 +128,7 @@ impl RpnExpressionBuilder {
             args_len,
             field_type: return_field_type.into(),
             implicit_args: vec![],
+            metadata: Box::new(()),
         };
         self.0.push(node);
         self
@@ -146,6 +147,7 @@ impl RpnExpressionBuilder {
             args_len,
             field_type: return_field_type.into(),
             implicit_args,
+            metadata: Box::new(()),
         };
         self.0.push(node);
         self
@@ -265,7 +267,9 @@ fn handle_node_column_ref(
     rpn_nodes: &mut Vec<RpnExpressionNode>,
     max_columns: usize,
 ) -> Result<()> {
-    let offset = number::decode_i64(&mut tree_node.get_val())
+    let offset = tree_node
+        .get_val()
+        .read_i64()
         .map_err(|_| other_err!("Unable to decode column reference offset from the request"))?
         as usize;
     if offset >= max_columns {
@@ -303,6 +307,7 @@ where
         )
     })?;
 
+    let metadata = (func_meta.metadata_ctor_ptr)(&mut tree_node);
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
 
@@ -332,6 +337,7 @@ where
         args_len,
         field_type: tree_node.take_field_type(),
         implicit_args,
+        metadata,
     });
     Ok(())
 }
@@ -400,14 +406,18 @@ fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
 
 #[inline]
 fn extract_scalar_value_int64(val: Vec<u8>) -> Result<ScalarValue> {
-    let value = number::decode_i64(&mut val.as_slice())
+    let value = val
+        .as_slice()
+        .read_i64()
         .map_err(|_| other_err!("Unable to decode int64 from the request"))?;
     Ok(ScalarValue::Int(Some(value)))
 }
 
 #[inline]
 fn extract_scalar_value_uint64(val: Vec<u8>) -> Result<ScalarValue> {
-    let value = number::decode_u64(&mut val.as_slice())
+    let value = val
+        .as_slice()
+        .read_u64()
         .map_err(|_| other_err!("Unable to decode uint64 from the request"))?;
     Ok(ScalarValue::Int(Some(value as i64)))
 }
@@ -419,7 +429,9 @@ fn extract_scalar_value_bytes(val: Vec<u8>) -> Result<ScalarValue> {
 
 #[inline]
 fn extract_scalar_value_float(val: Vec<u8>) -> Result<ScalarValue> {
-    let value = number::decode_f64(&mut val.as_slice())
+    let value = val
+        .as_slice()
+        .read_f64()
         .map_err(|_| other_err!("Unable to decode float from the request"))?;
     Ok(ScalarValue::Real(Real::new(value).ok()))
 }
@@ -430,7 +442,9 @@ fn extract_scalar_value_date_time(
     field_type: &FieldType,
     time_zone: &Tz,
 ) -> Result<ScalarValue> {
-    let v = number::decode_u64(&mut val.as_slice())
+    let v = val
+        .as_slice()
+        .read_u64()
         .map_err(|_| other_err!("Unable to decode date time from the request"))?;
     let fsp = field_type.decimal() as i8;
     let value =
@@ -441,7 +455,9 @@ fn extract_scalar_value_date_time(
 
 #[inline]
 fn extract_scalar_value_duration(val: Vec<u8>) -> Result<ScalarValue> {
-    let n = number::decode_i64(&mut val.as_slice())
+    let n = val
+        .as_slice()
+        .read_i64()
         .map_err(|_| other_err!("Unable to decode duration from the request"))?;
     let value = Duration::from_nanos(n, MAX_FSP)
         .map_err(|_| other_err!("Unable to decode duration from the request"))?;
@@ -453,7 +469,7 @@ fn extract_scalar_value_decimal(val: Vec<u8>) -> Result<ScalarValue> {
     use crate::codec::mysql::DecimalDecoder;
     let value = val
         .as_slice()
-        .decode_decimal()
+        .read_decimal()
         .map_err(|_| other_err!("Unable to decode decimal from the request"))?;
     Ok(ScalarValue::Decimal(Some(value)))
 }
@@ -462,7 +478,7 @@ fn extract_scalar_value_decimal(val: Vec<u8>) -> Result<ScalarValue> {
 fn extract_scalar_value_json(val: Vec<u8>) -> Result<ScalarValue> {
     let value = val
         .as_slice()
-        .decode_json()
+        .read_json()
         .map_err(|_| other_err!("Unable to decode json from the request"))?;
     Ok(ScalarValue::Json(Some(value)))
 }

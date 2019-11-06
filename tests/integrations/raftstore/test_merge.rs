@@ -27,6 +27,10 @@ fn test_node_base_merge() {
 
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
+    for i in 0..3 {
+        must_get_equal(&cluster.get_engine(i + 1), b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(i + 1), b"k3", b"v3");
+    }
 
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
@@ -106,6 +110,7 @@ fn test_node_base_merge() {
 fn test_node_merge_with_slow_learner() {
     let mut cluster = new_node_cluster(0, 2);
     configure_for_merge(&mut cluster);
+    cluster.pd_client.disable_default_operator();
 
     // Create a cluster with peer 1 as leader and peer 2 as learner.
     let r1 = cluster.run_conf_change();
@@ -495,7 +500,10 @@ fn test_node_merge_brain_split() {
 
     cluster.clear_send_filters();
 
-    cluster.must_transfer_leader(1, new_peer(3, 3));
+    // Wait until store 3 get data after merging
+    must_get_equal(&cluster.get_engine(3), b"k40", b"v4");
+    let right_peer_3 = find_peer(&right, 3).cloned().unwrap();
+    cluster.must_transfer_leader(right.get_id(), right_peer_3);
     cluster.must_put(b"k40", b"v5");
 
     // Make sure the two regions are already merged on store 3.
@@ -701,6 +709,59 @@ fn test_node_merge_update_region() {
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v3");
 }
 
+/// Test if merge is working properly when merge entries is empty but commit index is not updated.
+#[test]
+fn test_node_merge_catch_up_logs_empty_entries() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // make sure the peer of left region on engine 3 has caught up logs.
+    cluster.must_put(b"k0", b"v0");
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
+    // first MsgAppend will append log, second MsgAppend will set commit index,
+    // So only allowing first MsgAppend to make source peer have uncommitted entries.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend)
+            .allow(1),
+    ));
+    // make the source peer have no way to know the uncommitted entries can be applied from heartbeat.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .msg_type(MessageType::MsgHeartbeat)
+            .direction(Direction::Recv),
+    ));
+    // make the source peer have no way to know the uncommitted entries can be applied from target region.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(right.get_id(), 3)
+            .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv),
+    ));
+    pd_client.must_merge(left.get_id(), right.get_id());
+    cluster.must_region_not_exist(left.get_id(), 2);
+    cluster.shutdown();
+    cluster.clear_send_filters();
+
+    // as expected, merge process will forward the commit index
+    // and the source peer will be destroyed.
+    cluster.start().unwrap();
+    cluster.must_region_not_exist(left.get_id(), 3);
+}
+
 #[test]
 fn test_merge_with_slow_promote() {
     let mut cluster = new_node_cluster(0, 3);
@@ -725,7 +786,8 @@ fn test_merge_with_slow_promote() {
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
 
-    let delay_filter = Box::new(DelayFilter::new(Duration::from_millis(20)));
+    let delay_filter =
+        Box::new(RegionPacketFilter::new(right.get_id(), 3).direction(Direction::Recv));
     cluster.sim.wl().add_send_filter(3, delay_filter);
 
     pd_client.must_add_peer(right.get_id(), new_peer(3, right.get_id() + 3));

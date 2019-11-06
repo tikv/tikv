@@ -10,9 +10,9 @@ use tidb_query_datatype::FieldTypeTp;
 use tipb::ColumnInfo;
 
 use super::mysql::{Duration, Time};
-use super::{datum, Datum, Error, Result};
+use super::{datum, datum::DatumDecoder, Datum, Error, Result};
 use crate::expr::EvalContext;
-use tikv_util::codec::number::{self, NumberEncoder};
+use codec::prelude::*;
 use tikv_util::codec::BytesSlice;
 use tikv_util::collections::{HashMap, HashSet};
 
@@ -30,19 +30,19 @@ pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
-        self.write_all(TABLE_PREFIX)?;
-        self.encode_i64(table_id)?;
-        self.write_all(RECORD_PREFIX_SEP).map_err(Error::from)
+        self.write_bytes(TABLE_PREFIX)?;
+        self.write_i64(table_id)?;
+        self.write_bytes(RECORD_PREFIX_SEP).map_err(Error::from)
     }
 
     fn append_table_index_prefix(&mut self, table_id: i64) -> Result<()> {
-        self.write_all(TABLE_PREFIX)?;
-        self.encode_i64(table_id)?;
-        self.write_all(INDEX_PREFIX_SEP).map_err(Error::from)
+        self.write_bytes(TABLE_PREFIX)?;
+        self.write_i64(table_id)?;
+        self.write_bytes(INDEX_PREFIX_SEP).map_err(Error::from)
     }
 }
 
-impl<T: Write> TableEncoder for T {}
+impl<T: BufferWriter> TableEncoder for T {}
 
 /// Extracts table prefix from table record or index.
 #[inline]
@@ -73,17 +73,50 @@ pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
     Ok(())
 }
 
+#[inline]
+pub fn check_record_key(key: &[u8]) -> Result<()> {
+    check_key_type(key, RECORD_PREFIX_SEP)
+}
+
+#[inline]
+pub fn check_index_key(key: &[u8]) -> Result<()> {
+    check_key_type(key, INDEX_PREFIX_SEP)
+}
+
+/// `check_key_type` checks if the key is the type we want, `wanted_type` should be
+/// `table::RECORD_PREFIX_SEP` or `table::INDEX_PREFIX_SEP` .
+#[inline]
+fn check_key_type(key: &[u8], wanted_type: &[u8]) -> Result<()> {
+    let mut buf = key;
+    if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
+        return Err(invalid_type!(
+            "record or index key expected, but got {}",
+            hex::encode_upper(key)
+        ));
+    }
+
+    buf.read_bytes(ID_LEN)?;
+    if buf.read_bytes(SEP_LEN)? != wanted_type {
+        Err(invalid_type!(
+            "expected key sep type {}, but got key {})",
+            hex::encode_upper(wanted_type),
+            hex::encode_upper(key)
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Decodes table ID from the key.
 pub fn decode_table_id(key: &[u8]) -> Result<i64> {
-    if !key.starts_with(TABLE_PREFIX) {
+    let mut buf = key;
+    if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
         return Err(invalid_type!(
             "record key expected, but got {}",
             hex::encode_upper(key)
         ));
     }
-
-    let mut remaining = &key[TABLE_PREFIX.len()..];
-    number::decode_i64(&mut remaining).map_err(Error::from)
+    buf.read_i64().map_err(Error::from)
 }
 
 /// `flatten` flattens the datum.
@@ -123,7 +156,7 @@ pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN);
     // can't panic
     key.append_table_record_prefix(table_id).unwrap();
-    key.encode_i64(handle).unwrap();
+    key.write_i64(handle).unwrap();
     key
 }
 
@@ -131,32 +164,29 @@ pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
 pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN + ID_LEN);
     key.append_table_record_prefix(table_id).unwrap();
-    key.encode_i64(handle).unwrap();
-    key.encode_i64(column_id).unwrap();
+    key.write_i64(handle).unwrap();
+    key.write_i64(column_id).unwrap();
     key
 }
 
 /// `decode_handle` decodes the key and gets the handle.
 pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
-    if !encoded.starts_with(TABLE_PREFIX) {
+    let mut buf = encoded;
+    if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
         return Err(invalid_type!(
             "record key expected, but got {}",
             hex::encode_upper(encoded)
         ));
     }
+    buf.read_i64()?;
 
-    let mut remaining = &encoded[TABLE_PREFIX.len()..];
-    number::decode_i64(&mut remaining)?;
-
-    if !remaining.starts_with(RECORD_PREFIX_SEP) {
+    if buf.read_bytes(RECORD_PREFIX_SEP.len())? != RECORD_PREFIX_SEP {
         return Err(invalid_type!(
             "record key expected, but got {}",
             hex::encode_upper(encoded)
         ));
     }
-
-    remaining = &remaining[RECORD_PREFIX_SEP.len()..];
-    number::decode_i64(&mut remaining).map_err(Error::from)
+    buf.read_i64().map_err(Error::from)
 }
 
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
@@ -169,7 +199,7 @@ pub fn truncate_as_row_key(key: &[u8]) -> Result<&[u8]> {
 pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(PREFIX_LEN + ID_LEN + encoded.len());
     key.append_table_index_prefix(table_id).unwrap();
-    key.encode_i64(idx_id).unwrap();
+    key.write_i64(idx_id).unwrap();
     key.write_all(encoded).unwrap();
     key
 }
@@ -177,17 +207,17 @@ pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<
 // `decode_index_key` decodes datums from an index key.
 pub fn decode_index_key(
     ctx: &EvalContext,
-    mut encoded: &[u8],
+    encoded: &[u8],
     infos: &[ColumnInfo],
 ) -> Result<Vec<Datum>> {
-    encoded = &encoded[PREFIX_LEN + ID_LEN..];
+    let mut buf = &encoded[PREFIX_LEN + ID_LEN..];
     let mut res = vec![];
 
     for info in infos {
-        if encoded.is_empty() {
+        if buf.is_empty() {
             return Err(box_err!("{} is too short.", hex::encode_upper(encoded)));
         }
-        let mut v = datum::decode_datum(&mut encoded)?;
+        let mut v = buf.read_datum()?;
         v = unflatten(ctx, v, info)?;
         res.push(v);
     }
@@ -250,7 +280,7 @@ pub fn decode_col_value(
     ctx: &EvalContext,
     col: &ColumnInfo,
 ) -> Result<Datum> {
-    let d = datum::decode_datum(data)?;
+    let d = data.read_datum()?;
     unflatten(ctx, d, col)
 }
 
@@ -371,7 +401,7 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
         let length = data.len();
         let mut tmp_data: &[u8] = data.as_ref();
         while !tmp_data.is_empty() && meta_map.len() < cols.len() {
-            let id = datum::decode_datum(&mut tmp_data)?.i64();
+            let id = tmp_data.read_datum()?.i64();
             let offset = length - tmp_data.len();
             let (val, rem) = datum::split_datum(tmp_data, false)?;
             if cols.contains(&id) {
@@ -402,7 +432,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
         if tmp_data.is_empty() {
             None
         } else {
-            Some(datum::decode_datum(&mut tmp_data)?.i64())
+            Some(tmp_data.read_datum()?.i64())
         }
     };
     Ok((RowColsDict::new(meta_map, key), handle))
@@ -415,10 +445,14 @@ mod tests {
     use tipb::ColumnInfo;
 
     use crate::codec::datum::{self, Datum};
+    use crate::executor::tests::generate_index_data;
     use tikv_util::collections::{HashMap, HashSet};
     use tikv_util::map;
 
     use super::*;
+
+    const TABLE_ID: i64 = 1;
+    const INDEX_ID: i64 = 1;
 
     #[test]
     fn test_row_key_codec() {
@@ -605,11 +639,7 @@ mod tests {
         let handle = if handle_data.is_empty() {
             None
         } else {
-            Some(
-                datum::decode_datum(&mut (handle_data.as_ref() as &[u8]))
-                    .unwrap()
-                    .i64(),
-            )
+            Some((handle_data.as_ref() as &[u8]).read_datum().unwrap().i64())
         };
         col_ids.remove(3);
         res = cut_idx_key_as_owned(&bs, &col_ids);
@@ -675,5 +705,20 @@ mod tests {
             assert_eq!(tid, decode_table_id(&k).unwrap());
             assert!(decode_table_id(b"xxx").is_err());
         }
+    }
+
+    #[test]
+    fn test_check_key_type() {
+        let record_key = encode_row_key(TABLE_ID, 1);
+        assert!(check_key_type(&record_key.as_slice(), RECORD_PREFIX_SEP).is_ok());
+        assert!(check_key_type(&record_key.as_slice(), INDEX_PREFIX_SEP).is_err());
+
+        let (_, index_key) = generate_index_data(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
+        assert!(check_key_type(&index_key.as_slice(), RECORD_PREFIX_SEP).is_err());
+        assert!(check_key_type(&index_key.as_slice(), INDEX_PREFIX_SEP).is_ok());
+
+        let too_small_key = vec![0];
+        assert!(check_key_type(&too_small_key.as_slice(), RECORD_PREFIX_SEP).is_err());
+        assert!(check_key_type(&too_small_key.as_slice(), INDEX_PREFIX_SEP).is_err());
     }
 }

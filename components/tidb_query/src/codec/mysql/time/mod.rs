@@ -10,16 +10,14 @@ use std::fmt::Write;
 use std::fmt::{self, Display, Formatter};
 use std::{mem, str};
 
-use byteorder::WriteBytesExt;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
+use codec::prelude::*;
 use tidb_query_datatype::FieldTypeTp;
-use tikv_util::codec::number::{self, NumberEncoder};
-use tikv_util::codec::BytesSlice;
 
 use crate::codec::convert::ConvertTo;
 use crate::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use crate::codec::mysql::{self, Decimal, Json};
+use crate::codec::mysql::{self, Decimal};
 use crate::codec::{Error, Result, TEN_POW};
 use crate::expr::EvalContext;
 
@@ -802,16 +800,21 @@ impl Time {
 }
 
 impl ConvertTo<f64> for Time {
+    /// This function should not return err,
+    /// if it return err, then the err is because of bug.
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<f64> {
         if self.is_zero() {
             return Ok(0f64);
         }
-        let f: f64 = box_try!(self.to_numeric_string().parse());
-        Ok(f)
+        let r = self.to_numeric_string().parse::<f64>();
+        debug_assert!(r.is_ok());
+        Ok(r?)
     }
 }
 
 impl ConvertTo<Decimal> for Time {
+    // Port from TiDB's Time::ToNumber
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Decimal> {
         if self.is_zero() {
@@ -822,29 +825,19 @@ impl ConvertTo<Decimal> for Time {
     }
 }
 
-impl ConvertTo<Json> for Time {
-    #[inline]
-    fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        let s = if self.time_type == TimeType::DateTime || self.time_type == TimeType::Timestamp {
-            // TODO: avoid this clone
-            let mut val = self.clone();
-            val.fsp = mysql::MAX_FSP as u8;
-            val.to_string()
-        } else {
-            self.to_string()
-        };
-        Ok(Json::String(s))
-    }
-}
-
 impl ConvertTo<MyDuration> for Time {
+    /// Port from TiDB's Time::ConvertToDuration
+    #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<MyDuration> {
         if self.is_zero() {
             return Ok(MyDuration::zero());
         }
-        let nanos = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC
-            + i64::from(self.time.nanosecond());
-        MyDuration::from_nanos(nanos, self.fsp as i8)
+        let seconds = i64::from(self.time.num_seconds_from_midnight()) * NANOS_PER_SEC;
+        // `nanosecond` returns the number of nanoseconds since the whole non-leap second.
+        // Such as for 2019-09-22 07:21:22.670936103 UTC,
+        // it will return 670936103.
+        let nanosecond = i64::from(self.time.nanosecond());
+        MyDuration::from_nanos(seconds + nanosecond, self.fsp as i8)
     }
 }
 
@@ -900,57 +893,55 @@ impl Display for Time {
     }
 }
 
-impl<T: std::io::Write> TimeEncoder for T {}
+impl<T: BufferWriter> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
-    fn encode_time(&mut self, v: &Time) -> Result<()> {
+    fn write_time(&mut self, v: &Time) -> Result<()> {
         if !v.is_zero() {
-            self.encode_u16(v.time.year() as u16)?;
+            self.write_u32_le(v.time.hour() as u32)?;
+            self.write_u32_le(v.time.nanosecond() / 1000)?;
+            self.write_u16_le(v.time.year() as u16)?;
             self.write_u8(v.time.month() as u8)?;
             self.write_u8(v.time.day() as u8)?;
-            self.write_u8(v.time.hour() as u8)?;
             self.write_u8(v.time.minute() as u8)?;
             self.write_u8(v.time.second() as u8)?;
-            self.encode_u32(v.time.nanosecond() / 1000)?;
         } else {
-            let len = mem::size_of::<u16>() + mem::size_of::<u32>() + 5;
+            let len = mem::size_of::<u16>() + 2 * mem::size_of::<u32>() + 4;
             let buf = vec![0; len];
-            self.write_all(&buf)?;
+            self.write_bytes(&buf)?;
         }
+        // Encode an useless u16 to make byte alignment 16 bytes.
+        self.write_u16_le(0 as u16)?;
 
         let tp: FieldTypeTp = v.time_type.into();
         self.write_u8(tp.to_u8().unwrap())?;
-        self.write_u8(v.fsp).map_err(From::from)
+        self.write_u8(v.fsp)?;
+        // Encode an useless u16 to make byte alignment 20 bytes.
+        self.write_u16_le(0 as u16).map_err(From::from)
     }
 }
 
-impl Time {
-    /// `decode` decodes time encoded by `encode_time` for Chunk format.
-    pub fn decode(data: &mut BytesSlice<'_>) -> Result<Time> {
-        let year = i32::from(number::decode_u16(data)?);
-        let (month, day, hour, minute, second) = if data.len() >= 5 {
-            (
-                u32::from(data[0]),
-                u32::from(data[1]),
-                u32::from(data[2]),
-                u32::from(data[3]),
-                u32::from(data[4]),
-            )
-        } else {
-            return Err(Error::unexpected_eof());
-        };
-        *data = &data[5..];
-        let nanoseconds = 1000 * number::decode_u32(data)?;
-        let (tp, fsp) = if data.len() >= 2 {
-            (
-                FieldTypeTp::from_u8(data[0]).unwrap_or(FieldTypeTp::Unspecified),
-                data[1],
-            )
-        } else {
-            return Err(Error::unexpected_eof());
-        };
-        *data = &data[2..];
+pub trait TimeDecoder: NumberDecoder {
+    /// Decodes time encoded by `write_time` for Chunk format.
+    fn read_time(&mut self) -> Result<Time> {
+        let hour = self.read_u32_le()?;
+        let nanoseconds = 1000 * self.read_u32_le()?;
+        let year = i32::from(self.read_u16_le()?);
+        let buf = self.read_bytes(4)?;
+        let (month, day, minute, second) = (
+            u32::from(buf[0]),
+            u32::from(buf[1]),
+            u32::from(buf[2]),
+            u32::from(buf[3]),
+        );
+        let _ = self.read_u16();
+        let buf = self.read_bytes(2)?;
+        let (tp, fsp) = (
+            FieldTypeTp::from_u8(buf[0]).unwrap_or(FieldTypeTp::Unspecified),
+            buf[1],
+        );
+        let _ = self.read_u16();
         let tz = Tz::utc(); // TODO
         if year == 0
             && month == 0
@@ -980,6 +971,8 @@ impl Time {
         Time::new(t, tp.try_into()?, fsp as i8)
     }
 }
+
+impl<T: BufferReader> TimeDecoder for T {}
 
 impl crate::codec::data_type::AsMySQLBool for Time {
     #[inline]
@@ -1690,8 +1683,8 @@ mod tests {
         for (s, fsp) in cases {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
             let mut buf = vec![];
-            buf.encode_time(&t).unwrap();
-            let got = Time::decode(&mut buf.as_slice()).unwrap();
+            buf.write_time(&t).unwrap();
+            let got = buf.as_slice().read_time().unwrap();
             assert_eq!(got, t);
         }
     }

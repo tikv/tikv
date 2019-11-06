@@ -3,7 +3,6 @@
 use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
 use fail;
-use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{Error as GrpcError, WriteFlags};
@@ -13,6 +12,7 @@ use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftRequestHeader, RegionDetailResponse,
     StatusCmdType, StatusRequest,
 };
+use tokio_sync::oneshot;
 
 use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};

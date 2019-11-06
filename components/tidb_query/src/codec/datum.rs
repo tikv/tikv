@@ -1,24 +1,24 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::WriteBytesExt;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Write;
 use std::{i64, str};
 
 use tidb_query_datatype::FieldTypeTp;
-use tikv_util::codec::bytes::{self, BytesEncoder};
-use tikv_util::codec::{number, BytesSlice};
+use tikv_util::codec::BytesSlice;
 use tikv_util::escape;
 
 use super::mysql::{
     self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Json,
     JsonDecoder, JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP,
 };
-use super::{Error, Result};
+use super::Result;
 use crate::codec::convert::{ConvertTo, ToInt};
 use crate::expr::EvalContext;
+use codec::byte::{CompactByteCodec, MemComparableByteCodec};
+use codec::number::{self, NumberCodec};
+use codec::prelude::*;
 
 pub const NIL_FLAG: u8 = 0;
 pub const BYTES_FLAG: u8 = 1;
@@ -168,7 +168,7 @@ impl Datum {
             Datum::Dec(ref d) => cmp_f64(d.convert(ctx)?, f),
             Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
             Datum::Time(ref t) => cmp_f64(t.convert(ctx)?, f),
-            Datum::Json(ref json) => Datum::F64(f).cmp_json(ctx, json),
+            Datum::Json(_) => Ok(Ordering::Less),
         }
     }
 
@@ -192,7 +192,7 @@ impl Datum {
                 Ok(d.cmp(&d2))
             }
             _ => {
-                let f = bs.convert(ctx)?;
+                let f: f64 = bs.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -207,6 +207,7 @@ impl Datum {
                 Ok(d.cmp(dec))
             }
             _ => {
+                // FIXME: here is not same as TiDB's
                 let f = dec.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
@@ -233,7 +234,8 @@ impl Datum {
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),
             _ => {
-                let f = time.convert(ctx)?;
+                let f: Decimal = time.convert(ctx)?;
+                let f: f64 = f.convert(ctx)?;
                 self.cmp_f64(ctx, f)
             }
         }
@@ -246,6 +248,7 @@ impl Datum {
             Datum::U64(d) => Json::U64(d).cmp(json),
             Datum::F64(d) => Json::Double(d).cmp(json),
             Datum::Dec(ref d) => {
+                // FIXME: it this same as TiDB's?
                 let ff = d.convert(ctx)?;
                 Json::Double(ff).cmp(json)
             }
@@ -268,9 +271,9 @@ impl Datum {
             Datum::I64(i) => Some(i != 0),
             Datum::U64(u) => Some(u != 0),
             Datum::F64(f) => Some(f.round() != 0f64),
-            Datum::Bytes(ref bs) => {
-                Some(!bs.is_empty() && bs.to_int(ctx, FieldTypeTp::LongLong)? != 0)
-            }
+            Datum::Bytes(ref bs) => Some(
+                !bs.is_empty() && <&[u8] as ConvertTo<i64>>::convert(&bs.as_slice(), ctx)? != 0,
+            ),
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
@@ -331,11 +334,13 @@ impl Datum {
             Datum::I64(i) => Ok(i),
             Datum::U64(u) => u.to_int(ctx, tp),
             Datum::F64(f) => f.to_int(ctx, tp),
-            Datum::Bytes(bs) => bs.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Time(t) => t.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Dur(d) => d.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Dec(d) => d.to_int(ctx, FieldTypeTp::LongLong),
-            Datum::Json(j) => j.to_int(ctx, FieldTypeTp::LongLong),
+            Datum::Bytes(bs) => bs.to_int(ctx, tp),
+            Datum::Time(t) => t.to_int(ctx, tp),
+            // FIXME: in Datum::Dur, to_int's error handle is not same as TiDB's
+            Datum::Dur(d) => d.to_int(ctx, tp),
+            // FIXME: in Datum::Dec, to_int's error handle is not same as TiDB's
+            Datum::Dec(d) => d.to_int(ctx, tp),
+            Datum::Json(j) => j.to_int(ctx, tp),
             _ => Err(box_err!("failed to convert {} to i64", self)),
         }
     }
@@ -404,7 +409,7 @@ impl Datum {
             Datum::Dur(d) => d.convert(&mut EvalContext::default()),
             d => match d.coerce_to_dec()? {
                 Datum::Dec(d) => Ok(d),
-                d => Err(box_err!("failed to conver {} to decimal", d)),
+                d => Err(box_err!("failed to convert {} to decimal", d)),
             },
         }
     }
@@ -467,7 +472,7 @@ impl Datum {
     /// Try its best effort to convert into a decimal datum.
     /// source function name is `ConvertDatumToDecimal`.
     fn coerce_to_dec(self) -> Result<Datum> {
-        let dec = match self {
+        let dec: Decimal = match self {
             Datum::I64(i) => i.into(),
             Datum::U64(u) => u.into(),
             Datum::F64(f) => {
@@ -780,51 +785,52 @@ impl From<Json> for Datum {
     }
 }
 
-/// `decode_datum` decodes on a datum from a byte slice generated by tidb.
-pub fn decode_datum(data: &mut BytesSlice<'_>) -> Result<Datum> {
-    if !data.is_empty() {
-        let flag = data[0];
-        *data = &data[1..];
+/// `DatumDecoder` decodes the datum.
+pub trait DatumDecoder:
+    DecimalDecoder + JsonDecoder + CompactByteDecoder + MemComparableByteDecoder
+{
+    /// `read_datum` decodes on a datum from a byte slice generated by TiDB.
+    fn read_datum(&mut self) -> Result<Datum> {
+        let flag = self.read_u8()?;
         let datum = match flag {
-            INT_FLAG => number::decode_i64(data).map(Datum::I64)?,
-            UINT_FLAG => number::decode_u64(data).map(Datum::U64)?,
-            BYTES_FLAG => bytes::decode_bytes(data, false).map(Datum::Bytes)?,
-            COMPACT_BYTES_FLAG => bytes::decode_compact_bytes(data).map(Datum::Bytes)?,
+            INT_FLAG => self.read_i64().map(Datum::I64)?,
+            UINT_FLAG => self.read_u64().map(Datum::U64)?,
+            BYTES_FLAG => self.read_comparable_bytes().map(Datum::Bytes)?,
+            COMPACT_BYTES_FLAG => self.read_compact_bytes().map(Datum::Bytes)?,
             NIL_FLAG => Datum::Null,
-            FLOAT_FLAG => number::decode_f64(data).map(Datum::F64)?,
+            FLOAT_FLAG => self.read_f64().map(Datum::F64)?,
             DURATION_FLAG => {
-                let nanos = number::decode_i64(data)?;
-                // Decode the i64 into `Duration` with `MAX_FSP`, then unflatten it with concrete
-                // `FieldType` information
+                let nanos = self.read_i64()?;
                 let dur = Duration::from_nanos(nanos, MAX_FSP)?;
                 Datum::Dur(dur)
             }
-            DECIMAL_FLAG => data.decode_decimal().map(Datum::Dec)?,
-            VAR_INT_FLAG => number::decode_var_i64(data).map(Datum::I64)?,
-            VAR_UINT_FLAG => number::decode_var_u64(data).map(Datum::U64)?,
-            JSON_FLAG => data.decode_json().map(Datum::Json)?,
+            DECIMAL_FLAG => self.read_decimal().map(Datum::Dec)?,
+            VAR_INT_FLAG => self.read_var_i64().map(Datum::I64)?,
+            VAR_UINT_FLAG => self.read_var_u64().map(Datum::U64)?,
+            JSON_FLAG => self.read_json().map(Datum::Json)?,
             f => return Err(invalid_type!("unsupported data type `{}`", f)),
         };
         Ok(datum)
-    } else {
-        Err(Error::unexpected_eof())
     }
 }
+impl<T: BufferReader> DatumDecoder for T {}
 
 /// `decode` decodes all datum from a byte slice generated by tidb.
 pub fn decode(data: &mut BytesSlice<'_>) -> Result<Vec<Datum>> {
     let mut res = vec![];
     while !data.is_empty() {
-        let v = decode_datum(data)?;
+        let v = data.read_datum()?;
         res.push(v);
     }
     Ok(res)
 }
 
 /// `DatumEncoder` encodes the datum.
-pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
+pub trait DatumEncoder:
+    DecimalEncoder + JsonEncoder + CompactByteEncoder + MemComparableByteEncoder
+{
     /// Encode values to buf slice.
-    fn encode(&mut self, values: &[Datum], comparable: bool) -> Result<()> {
+    fn write_datum(&mut self, values: &[Datum], comparable: bool) -> Result<()> {
         let mut find_min = false;
         for v in values {
             if find_min {
@@ -836,33 +842,33 @@ pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
                 Datum::I64(i) => {
                     if comparable {
                         self.write_u8(INT_FLAG)?;
-                        self.encode_i64(i)?;
+                        self.write_i64(i)?;
                     } else {
                         self.write_u8(VAR_INT_FLAG)?;
-                        self.encode_var_i64(i)?;
+                        self.write_var_i64(i)?;
                     }
                 }
                 Datum::U64(u) => {
                     if comparable {
                         self.write_u8(UINT_FLAG)?;
-                        self.encode_u64(u)?;
+                        self.write_u64(u)?;
                     } else {
                         self.write_u8(VAR_UINT_FLAG)?;
-                        self.encode_var_u64(u)?;
+                        self.write_var_u64(u)?;
                     }
                 }
                 Datum::Bytes(ref bs) => {
                     if comparable {
                         self.write_u8(BYTES_FLAG)?;
-                        self.encode_bytes(bs, false)?;
+                        self.write_comparable_bytes(bs)?;
                     } else {
                         self.write_u8(COMPACT_BYTES_FLAG)?;
-                        self.encode_compact_bytes(bs)?;
+                        self.write_compact_bytes(bs)?;
                     }
                 }
                 Datum::F64(f) => {
                     self.write_u8(FLOAT_FLAG)?;
-                    self.encode_f64(f)?;
+                    self.write_f64(f)?;
                 }
                 Datum::Null => self.write_u8(NIL_FLAG)?,
                 Datum::Min => {
@@ -872,20 +878,20 @@ pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
                 Datum::Max => self.write_u8(MAX_FLAG)?,
                 Datum::Time(ref t) => {
                     self.write_u8(UINT_FLAG)?;
-                    self.encode_u64(t.to_packed_u64())?;
+                    self.write_u64(t.to_packed_u64())?;
                 }
                 Datum::Dur(ref d) => {
                     self.write_u8(DURATION_FLAG)?;
-                    self.encode_i64(d.to_nanos())?;
+                    self.write_i64(d.to_nanos())?;
                 }
                 Datum::Dec(ref d) => {
                     self.write_u8(DECIMAL_FLAG)?;
                     let (prec, frac) = d.prec_and_frac();
-                    self.encode_decimal(d, prec, frac)?;
+                    self.write_decimal(d, prec, frac)?;
                 }
                 Datum::Json(ref j) => {
                     self.write_u8(JSON_FLAG)?;
-                    self.encode_json(j)?;
+                    self.write_json(j)?;
                 }
             }
         }
@@ -893,7 +899,7 @@ pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
     }
 }
 
-impl<T: Write> DatumEncoder for T {}
+impl<T: BufferWriter> DatumEncoder for T {}
 
 /// Get the approximate needed buffer size of values.
 ///
@@ -907,14 +913,14 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
                     if comparable {
                         number::I64_SIZE
                     } else {
-                        number::MAX_VAR_I64_LEN
+                        number::MAX_VARINT64_LENGTH
                     }
                 }
                 Datum::U64(_) => {
                     if comparable {
                         number::U64_SIZE
                     } else {
-                        number::MAX_VAR_U64_LEN
+                        number::MAX_VARINT64_LENGTH
                     }
                 }
                 Datum::F64(_) => number::F64_SIZE,
@@ -922,9 +928,9 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
                 Datum::Dur(_) => number::I64_SIZE,
                 Datum::Bytes(ref bs) => {
                     if comparable {
-                        bytes::max_encoded_bytes_size(bs.len())
+                        MemComparableByteCodec::encoded_len(bs.len())
                     } else {
-                        bs.len() + number::MAX_VAR_I64_LEN
+                        bs.len() + number::MAX_VARINT64_LENGTH
                     }
                 }
                 Datum::Dec(ref d) => d.approximate_encoded_size(),
@@ -958,7 +964,7 @@ pub fn encode_value(values: &[Datum]) -> Result<Vec<u8>> {
 /// Uses comparable to encode a memory comparable buffer or not.
 pub fn encode_to(buf: &mut Vec<u8>, values: &[Datum], comparable: bool) -> Result<()> {
     buf.reserve(approximate_size(values, comparable));
-    buf.encode(values, comparable)?;
+    buf.write_datum(values, comparable)?;
     Ok(())
 }
 
@@ -971,28 +977,23 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
     let pos = match buf[0] {
         INT_FLAG => number::I64_SIZE,
         UINT_FLAG => number::U64_SIZE,
-        BYTES_FLAG => bytes::encoded_bytes_len(&buf[1..], desc),
-        COMPACT_BYTES_FLAG => bytes::encoded_compact_len(&buf[1..]),
+        BYTES_FLAG => {
+            if desc {
+                MemComparableByteCodec::get_first_encoded_len_desc(&buf[1..])
+            } else {
+                MemComparableByteCodec::get_first_encoded_len(&buf[1..])
+            }
+        }
+        COMPACT_BYTES_FLAG => CompactByteCodec::get_first_encoded_len(&buf[1..]),
         NIL_FLAG => 0,
         FLOAT_FLAG => number::F64_SIZE,
         DURATION_FLAG => number::I64_SIZE,
         DECIMAL_FLAG => mysql::dec_encoded_len(&buf[1..])?,
-        VAR_INT_FLAG => {
-            let mut v = &buf[1..];
-            let l = v.len();
-            number::decode_var_i64(&mut v)?;
-            l - v.len()
-        }
-        VAR_UINT_FLAG => {
-            let mut v = &buf[1..];
-            let l = v.len();
-            number::decode_var_u64(&mut v)?;
-            l - v.len()
-        }
+        VAR_INT_FLAG | VAR_UINT_FLAG => NumberCodec::get_first_encoded_var_int_len(&buf[1..]),
         JSON_FLAG => {
             let mut v = &buf[1..];
             let l = v.len();
-            v.decode_json()?;
+            v.read_json()?;
             l - v.len()
         }
         f => return Err(invalid_type!("unsupported data type `{}`", f)),
@@ -1869,7 +1870,16 @@ mod tests {
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (d, exp) in tests {
-            let got = d.into_i64(&mut ctx).unwrap();
+            let d2 = d.clone();
+            let got = d.into_i64(&mut ctx);
+            assert!(
+                got.is_ok(),
+                "datum: {}, got: {:?}, expect: {}",
+                d2,
+                got,
+                exp
+            );
+            let got = got.unwrap();
             assert_eq!(got, exp);
         }
     }
