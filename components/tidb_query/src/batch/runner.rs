@@ -1,12 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::{self, ExecType, ExecutorExecutionSummary};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
 
 use tikv_util::deadline::Deadline;
+use tikv_util::future::PendingOnce;
+use tikv_util::time::Instant;
 
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
@@ -358,13 +361,21 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         })
     }
 
-    pub fn handle_request(&mut self) -> Result<SelectResponse> {
+    pub async fn handle_request(&mut self) -> Result<SelectResponse> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
+        let mut last_pending = Instant::now();
+        // TODO: make it configurable
+        const YIELD_DUR: Duration = Duration::from_millis(1);
 
         loop {
             self.deadline.check()?;
+
+            if last_pending.elapsed() > YIELD_DUR {
+                PendingOnce::new().await;
+                last_pending = Instant::now();
+            }
 
             let mut result = self.out_most_executor.next_batch(batch_size);
 

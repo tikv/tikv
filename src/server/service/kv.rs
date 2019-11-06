@@ -2606,7 +2606,11 @@ fn future_cop<E: Engine>(
     req: Request,
     peer: Option<String>,
 ) -> impl Future<Item = Response, Error = Error> {
+    use futures03::prelude::*;
     cop.parse_and_handle_unary_request(req, peer)
+        .never_error()
+        .boxed()
+        .compat()
         .map_err(|_| unreachable!())
 }
 

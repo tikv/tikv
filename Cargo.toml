@@ -84,7 +84,7 @@ backtrace = "0.3.9"
 url = "2"
 sys-info = "0.5.7"
 futures = "0.1"
-futures03 = { package = "futures-preview", version = "0.3.0-alpha.6", features = ["async-await"]}
+futures03 = { package = "futures-preview", version = "0.3.0-alpha.6", features = ["async-await", "compat"]}
 futures-cpupool = "0.1"
 futures-locks = "0.1"
 tokio-core = "0.1"
@@ -112,6 +112,7 @@ vlog = "0.1.4"
 mime = "0.3.13"
 farmhash = "1.1.5"
 failure = "0.1"
+async-trait = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 

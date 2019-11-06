@@ -4,6 +4,10 @@ use crate::Either;
 use futures::{Async, Future, IntoFuture, Poll};
 use tokio_sync::oneshot;
 
+use std::future::Future as StdFuture;
+use std::pin::Pin;
+use std::task::{Context, Poll as StdPoll};
+
 /// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
 pub fn paired_future_callback<T>() -> (Box<dyn FnOnce(T) + Send>, oneshot::Receiver<T>)
@@ -92,6 +96,29 @@ where
                 }
             };
             self.f2 = Either::Right(res);
+        }
+    }
+}
+
+pub struct PendingOnce {
+    is_ready: bool,
+}
+
+impl PendingOnce {
+    pub fn new() -> PendingOnce {
+        PendingOnce { is_ready: false }
+    }
+}
+
+impl StdFuture for PendingOnce {
+    type Output = ();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> StdPoll<Self::Output> {
+        if self.is_ready {
+            StdPoll::Ready(())
+        } else {
+            self.is_ready = true;
+            cx.waker().wake_by_ref();
+            StdPoll::Pending
         }
     }
 }

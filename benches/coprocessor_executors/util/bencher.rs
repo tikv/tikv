@@ -2,6 +2,7 @@
 
 use criterion::black_box;
 use criterion::measurement::Measurement;
+use futures03::executor::block_on;
 
 use tidb_query::batch::interface::*;
 use tidb_query::executor::Executor;
@@ -190,7 +191,7 @@ impl<F: FnMut() -> Box<dyn RequestHandler>> Bencher for DAGHandleBencher<F> {
             &mut self.handler_builder,
             |handler| {
                 profiler::start("DAGHandleBencher");
-                black_box(handler.handle_request().unwrap());
+                black_box(block_on(handler.handle_request()).unwrap());
                 profiler::stop();
             },
             criterion::BatchSize::SmallInput,

@@ -221,13 +221,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let server_cfg = Arc::new(cfg.server.clone());
 
-    // Create coprocessor endpoint.
-    let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
-        &cfg.readpool.coprocessor,
-        pd_sender.clone(),
-        engine.clone(),
-    );
-    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
+    let cop = coprocessor::Endpoint::new(&server_cfg, read_pool);
 
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
     let import_service = ImportSSTService::new(

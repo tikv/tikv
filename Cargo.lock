@@ -84,6 +84,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b64ebe56ac5fbe89417328eeb4291984d138056dcf694f1414ab0f26d49a6290"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1060,6 +1071,7 @@ version = "0.3.0-alpha.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ce968633c17e5f97936bd2797b6e38fb56cf16a7422319f7ec2e30d3c470e8d"
 dependencies = [
+ "futures",
  "futures-channel-preview",
  "futures-core-preview",
  "futures-io-preview",
@@ -3149,6 +3161,7 @@ name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
  "futures",
+ "futures-preview",
  "kvproto",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "test_storage",
@@ -3311,6 +3324,7 @@ name = "tikv"
 version = "4.0.0-alpha"
 dependencies = [
  "arrow",
+ "async-trait",
  "backtrace",
  "bitflags",
  "byteorder",

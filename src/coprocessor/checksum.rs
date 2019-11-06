@@ -6,6 +6,7 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
 
+use async_trait::async_trait;
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query::storage::Range;
 
@@ -46,8 +47,9 @@ impl<S: Snapshot> ChecksumContext<S> {
     }
 }
 
+#[async_trait]
 impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
-    fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<Response> {
         let algorithm = self.req.get_algorithm();
         if algorithm != ChecksumAlgorithm::Crc64Xor {
             return Err(box_err!("unknown checksum algorithm {:?}", algorithm));

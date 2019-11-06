@@ -215,7 +215,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
         Ok(s_resp)
     }
 
-    pub fn handle_request(&mut self) -> Result<SelectResponse> {
+    pub async fn handle_request(&mut self) -> Result<SelectResponse> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
