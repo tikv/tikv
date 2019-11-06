@@ -129,9 +129,6 @@
 ## The path to RocksDB directory.
 # data-dir = "/tmp/tikv/store"
 
-## Internal notify capacity of Scheduler's channel.
-# scheduler-notify-capacity = 10240
-
 ## The number of slots in Scheduler latches, which controls write concurrency.
 ## In most cases you can use the default value. When importing data, you can set it to a larger
 ## value.

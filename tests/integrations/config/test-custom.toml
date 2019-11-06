@@ -57,7 +57,6 @@ a = "b"
 data-dir = "/var"
 gc-ratio-threshold = 1.2
 max-key-size = 8192
-scheduler-notify-capacity = 123
 scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
