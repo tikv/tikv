@@ -743,26 +743,19 @@ impl ConvertTo<f64> for &[u8] {
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let s = str::from_utf8(self)?.trim();
         let vs = get_valid_float_prefix(ctx, s)?;
-        match vs.parse::<f64>() {
-            Ok(val) => {
-                // In rust's parse, if the number is out of range,
-                // it will return Ok but the res is inf
-                if val.is_infinite() {
-                    ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", &vs))?;
-                    if val.is_sign_negative() {
-                        return Ok(std::f64::MIN);
-                    } else {
-                        return Ok(std::f64::MAX);
-                    }
-                }
-                Ok(val)
-            }
-            // if reaches here, it means our code has bug
-            Err(err) => {
-                debug_assert!(false);
-                Err(box_err!("parse float err: {}, this is a bug", err))
+        let val = vs
+            .parse::<f64>()
+            .map_err(|err| -> Error { box_err!("Parse '{}' to float err: {:?}", vs, err) })?;
+        // The `parse` will return Ok(inf) if the float string literal out of range
+        if val.is_infinite() {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", &vs))?;
+            if val.is_sign_negative() {
+                return Ok(std::f64::MIN);
+            } else {
+                return Ok(std::f64::MAX);
             }
         }
+        Ok(val)
     }
 }
 
@@ -792,7 +785,7 @@ pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&
     let mut e_idx = 0;
     for (i, c) in s.chars().enumerate() {
         if c == '+' || c == '-' {
-            if i != 0 && i != e_idx + 1 {
+            if i != 0 && (e_idx == 0 || i != e_idx + 1) {
                 // "1e+1" is valid.
                 break;
             }
@@ -1832,6 +1825,9 @@ mod tests {
             ("", "0"),
             ("123e+", "123"),
             ("123.e", "123."),
+            ("1-1-", "1"),
+            ("11-1-", "11"),
+            ("-1-1-", "-1"),
         ];
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
