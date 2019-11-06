@@ -53,7 +53,7 @@ const REQUEST_LOAD_ESTIMATE_SAMPLE_WINDOW: usize = 30;
 const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f32 = 0.3;
 const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 70;
 const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.0;
-const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_LATENCY: f64 = 25.0;
+const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_LATENCY: f64 = 20.0;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
@@ -117,7 +117,7 @@ impl RequestLoadEstimator {
 
     fn monitor_latency(&mut self, reader: HistogramReader, threshold: f64) {
         self.latency_reader.replace(reader);
-        self.latency_estimation = threshold;
+        self.latency_threshold = threshold;
         self.thread_load_estimation = REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR;
     }
 
