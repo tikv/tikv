@@ -6,18 +6,19 @@ use codec::prelude::*;
 use num_traits::PrimInt;
 use tikv_util::codec::read_slice;
 
-#[derive(Debug)]
-struct RowSlice<'a> {
-    is_big: bool,
-    non_null_ids: &'a [u8],
-    null_ids: &'a [u8],
-    offsets: &'a [u16],
-
-    non_null_ids_big: &'a [u32],
-    null_ids_big: &'a [u32],
-    offsets_big: &'a [u32],
-
-    values: &'a [u8],
+enum RowSlice<'a> {
+    Small {
+        non_null_ids: &'a [u8],
+        null_ids: &'a [u8],
+        offsets: &'a [u16],
+        values: &'a [u8],
+    },
+    Big {
+        non_null_ids: &'a [u32],
+        null_ids: &'a [u32],
+        offsets: &'a [u32],
+        values: &'a [u8],
+    },
 }
 
 impl RowSlice<'_> {
@@ -27,35 +28,26 @@ impl RowSlice<'_> {
     fn from_bytes(mut data: &[u8]) -> Result<RowSlice> {
         assert_eq!(data.read_u8()?, super::CODEC_VERSION);
         let is_big = super::Flags::from_bits_truncate(data.read_u8()?) == super::Flags::BIG;
-        let mut non_null_ids: &[u8] = &[];
-        let mut null_ids: &[u8] = &[];
-        let mut offsets: &[u16] = &[];
-        let mut non_null_ids_big: &[u32] = &[];
-        let mut null_ids_big: &[u32] = &[];
-        let mut offsets_big: &[u32] = &[];
 
         // read ids count
         let non_null_cnt = data.read_u16_le()? as usize;
         let null_cnt = data.read_u16_le()? as usize;
-        if is_big {
-            non_null_ids_big = read_ints_le(&mut data, non_null_cnt)?;
-            null_ids_big = read_ints_le(&mut data, null_cnt)?;
-            offsets_big = read_ints_le(&mut data, non_null_cnt)?;
+        let row = if is_big {
+            RowSlice::Big {
+                non_null_ids: read_ints_le(&mut data, non_null_cnt)?,
+                null_ids: read_ints_le(&mut data, null_cnt)?,
+                offsets: read_ints_le(&mut data, non_null_cnt)?,
+                values: data,
+            }
         } else {
-            non_null_ids = read_ints_le(&mut data, non_null_cnt)?;
-            null_ids = read_ints_le(&mut data, null_cnt)?;
-            offsets = read_ints_le(&mut data, non_null_cnt)?;
-        }
-        Ok(RowSlice {
-            is_big,
-            non_null_ids,
-            null_ids,
-            offsets,
-            non_null_ids_big,
-            null_ids_big,
-            offsets_big,
-            values: data,
-        })
+            RowSlice::Small {
+                non_null_ids: read_ints_le(&mut data, non_null_cnt)?,
+                null_ids: read_ints_le(&mut data, null_cnt)?,
+                offsets: read_ints_le(&mut data, non_null_cnt)?,
+                values: data,
+            }
+        };
+        Ok(row)
     }
 
     /// Search `id` in non-null ids
@@ -70,25 +62,36 @@ impl RowSlice<'_> {
         if !self.id_valid(id) {
             return Ok(None);
         }
-        if self.is_big {
-            if let Ok(idx) = self.non_null_ids_big.binary_search(&(id as u32)) {
-                let offset = self.offsets_big.get(idx).ok_or(Error::ColumnOffset(idx))?;
-                let start = if idx > 0 {
-                    self.offsets_big[idx - 1] as usize
-                } else {
-                    0usize
-                };
-                return Ok(Some((start, (*offset as usize))));
+        match self {
+            RowSlice::Big {
+                non_null_ids,
+                offsets,
+                ..
+            } => {
+                if let Ok(idx) = non_null_ids.binary_search(&(id as u32)) {
+                    let offset = offsets.get(idx).ok_or(Error::ColumnOffset(idx))?;
+                    let start = if idx > 0 {
+                        offsets[idx - 1] as usize
+                    } else {
+                        0usize
+                    };
+                    return Ok(Some((start, (*offset as usize))));
+                }
             }
-        } else {
-            if let Ok(idx) = self.non_null_ids.binary_search(&(id as u8)) {
-                let offset = self.offsets.get(idx).ok_or(Error::ColumnOffset(idx))?;
-                let start = if idx > 0 {
-                    self.offsets[idx - 1] as usize
-                } else {
-                    0usize
-                };
-                return Ok(Some((start, (*offset as usize))));
+            RowSlice::Small {
+                non_null_ids,
+                offsets,
+                ..
+            } => {
+                if let Ok(idx) = non_null_ids.binary_search(&(id as u8)) {
+                    let offset = offsets.get(idx).ok_or(Error::ColumnOffset(idx))?;
+                    let start = if idx > 0 {
+                        offsets[idx - 1] as usize
+                    } else {
+                        0usize
+                    };
+                    return Ok(Some((start, (*offset as usize))));
+                }
             }
         }
         Ok(None)
@@ -98,20 +101,26 @@ impl RowSlice<'_> {
     ///
     /// Returns true if found
     fn search_in_null_ids(&self, id: i64) -> bool {
-        if self.is_big {
-            self.null_ids_big.binary_search(&(id as u32)).is_ok()
-        } else {
-            self.null_ids.binary_search(&(id as u8)).is_ok()
+        match self {
+            RowSlice::Big { null_ids, .. } => null_ids.binary_search(&(id as u32)).is_ok(),
+            RowSlice::Small { null_ids, .. } => null_ids.binary_search(&(id as u8)).is_ok(),
         }
     }
 
     fn id_valid(&self, id: i64) -> bool {
-        let upper: i64 = if self.is_big {
+        let upper: i64 = if self.is_big() {
             i64::from(u32::max_value())
         } else {
             i64::from(u8::max_value())
         };
         id > 0 && id <= upper
+    }
+
+    fn is_big(&self) -> bool {
+        match self {
+            RowSlice::Big { .. } => true,
+            RowSlice::Small { .. } => false,
+        }
     }
 }
 
@@ -184,7 +193,7 @@ mod tests {
     fn test_search_in_non_null_ids() {
         let data = encoded_data_big();
         let big_row = RowSlice::from_bytes(&data).unwrap();
-        assert!(big_row.is_big);
+        assert!(big_row.is_big());
         assert_eq!(big_row.search_in_non_null_ids(33).unwrap(), None);
         assert_eq!(big_row.search_in_non_null_ids(333).unwrap(), None);
         assert_eq!(
@@ -198,7 +207,7 @@ mod tests {
 
         let data = encoded_data();
         let row = RowSlice::from_bytes(&data).unwrap();
-        assert!(!row.is_big);
+        assert!(!row.is_big());
         assert_eq!(row.search_in_non_null_ids(33).unwrap(), None);
         assert_eq!(row.search_in_non_null_ids(35).unwrap(), None);
         assert_eq!(
