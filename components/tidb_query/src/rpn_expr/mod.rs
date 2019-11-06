@@ -178,6 +178,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::DecimalIsFalse => decimal_is_false_fn_meta(),
         ScalarFuncSig::LogicalAnd => logical_and_fn_meta(),
         ScalarFuncSig::LogicalOr => logical_or_fn_meta(),
+        ScalarFuncSig::LogicalXor => logical_xor_fn_meta(),
         ScalarFuncSig::UnaryNotInt => unary_not_int_fn_meta(),
         ScalarFuncSig::UnaryNotReal => unary_not_real_fn_meta(),
         ScalarFuncSig::UnaryNotDecimal => unary_not_decimal_fn_meta(),
