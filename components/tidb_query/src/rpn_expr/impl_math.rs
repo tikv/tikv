@@ -319,8 +319,8 @@ mod tests {
         ];
         for (a1, a2, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(a1.and_then(|a| Some(Real::from(a))))
-                .push_param(a2.and_then(|a| Some(Real::from(a))))
+                .push_param(a1.map(|a| Real::from(a)))
+                .push_param(a2.map(|a| Real::from(a)))
                 .evaluate(ScalarFuncSig::Log2Args)
                 .unwrap();
             assert_eq!(output, expect, "arg1 {:?}, arg2 {:?}", a1, a2);
@@ -338,7 +338,7 @@ mod tests {
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(input.and_then(|a| Some(Real::from(a))))
+                .push_param(input.map(|a| Real::from(a)))
                 .evaluate(ScalarFuncSig::Log2)
                 .unwrap();
             assert_eq!(output, expect, "{:?}", input);
@@ -356,7 +356,7 @@ mod tests {
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(input.and_then(|a| Some(Real::from(a))))
+                .push_param(input.map(|a| Real::from(a)))
                 .evaluate(ScalarFuncSig::Log10)
                 .unwrap();
             assert_eq!(output, expect, "{:?}", input);
