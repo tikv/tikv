@@ -7,7 +7,7 @@ use tipb::ColumnInfo;
 use tipb::IndexScan;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
-use crate::codec::table;
+use crate::codec::table::{self, check_index_key};
 use crate::storage::Storage;
 use crate::Result;
 
@@ -40,6 +40,7 @@ impl InnerExecutor for IndexInnerExecutor {
         use tidb_query_datatype::prelude::*;
         use tidb_query_datatype::FieldTypeFlag;
 
+        check_index_key(key.as_slice())?;
         let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
         let handle = match handle {
             None => box_try!(value.as_slice().read_i64::<BigEndian>()),
@@ -117,7 +118,6 @@ pub mod tests {
     use std::i64;
 
     use tidb_query_datatype::FieldTypeTp;
-    use tikv_util::collections::HashMap;
     use tipb::ColumnInfo;
 
     use super::super::tests::*;
@@ -147,30 +147,6 @@ pub mod tests {
         key_range.set_start(start_key);
         key_range.set_end(end_key);
         key_range
-    }
-
-    pub fn generate_index_data(
-        table_id: i64,
-        index_id: i64,
-        handle: i64,
-        col_val: &Datum,
-        unique: bool,
-    ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
-        let indice = vec![(2, (*col_val).clone()), (3, Datum::Dec(handle.into()))];
-        let mut expect_row = HashMap::default();
-        let mut v: Vec<_> = indice
-            .iter()
-            .map(|&(ref cid, ref value)| {
-                expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
-                value.clone()
-            })
-            .collect();
-        if !unique {
-            v.push(Datum::I64(handle));
-        }
-        let encoded = datum::encode_key(&v).unwrap();
-        let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
-        (expect_row, idx_key)
     }
 
     pub fn prepare_index_data(
