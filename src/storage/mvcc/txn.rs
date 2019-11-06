@@ -68,6 +68,11 @@ impl<S: Snapshot> MvccTxn<S> {
         })
     }
 
+    // We may set scan mode Forward to skip seek key which not existed
+    pub fn set_scan_mode(&mut self, mode: ScanMode) {
+        self.reader.set_scan_mode(mode);
+    }
+
     pub fn collapse_rollback(&mut self, collapse: bool) {
         self.collapse_rollback = collapse;
     }

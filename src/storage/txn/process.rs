@@ -25,6 +25,7 @@ use tikv_util::time::{Instant, SlowTimer};
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
+pub const FORWARD_MIN_MUTATIONS_NUM: usize = 8;
 
 /// Process result of a command.
 pub enum ProcessResult {
@@ -519,19 +520,36 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd {
         Command::Prewrite {
             ctx,
-            mutations,
+            mut mutations,
             primary,
             start_ts,
             options,
             ..
         } => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
-            let mut locks = vec![];
             let rows = mutations.len();
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
 
+            let mut locks = vec![];
             // If `options.for_update_ts` is 0, the transaction is optimistic
             // or else pessimistic.
             if options.for_update_ts == 0 {
+                if rows > FORWARD_MIN_MUTATIONS_NUM {
+                    let insert_count =
+                        mutations.iter().fold(
+                            0,
+                            |sum, m| {
+                                if m.is_insert() {
+                                    sum + 1
+                                } else {
+                                    sum
+                                }
+                            },
+                        );
+                    if insert_count == rows {
+                        txn.set_scan_mode(ScanMode::Forward);
+                        mutations.sort_by(|a, b| a.key().cmp(b.key()));
+                    }
+                }
                 for m in mutations {
                     match txn.prewrite(m, &primary, &options) {
                         Ok(_) => {}

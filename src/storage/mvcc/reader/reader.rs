@@ -128,6 +128,10 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
+    pub fn set_scan_mode(&mut self, mode: ScanMode) {
+        self.scan_mode = Some(mode);
+    }
+
     pub fn seek_write(&mut self, key: &Key, ts: u64) -> Result<Option<(u64, Write)>> {
         if self.scan_mode.is_some() {
             if self.write_cursor.is_none() {
