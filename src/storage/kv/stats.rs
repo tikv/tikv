@@ -1,9 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use kvproto::kvrpcpb::{ScanDetail, ScanInfo};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::FutureScheduler;
-use kvproto::kvrpcpb::{ScanDetail, ScanInfo};
 
 use crate::raftstore::store::PdTask;
 

@@ -7,8 +7,7 @@ use tikv_util::collections::HashMap;
 
 use crate::storage::metrics::{CommandKind, CommandPriority};
 use crate::storage::mvcc::Lock;
-use crate::storage::types::Key;
-use crate::storage::types::{Mutation, Options};
+use crate::storage::types::{Key, Mutation};
 
 pub struct PointGetCommand {
     pub(super) ctx: Context,
@@ -582,5 +581,38 @@ impl Command {
             _ => {}
         }
         bytes
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Options {
+    pub lock_ttl: u64,
+    pub skip_constraint_check: bool,
+    pub key_only: bool,
+    pub reverse_scan: bool,
+    pub is_first_lock: bool,
+    pub for_update_ts: u64,
+    pub is_pessimistic_lock: Vec<bool>,
+    // How many keys this transaction involved.
+    pub txn_size: u64,
+    pub min_commit_ts: u64,
+    // Time to wait for lock released in milliseconds when encountering locks.
+    // 0 means using default timeout. Negative means no wait.
+    pub wait_timeout: i64,
+}
+
+impl Options {
+    pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> Options {
+        Options {
+            lock_ttl,
+            skip_constraint_check,
+            key_only,
+            ..Default::default()
+        }
+    }
+
+    pub fn reverse_scan(mut self) -> Options {
+        self.reverse_scan = true;
+        self
     }
 }

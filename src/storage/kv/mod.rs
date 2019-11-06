@@ -25,7 +25,9 @@ pub use self::compact_listener::{CompactedEvent, CompactionListener};
 pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
-pub use self::stats::{CFStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary};
+pub use self::stats::{
+    CFStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
+};
 
 pub const SEEK_BOUND: u64 = 8;
 const DEFAULT_TIMEOUT_SECS: u64 = 5;

@@ -35,7 +35,7 @@ use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::scheduler::Scheduler as TxnScheduler;
 
-pub use self::commands::{is_normal_priority, PointGetCommand};
+pub use self::commands::{is_normal_priority, Options, PointGetCommand};
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind};
 pub use self::kv::{
@@ -48,7 +48,7 @@ pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
-pub use self::types::{Key, KvPair, Mutation, MvccInfo, Options, StorageCb, TxnStatus, Value};
+pub use self::types::{Key, KvPair, Mutation, MvccInfo, StorageCb, TxnStatus, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;

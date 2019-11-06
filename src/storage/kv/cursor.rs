@@ -9,7 +9,7 @@ use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
-use crate::storage::kv::{SEEK_BOUND, CFStatistics, Result, Key, ScanMode, Snapshot, Iterator};
+use crate::storage::kv::{CFStatistics, Iterator, Key, Result, ScanMode, Snapshot, SEEK_BOUND};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
