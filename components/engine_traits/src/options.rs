@@ -69,7 +69,7 @@ impl IterOptions {
         }
     }
 
-    pub fn use_prefix_seek(mut self) -> IterOptions {
+    pub fn set_prefix_seek(mut self) -> IterOptions {
         self.seek_mode = SeekMode::Prefix;
         self
     }

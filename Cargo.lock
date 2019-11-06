@@ -703,6 +703,7 @@ version = "0.0.1"
 dependencies = [
  "crc",
  "hex",
+ "keys",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -1314,11 +1315,13 @@ name = "keys"
 version = "0.1.0"
 dependencies = [
  "byteorder",
+ "codec",
  "derive_more",
  "failure",
  "hex",
  "kvproto",
  "panic_hook",
+ "static_assertions 1.0.0",
  "tikv_alloc",
  "tikv_util",
 ]

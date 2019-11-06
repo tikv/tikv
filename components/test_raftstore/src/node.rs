@@ -220,7 +220,7 @@ impl Simulator for NodeCluster {
         )?;
         assert!(engines
             .kv
-            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+            .get_msg::<metapb::Region, _>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none());
         assert!(node_id == 0 || node_id == node.id());

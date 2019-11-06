@@ -11,6 +11,7 @@ use crate::storage::{Key, Value};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys::{LogicalKeySlice, PhysicalKey, PhysicalKeySlice, ToPhysicalKeySlice};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::worker::FutureScheduler;
@@ -105,15 +106,25 @@ pub trait Engine: Send + Clone + 'static {
 }
 
 pub trait Snapshot: Send + Clone {
-    type Iter: Iterator;
+    type Key: PhysicalKey;
+    type Iter: Iterator<Key = Self::Key>;
 
-    fn get(&self, key: &Key) -> Result<Option<Value>>;
-    fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>>;
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
+    fn get(
+        &self,
+        // FIXME: Completely remove the `impl ToPhysicalKeySlice` helper wrapper.
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+    ) -> Result<Option<Value>>;
+    fn get_cf(
+        &self,
+        cf: CfName,
+        // FIXME: Completely remove the `impl ToPhysicalKeySlice` helper wrapper.
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+    ) -> Result<Option<Value>>;
+    fn iter(&self, iter_opt: IterOption<Self::Key>, mode: ScanMode) -> Result<Cursor<Self::Iter>>;
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOption<Self::Key>,
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>>;
     fn get_properties(&self) -> Result<TablePropertiesCollection> {
@@ -124,31 +135,46 @@ pub trait Snapshot: Send + Clone {
     }
     // The minimum key this snapshot can retrieve.
     #[inline]
-    fn lower_bound(&self) -> Option<&[u8]> {
+    fn lower_bound(&self) -> Option<&LogicalKeySlice> {
         None
     }
     // The maximum key can be fetched from the snapshot should less than the upper bound.
     #[inline]
-    fn upper_bound(&self) -> Option<&[u8]> {
+    fn upper_bound(&self) -> Option<&LogicalKeySlice> {
         None
     }
 }
 
 pub trait Iterator: Send {
+    type Key: PhysicalKey;
+
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
-    fn seek(&mut self, key: &Key) -> Result<bool>;
-    fn seek_for_prev(&mut self, key: &Key) -> Result<bool>;
+    fn seek(
+        &mut self,
+        // FIXME: Completely remove the `impl ToPhysicalKeySlice` helper wrapper.
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+    ) -> Result<bool>;
+    fn seek_for_prev(
+        &mut self,
+        // FIXME: Completely remove the `impl ToPhysicalKeySlice` helper wrapper.
+        key: impl ToPhysicalKeySlice<<Self::Key as PhysicalKey>::Slice>,
+    ) -> Result<bool>;
     fn seek_to_first(&mut self) -> bool;
     fn seek_to_last(&mut self) -> bool;
     fn valid(&self) -> bool;
     fn status(&self) -> Result<()>;
 
-    fn validate_key(&self, _: &Key) -> Result<()> {
+    fn validate_key(
+        &self,
+        _: &LogicalKeySlice, // For performance consideration, use `LogicalKeySlice` directly. otherwise the legacy `Key` will be converted twice.
+    ) -> Result<()> {
         Ok(())
     }
 
-    fn key(&self) -> &[u8];
+    // TODO: Remove this interface. Always provide physical key.
+    fn key(&self) -> &LogicalKeySlice;
+    fn physical_key(&self) -> &<Self::Key as PhysicalKey>::Slice;
     fn value(&self) -> &[u8];
 }
 
@@ -327,9 +353,10 @@ impl StatisticsSummary {
 pub struct Cursor<I: Iterator> {
     iter: I,
     scan_mode: ScanMode,
+
     // the data cursor can be seen will be
-    min_key: Option<Vec<u8>>,
-    max_key: Option<Vec<u8>>,
+    min_physical_key: Option<I::Key>,
+    max_physical_key: Option<I::Key>,
 
     // Use `Cell` to wrap these flags to provide interior mutability, so that `key()` and
     // `value()` don't need to have `&mut self`.
@@ -337,13 +364,15 @@ pub struct Cursor<I: Iterator> {
     cur_value_has_read: Cell<bool>,
 }
 
+// Ignore these false negatives.
+#[allow(clippy::op_ref)]
 impl<I: Iterator> Cursor<I> {
     pub fn new(iter: I, mode: ScanMode) -> Self {
         Self {
             iter,
             scan_mode: mode,
-            min_key: None,
-            max_key: None,
+            min_physical_key: None,
+            max_physical_key: None,
 
             cur_key_has_read: Cell::new(false),
             cur_value_has_read: Cell::new(false),
@@ -369,30 +398,60 @@ impl<I: Iterator> Cursor<I> {
         self.cur_value_has_read.replace(true)
     }
 
-    pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    /// Updates the max visible physical key.
+    fn set_max_physical_key(&mut self, key: &<I::Key as PhysicalKey>::Slice) {
+        match &mut self.max_physical_key {
+            None => {
+                self.max_physical_key = Some(key.alloc_to_physical_key());
+            }
+            Some(k) => {
+                k.reset_from_physical_slice(key);
+            }
+        }
+    }
+
+    /// Updates the min visible physical key.
+    fn set_min_physical_key(&mut self, key: &<I::Key as PhysicalKey>::Slice) {
+        match &mut self.min_physical_key {
+            None => {
+                self.min_physical_key = Some(key.alloc_to_physical_key());
+            }
+            Some(k) => {
+                k.reset_from_physical_slice(key);
+            }
+        }
+    }
+
+    pub fn seek(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<I::Key as PhysicalKey>::Slice>,
+        statistics: &mut CFStatistics,
+    ) -> Result<bool> {
         fail_point!("kv_cursor_seek", |_| {
             return Err(box_err!("kv cursor seek error"));
         });
 
+        let key = key.to_physical_slice_container();
+
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if self
-            .max_key
+            .max_physical_key
             .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
+            .map_or(false, |k| k.as_physical_slice() <= &*key)
         {
-            self.iter.validate_key(key)?;
+            self.iter.validate_key(key.as_logical_slice())?;
             return Ok(false);
         }
 
         if self.scan_mode == ScanMode::Forward
             && self.valid()?
-            && self.key(statistics) >= key.as_encoded().as_slice()
+            && self.physical_key(statistics) >= &*key
         {
             return Ok(true);
         }
 
-        if !self.internal_seek(key, statistics)? {
-            self.max_key = Some(key.as_encoded().to_owned());
+        if !self.internal_seek(&*key, statistics)? {
+            self.set_max_physical_key(&*key);
             return Ok(false);
         }
         Ok(true)
@@ -402,33 +461,40 @@ impl<I: Iterator> Cursor<I> {
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `seek` instead.
-    pub fn near_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn near_seek(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<I::Key as PhysicalKey>::Slice>,
+        statistics: &mut CFStatistics,
+    ) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
+
+        let key = key.to_physical_slice_container();
+
         if !self.valid()? {
-            return self.seek(key, statistics);
+            return self.seek(&*key, statistics);
         }
-        let ord = self.key(statistics).cmp(key.as_encoded());
+        let ord = self.physical_key(statistics).cmp(&*key);
         if ord == Ordering::Equal
             || (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
         {
             return Ok(true);
         }
         if self
-            .max_key
+            .max_physical_key
             .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
+            .map_or(false, |k| k.as_physical_slice() <= &*key)
         {
-            self.iter.validate_key(key)?;
+            self.iter.validate_key(key.as_logical_slice())?;
             return Ok(false);
         }
         if ord == Ordering::Greater {
             near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
-                self.seek(key, statistics),
+                self.prev(statistics) && self.physical_key(statistics) > &*key,
+                self.seek(&*key, statistics),
                 statistics
             );
             if self.valid()? {
-                if self.key(statistics) < key.as_encoded().as_slice() {
+                if self.physical_key(statistics) < &*key {
                     self.next(statistics);
                 }
             } else {
@@ -438,13 +504,13 @@ impl<I: Iterator> Cursor<I> {
         } else {
             // ord == Less
             near_loop!(
-                self.next(statistics) && self.key(statistics) < key.as_encoded().as_slice(),
-                self.seek(key, statistics),
+                self.next(statistics) && self.physical_key(statistics) < &*key,
+                self.seek(&*key, statistics),
                 statistics
             );
         }
         if !self.valid()? {
-            self.max_key = Some(key.as_encoded().to_owned());
+            self.set_max_physical_key(&*key);
             return Ok(false);
         }
         Ok(true)
@@ -454,74 +520,93 @@ impl<I: Iterator> Cursor<I> {
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should `seek` first.
-    pub fn get(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<Option<&[u8]>> {
+    pub fn get(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<I::Key as PhysicalKey>::Slice>,
+        statistics: &mut CFStatistics,
+    ) -> Result<Option<&[u8]>> {
+        let key = key.to_physical_slice_container();
+
         if self.scan_mode != ScanMode::Backward {
-            if self.near_seek(key, statistics)? && self.key(statistics) == &**key.as_encoded() {
+            if self.near_seek(&*key, statistics)? && self.physical_key(statistics) == &*key {
                 return Ok(Some(self.value(statistics)));
             }
             return Ok(None);
         }
-        if self.near_seek_for_prev(key, statistics)? && self.key(statistics) == &**key.as_encoded()
-        {
+        if self.near_seek_for_prev(&*key, statistics)? && self.physical_key(statistics) == &*key {
             return Ok(Some(self.value(statistics)));
         }
         Ok(None)
     }
 
-    pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn seek_for_prev(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<I::Key as PhysicalKey>::Slice>,
+        statistics: &mut CFStatistics,
+    ) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
+
+        let key = key.to_physical_slice_container();
+
         if self
-            .min_key
+            .min_physical_key
             .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
+            .map_or(false, |k| k.as_physical_slice() >= &*key)
         {
-            self.iter.validate_key(key)?;
+            self.iter.validate_key(key.as_logical_slice())?;
             return Ok(false);
         }
 
         if self.scan_mode == ScanMode::Backward
             && self.valid()?
-            && self.key(statistics) <= key.as_encoded().as_slice()
+            && self.physical_key(statistics) <= &*key
         {
             return Ok(true);
         }
 
-        if !self.internal_seek_for_prev(key, statistics)? {
-            self.min_key = Some(key.as_encoded().to_owned());
+        if !self.internal_seek_for_prev(&*key, statistics)? {
+            self.set_min_physical_key(&*key);
             return Ok(false);
         }
         Ok(true)
     }
 
     /// Find the largest key that is not greater than the specific key.
-    pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn near_seek_for_prev(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<I::Key as PhysicalKey>::Slice>,
+        statistics: &mut CFStatistics,
+    ) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
+
+        let key = key.to_physical_slice_container();
+
         if !self.valid()? {
-            return self.seek_for_prev(key, statistics);
+            return self.seek_for_prev(&*key, statistics);
         }
-        let ord = self.key(statistics).cmp(key.as_encoded());
+        let ord = self.physical_key(statistics).cmp(&*key);
         if ord == Ordering::Equal || (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
         {
             return Ok(true);
         }
 
         if self
-            .min_key
+            .min_physical_key
             .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
+            .map_or(false, |k| k.as_physical_slice() >= &*key)
         {
-            self.iter.validate_key(key)?;
+            self.iter.validate_key(key.as_logical_slice())?;
             return Ok(false);
         }
 
         if ord == Ordering::Less {
             near_loop!(
-                self.next(statistics) && self.key(statistics) < key.as_encoded().as_slice(),
-                self.seek_for_prev(key, statistics),
+                self.next(statistics) && self.physical_key(statistics) < &*key,
+                self.seek_for_prev(&*key, statistics),
                 statistics
             );
             if self.valid()? {
-                if self.key(statistics) > key.as_encoded().as_slice() {
+                if self.physical_key(statistics) > &*key {
                     self.prev(statistics);
                 }
             } else {
@@ -530,25 +615,31 @@ impl<I: Iterator> Cursor<I> {
             }
         } else {
             near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
-                self.seek_for_prev(key, statistics),
+                self.prev(statistics) && self.physical_key(statistics) > &*key,
+                self.seek_for_prev(&*key, statistics),
                 statistics
             );
         }
 
         if !self.valid()? {
-            self.min_key = Some(key.as_encoded().to_owned());
+            self.set_min_physical_key(&*key);
             return Ok(false);
         }
         Ok(true)
     }
 
-    pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        if !self.seek_for_prev(key, statistics)? {
+    pub fn reverse_seek(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<I::Key as PhysicalKey>::Slice>,
+        statistics: &mut CFStatistics,
+    ) -> Result<bool> {
+        let key = key.to_physical_slice_container();
+
+        if !self.seek_for_prev(&*key, statistics)? {
             return Ok(false);
         }
 
-        if self.key(statistics) == &**key.as_encoded() {
+        if self.physical_key(statistics) == &*key {
             // should not update min_key here. otherwise reverse_seek_le may not
             // work as expected.
             return Ok(self.prev(statistics));
@@ -561,12 +652,18 @@ impl<I: Iterator> Cursor<I> {
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
-    pub fn near_reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        if !self.near_seek_for_prev(key, statistics)? {
+    pub fn near_reverse_seek(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<I::Key as PhysicalKey>::Slice>,
+        statistics: &mut CFStatistics,
+    ) -> Result<bool> {
+        let key = key.to_physical_slice_container();
+
+        if !self.near_seek_for_prev(&*key, statistics)? {
             return Ok(false);
         }
 
-        if self.key(statistics) == &**key.as_encoded() {
+        if self.physical_key(statistics) == &*key {
             return Ok(self.prev(statistics));
         }
 
@@ -574,13 +671,24 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn key(&self, statistics: &mut CFStatistics) -> &[u8] {
-        let key = self.iter.key();
+    pub fn physical_key(&self, statistics: &mut CFStatistics) -> &<I::Key as PhysicalKey>::Slice {
+        let key = self.iter.physical_key();
         if !self.mark_key_read() {
             statistics.flow_stats.read_bytes += key.len();
             statistics.flow_stats.read_keys += 1;
         }
         key
+    }
+
+    #[inline]
+    pub fn logical_key(&self, statistics: &mut CFStatistics) -> &LogicalKeySlice {
+        self.physical_key(statistics).as_logical_slice()
+    }
+
+    // TODO: Remove this compatible interface.
+    #[inline]
+    pub fn key(&self, statistics: &mut CFStatistics) -> &[u8] {
+        self.logical_key(statistics).as_std_slice()
     }
 
     #[inline]
@@ -607,21 +715,27 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn internal_seek(
+        &mut self,
+        key: impl ToPhysicalKeySlice<<I::Key as PhysicalKey>::Slice>,
+        statistics: &mut CFStatistics,
+    ) -> Result<bool> {
+        let key = key.to_physical_slice_container();
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek(key)
+        self.iter.seek(&*key)
     }
 
     #[inline]
     pub fn internal_seek_for_prev(
         &mut self,
-        key: &Key,
+        key: impl ToPhysicalKeySlice<<I::Key as PhysicalKey>::Slice>,
         statistics: &mut CFStatistics,
     ) -> Result<bool> {
+        let key = key.to_physical_slice_container();
         statistics.seek_for_prev += 1;
         self.mark_unread();
-        self.iter.seek_for_prev(key)
+        self.iter.seek_for_prev(&*key)
     }
 
     #[inline]
@@ -638,31 +752,33 @@ impl<I: Iterator> Cursor<I> {
         self.iter.prev()
     }
 
-    #[inline]
+    fn handle_error_status(&self, e: &Error) {
+        CRITICAL_ERROR.with_label_values(&["rocksdb iter"]).inc();
+        if panic_when_unexpected_key_or_data() {
+            set_panic_mark();
+            panic!(
+                "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
+                e, self.min_physical_key, self.max_physical_key,
+            );
+        } else {
+            error!(
+                "failed to iterate";
+                "min_key" => ?self.min_physical_key,
+                "max_key" => ?self.max_physical_key,
+                "error" => ?e,
+            );
+        }
+    }
+
     // As Rocksdb described, if Iterator::Valid() is false, there are two possibilities:
     // (1) We reached the end of the data. In this case, status() is OK();
     // (2) there is an error. In this case status() is not OK().
     // So check status when iterator is invalidated.
+    #[inline]
     pub fn valid(&self) -> Result<bool> {
         if !self.iter.valid() {
             if let Err(e) = self.iter.status() {
-                CRITICAL_ERROR.with_label_values(&["rocksdb iter"]).inc();
-                if panic_when_unexpected_key_or_data() {
-                    set_panic_mark();
-                    panic!(
-                        "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
-                        e,
-                        self.min_key.as_ref().map(|k| hex::encode_upper(k)),
-                        self.max_key.as_ref().map(|k| hex::encode_upper(k))
-                    );
-                } else {
-                    error!(
-                        "failed to iterate";
-                        "min_key" => ?self.min_key.as_ref().map(|k| hex::encode_upper(k)),
-                        "max_key" => ?self.max_key.as_ref().map(|k| hex::encode_upper(k)),
-                        "error" => ?e,
-                    );
-                }
+                self.handle_error_status(&e);
                 return Err(e);
             }
             Ok(false)

@@ -10,6 +10,7 @@ use engine::CfName;
 use engine::IterOption;
 use engine::Peekable;
 use engine::CF_DEFAULT;
+use keys::{LogicalKeySlice, RaftPhysicalKey, RaftPhysicalKeySlice, ToPhysicalKeySlice};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
@@ -25,7 +26,7 @@ use crate::server::transport::RaftStoreRouter;
 use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
-use crate::storage::{self, kv, Key, Value};
+use crate::storage::{self, kv, Value};
 
 quick_error! {
     #[derive(Debug)]
@@ -361,25 +362,36 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 }
 
 impl Snapshot for RegionSnapshot {
+    type Key = RaftPhysicalKey;
     type Iter = RegionIterator;
 
-    fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
+    fn get(&self, key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
             "injected error for get"
         )));
-        let v = box_try!(self.get_value(key.as_encoded()));
+        // TODO: Accept PhysicalKeySlice instead of Key
+        let v = box_try!(self.get_value(key));
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn get_cf(&self, cf: CfName, key: &Key) -> kv::Result<Option<Value>> {
+    fn get_cf(
+        &self,
+        cf: CfName,
+        key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+    ) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
             "injected error for get_cf"
         )));
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        // TODO: Accept PhysicalKeySlice instead of Key
+        let v = box_try!(self.get_value_cf(cf, key));
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
+    fn iter(
+        &self,
+        iter_opt: IterOption<RaftPhysicalKey>,
+        mode: ScanMode,
+    ) -> kv::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
@@ -389,7 +401,7 @@ impl Snapshot for RegionSnapshot {
     fn iter_cf(
         &self,
         cf: CfName,
-        iter_opt: IterOption,
+        iter_opt: IterOption<RaftPhysicalKey>,
         mode: ScanMode,
     ) -> kv::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
@@ -406,17 +418,19 @@ impl Snapshot for RegionSnapshot {
     }
 
     #[inline]
-    fn lower_bound(&self) -> Option<&[u8]> {
-        Some(self.get_start_key())
+    fn lower_bound(&self) -> Option<&LogicalKeySlice> {
+        Some(LogicalKeySlice::from_std_slice(self.get_start_key()))
     }
 
     #[inline]
-    fn upper_bound(&self) -> Option<&[u8]> {
-        Some(self.get_end_key())
+    fn upper_bound(&self) -> Option<&LogicalKeySlice> {
+        Some(LogicalKeySlice::from_std_slice(self.get_end_key()))
     }
 }
 
 impl EngineIterator for RegionIterator {
+    type Key = RaftPhysicalKey;
+
     fn next(&mut self) -> bool {
         RegionIterator::next(self)
     }
@@ -425,18 +439,21 @@ impl EngineIterator for RegionIterator {
         RegionIterator::prev(self)
     }
 
-    fn seek(&mut self, key: &Key) -> kv::Result<bool> {
+    fn seek(&mut self, key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>) -> kv::Result<bool> {
         fail_point!("raftkv_iter_seek", |_| Err(box_err!(
             "injected error for iter_seek"
         )));
-        RegionIterator::seek(self, key.as_encoded()).map_err(From::from)
+        RegionIterator::seek(self, key).map_err(From::from)
     }
 
-    fn seek_for_prev(&mut self, key: &Key) -> kv::Result<bool> {
+    fn seek_for_prev(
+        &mut self,
+        key: impl ToPhysicalKeySlice<RaftPhysicalKeySlice>,
+    ) -> kv::Result<bool> {
         fail_point!("raftkv_iter_seek_for_prev", |_| Err(box_err!(
             "injected error for iter_seek_for_prev"
         )));
-        RegionIterator::seek_for_prev(self, key.as_encoded()).map_err(From::from)
+        RegionIterator::seek_for_prev(self, key).map_err(From::from)
     }
 
     fn seek_to_first(&mut self) -> bool {
@@ -455,12 +472,16 @@ impl EngineIterator for RegionIterator {
         RegionIterator::status(self).map_err(From::from)
     }
 
-    fn validate_key(&self, key: &Key) -> kv::Result<()> {
-        self.should_seekable(key.as_encoded()).map_err(From::from)
+    fn validate_key(&self, key: &LogicalKeySlice) -> kv::Result<()> {
+        self.should_seekable(key).map_err(From::from)
     }
 
-    fn key(&self) -> &[u8] {
+    fn key(&self) -> &LogicalKeySlice {
         RegionIterator::key(self)
+    }
+
+    fn physical_key(&self) -> &RaftPhysicalKeySlice {
+        RegionIterator::physical_key(self)
     }
 
     fn value(&self) -> &[u8] {

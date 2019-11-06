@@ -416,7 +416,7 @@ fn init_last_term(
         assert!(last_idx > RAFT_INIT_LOG_INDEX);
     }
     let last_log_key = keys::raft_log_key(region.get_id(), last_idx);
-    let entry = engines.raft.get_msg::<Entry>(&last_log_key)?;
+    let entry = engines.raft.get_msg::<Entry, _>(&last_log_key)?;
     match entry {
         None => Err(box_err!(
             "[region {}] entry at {} doesn't exist, may lose data.",
@@ -1365,7 +1365,7 @@ pub fn do_snapshot(
     let term = if idx == apply_state.get_truncated_state().get_index() {
         apply_state.get_truncated_state().get_term()
     } else {
-        match raft_snap.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))? {
+        match raft_snap.get_msg::<Entry, _>(&keys::raft_log_key(region_id, idx))? {
             None => {
                 return Err(storage_error(format!(
                     "entry {} of {} not found.",
@@ -1531,7 +1531,7 @@ pub fn maybe_upgrade_from_2_to_3(
     //  1. store_ident_key: 0x01 0x01
     //  2. prepare_bootstrap_key: 0x01 0x02
     if let Some(m) =
-        kv_engine.get_msg::<kvproto::raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY)?
+        kv_engine.get_msg::<kvproto::raft_serverpb::StoreIdent, _>(keys::STORE_IDENT_KEY)?
     {
         info!("upgrading STORE_IDENT_KEY";
             "store_id" => m.get_store_id(),
@@ -1540,7 +1540,7 @@ pub fn maybe_upgrade_from_2_to_3(
         box_try!(upgrade_raft_wb.put_msg(keys::STORE_IDENT_KEY, &m));
         box_try!(cleanup_kv_wb.delete(keys::STORE_IDENT_KEY));
     }
-    if let Some(m) = kv_engine.get_msg::<kvproto::metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)? {
+    if let Some(m) = kv_engine.get_msg::<kvproto::metapb::Region, _>(keys::PREPARE_BOOTSTRAP_KEY)? {
         info!("upgrading PREPARE_BOOTSTRAP_KEY"; "region" => ?m);
         box_try!(upgrade_raft_wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, &m));
         box_try!(cleanup_kv_wb.delete(keys::PREPARE_BOOTSTRAP_KEY));

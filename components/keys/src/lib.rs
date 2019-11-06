@@ -2,6 +2,11 @@
 
 //! TiKV key building
 
+#![allow(incomplete_features)]
+#![feature(const_generics)]
+
+#[macro_use]
+extern crate static_assertions;
 #[macro_use]
 extern crate derive_more;
 #[macro_use]
@@ -14,8 +19,12 @@ use std::mem;
 
 pub mod rewrite;
 mod types;
+mod v2;
+mod v2_raft;
 
 pub use types::{Key, KvPair, Value};
+pub use v2::*;
+pub use v2_raft::*;
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];

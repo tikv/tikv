@@ -1,3 +1,4 @@
+use crate::LogicalKeySlice;
 use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -186,6 +187,11 @@ impl Key {
     /// Returns whether the encoded key is encoded from `raw_key`.
     pub fn is_encoded_from(&self, raw_key: &[u8]) -> bool {
         bytes::is_encoded_from(&self.0, raw_key, false)
+    }
+
+    // FIXME: This is for compatibility. To be removed.
+    pub fn as_logical_key_slice(&self) -> &LogicalKeySlice {
+        LogicalKeySlice::from_legacy_key(self)
     }
 }
 

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::{CFHandle, DBVector, ReadOptions, UnsafeSnap, DB};
 use crate::{DBIterator, Error, IterOption, Iterable, Peekable, Result};
+use keys::{BasicPhysicalKey, BasicPhysicalKeySlice, PhysicalKeySlice, ToPhysicalKeySlice};
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -44,7 +45,7 @@ impl Snapshot {
         Arc::clone(&self.db)
     }
 
-    pub fn db_iterator(&self, iter_opt: IterOption) -> DBIterator<Arc<DB>> {
+    pub fn db_iterator(&self, iter_opt: IterOption<BasicPhysicalKey>) -> DBIterator<Arc<DB>> {
         let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -52,7 +53,11 @@ impl Snapshot {
         DBIterator::new(Arc::clone(&self.db), opt)
     }
 
-    pub fn db_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<Arc<DB>>> {
+    pub fn db_iterator_cf(
+        &self,
+        cf: &str,
+        iter_opt: IterOption<BasicPhysicalKey>,
+    ) -> Result<DBIterator<Arc<DB>>> {
         let handle = super::util::get_cf_handle(&self.db, cf)?;
         let mut opt = iter_opt.build_read_opts();
         unsafe {
@@ -98,7 +103,9 @@ impl SyncSnapshot {
 }
 
 impl Iterable for Snapshot {
-    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB> {
+    type Key = BasicPhysicalKey;
+
+    fn new_iterator(&self, iter_opt: IterOption<BasicPhysicalKey>) -> DBIterator<&DB> {
         let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -106,7 +113,11 @@ impl Iterable for Snapshot {
         DBIterator::new(&self.db, opt)
     }
 
-    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>> {
+    fn new_iterator_cf(
+        &self,
+        cf: &str,
+        iter_opt: IterOption<BasicPhysicalKey>,
+    ) -> Result<DBIterator<&DB>> {
         let handle = super::util::get_cf_handle(&self.db, cf)?;
         let mut opt = iter_opt.build_read_opts();
         unsafe {
@@ -117,22 +128,37 @@ impl Iterable for Snapshot {
 }
 
 impl Peekable for Snapshot {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
+    type Key = BasicPhysicalKey;
+
+    fn get_value(
+        &self,
+        key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>,
+    ) -> Result<Option<DBVector>> {
         let mut opt = ReadOptions::new();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        let v = self.db.get_opt(key, &opt)?;
+
+        let pk_slice = key.to_physical_slice_container();
+        let v = self.db.get_opt(pk_slice.as_physical_std_slice(), &opt)?;
         Ok(v)
     }
 
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
+    fn get_value_cf(
+        &self,
+        cf: &str,
+        key: impl ToPhysicalKeySlice<BasicPhysicalKeySlice>,
+    ) -> Result<Option<DBVector>> {
         let handle = super::util::get_cf_handle(&self.db, cf)?;
         let mut opt = ReadOptions::new();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        let v = self.db.get_cf_opt(handle, key, &opt)?;
+
+        let pk_slice = key.to_physical_slice_container();
+        let v = self
+            .db
+            .get_cf_opt(handle, pk_slice.as_physical_std_slice(), &opt)?;
         Ok(v)
     }
 }

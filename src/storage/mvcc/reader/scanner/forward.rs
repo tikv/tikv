@@ -3,6 +3,7 @@
 use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
+use keys::{PhysicalKey, PhysicalKeySlice};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::kv::SEEK_BOUND;
@@ -26,6 +27,7 @@ pub struct ForwardScanner<S: Snapshot> {
     default_cursor: Option<Cursor<S::Iter>>,
     /// Is iteration started
     is_started: bool,
+    key_buffer: S::Key,
     statistics: Statistics,
 }
 
@@ -42,6 +44,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             statistics: Statistics::default(),
             default_cursor: None,
             is_started: false,
+            key_buffer: S::Key::alloc_new(),
         }
     }
 
@@ -75,32 +78,31 @@ impl<S: Snapshot> ForwardScanner<S> {
         // TODO: We don't need to seek lock CF if isolation level is RC.
 
         loop {
-            // `current_user_key` is `min(user_key(write_cursor), lock_cursor)`, indicating
+            // `current_key_without_ts` is `min(user_key(write_cursor), lock_cursor)`, indicating
             // the encoded user key we are currently dealing with. It may not have a write, or
             // may not have a lock. It is not a slice to avoid data being invalidated after
             // cursor moving.
             //
-            // `has_write` indicates whether `current_user_key` has at least one corresponding
+            // `has_write` indicates whether `current_key_without_ts` has at least one corresponding
             // `write`. If there is one, it is what current write cursor pointing to. The pointed
             // `write` must be the most recent (i.e. largest `commit_ts`) write of
-            // `current_user_key`.
+            // `current_key_without_ts`.
             //
-            // `has_lock` indicates whether `current_user_key` has a corresponding `lock`. If
+            // `has_lock` indicates whether `current_key_without_ts` has a corresponding `lock`. If
             // there is one, it is what current lock cursor pointing to.
-            let (current_user_key, has_write, has_lock) = {
+            let (current_key_without_ts, has_write, has_lock) = {
                 let w_key = if self.write_cursor.valid()? {
-                    Some(self.write_cursor.key(&mut self.statistics.write))
+                    Some(self.write_cursor.physical_key(&mut self.statistics.write))
                 } else {
                     None
                 };
                 let l_key = if self.lock_cursor.valid()? {
-                    Some(self.lock_cursor.key(&mut self.statistics.lock))
+                    Some(self.lock_cursor.physical_key(&mut self.statistics.lock))
                 } else {
                     None
                 };
 
-                // `res` is `(current_user_key_slice, has_write, has_lock)`
-                let res = match (w_key, l_key) {
+                match (w_key, l_key) {
                     (None, None) => {
                         // Both cursors yield `None`: we know that there is nothing remaining.
                         return Ok(None);
@@ -114,15 +116,15 @@ impl<S: Snapshot> ForwardScanner<S> {
                     (Some(k), None) => {
                         // Write cursor yields something but lock cursor yields `None`:
                         // We need to further step write cursor to our desired version
-                        (Key::truncate_ts_for(k)?, true, false)
+                        (k.as_physical_slice_without_ts(), true, false)
                     }
                     (Some(wk), Some(lk)) => {
-                        let write_user_key = Key::truncate_ts_for(wk)?;
-                        match write_user_key.cmp(lk) {
+                        let write_key_without_ts = wk.as_physical_slice_without_ts();
+                        match write_key_without_ts.cmp(lk) {
                             Ordering::Less => {
                                 // Write cursor user key < lock cursor, it means the lock of the
                                 // current key that write cursor is pointing to does not exist.
-                                (write_user_key, true, false)
+                                (write_key_without_ts, true, false)
                             }
                             Ordering::Greater => {
                                 // Write cursor user key > lock cursor, it means we got a lock of a
@@ -137,12 +139,11 @@ impl<S: Snapshot> ForwardScanner<S> {
                             }
                         }
                     }
-                };
-
-                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
-                // the key or its clones without reallocation.
-                (Key::from_encoded_slice(res.0), res.1, res.2)
+                }
             };
+
+            self.key_buffer
+                .reset_from_physical_slice(current_key_without_ts);
 
             // `result` stores intermediate values, including KeyLocked errors (but not other kind
             // of errors). If there is KeyLocked errors, we should be able to continue scanning.
@@ -163,8 +164,12 @@ impl<S: Snapshot> ForwardScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        result = super::super::util::check_lock(&current_user_key, ts, lock)
-                            .map(|_| None);
+                        result = super::super::util::check_lock(
+                            self.key_buffer.as_logical_slice(),
+                            ts,
+                            lock,
+                        )
+                        .map(|_| None);
                     }
                     IsolationLevel::Rc => {}
                 }
@@ -175,20 +180,21 @@ impl<S: Snapshot> ForwardScanner<S> {
                 if result.is_ok() {
                     // Attempt to read specified version of the key. Note that we may get `None`
                     // indicating that no desired version is found, or a DELETE version is found
-                    result = self.get(&current_user_key, ts, &mut met_next_user_key);
+                    result = self.get(ts, &mut met_next_user_key);
                 }
                 // Even if there is a lock error, we still need to step the cursor for future
                 // calls. However if we are already pointing at next user key, we don't need to
                 // move it any more. `met_next_user_key` eliminates a key compare.
                 if !met_next_user_key {
-                    self.move_write_cursor_to_next_user_key(&current_user_key)?;
+                    self.move_write_cursor_to_next_user_key()?;
                 }
             }
 
             // If we got something, it can be just used as the return value. Otherwise, we need
             // to continue stepping the cursor.
             if let Some(v) = result? {
-                return Ok(Some((current_user_key, v)));
+                let k = Key::from_encoded(self.key_buffer.as_logical_std_slice().to_vec());
+                return Ok(Some((k, v)));
             }
         }
     }
@@ -196,13 +202,8 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts`. This function
     /// requires that the write cursor is currently pointing to the latest version of `user_key`.
     #[inline]
-    fn get(
-        &mut self,
-        user_key: &Key,
-        ts: u64,
-        met_next_user_key: &mut bool,
-    ) -> Result<Option<Value>> {
-        assert!(self.write_cursor.valid()?);
+    fn get(&mut self, ts: u64, met_next_user_key: &mut bool) -> Result<Option<Value>> {
+        // assert!(self.write_cursor.valid()?);
 
         // The logic starting from here is similar to `PointGetter`.
 
@@ -214,20 +215,20 @@ impl<S: Snapshot> ForwardScanner<S> {
 
         for i in 0..SEEK_BOUND {
             if i > 0 {
-                self.write_cursor.next(&mut self.statistics.write);
-                if !self.write_cursor.valid()? {
+                if !self.write_cursor.next(&mut self.statistics.write) {
                     // Key space ended.
                     return Ok(None);
                 }
             }
             {
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
-                if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
+                let current_key = self.write_cursor.physical_key(&mut self.statistics.write);
+                if current_key.as_physical_slice_without_ts() != self.key_buffer.as_physical_slice()
+                {
                     // Meet another key.
                     *met_next_user_key = true;
                     return Ok(None);
                 }
-                if Key::decode_ts_from(current_key)? <= ts {
+                if current_key.get_ts() <= ts {
                     // Founded, don't need to seek again.
                     needs_seek = false;
                     break;
@@ -238,14 +239,19 @@ impl<S: Snapshot> ForwardScanner<S> {
         if needs_seek {
             // `user_key` must have reserved space here, so its clone has reserved space too. So no
             // reallocation happens in `append_ts`.
-            self.write_cursor
-                .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
-            if !self.write_cursor.valid()? {
-                // Key space ended.
-                return Ok(None);
+            {
+                let key = self.key_buffer.with_ts_temporarily(ts);
+                if !self
+                    .write_cursor
+                    .seek(key.as_physical_slice(), &mut self.statistics.write)?
+                {
+                    // Key space ended.
+                    return Ok(None);
+                }
             }
-            let current_key = self.write_cursor.key(&mut self.statistics.write);
-            if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
+
+            let current_key = self.write_cursor.physical_key(&mut self.statistics.write);
+            if current_key.as_physical_slice_without_ts() != self.key_buffer.as_physical_slice() {
                 // Meet another key.
                 *met_next_user_key = true;
                 return Ok(None);
@@ -271,10 +277,12 @@ impl<S: Snapshot> ForwardScanner<S> {
                         None => {
                             // Value is in the default CF.
                             let start_ts = write.start_ts;
+                            let key =
+                                Key::from_encoded_slice(self.key_buffer.as_logical_std_slice());
                             self.ensure_default_cursor()?;
                             let value = super::super::util::near_load_data_by_write(
                                 &mut self.default_cursor.as_mut().unwrap(),
-                                user_key,
+                                &key,
                                 start_ts,
                                 &mut self.statistics,
                             )?;
@@ -288,14 +296,13 @@ impl<S: Snapshot> ForwardScanner<S> {
                 }
             }
 
-            self.write_cursor.next(&mut self.statistics.write);
-
-            if !self.write_cursor.valid()? {
+            if !self.write_cursor.next(&mut self.statistics.write) {
                 // Key space ended.
                 return Ok(None);
             }
-            let current_key = self.write_cursor.key(&mut self.statistics.write);
-            if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
+
+            let current_key = self.write_cursor.physical_key(&mut self.statistics.write);
+            if current_key.as_physical_slice_without_ts() != self.key_buffer.as_physical_slice() {
                 // Meet another key.
                 *met_next_user_key = true;
                 return Ok(None);
@@ -311,32 +318,34 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// key. We first try to `next()` a few times. If still not reaching another user
     /// key, we `seek()`.
     #[inline]
-    fn move_write_cursor_to_next_user_key(&mut self, current_user_key: &Key) -> Result<()> {
+    fn move_write_cursor_to_next_user_key(&mut self) -> Result<()> {
+        if !self.write_cursor.valid()? {
+            // Key space ended. We are done here.
+            return Ok(());
+        }
         for i in 0..SEEK_BOUND {
             if i > 0 {
-                self.write_cursor.next(&mut self.statistics.write);
-            }
-            if !self.write_cursor.valid()? {
-                // Key space ended. We are done here.
-                return Ok(());
-            }
-            {
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
-                if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
-                    // Found another user key. We are done here.
+                if !self.write_cursor.next(&mut self.statistics.write) {
+                    // Key space ended. We are done here.
                     return Ok(());
                 }
+            }
+            let current_key = self.write_cursor.physical_key(&mut self.statistics.write);
+            if current_key.as_physical_slice_without_ts() != self.key_buffer.as_physical_slice() {
+                // Found another user key. We are done here.
+                return Ok(());
             }
         }
 
         // We have not found another user key for now, so we directly `seek()`.
         // After that, we must pointing to another key, or out of bound.
-        // `current_user_key` must have reserved space here, so its clone has reserved space too.
+        // `current_key_without_ts` must have reserved space here, so its clone has reserved space too.
         // So no reallocation happens in `append_ts`.
-        self.write_cursor.internal_seek(
-            &current_user_key.clone().append_ts(0),
-            &mut self.statistics.write,
-        )?;
+        {
+            let key = self.key_buffer.with_ts_temporarily(0);
+            self.write_cursor
+                .internal_seek(key.as_physical_slice(), &mut self.statistics.write)?;
+        }
 
         Ok(())
     }

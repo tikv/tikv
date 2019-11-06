@@ -39,6 +39,7 @@ use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
+use keys::{PhysicalKey, RaftPhysicalKey};
 use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -2631,7 +2632,7 @@ impl ReadExecutor {
             let cf = req.get_get().get_cf();
             // TODO: check whether cf exists or not.
             snapshot
-                .get_value_cf(cf, &keys::data_key(key))
+                .get_value_cf(cf, RaftPhysicalKey::alloc_from_logical_std_slice(key))
                 .unwrap_or_else(|e| {
                     panic!(
                         "[region {}] failed to get {} with cf {}: {:?}",
@@ -2643,7 +2644,7 @@ impl ReadExecutor {
                 })
         } else {
             snapshot
-                .get_value(&keys::data_key(key))
+                .get_value(RaftPhysicalKey::alloc_from_logical_std_slice(key))
                 .unwrap_or_else(|e| {
                     panic!(
                         "[region {}] failed to get {}: {:?}",

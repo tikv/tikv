@@ -132,9 +132,8 @@ impl<S: Snapshot> MvccReader<S> {
             }
         } else {
             // use prefix bloom filter
-            let iter_opt = IterOption::default()
-                .use_prefix_seek()
-                .set_prefix_same_as_start(true);
+            let mut iter_opt = IterOption::default();
+            iter_opt.set_prefix_seek().set_prefix_same_as_start(true);
             let iter = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
             self.write_cursor = Some(iter);
         }
@@ -158,7 +157,7 @@ impl<S: Snapshot> MvccReader<S> {
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: u64) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            return super::util::check_lock(key, ts, lock);
+            return super::util::check_lock(key.as_logical_key_slice(), ts, lock);
         }
         Ok(())
     }

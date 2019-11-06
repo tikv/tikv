@@ -67,12 +67,12 @@ fn test_node_bootstrap_with_prepared_data() {
     bootstrap_store(&engines, 0, 1).unwrap();
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
     assert!(engine
-        .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+        .get_msg::<metapb::Region, _>(keys::PREPARE_BOOTSTRAP_KEY)
         .unwrap()
         .is_some());
     let region_state_key = keys::region_state_key(region.get_id());
     assert!(engine
-        .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        .get_msg_cf::<RegionLocalState, _>(CF_RAFT, &region_state_key)
         .unwrap()
         .is_some());
 
@@ -96,11 +96,11 @@ fn test_node_bootstrap_with_prepared_data() {
     )
     .unwrap();
     assert!(Arc::clone(&engine)
-        .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+        .get_msg::<metapb::Region, _>(keys::PREPARE_BOOTSTRAP_KEY)
         .unwrap()
         .is_none());
     assert!(engine
-        .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        .get_msg_cf::<RegionLocalState, _>(CF_RAFT, &region_state_key)
         .unwrap()
         .is_none());
     assert_eq!(pd_client.get_regions_number() as u32, 1);

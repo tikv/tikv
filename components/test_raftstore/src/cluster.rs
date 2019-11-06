@@ -784,7 +784,7 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
         self.get_engine(store_id)
-            .get_msg_cf::<RaftApplyState>(engine::CF_RAFT, &keys::apply_state_key(region_id))
+            .get_msg_cf::<RaftApplyState, _>(engine::CF_RAFT, &keys::apply_state_key(region_id))
             .unwrap()
             .unwrap()
             .take_truncated_state()

@@ -21,7 +21,7 @@ use std::io::Error as IoError;
 use std::sync::{atomic, Arc};
 use std::{cmp, error, u64};
 
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine::IterOption;
 use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
@@ -56,6 +56,7 @@ pub const TXN_SIZE_PREFIX: u8 = b't';
 pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use keys::PhysicalKey;
 use tikv_util::future_pool::FuturePool;
 
 pub fn is_short_value(value: &[u8]) -> bool {
@@ -1849,7 +1850,10 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
+            let key = <<E::Snap as Snapshot>::Key as PhysicalKey>::copy_from_logical_vec(
+                end.into_encoded(),
+            );
+            option.set_upper_bound(key);
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);
@@ -1887,7 +1891,10 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
+            let key = <<E::Snap as Snapshot>::Key as PhysicalKey>::copy_from_logical_vec(
+                end.into_encoded(),
+            );
+            option.set_lower_bound(key);
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
         let statistics = statistics.mut_cf_statistics(cf);
