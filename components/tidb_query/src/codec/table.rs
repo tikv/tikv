@@ -86,7 +86,7 @@ pub fn check_index_key(key: &[u8]) -> Result<()> {
 /// `check_key_type` checks if the key is the type we want, `wanted_type` should be
 /// `table::RECORD_PREFIX_SEP` or `table::INDEX_PREFIX_SEP` .
 #[inline]
-pub fn check_key_type(key: &[u8], wanted_type: &[u8]) -> Result<()> {
+fn check_key_type(key: &[u8], wanted_type: &[u8]) -> Result<()> {
     let mut buf = key;
     if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
         return Err(invalid_type!(
