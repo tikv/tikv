@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Borrow;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -323,7 +323,7 @@ impl Snapshot for RocksSnapshot {
     }
 }
 
-impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
+impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
     fn next(&mut self) -> bool {
         DBIterator::next(self)
     }
@@ -457,21 +457,21 @@ mod tests {
         let perf_statistics = PerfStatisticsInstant::new();
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
             .unwrap();
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 0);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 0);
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 2);
 
         iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 3);
 
         iter.prev(&mut statistics);
-        assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
+        assert_eq!(perf_statistics.delta().0.internal_delete_skipped_count, 3);
     }
 }
