@@ -912,7 +912,9 @@ mod tests {
     use crate::storage::tests::{expect_ok_callback, expect_value_callback};
     use crate::storage::txn::ProcessResult;
     use crate::storage::*;
+
     use kvproto::kvrpcpb::Context;
+
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::*,
@@ -927,6 +929,7 @@ mod tests {
             pr: ProcessResult,
             lock: Lock,
             is_first_lock: bool,
+            timeout: i64,
         },
 
         WakeUp {
@@ -966,6 +969,7 @@ mod tests {
             pr: ProcessResult,
             lock: Lock,
             is_first_lock: bool,
+            timeout: i64,
         ) {
             self.tx
                 .send(Msg::WaitFor {
@@ -974,6 +978,7 @@ mod tests {
                     pr,
                     lock,
                     is_first_lock,
+                    timeout,
                 })
                 .unwrap();
         }
@@ -1026,6 +1031,7 @@ mod tests {
 
         let mut options = Options::default();
         options.is_first_lock = true;
+        options.wait_timeout = -1;
         storage
             .async_acquire_pessimistic_lock(
                 Context::default(),
@@ -1046,6 +1052,7 @@ mod tests {
                 pr,
                 lock,
                 is_first_lock,
+                timeout,
                 ..
             } => {
                 assert_eq!(start_ts, 20);
@@ -1057,6 +1064,7 @@ mod tests {
                     }
                 );
                 assert_eq!(is_first_lock, true);
+                assert_eq!(timeout, -1);
                 match pr {
                     ProcessResult::MultiRes { results } => {
                         assert_eq!(results.len(), 1);
@@ -1194,7 +1202,8 @@ mod tests {
                 60,
                 70,
                 80,
-                expect_value_callback(tx.clone(), 8, (0, 0)),
+                true,
+                expect_value_callback(tx.clone(), 8, TxnStatus::Rollbacked),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1429,7 +1438,8 @@ mod tests {
                 start_ts,
                 compose_ts(20, 0),
                 compose_ts(30, 0),
-                expect_value_callback(tx.clone(), 8, (100, 0)),
+                true,
+                expect_value_callback(tx.clone(), 8, TxnStatus::uncommitted(100)),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1443,7 +1453,8 @@ mod tests {
                 start_ts,
                 compose_ts(20, 0),
                 compose_ts(120, 0),
-                expect_value_callback(tx.clone(), 8, (0, 0)),
+                true,
+                expect_value_callback(tx.clone(), 8, TxnStatus::Rollbacked),
             )
             .unwrap();
         rx.recv().unwrap();
