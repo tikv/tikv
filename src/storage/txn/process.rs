@@ -17,7 +17,7 @@ use crate::storage::mvcc::{
 use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
 use crate::storage::{
     metrics::*, Command, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
-    ScanMode, Snapshot, Statistics, StorageCb, Value,
+    ScanMode, Snapshot, Statistics, StorageCb, Value, Mutation, Options
 };
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
@@ -511,6 +511,24 @@ struct WriteResult {
     lock_info: Option<(lock_manager::Lock, bool)>,
 }
 
+fn prewrite_into_txn<S: Snapshot>(txn: &mut MvccTxn<S>,
+                                  primary: &[u8],
+                                  options: &Options,
+                                  mutations: Vec<Mutation>,
+                            locks: &mut Vec<StorageResult<()>>) -> Result<()> {
+    for m in mutations {
+        match txn.prewrite(m, &primary, &options) {
+            Ok(_) => {}
+            e @ Err(MvccError::KeyIsLocked { .. }) => {
+                locks.push(e.map_err(Error::from).map_err(StorageError::from));
+            }
+            Err(e) => return Err(Error::from(e)),
+        }
+    }
+    return Ok(());
+
+}
+
 fn process_write_impl<S: Snapshot, L: LockMgr>(
     cmd: Command,
     snapshot: S,
@@ -520,37 +538,26 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd {
         Command::Prewrite {
             ctx,
-            mut mutations,
+            mutations,
             primary,
             start_ts,
             options,
             ..
         } => {
             let rows = mutations.len();
-            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
-
+            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
+            let use_forward = rows > FORWARD_MIN_MUTATIONS_NUM;
             let mut locks = vec![];
             // If `options.for_update_ts` is 0, the transaction is optimistic
             // or else pessimistic.
+            let mut forward_modifies = None;
             if options.for_update_ts == 0 {
-                if rows > FORWARD_MIN_MUTATIONS_NUM {
-                    let insert_count =
-                        mutations.iter().fold(
-                            0,
-                            |sum, m| {
-                                if m.is_insert() {
-                                    sum + 1
-                                } else {
-                                    sum
-                                }
-                            },
-                        );
-                    if insert_count == rows {
-                        txn.set_scan_mode(ScanMode::Forward);
-                        mutations.sort_by(|a, b| a.key().cmp(b.key()));
-                    }
-                }
+                let mut insert_mutations = Vec::new();
                 for m in mutations {
+                    if m.is_insert() && use_forward {
+                        insert_mutations.push(m);
+                        continue;
+                    }
                     match txn.prewrite(m, &primary, &options) {
                         Ok(_) => {}
                         e @ Err(MvccError::KeyIsLocked { .. }) => {
@@ -558,6 +565,16 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                         }
                         Err(e) => return Err(Error::from(e)),
                     }
+                }
+                // We only use forward seek for INSERT mutation. Because INSERT mutations are almost continuous.
+                if insert_mutations.len() > FORWARD_MIN_MUTATIONS_NUM {
+                    insert_mutations.sort_by(|a,b| a.key().cmp(b.key()));
+                    let mut forward_txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
+                    forward_txn.set_scan_mode(ScanMode::Forward);
+                    prewrite_into_txn(&mut forward_txn, &primary, &options, insert_mutations, &mut locks)?;
+                    forward_modifies = Some(forward_txn.into_modifies());
+                } else {
+                    prewrite_into_txn(&mut txn, &primary, &options, insert_mutations, &mut locks)?;
                 }
             } else {
                 for (i, m) in mutations.into_iter().enumerate() {
@@ -579,7 +596,10 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             statistics.add(&txn.take_statistics());
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
-                let modifies = txn.into_modifies();
+                let mut modifies = txn.into_modifies();
+                if let Some(mut m) = forward_modifies {
+                    modifies.append(&mut m);
+                }
                 (pr, modifies, rows, ctx, None)
             } else {
                 // Skip write stage if some keys are locked.
