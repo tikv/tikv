@@ -4,6 +4,10 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
+[[test]]
+name = "integrations"
+path = "tests/integrations/mod.rs"
+
 [dependencies]
 tikv = { path = "../../", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.1" }
