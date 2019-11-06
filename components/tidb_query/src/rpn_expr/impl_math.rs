@@ -1,9 +1,49 @@
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::codec::mysql::{RoundMode, DEFAULT_FSP};
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::Result;
+
+#[rpn_fn]
+#[inline]
+fn abs_int(arg: &Option<Int>) -> Result<Option<Int>> {
+    match arg {
+        None => Ok(None),
+        Some(arg) => match (*arg).checked_abs() {
+            None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)).into()),
+            Some(arg_abs) => Ok(Some(arg_abs)),
+        },
+    }
+}
+
+#[rpn_fn]
+#[inline]
+fn abs_uint(arg: &Option<Int>) -> Result<Option<Int>> {
+    Ok(*arg)
+}
+
+#[rpn_fn]
+#[inline]
+fn abs_real(arg: &Option<Real>) -> Result<Option<Real>> {
+    match arg {
+        Some(arg) => Ok(Some(num_traits::Signed::abs(arg))),
+        None => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+fn abs_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
+    match arg {
+        Some(arg) => {
+            let res: codec::Result<Decimal> = arg.to_owned().abs().into();
+            Ok(Some(res?))
+        }
+        None => Ok(None),
+    }
+}
 
 #[inline]
 #[rpn_fn(capture = [ctx])]
@@ -143,49 +183,84 @@ impl Floor for FloorIntToInt {
 
 #[rpn_fn]
 #[inline]
-fn abs_int(arg: &Option<Int>) -> Result<Option<Int>> {
-    match arg {
-        None => Ok(None),
-        Some(arg) => match (*arg).checked_abs() {
-            None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)).into()),
-            Some(arg_abs) => Ok(Some(arg_abs)),
-        },
-    }
-}
-
-#[rpn_fn]
-#[inline]
-fn abs_uint(arg: &Option<Int>) -> Result<Option<Int>> {
+fn round_int(arg: &Option<Int>) -> Result<Option<Int>> {
     Ok(*arg)
 }
 
 #[rpn_fn]
 #[inline]
-fn abs_real(arg: &Option<Real>) -> Result<Option<Real>> {
-    match arg {
-        Some(arg) => Ok(Some(num_traits::Signed::abs(arg))),
-        None => Ok(None),
-    }
+fn round_real(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(match arg {
+        Some(arg) => Some(Real::from(arg.round())),
+        None => None,
+    })
 }
 
 #[rpn_fn]
 #[inline]
-fn abs_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
-    match arg {
+fn round_dec(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
+    Ok(match arg {
         Some(arg) => {
-            let res: codec::Result<Decimal> = arg.to_owned().abs().into();
-            Ok(Some(res?))
+            let result: codec::Result<Decimal> = arg
+                .to_owned()
+                .round(DEFAULT_FSP, RoundMode::HalfEven)
+                .into();
+            Some(result?)
         }
-        None => Ok(None),
-    }
+        None => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
+fn round_with_frac_int(arg0: &Option<Int>, arg1: &Option<Int>) -> Result<Option<Int>> {
+    Ok(match (arg0, arg1) {
+        (Some(number), Some(digits)) => {
+            if *digits >= 0 {
+                Some(*number)
+            } else {
+                let power = 10.0_f64.powi(-digits as i32);
+                let frac = *number as f64 / power;
+                Some((frac.round() * power) as i64)
+            }
+        }
+        _ => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
+fn round_with_frac_real(arg0: &Option<Real>, arg1: &Option<Int>) -> Result<Option<Real>> {
+    Ok(match (arg0, arg1) {
+        (Some(number), Some(digits)) => {
+            let power = 10.0_f64.powi(-digits as i32);
+            let frac = number.into_inner() / power;
+            Some(Real::from(frac.round() * power))
+        }
+        _ => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
+fn round_with_frac_dec(arg0: &Option<Decimal>, arg1: &Option<Int>) -> Result<Option<Decimal>> {
+    Ok(match (arg0, arg1) {
+        (Some(number), Some(digits)) => {
+            let result: codec::Result<Decimal> = number
+                .to_owned()
+                .round(*digits as i8, RoundMode::HalfEven)
+                .into();
+            Some(result?)
+        }
+        _ => None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
@@ -435,5 +510,124 @@ mod tests {
         }
 
         test_unary_func_ok_none::<Int, Int>(ScalarFuncSig::FloorIntToInt);
+    }
+
+    #[test]
+    fn test_round_int() {
+        let test_cases: Vec<(Int, Option<Int>)> = vec![
+            (1, Some(1)),
+            (Int::max_value(), Some(Int::max_value())),
+            (Int::min_value(), Some(Int::min_value())),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::RoundInt)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_round_real() {
+        let test_cases: Vec<(Real, Option<Real>)> = vec![
+            (Real::from(3.45_f64), Some(Real::from(3_f64))),
+            (Real::from(-3.45_f64), Some(Real::from(-3_f64))),
+            (Real::from(std::f64::MAX), Some(Real::from(std::f64::MAX))),
+            (Real::from(std::f64::MIN), Some(Real::from(std::f64::MIN))),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::RoundReal)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_round_dec() {
+        let test_cases: Vec<(Decimal, Option<Decimal>)> = vec![
+            ("123.456".parse().unwrap(), Some("123.000".parse().unwrap())),
+            ("123.656".parse().unwrap(), Some("124.000".parse().unwrap())),
+            (
+                "-123.456".parse().unwrap(),
+                Some("-123.000".parse().unwrap()),
+            ),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::RoundDec)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_round_with_frac_int() {
+        let test_cases: Vec<(Int, Int, Option<Int>)> = vec![
+            (23, 2, Some(23)),
+            (23, -1, Some(20)),
+            (-27, -1, Some(-30)),
+            (-27, -2, Some(0)),
+        ];
+
+        for (arg0, arg1, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RoundWithFracInt)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_round_with_frac_real() {
+        let test_cases: Vec<(Real, Int, Option<Real>)> = vec![
+            (Real::from(-1.298_f64), 1, Some(Real::from(-1.3_f64))),
+            (Real::from(-1.298_f64), 0, Some(Real::from(-1.0_f64))),
+            (Real::from(23.298_f64), 2, Some(Real::from(23.30_f64))),
+            (Real::from(23.298_f64), -1, Some(Real::from(20.0_f64))),
+        ];
+
+        for (arg0, arg1, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RoundWithFracReal)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_round_with_frac_dec() {
+        let test_cases: Vec<(Decimal, Int, Option<Decimal>)> = vec![
+            (
+                "150.000".parse().unwrap(),
+                2,
+                Some("150.00".parse().unwrap()),
+            ),
+            (
+                "150.257".parse().unwrap(),
+                1,
+                Some("150.3".parse().unwrap()),
+            ),
+            ("153.257".parse().unwrap(), -1, Some("150".parse().unwrap())),
+        ];
+
+        for (arg0, arg1, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::RoundWithFracDec)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
     }
 }
