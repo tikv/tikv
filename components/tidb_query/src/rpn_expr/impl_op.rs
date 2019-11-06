@@ -32,10 +32,8 @@ pub fn logical_or(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>>
 pub fn logical_xor(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>> {
     // evaluates to 1 if an odd number of operands is nonzero, otherwise 0 is returned.
     Ok(match (arg0, arg1) {
-        (Some(0), Some(0)) => Some(0),
-        (Some(0), Some(_)) | (Some(_), Some(0)) => Some(1),
-        (None, _) | (_, None) => None,
-        _ => Some(0),
+        (Some(arg0), Some(arg1)) => Some(((*arg0 == 0) ^ (*arg1 == 0)) as i64),
+        _ => None,
     })
 }
 
