@@ -29,6 +29,18 @@ pub fn logical_or(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>>
 
 #[rpn_fn]
 #[inline]
+pub fn logical_xor(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>> {
+    // evaluates to 1 if an odd number of operands is nonzero, otherwise 0 is returned.
+    Ok(match (arg0, arg1) {
+        (Some(0), Some(0)) => Some(0),
+        (Some(0), Some(_)) | (Some(_), Some(0)) => Some(1),
+        (None, _) | (_, None) => None,
+        _ => Some(0),
+    })
+}
+
+#[rpn_fn]
+#[inline]
 pub fn unary_not_int(arg: &Option<i64>) -> Result<Option<i64>> {
     Ok(arg.map(|v| (v == 0) as i64))
 }
@@ -130,6 +142,27 @@ mod tests {
                 .push_param(arg0)
                 .push_param(arg1)
                 .evaluate(ScalarFuncSig::LogicalOr)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_logical_xor() {
+        let test_cases = vec![
+            (Some(1), Some(1), Some(0)),
+            (Some(1), Some(0), Some(1)),
+            (Some(0), Some(0), Some(0)),
+            (Some(2), Some(-1), Some(0)),
+            (Some(-1), Some(0), Some(1)),
+            (Some(0), None, None),
+            (None, Some(1), None),
+        ];
+        for (arg0, arg1, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::LogicalXor)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
