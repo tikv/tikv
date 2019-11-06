@@ -1,7 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::BTreeMap;
 use std::iter::{self, FromIterator};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::coprocessor::Endpoint;
 use crate::raftstore::store::{Callback, CasualMessage};
@@ -15,7 +18,9 @@ use crate::storage::kv::Error as EngineError;
 use crate::storage::lock_manager::LockMgr;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
-use crate::storage::{self, Engine, Key, Mutation, Options, Storage, Value};
+use crate::storage::{
+    self, Engine, Key, Mutation, Options, PointGetCommand, Storage, TxnStatus, Value,
+};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
@@ -31,14 +36,416 @@ use kvproto::tikvpb::*;
 use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
+use tikv_util::metrics::HistogramReader;
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
+use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
+
+const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 30;
+const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
+
+#[derive(Hash, PartialEq, Eq, Debug)]
+struct RegionVerId {
+    region_id: u64,
+    conf_ver: u64,
+    version: u64,
+    term: u64,
+}
+
+impl RegionVerId {
+    #[inline]
+    fn from_context(ctx: &Context) -> Self {
+        RegionVerId {
+            region_id: ctx.get_region_id(),
+            conf_ver: ctx.get_region_epoch().get_conf_ver(),
+            version: ctx.get_region_epoch().get_version(),
+            term: ctx.get_term(),
+        }
+    }
+}
+
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord)]
+enum BatchableRequestKind {
+    PointGet,
+    Prewrite,
+    Commit,
+}
+
+impl BatchableRequestKind {
+    fn as_str(&self) -> &str {
+        match self {
+            BatchableRequestKind::PointGet => &"point_get",
+            BatchableRequestKind::Prewrite => &"prewrite",
+            BatchableRequestKind::Commit => &"commit",
+        }
+    }
+}
+
+/// BatchLimiter controls submit timing of request batch.
+struct BatchLimiter {
+    cmd: BatchableRequestKind,
+    timeout: Option<Duration>,
+    last_submit_time: Instant,
+    latency_reader: HistogramReader,
+    latency_estimation: f64,
+    thread_load_reader: Arc<ThreadLoad>,
+    thread_load_estimation: usize,
+    sample_size: usize,
+    enable_batch: bool,
+    batch_input: usize,
+}
+
+impl BatchLimiter {
+    /// Construct a new `BatchLimiter` with provided timeout-duration,
+    /// and reader on latency and thread-load.
+    fn new(
+        cmd: BatchableRequestKind,
+        timeout: Option<Duration>,
+        latency_reader: HistogramReader,
+        thread_load_reader: Arc<ThreadLoad>,
+    ) -> Self {
+        BatchLimiter {
+            cmd,
+            timeout,
+            last_submit_time: Instant::now(),
+            latency_reader,
+            latency_estimation: 0.0,
+            thread_load_reader,
+            thread_load_estimation: 100,
+            sample_size: 0,
+            enable_batch: false,
+            batch_input: 0,
+        }
+    }
+
+    /// Whether this batch limiter is disabled.
+    #[inline]
+    fn disabled(&self) -> bool {
+        self.timeout.is_none()
+    }
+
+    /// Whether the batch is timely due to be submitted.
+    #[inline]
+    fn is_due(&self, now: Instant) -> bool {
+        if let Some(timeout) = self.timeout {
+            now - self.last_submit_time >= timeout
+        } else {
+            true
+        }
+    }
+
+    /// Whether current batch needs more requests.
+    #[inline]
+    fn needs_more(&self) -> bool {
+        self.enable_batch
+    }
+
+    /// Observe a tick from timer guard. Limiter will update statistics at this point.
+    #[inline]
+    fn observe_tick(&mut self) {
+        if self.disabled() {
+            return;
+        }
+        self.sample_size += 1;
+        if self.enable_batch {
+            // check if thread load is too low, which means busy hour has passed.
+            if self.thread_load_reader.load()
+                < (self.thread_load_estimation as f32 * REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO)
+                    as usize
+            {
+                self.enable_batch = false;
+            }
+        } else if self.sample_size > REQUEST_BATCH_LIMITER_SAMPLE_WINDOW {
+            self.sample_size = 0;
+            let latency = self.latency_reader.read_latest_avg() * 1000.0;
+            let load = self.thread_load_reader.load();
+            self.latency_estimation = (self.latency_estimation + latency) / 2.0;
+            if load > 70 {
+                // thread load is less sensitive to workload,
+                // a small barrier here to make sure we have good samples of thread load.
+                let timeout = self.timeout.unwrap();
+                if latency > timeout.as_millis() as f64 * 2.0 {
+                    self.thread_load_estimation = (self.thread_load_estimation + load) / 2;
+                }
+                if self.latency_estimation > timeout.as_millis() as f64 * 2.0 {
+                    self.enable_batch = true;
+                    self.latency_estimation = 0.0;
+                }
+            }
+        }
+    }
+
+    /// Observe the size of commands been examined by batcher.
+    /// Command may not be batched but must have the valid type for this batch.
+    #[inline]
+    fn observe_input(&mut self, size: usize) {
+        self.batch_input += size;
+    }
+
+    /// Observe the time and output size of one batch submit.
+    #[inline]
+    fn observe_submit(&mut self, now: Instant, size: usize) {
+        self.last_submit_time = now;
+        if self.enable_batch {
+            REQUEST_BATCH_SIZE_HISTOGRAM_VEC
+                .with_label_values(&[self.cmd.as_str()])
+                .observe(self.batch_input as f64);
+            if size > 0 {
+                REQUEST_BATCH_RATIO_HISTOGRAM_VEC
+                    .with_label_values(&[self.cmd.as_str()])
+                    .observe(self.batch_input as f64 / size as f64);
+            }
+        }
+        self.batch_input = 0;
+    }
+}
+
+/// Batcher buffers specific requests in one stream of `batch_commands` in a batch for bulk submit.
+trait Batcher<E: Engine, L: LockMgr> {
+    /// Try to batch single batch_command request, returns whether the request is stashed.
+    /// One batcher must only process requests from one unique command stream.
+    fn filter(
+        &mut self,
+        request_id: u64,
+        request: &mut batch_commands_request::request::Cmd,
+    ) -> bool;
+
+    /// Submit all batched requests to store. `is_empty` always returns true after this operation.
+    /// Returns number of fused commands been submitted.
+    fn submit(
+        &mut self,
+        tx: &Sender<(u64, batch_commands_response::Response)>,
+        storage: &Storage<E, L>,
+    ) -> usize;
+
+    /// Whether this batcher is empty of buffered requests.
+    fn is_empty(&self) -> bool;
+}
+
+#[derive(Hash, PartialEq, Eq, Debug)]
+struct ReadId {
+    region: RegionVerId,
+    // None in this field stands for transactional read.
+    cf: Option<String>,
+}
+
+impl ReadId {
+    #[inline]
+    fn from_context_cf(ctx: &Context, cf: Option<String>) -> Self {
+        ReadId {
+            region: RegionVerId::from_context(ctx),
+            cf,
+        }
+    }
+}
+
+/// ReadBatcher batches normal-priority `raw_get` and `get` requests to the same region.
+struct ReadBatcher {
+    router: HashMap<ReadId, (Vec<u64>, Vec<PointGetCommand>)>,
+}
+
+impl ReadBatcher {
+    fn new() -> Self {
+        ReadBatcher {
+            router: HashMap::default(),
+        }
+    }
+
+    fn is_batchable_context(ctx: &Context) -> bool {
+        storage::is_normal_priority(ctx.get_priority()) && !ctx.get_replica_read()
+    }
+
+    fn add_get(&mut self, request_id: u64, request: &mut GetRequest) {
+        let id = ReadId::from_context_cf(request.get_context(), None);
+        let command = PointGetCommand::from_get(request);
+        match self.router.get_mut(&id) {
+            Some((reqs, commands)) => {
+                reqs.push(request_id);
+                commands.push(command);
+            }
+            None => {
+                self.router.insert(id, (vec![request_id], vec![command]));
+            }
+        }
+    }
+
+    fn add_raw_get(&mut self, request_id: u64, request: &mut RawGetRequest) {
+        let cf = Some(request.take_cf());
+        let id = ReadId::from_context_cf(request.get_context(), cf);
+        let command = PointGetCommand::from_raw_get(request);
+        match self.router.get_mut(&id) {
+            Some((reqs, commands)) => {
+                reqs.push(request_id);
+                commands.push(command);
+            }
+            None => {
+                self.router.insert(id, (vec![request_id], vec![command]));
+            }
+        }
+    }
+}
+
+impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
+    fn filter(
+        &mut self,
+        request_id: u64,
+        request: &mut batch_commands_request::request::Cmd,
+    ) -> bool {
+        match request {
+            batch_commands_request::request::Cmd::Get(req)
+                if Self::is_batchable_context(req.get_context()) =>
+            {
+                self.add_get(request_id, req);
+                true
+            }
+            batch_commands_request::request::Cmd::RawGet(req)
+                if Self::is_batchable_context(req.get_context()) =>
+            {
+                self.add_raw_get(request_id, req);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn submit(
+        &mut self,
+        tx: &Sender<(u64, batch_commands_response::Response)>,
+        storage: &Storage<E, L>,
+    ) -> usize {
+        let mut output = 0;
+        for (id, (reqs, commands)) in self.router.drain() {
+            let tx = tx.clone();
+            output += 1;
+            match id.cf {
+                Some(cf) => {
+                    let f = future_raw_batch_get_command(storage, tx, reqs, cf, commands);
+                    poll_future_notify(f);
+                }
+                None => {
+                    let f = future_batch_get_command(storage, tx, reqs, commands);
+                    poll_future_notify(f);
+                }
+            }
+        }
+        output
+    }
+
+    fn is_empty(&self) -> bool {
+        self.router.is_empty()
+    }
+}
+
+type ReqBatcherInner<E, L> = (BatchLimiter, Box<dyn Batcher<E, L> + Send>);
+
+/// ReqBatcher manages multiple `Batcher`s which batch requests from one unique stream of `batch_commands`
+// and controls the submit timing of those batchers based on respective `BatchLimiter`.
+struct ReqBatcher<E: Engine, L: LockMgr> {
+    inners: BTreeMap<BatchableRequestKind, ReqBatcherInner<E, L>>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
+}
+
+impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
+    /// Constructs a new `ReqBatcher` which provides batching of one request stream with specific response channel.
+    pub fn new(
+        tx: Sender<(u64, batch_commands_response::Response)>,
+        timeout: Option<Duration>,
+        readpool_thread_load: Arc<ThreadLoad>,
+    ) -> Self {
+        let mut inners = BTreeMap::<BatchableRequestKind, ReqBatcherInner<E, L>>::default();
+        inners.insert(
+            BatchableRequestKind::PointGet,
+            (
+                BatchLimiter::new(
+                    BatchableRequestKind::PointGet,
+                    timeout,
+                    HistogramReader::new(GRPC_MSG_HISTOGRAM_VEC.kv_get.clone()),
+                    readpool_thread_load,
+                ),
+                Box::new(ReadBatcher::new()),
+            ),
+        );
+        ReqBatcher { inners, tx }
+    }
+
+    /// Try to batch single batch_command request, returns whether the request is stashed.
+    /// One batcher can only accept requests from one unique command stream.
+    pub fn filter(
+        &mut self,
+        request_id: u64,
+        request: &mut batch_commands_request::Request,
+    ) -> bool {
+        if let Some(ref mut cmd) = request.cmd {
+            if let Some((limiter, batcher)) = match cmd {
+                batch_commands_request::request::Cmd::Prewrite(_) => {
+                    self.inners.get_mut(&BatchableRequestKind::Prewrite)
+                }
+                batch_commands_request::request::Cmd::Commit(_) => {
+                    self.inners.get_mut(&BatchableRequestKind::Commit)
+                }
+                batch_commands_request::request::Cmd::Get(_)
+                | batch_commands_request::request::Cmd::RawGet(_) => {
+                    self.inners.get_mut(&BatchableRequestKind::PointGet)
+                }
+                _ => None,
+            } {
+                // in normal mode, batch requests inside one `batch_commands`.
+                // in cross-command mode, only batch request when limiter permits.
+                if limiter.disabled() || limiter.needs_more() {
+                    limiter.observe_input(1);
+                    return batcher.filter(request_id, cmd);
+                }
+            }
+        }
+        false
+    }
+
+    /// Check all batchers and submit if their limiters see fit.
+    /// Called by anyone with a suitable timeslice for executing commands.
+    #[inline]
+    pub fn maybe_submit(&mut self, storage: &Storage<E, L>) {
+        let mut now = None;
+        for (limiter, batcher) in self.inners.values_mut() {
+            if limiter.disabled() || !limiter.needs_more() {
+                if now.is_none() {
+                    now = Some(Instant::now());
+                }
+                limiter.observe_submit(now.unwrap(), batcher.submit(&self.tx, storage));
+            }
+        }
+    }
+
+    /// Check all batchers and submit if their wait duration has exceeded the max limit.
+    /// Called repeatedly every `request-batch-wait-duration` interval after the batcher starts working.
+    #[inline]
+    pub fn should_submit(&mut self, storage: &Storage<E, L>) {
+        let now = Instant::now();
+        for (limiter, batcher) in self.inners.values_mut() {
+            limiter.observe_tick();
+            if limiter.is_due(now) {
+                limiter.observe_submit(now, batcher.submit(&self.tx, storage));
+            }
+        }
+    }
+
+    /// Whether or not every batcher is empty of buffered requests.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        for (_, batcher) in self.inners.values() {
+            if !batcher.is_empty() {
+                return false;
+            }
+        }
+        true
+    }
+}
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
@@ -54,7 +461,15 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
 
-    thread_load: Arc<ThreadLoad>,
+    enable_req_batch: bool,
+
+    req_batch_wait_duration: Option<Duration>,
+
+    timer_pool: Arc<Mutex<ThreadPool>>,
+
+    grpc_thread_load: Arc<ThreadLoad>,
+
+    readpool_normal_thread_load: Arc<ThreadLoad>,
 }
 
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
@@ -65,15 +480,28 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
-        thread_load: Arc<ThreadLoad>,
+        grpc_thread_load: Arc<ThreadLoad>,
+        readpool_normal_thread_load: Arc<ThreadLoad>,
+        enable_req_batch: bool,
+        req_batch_wait_duration: Option<Duration>,
     ) -> Self {
+        let timer_pool = Arc::new(Mutex::new(
+            ThreadPoolBuilder::new()
+                .pool_size(1)
+                .name_prefix("req_batch_timer_guard")
+                .build(),
+        ));
         Service {
             gc_worker,
             storage,
             cop,
             ch,
             snap_scheduler,
-            thread_load,
+            grpc_thread_load,
+            readpool_normal_thread_load,
+            timer_pool,
+            enable_req_batch,
+            req_batch_wait_duration,
         }
     }
 
@@ -1019,28 +1447,89 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         let storage = self.storage.clone();
         let cop = self.cop.clone();
         let gc_worker = self.gc_worker.clone();
-
-        let request_handler = stream.for_each(move |mut req| {
-            let request_ids = req.take_request_ids();
-            let requests: Vec<_> = req.take_requests().into();
-            GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
-            for (id, req) in request_ids.into_iter().zip(requests) {
-                handle_batch_commands_request(
-                    &storage,
-                    &gc_worker,
-                    &cop,
-                    &peer,
-                    id,
-                    req,
-                    tx.clone(),
+        if self.enable_req_batch {
+            let stopped = Arc::new(AtomicBool::new(false));
+            let req_batcher = ReqBatcher::new(
+                tx.clone(),
+                self.req_batch_wait_duration,
+                Arc::clone(&self.readpool_normal_thread_load),
+            );
+            let req_batcher = Arc::new(Mutex::new(req_batcher));
+            if let Some(duration) = self.req_batch_wait_duration {
+                let storage = storage.clone();
+                let req_batcher = req_batcher.clone();
+                let req_batcher2 = req_batcher.clone();
+                let stopped = Arc::clone(&stopped);
+                let start = Instant::now();
+                let timer = GLOBAL_TIMER_HANDLE.clone();
+                self.timer_pool.lock().unwrap().spawn(
+                    timer
+                        .interval(start, duration)
+                        .take_while(move |_| {
+                            // only stop timer when no more incoming and old batch is submitted.
+                            future::ok(
+                                !stopped.load(Ordering::Relaxed)
+                                    || !req_batcher2.lock().unwrap().is_empty(),
+                            )
+                        })
+                        .for_each(move |_| {
+                            req_batcher.lock().unwrap().should_submit(&storage);
+                            Ok(())
+                        })
+                        .map_err(|e| error!("batch_commands timer errored"; "err" => ?e)),
                 );
             }
-            future::ok::<_, _>(())
-        });
+            let request_handler = stream.for_each(move |mut req| {
+                let request_ids = req.take_request_ids();
+                let requests: Vec<_> = req.take_requests().into();
+                GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
+                for (id, mut req) in request_ids.into_iter().zip(requests) {
+                    if !req_batcher.lock().unwrap().filter(id, &mut req) {
+                        handle_batch_commands_request(
+                            &storage,
+                            &gc_worker,
+                            &cop,
+                            &peer,
+                            id,
+                            req,
+                            tx.clone(),
+                        );
+                    }
+                }
+                req_batcher.lock().unwrap().maybe_submit(&storage);
+                future::ok(())
+            });
+            ctx.spawn(
+                request_handler
+                    .map_err(|e| error!("batch_commands error"; "err" => %e))
+                    .and_then(move |_| {
+                        // signal timer guard to stop polling
+                        stopped.store(true, Ordering::Relaxed);
+                        Ok(())
+                    }),
+            );
+        } else {
+            let request_handler = stream.for_each(move |mut req| {
+                let request_ids = req.take_request_ids();
+                let requests: Vec<_> = req.take_requests().into();
+                GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
+                for (id, req) in request_ids.into_iter().zip(requests) {
+                    handle_batch_commands_request(
+                        &storage,
+                        &gc_worker,
+                        &cop,
+                        &peer,
+                        id,
+                        req,
+                        tx.clone(),
+                    );
+                }
+                future::ok(())
+            });
+            ctx.spawn(request_handler.map_err(|e| error!("batch_commands error"; "err" => %e)));
+        };
 
-        ctx.spawn(request_handler.map_err(|e| error!("batch commands error"; "err" => %e)));
-
-        let thread_load = Arc::clone(&self.thread_load);
+        let thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
@@ -1390,6 +1879,60 @@ fn future_get<E: Engine, L: LockMgr>(
         })
 }
 
+fn future_batch_get_command<E: Engine, L: LockMgr>(
+    storage: &Storage<E, L>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
+    requests: Vec<u64>,
+    commands: Vec<PointGetCommand>,
+) -> impl Future<Item = (), Error = ()> {
+    let timer = GRPC_MSG_HISTOGRAM_VEC
+        .kv_batch_get_command
+        .start_coarse_timer();
+    storage.async_batch_get_command(commands).then(move |v| {
+        match v {
+            Ok(v) => {
+                if requests.len() != v.len() {
+                    error!("KvService batch response size mismatch");
+                }
+                for (req, v) in requests.into_iter().zip(v.into_iter()) {
+                    let mut resp = GetResponse::default();
+                    if let Some(err) = extract_region_error(&v) {
+                        resp.set_region_error(err);
+                    } else {
+                        match v {
+                            Ok(Some(val)) => resp.set_value(val),
+                            Ok(None) => resp.set_not_found(true),
+                            Err(e) => resp.set_error(extract_key_error(&e)),
+                        }
+                    }
+                    let mut res = batch_commands_response::Response::default();
+                    res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                    if tx.send_and_notify((req, res)).is_err() {
+                        error!("KvService response batch commands fail");
+                    }
+                }
+            }
+            e => {
+                let mut resp = GetResponse::default();
+                if let Some(err) = extract_region_error(&e) {
+                    resp.set_region_error(err);
+                } else if let Err(e) = e {
+                    resp.set_error(extract_key_error(&e));
+                }
+                let mut res = batch_commands_response::Response::default();
+                res.cmd = Some(batch_commands_response::response::Cmd::Get(resp));
+                for req in requests {
+                    if tx.send_and_notify((req, res.clone())).is_err() {
+                        error!("KvService response batch commands fail");
+                    }
+                }
+            }
+        }
+        timer.observe_duration();
+        Ok(())
+    })
+}
+
 fn future_scan<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: ScanRequest,
@@ -1487,6 +2030,7 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockMgr>(
     options.lock_ttl = req.get_lock_ttl();
     options.is_first_lock = req.get_is_first_lock();
     options.for_update_ts = req.get_for_update_ts();
+    options.wait_timeout = req.get_wait_timeout();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_acquire_pessimistic_lock(
@@ -1646,7 +2190,13 @@ fn future_txn_heart_beat<E: Engine, L: LockMgr>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok((ttl, _)) => resp.set_lock_ttl(ttl),
+                Ok(txn_status) => {
+                    if let TxnStatus::Uncommitted { lock_ttl } = txn_status {
+                        resp.set_lock_ttl(lock_ttl);
+                    } else {
+                        unreachable!();
+                    }
+                }
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1667,6 +2217,7 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
         req.get_lock_ts(),
         req.get_caller_start_ts(),
         req.get_current_ts(),
+        req.get_rollback_if_not_exist(),
         cb,
     );
 
@@ -1676,10 +2227,11 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
             resp.set_region_error(err);
         } else {
             match v {
-                Ok((lock_ttl, commit_ts)) => {
-                    resp.set_lock_ttl(lock_ttl);
-                    resp.set_commit_version(commit_ts);
-                }
+                Ok(txn_status) => match txn_status {
+                    TxnStatus::Committed { commit_ts } => resp.set_commit_version(commit_ts),
+                    TxnStatus::Uncommitted { lock_ttl } => resp.set_lock_ttl(lock_ttl),
+                    TxnStatus::Rollbacked | TxnStatus::RollbackedBefore => {}
+                },
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1817,6 +2369,63 @@ fn future_raw_get<E: Engine, L: LockMgr>(
                 }
             }
             Ok(resp)
+        })
+}
+
+fn future_raw_batch_get_command<E: Engine, L: LockMgr>(
+    storage: &Storage<E, L>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
+    requests: Vec<u64>,
+    cf: String,
+    commands: Vec<PointGetCommand>,
+) -> impl Future<Item = (), Error = ()> {
+    let timer = GRPC_MSG_HISTOGRAM_VEC
+        .raw_batch_get_command
+        .start_coarse_timer();
+    storage
+        .async_raw_batch_get_command(cf, commands)
+        .then(move |v| {
+            match v {
+                Ok(v) => {
+                    if requests.len() != v.len() {
+                        error!("KvService batch response size mismatch");
+                    }
+                    for (req, v) in requests.into_iter().zip(v.into_iter()) {
+                        let mut resp = RawGetResponse::default();
+                        if let Some(err) = extract_region_error(&v) {
+                            resp.set_region_error(err);
+                        } else {
+                            match v {
+                                Ok(Some(val)) => resp.set_value(val),
+                                Ok(None) => resp.set_not_found(true),
+                                Err(e) => resp.set_error(format!("{}", e)),
+                            }
+                        }
+                        let mut res = batch_commands_response::Response::default();
+                        res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                        if tx.send_and_notify((req, res)).is_err() {
+                            error!("KvService response batch commands fail");
+                        }
+                    }
+                }
+                e => {
+                    let mut resp = RawGetResponse::default();
+                    if let Some(err) = extract_region_error(&e) {
+                        resp.set_region_error(err);
+                    } else if let Err(e) = e {
+                        resp.set_error(format!("{}", e));
+                    }
+                    let mut res = batch_commands_response::Response::default();
+                    res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                    for req in requests {
+                        if tx.send_and_notify((req, res.clone())).is_err() {
+                            error!("KvService response batch commands fail");
+                        }
+                    }
+                }
+            }
+            timer.observe_duration();
+            Ok(())
         })
 }
 
@@ -2088,6 +2697,12 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             warn!("txn conflicts"; "err" => ?err);
             key_error.set_retryable(format!("{:?}", err));
         }
+        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnNotFound { start_ts, key })) => {
+            let mut txn_not_found = TxnNotFound::default();
+            txn_not_found.set_start_ts(*start_ts);
+            txn_not_found.set_primary_key(key.to_owned());
+            key_error.set_txn_not_found(txn_not_found);
+        }
         storage::Error::Txn(TxnError::Mvcc(MvccError::Deadlock {
             lock_ts,
             lock_key,
@@ -2100,6 +2715,19 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             deadlock.set_lock_key(lock_key.to_owned());
             deadlock.set_deadlock_key_hash(*deadlock_key_hash);
             key_error.set_deadlock(deadlock);
+        }
+        storage::Error::Txn(TxnError::Mvcc(MvccError::CommitTsExpired {
+            start_ts,
+            commit_ts,
+            key,
+            min_commit_ts,
+        })) => {
+            let mut commit_ts_expired = CommitTsExpired::default();
+            commit_ts_expired.set_start_ts(*start_ts);
+            commit_ts_expired.set_attempted_commit_ts(*commit_ts);
+            commit_ts_expired.set_key(key.to_owned());
+            commit_ts_expired.set_min_commit_ts(*min_commit_ts);
+            key_error.set_commit_ts_expired(commit_ts_expired);
         }
         _ => {
             error!("txn aborts"; "err" => ?err);

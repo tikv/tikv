@@ -39,7 +39,7 @@ tokio-threadpool = "0.1.13"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
-grpcio = { version = "0.5.0-alpha.3", features = [ "secure" ] }
+grpcio = { version = "0.5.0-alpha.5", features = [ "secure" ] }
 crossbeam = "0.7.2"
 fail = "0.3"
 fxhash = "0.2.1"
@@ -49,12 +49,12 @@ hex = "0.3"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
+rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
 features = ["nightly", "push", "process"]
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
+rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }

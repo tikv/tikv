@@ -21,7 +21,7 @@ tikv_util = { path = "../tikv_util" }
 futures = "0.1"
 tempfile = "3.0"
 tokio-threadpool = "0.1"
-grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
+grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ] }
 url = "2.0"
 hex = "0.3"
 external_storage = { path = "../external_storage" }
@@ -34,7 +34,7 @@ tidb_query = { path = "../tidb_query", default-features = false }
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
+rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
 default-features = false
 features = ["nightly", "push", "process"]
 
