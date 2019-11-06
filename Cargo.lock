@@ -1394,7 +1394,6 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/brson/rust-rocksdb?rev=548c2ef4696784232425aab09ac4841f2d81a0bb#548c2ef4696784232425aab09ac4841f2d81a0bb"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1411,7 +1410,6 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/brson/rust-rocksdb?rev=548c2ef4696784232425aab09ac4841f2d81a0bb#548c2ef4696784232425aab09ac4841f2d81a0bb"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2369,7 +2367,6 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/brson/rust-rocksdb?rev=548c2ef4696784232425aab09ac4841f2d81a0bb#548c2ef4696784232425aab09ac4841f2d81a0bb"
 dependencies = [
  "crc",
  "libc",
