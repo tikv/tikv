@@ -52,6 +52,8 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 const REQUEST_LOAD_ESTIMATE_SAMPLE_WINDOW: usize = 30;
 const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f32 = 0.3;
 const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 70;
+const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.0;
+const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_LATENCY: f64 = 15.0;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
@@ -198,14 +200,13 @@ impl BatchLimiter {
     fn with_latency(
         cmd: BatchableRequestKind,
         timeout: Option<Duration>,
+        latency_threshold: f64,
         latency_reader: HistogramReader,
         thread_load_reader: Arc<ThreadLoad>,
     ) -> Self {
         let mut estimator = RequestLoadEstimator::new();
-        if let Some(timeout) = timeout {
-            estimator.monitor_latency(latency_reader, timeout.as_millis() as f64 * 2.0);
-            estimator.monitor_thread(thread_load_reader, 0);
-        }
+        estimator.monitor_latency(latency_reader, latency_threshold);
+        estimator.monitor_thread(thread_load_reader, 0);
         BatchLimiter {
             cmd,
             timeout,
@@ -218,13 +219,15 @@ impl BatchLimiter {
 
     /// Construct a new `BatchLimiter` with provided timeout-duration and reader on thread-load
     /// Limiter will control batching w.r.t. thread load pressure.
+    #[allow(dead_code)]
     fn with_thread_load(
         cmd: BatchableRequestKind,
         timeout: Option<Duration>,
+        thread_load_threshold: usize,
         thread_load_reader: Arc<ThreadLoad>,
     ) -> Self {
         let mut estimator = RequestLoadEstimator::new();
-        estimator.monitor_thread(thread_load_reader, 100);
+        estimator.monitor_thread(thread_load_reader, thread_load_threshold);
         BatchLimiter {
             cmd,
             timeout,
@@ -683,6 +686,7 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
                 BatchLimiter::with_latency(
                     BatchableRequestKind::PointGet,
                     timeout,
+                    REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY,
                     HistogramReader::new(GRPC_MSG_HISTOGRAM_VEC.kv_get.clone()),
                     readpool_thread_load,
                 ),
@@ -693,9 +697,11 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
             // TODO(tabokie): maybe share one batcher
             BatchableRequestKind::Prewrite,
             (
-                BatchLimiter::with_thread_load(
+                BatchLimiter::with_latency(
                     BatchableRequestKind::Prewrite,
                     timeout,
+                    REQUEST_LOAD_ESTIMATE_WRITE_HIGH_LATENCY,
+                    HistogramReader::new(GRPC_MSG_HISTOGRAM_VEC.kv_prewrite.clone()),
                     sched_pool_thread_load.clone(),
                 ),
                 Box::new(WriteBatcher::new(BatchableRequestKind::Prewrite)),
@@ -704,9 +710,11 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         inners.insert(
             BatchableRequestKind::Commit,
             (
-                BatchLimiter::with_thread_load(
+                BatchLimiter::with_latency(
                     BatchableRequestKind::Commit,
                     timeout,
+                    REQUEST_LOAD_ESTIMATE_WRITE_HIGH_LATENCY,
+                    HistogramReader::new(GRPC_MSG_HISTOGRAM_VEC.kv_commit.clone()),
                     sched_pool_thread_load.clone(),
                 ),
                 Box::new(WriteBatcher::new(BatchableRequestKind::Commit)),
