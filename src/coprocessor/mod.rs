@@ -29,8 +29,6 @@ pub mod readpool_impl;
 mod statistics;
 mod tracker;
 
-use std::sync::Arc;
-
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
 pub use checksum::checksum_crc64_xor;
@@ -105,7 +103,7 @@ pub struct ReqContext {
     pub txn_start_ts: Option<u64>,
 
     /// The set of timestamps of locks that can be bypassed during the reading.
-    pub bypass_locks: Arc<TsSet>,
+    pub bypass_locks: TsSet,
 }
 
 impl ReqContext {
@@ -119,7 +117,7 @@ impl ReqContext {
         txn_start_ts: Option<u64>,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
-        let bypass_locks = Arc::new(TsSet::new(context.take_resolved_locks()));
+        let bypass_locks = TsSet::new(context.take_resolved_locks());
         Self {
             tag,
             context,

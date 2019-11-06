@@ -971,7 +971,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            let bypass_locks = Arc::new(TsSet::vec(ctx.take_resolved_locks()));
+            let bypass_locks = TsSet::vec(ctx.take_resolved_locks());
             Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
@@ -1043,9 +1043,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                             for mut get in gets {
                                 snap_store.set_start_ts(get.ts.unwrap());
                                 snap_store.set_isolation_level(get.ctx.get_isolation_level());
-                                snap_store.set_bypass_locks(Arc::new(TsSet::vec(
-                                    get.ctx.take_resolved_locks(),
-                                )));
+                                snap_store
+                                    .set_bypass_locks(TsSet::vec(get.ctx.take_resolved_locks()));
                                 results.push(
                                     snap_store
                                         .get(&get.key, &mut statistics)
@@ -1082,7 +1081,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            let bypass_locks = Arc::new(TsSet::new(ctx.take_resolved_locks()));
+            let bypass_locks = TsSet::new(ctx.take_resolved_locks());
             Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
@@ -1154,7 +1153,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            let bypass_locks = Arc::new(TsSet::new(ctx.take_resolved_locks()));
+            let bypass_locks = TsSet::new(ctx.take_resolved_locks());
             Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {

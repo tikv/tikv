@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
-use std::sync::Arc;
 use std::time::Duration;
 
 use futures::sync::mpsc;
@@ -141,7 +140,7 @@ impl<E: Engine> Endpoint<E> {
                         dag.get_start_ts(),
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
-                        Arc::clone(&req_ctx.bypass_locks),
+                        req_ctx.bypass_locks.clone(),
                     );
                     dag::build_handler(
                         dag,

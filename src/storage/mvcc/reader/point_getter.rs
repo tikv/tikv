@@ -7,8 +7,6 @@ use crate::storage::mvcc::{default_not_found_error, Lock, Result, TsSet};
 use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value, CF_LOCK};
 use crate::storage::{CF_DEFAULT, CF_WRITE};
 
-use std::sync::Arc;
-
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
     snapshot: S,
@@ -17,7 +15,7 @@ pub struct PointGetterBuilder<S: Snapshot> {
     omit_value: bool,
     isolation_level: IsolationLevel,
     ts: u64,
-    bypass_locks: Arc<TsSet>,
+    bypass_locks: TsSet,
 }
 
 impl<S: Snapshot> PointGetterBuilder<S> {
@@ -77,7 +75,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     ///
     /// Defaults to none.
     #[inline]
-    pub fn bypass_locks(mut self, locks: Arc<TsSet>) -> Self {
+    pub fn bypass_locks(mut self, locks: TsSet) -> Self {
         self.bypass_locks = locks;
         self
     }
@@ -122,7 +120,7 @@ pub struct PointGetter<S: Snapshot> {
     omit_value: bool,
     isolation_level: IsolationLevel,
     ts: u64,
-    bypass_locks: Arc<TsSet>,
+    bypass_locks: TsSet,
 
     statistics: Statistics,
 

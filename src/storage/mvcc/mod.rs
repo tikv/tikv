@@ -15,6 +15,7 @@ pub use self::write::{Write, WriteType};
 
 use std::error;
 use std::io;
+use std::sync::Arc;
 use tikv_util::collections::HashSet;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -32,37 +33,46 @@ pub fn compose_ts(physical: u64, logical: u64) -> u64 {
     (physical << TSO_PHYSICAL_SHIFT_BITS) + logical
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TsSet {
-    Vec(Vec<u64>),
-    Set(HashSet<u64>),
+    // When the set is empty, avoid the useless clone of Arc.
+    Empty,
+    Vec(Arc<Vec<u64>>),
+    Set(Arc<HashSet<u64>>),
 }
 
 impl Default for TsSet {
     fn default() -> TsSet {
-        TsSet::new(vec![])
+        TsSet::Empty
     }
 }
 
 impl TsSet {
     #[inline]
     pub fn new(ts: Vec<u64>) -> Self {
-        if ts.len() <= TS_SET_USE_VEC_LIMIT {
+        if ts.is_empty() {
+            TsSet::Empty
+        } else if ts.len() <= TS_SET_USE_VEC_LIMIT {
             // If there are too less elements in `ts`, use Vec directly instead of making a
-            TsSet::Vec(ts)
+            TsSet::Vec(Arc::new(ts))
         } else {
-            TsSet::Set(ts.into_iter().collect())
+            TsSet::Set(Arc::new(ts.into_iter().collect()))
         }
     }
 
     #[inline]
     pub fn vec(ts: Vec<u64>) -> Self {
-        TsSet::Vec(ts)
+        if ts.is_empty() {
+            TsSet::Empty
+        } else {
+            TsSet::Vec(Arc::new(ts))
+        }
     }
 
     #[inline]
     pub fn contains(&self, ts: u64) -> bool {
         match self {
+            TsSet::Empty => false,
             TsSet::Vec(vec) => vec.contains(&ts),
             TsSet::Set(set) => set.contains(&ts),
         }

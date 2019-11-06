@@ -9,8 +9,6 @@ use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TsSet};
 use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder, Write};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
-use std::sync::Arc;
-
 use super::{Error, Result};
 
 pub trait Store: Send {
@@ -175,7 +173,7 @@ pub struct SnapshotStore<S: Snapshot> {
     start_ts: u64,
     isolation_level: IsolationLevel,
     fill_cache: bool,
-    bypass_locks: Arc<TsSet>,
+    bypass_locks: TsSet,
 
     point_getter_cache: Option<PointGetter<S>>,
 }
@@ -188,7 +186,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .multi(false)
-            .bypass_locks(Arc::clone(&self.bypass_locks))
+            .bypass_locks(self.bypass_locks.clone())
             .build()?;
         let v = point_getter.get(key)?;
         statistics.add(&point_getter.take_statistics());
@@ -202,7 +200,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                     .fill_cache(self.fill_cache)
                     .isolation_level(self.isolation_level)
                     .multi(true)
-                    .bypass_locks(Arc::clone(&self.bypass_locks))
+                    .bypass_locks(self.bypass_locks.clone())
                     .build()?,
             );
         }
@@ -236,7 +234,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
             .multi(true)
-            .bypass_locks(Arc::clone(&self.bypass_locks))
+            .bypass_locks(self.bypass_locks.clone())
             .build()?;
 
         let mut values: Vec<MaybeUninit<Element>> = Vec::with_capacity(keys.len());
@@ -271,7 +269,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .omit_value(key_only)
             .fill_cache(self.fill_cache)
             .isolation_level(self.isolation_level)
-            .bypass_locks(Arc::clone(&self.bypass_locks))
+            .bypass_locks(self.bypass_locks.clone())
             .build()?;
 
         Ok(scanner)
@@ -293,7 +291,7 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
                 .omit_value(false)
                 .fill_cache(self.fill_cache)
                 .isolation_level(self.isolation_level)
-                .bypass_locks(Arc::clone(&self.bypass_locks))
+                .bypass_locks(self.bypass_locks.clone())
                 .build_entry_scanner()?;
 
         Ok(scanner)
@@ -306,7 +304,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         start_ts: u64,
         isolation_level: IsolationLevel,
         fill_cache: bool,
-        bypass_locks: Arc<TsSet>,
+        bypass_locks: TsSet,
     ) -> Self {
         SnapshotStore {
             snapshot,
@@ -330,7 +328,7 @@ impl<S: Snapshot> SnapshotStore<S> {
     }
 
     #[inline]
-    pub fn set_bypass_locks(&mut self, locks: Arc<TsSet>) {
+    pub fn set_bypass_locks(&mut self, locks: TsSet) {
         self.bypass_locks = locks;
     }
 

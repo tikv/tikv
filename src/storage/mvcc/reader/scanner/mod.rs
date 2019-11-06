@@ -17,8 +17,6 @@ use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
 pub use self::txn_entry::Scanner as EntryScanner;
 
-use std::sync::Arc;
-
 /// `Scanner` factory.
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
 
@@ -87,7 +85,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     ///
     /// Default is empty.
     #[inline]
-    pub fn bypass_locks(mut self, locks: Arc<TsSet>) -> Self {
+    pub fn bypass_locks(mut self, locks: TsSet) -> Self {
         self.bypass_locks = locks;
         self
     }
@@ -164,7 +162,7 @@ pub struct ScannerConfig<S: Snapshot> {
     ts: u64,
     desc: bool,
 
-    bypass_locks: Arc<TsSet>,
+    bypass_locks: TsSet,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
