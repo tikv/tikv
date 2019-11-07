@@ -1318,7 +1318,7 @@ mod tests {
             },
         };
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
+        let ret = process_write_impl(cmd, snap, &Some(m), statistics)?;
         if let ProcessResult::MultiRes { results } = ret.pr {
             if !results.is_empty() {
                 let info = LockInfo::default();
@@ -1350,7 +1350,7 @@ mod tests {
             },
         };
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
+        let ret = process_write_impl(cmd, snap, &Some(m), statistics)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())

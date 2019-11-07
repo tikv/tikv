@@ -401,7 +401,7 @@ impl ApplyContext {
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.enable_sync_log && self.sync_log_hint;
-        if !self.kv_wbs.is_empty() {
+        if !self.kv_wbs.is_empty() && !self.kv_wb().is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(need_sync);
             self.engines
@@ -810,8 +810,6 @@ impl ApplyDelegate {
             if should_write_to_engine(&cmd, apply_ctx.kv_wb) {
                 apply_ctx.commit(self);
             }
-            apply_ctx.check_switch_write_batch();
-
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
 
@@ -953,15 +951,20 @@ impl ApplyDelegate {
         assert!(!self.pending_remove);
 
         ctx.exec_ctx = Some(self.new_ctx(index, term));
+        let pos = ctx.kv_wb;
         ctx.kv_kv_wb_mut().set_save_point();
         let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
             Ok(a) => {
-                ctx.kv_kv_wb_mut().pop_save_point().unwrap();
+                ctx.kv_wbs[pos].pop_save_point().unwrap();
                 a
             }
             Err(e) => {
                 // clear dirty values.
-                ctx.kv_kv_wb_mut().rollback_to_save_point().unwrap();
+                for i in pos..ctx.kv_wb {
+                    ctx.kv_wbs[i + 1].clear();
+                }
+                ctx.kv_wbs[pos].rollback_to_save_point().unwrap();
+                ctx.kv_wb = pos;
                 match e {
                     Error::EpochNotMatch(..) => debug!(
                         "epoch not match";
@@ -1112,7 +1115,7 @@ impl ApplyDelegate {
 
     fn exec_write_cmd(
         &mut self,
-        ctx: &ApplyContext,
+        ctx: &mut ApplyContext,
         req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         fail_point!(
@@ -1129,6 +1132,9 @@ impl ApplyDelegate {
         let mut ranges = vec![];
         let mut ssts = vec![];
         for req in requests {
+            if responses.len() % 4 == 0 {
+                ctx.check_switch_write_batch();
+            }
             let cmd_type = req.get_cmd_type();
             let mut resp = match cmd_type {
                 CmdType::Put => self.handle_put(ctx, req),
@@ -2642,7 +2648,9 @@ impl ApplyFsm {
                 apply_ctx.timer = Some(SlowTimer::new());
             }
             if apply_ctx.kv_wbs.is_empty() {
-                apply_ctx.kv_wbs.push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+                apply_ctx
+                    .kv_wbs
+                    .push(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
                 apply_ctx.kv_wb = 0;
             }
             self.delegate
@@ -3016,38 +3024,38 @@ mod tests {
     #[test]
     fn test_should_write_to_engine() {
         // ComputeHash command
-//        let mut req = RaftCmdRequest::new();
-//        req.mut_admin_request()
-//            .set_cmd_type(AdminCmdType::ComputeHash);
-//        let wb = WriteBatch::new();
-//        assert_eq!(should_write_to_engine(&req, wb.count()), true);
-//
-//        // IngestSST command
-//        let mut req = Request::new();
-//        req.set_cmd_type(CmdType::IngestSST);
-//        req.set_ingest_sst(IngestSSTRequest::new());
-//        let mut cmd = RaftCmdRequest::new();
-//        cmd.mut_requests().push(req);
-//        let wb = WriteBatch::new();
-//        assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
-//
-//        // Write batch keys reach WRITE_BATCH_MAX_KEYS
-//        let req = RaftCmdRequest::new();
-//        let wb = WriteBatch::new();
-//        for i in 0..WRITE_BATCH_MAX_KEYS {
-//            let key = format!("key_{}", i);
-//            wb.put(key.as_bytes(), b"value").unwrap();
-//        }
-//        assert_eq!(should_write_to_engine(&req, wb.count()), true);
-//
-//        // Write batch keys not reach WRITE_BATCH_MAX_KEYS
-//        let req = RaftCmdRequest::new();
-//        let wb = WriteBatch::new();
-//        for i in 0..WRITE_BATCH_MAX_KEYS - 1 {
-//            let key = format!("key_{}", i);
-//            wb.put(key.as_bytes(), b"value").unwrap();
-//        }
-//        assert_eq!(should_write_to_engine(&req, wb.count()), false);
+        let mut req = RaftCmdRequest::new();
+        req.mut_admin_request()
+            .set_cmd_type(AdminCmdType::ComputeHash);
+        let wb = WriteBatch::new();
+        assert_eq!(should_write_to_engine(&req, wb.count()), true);
+
+        // IngestSST command
+        let mut req = Request::new();
+        req.set_cmd_type(CmdType::IngestSst);
+        req.set_ingest_sst(IngestSstRequest::new());
+        let mut cmd = RaftCmdRequest::new();
+        cmd.mut_requests().push(req);
+        let wb = WriteBatch::new();
+        assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
+
+        // Write batch keys reach WRITE_BATCH_MAX_KEYS
+        let req = RaftCmdRequest::new();
+        let wb = WriteBatch::new();
+        for i in 0..MAX_WRITE_BATCH_NUM {
+            let key = format!("key_{}", i);
+            wb.put(key.as_bytes(), b"value").unwrap();
+        }
+        assert_eq!(should_write_to_engine(&req, wb.count()), true);
+
+        // Write batch keys not reach WRITE_BATCH_MAX_KEYS
+        let req = RaftCmdRequest::new();
+        let wb = WriteBatch::new();
+        for i in 0..MAX_WRITE_BATCH_NUM - 1 {
+            let key = format!("key_{}", i);
+            wb.put(key.as_bytes(), b"value").unwrap();
+        }
+        assert_eq!(should_write_to_engine(&req, wb.count()), false);
     }
 
     fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)

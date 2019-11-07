@@ -742,7 +742,7 @@ impl Default for DbConfig {
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
             enable_unordered_write: false,
-            enable_multithread_write: false,
+            enable_multithread_write: true,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
