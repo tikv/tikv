@@ -12,8 +12,7 @@ use tidb_query_datatype::FieldTypeFlag;
 use tikv_util::codec::BytesSlice;
 use tipb::FieldType;
 
-/// `Chunk` stores multiple rows of data in Apache Arrow format.
-/// See https://arrow.apache.org/docs/memory_layout.html
+/// `Chunk` stores multiple rows of data.
 /// Values are appended in compact format and can be directly accessed without decoding.
 /// When the chunk is done processing, we can reuse the allocated memory by resetting it.
 pub struct Chunk {

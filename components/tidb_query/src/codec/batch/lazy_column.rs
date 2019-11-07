@@ -17,7 +17,7 @@ use crate::expr::EvalContext;
 /// TODO:
 /// Since currently the data format in response can be the same as in storage, we use this structure
 /// to avoid unnecessary repeated serialization / deserialization. In future, Coprocessor will
-/// respond all data in Arrow format which is different to the format in storage. At that time,
+/// respond all data in Chunk format which is different to the format in storage. At that time,
 /// this structure is no longer useful and should be removed.
 #[derive(Clone, Debug)]
 pub enum LazyBatchColumn {
@@ -203,11 +203,11 @@ impl LazyBatchColumn {
         }
     }
 
-    /// Returns maximum encoded size in arrow format.
-    pub fn maximum_encoded_size_arrow(&self, logical_rows: &[usize]) -> Result<usize> {
+    /// Returns maximum encoded size in chunk format.
+    pub fn maximum_encoded_size_chunk(&self, logical_rows: &[usize]) -> Result<usize> {
         match self {
             LazyBatchColumn::Raw(v) => Ok(v.total_len()),
-            LazyBatchColumn::Decoded(v) => v.maximum_encoded_size_arrow(logical_rows),
+            LazyBatchColumn::Decoded(v) => v.maximum_encoded_size_chunk(logical_rows),
         }
     }
 
