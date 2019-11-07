@@ -3,16 +3,24 @@ use crate::scheduler::Scheduler;
 use crate::task::ArcTask;
 
 use crossbeam::deque::{Steal, Stealer, Worker as LocalQueue};
+use crossbeam::sync::WaitGroup;
 use rand::prelude::*;
+use tokio_timer::timer::Handle;
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
+/// A worker thread for running `Future`s.
 pub struct Worker {
     pub local: LocalQueue<ArcTask>,
     pub stealers: Vec<Stealer<ArcTask>>,
     pub scheduler: Scheduler,
+    pub timer_handle: Handle,
+    pub timer_wg: Option<WaitGroup>,
     pub parker: Parker,
+    pub proportions: Proportions,
     pub after_start: Arc<dyn Fn() + Send + Sync + 'static>,
 }
 
@@ -23,10 +31,13 @@ impl Worker {
             .expect("start worker thread error");
     }
 
-    fn start_impl(self) {
+    fn start_impl(mut self) {
         (self.after_start)();
         let mut rng = thread_rng();
         let mut step = 0;
+        let _guard = tokio_timer::set_default(&self.timer_handle);
+        println!("timer set");
+        self.timer_wg.take().expect("timer wg missing").wait();
         loop {
             if let Some(task) = self.find_task(&mut rng) {
                 step = 0;
@@ -56,11 +67,7 @@ impl Worker {
         while retry {
             retry = false;
             // Local is empty, steal from injector
-            let i = match rng.next_u32() {
-                0..=4160749567 => 0,
-                4160749568..=4261412863 => 1,
-                _ => 2,
-            };
+            let i = self.proportions.get_level(rng.next_u32());
             for j in 0..3 {
                 let idx = (i + j) % 3;
                 match self
@@ -89,5 +96,83 @@ impl Worker {
             }
         }
         None
+    }
+}
+
+// 127/128
+const MAX_LEVEL0_PROPORTION: u32 = (1 << 25) * ((1 << 7) - 1);
+
+// 1/2
+const MIN_LEVEL0_PROPORTION: u32 = 1 << 16;
+
+// 31/32
+const DEFAULT_LEVEL0_PROPORTION: u32 = (1 << 27) * ((1 << 5) - 1);
+
+#[derive(Clone)]
+pub struct Proportions(Arc<[AtomicU32; 2]>);
+
+impl Proportions {
+    pub fn new() -> Proportions {
+        Proportions(Arc::new([
+            AtomicU32::new(DEFAULT_LEVEL0_PROPORTION),
+            AtomicU32::new(DEFAULT_LEVEL0_PROPORTION / 8 + (1 << 24) * 7),
+        ]))
+    }
+
+    fn get_level(&self, rand_val: u32) -> usize {
+        if rand_val < self.0[0].load(Ordering::SeqCst) {
+            0
+        } else if rand_val < self.0[1].load(Ordering::SeqCst) {
+            1
+        } else {
+            2
+        }
+    }
+}
+
+// Update proportions interval
+const UPDATE_PROPORTIONS_INTERVAL: Duration = Duration::from_secs(1);
+
+pub async fn update_proportions(scheduler: Scheduler, proportions: Proportions) {
+    let mut last_level_elapsed = [0u64; 3];
+    loop {
+        tokio_timer::delay_for(UPDATE_PROPORTIONS_INTERVAL).await;
+        let new_level_elapsed = [
+            scheduler.get_level_elapsed(0),
+            scheduler.get_level_elapsed(1),
+            scheduler.get_level_elapsed(2),
+        ];
+        let level_elapsed_diff = [
+            new_level_elapsed[0] - last_level_elapsed[0],
+            new_level_elapsed[1] - last_level_elapsed[1],
+            new_level_elapsed[2] - last_level_elapsed[2],
+        ];
+        let total = (level_elapsed_diff[0] + level_elapsed_diff[1] + level_elapsed_diff[2]) as f64;
+        let level0_percentage = level_elapsed_diff[0] as f64 / total;
+        let old_proportions = [
+            proportions.0[0].load(Ordering::SeqCst),
+            proportions.0[1].load(Ordering::SeqCst),
+        ];
+        let mut new_proportions = old_proportions;
+        if level0_percentage < 0.75 {
+            new_proportions[0] = u32::max(
+                ((u64::from(old_proportions[0]) + (1 << 32)) / 2) as u32,
+                MAX_LEVEL0_PROPORTION,
+            );
+            // level 1 : level 2 = 7 : 1
+            new_proportions[1] = new_proportions[0] / 8 + (1 << 24) * 7;
+            proportions.0[1].store(new_proportions[1], Ordering::SeqCst);
+            proportions.0[0].store(new_proportions[0], Ordering::SeqCst);
+        } else if level0_percentage > 0.85 {
+            new_proportions[0] = u32::max(
+                ((u64::from(old_proportions[0]) + (1 << 31)) / 2) as u32,
+                MIN_LEVEL0_PROPORTION,
+            );
+            // level 1 : level 2 = 7 : 1
+            new_proportions[1] = new_proportions[0] / 8 + (1 << 24) * 7;
+            proportions.0[0].store(new_proportions[0], Ordering::SeqCst);
+            proportions.0[1].store(new_proportions[1], Ordering::SeqCst);
+        }
+        last_level_elapsed = new_level_elapsed;
     }
 }

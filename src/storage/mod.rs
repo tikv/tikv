@@ -26,8 +26,7 @@ use futures::{future, Future};
 use futures03::prelude::*;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
-use multi_level_pool::MultiLevelPool;
-use rand::prelude::*;
+use multi_level_pool::{MultiLevelPool, SpawnOption};
 use tikv_util::collections::HashMap;
 
 use self::metrics::*;
@@ -954,8 +953,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ) -> impl Future<Item = Option<Value>, Error = Error> {
         const CMD: &str = "get";
         let priority = get_priority_tag(ctx.get_priority());
-        // TODO: get token from context
-        let token = thread_rng().next_u64();
 
         let res = self.read_pool.spawn_handle_legacy(
             async move {
@@ -989,7 +986,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 tls_collect_command_duration(CMD, command_duration.elapsed());
                 result
             },
-            token,
+            // TODO: pass token from context
+            SpawnOption::default(),
         );
 
         future::result(res)
@@ -1008,8 +1006,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
-        // TODO: get token from context
-        let token = thread_rng().next_u64();
 
         let res = self.read_pool.spawn_handle_legacy(
             async move {
@@ -1042,7 +1038,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 tls_collect_command_duration(CMD, command_duration.elapsed());
                 Ok(results)
             },
-            token,
+            // TODO: pass token from context
+            SpawnOption::default(),
         );
 
         future::result(res)
@@ -1061,8 +1058,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "batch_get";
         let priority = get_priority_tag(ctx.get_priority());
-        // TODO: get token from context
-        let token = thread_rng().next_u64();
 
         let res = self.read_pool.spawn_handle_legacy(
             async move {
@@ -1107,7 +1102,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 tls_collect_command_duration(CMD, command_duration.elapsed());
                 result
             },
-            token,
+            // TODO: pass token from context
+            SpawnOption::default(),
         );
 
         future::result(res)
@@ -1131,8 +1127,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "scan";
         let priority = get_priority_tag(ctx.get_priority());
-        // TODO: get token from context
-        let token = thread_rng().next_u64();
 
         let res = self.read_pool.spawn_handle_legacy(
             async move {
@@ -1178,7 +1172,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 tls_collect_command_duration(CMD, command_duration.elapsed());
                 result
             },
-            token,
+            // TODO: pass token from context
+            SpawnOption::default(),
         );
 
         future::result(res)
@@ -1540,8 +1535,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
         const CMD: &str = "raw_get";
         let priority = get_priority_tag(ctx.get_priority());
-        // TODO: get token from context
-        let token = thread_rng().next_u64();
 
         let res = self.read_pool.spawn_handle_legacy(
             async move {
@@ -1568,7 +1561,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 tls_collect_command_duration(CMD, command_duration.elapsed());
                 result
             },
-            token,
+            // TODO: pass token from context
+            SpawnOption::default(),
         );
 
         future::result(res)
@@ -1586,8 +1580,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
-        // TODO: get token from context
-        let token = thread_rng().next_u64();
 
         let res = self.read_pool.spawn_handle_legacy(
             async move {
@@ -1608,7 +1600,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 tls_collect_command_duration(CMD, command_duration.elapsed());
                 results
             },
-            token,
+            // TODO: pass token from context
+            SpawnOption::default(),
         );
 
         future::result(res)
@@ -1625,8 +1618,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_get";
         let priority = get_priority_tag(ctx.get_priority());
-        // TODO: get token from context
-        let token = thread_rng().next_u64();
 
         let res = self.read_pool.spawn_handle_legacy(
             async move {
@@ -1665,7 +1656,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 tls_collect_command_duration(CMD, command_duration.elapsed());
                 result
             },
-            token,
+            // TODO: pass token from context
+            SpawnOption::default(),
         );
 
         future::result(res)
@@ -1904,8 +1896,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_scan";
         let priority = get_priority_tag(ctx.get_priority());
-        // TODO: get token from context
-        let token = thread_rng().next_u64();
 
         let res = self.read_pool.spawn_handle_legacy(
             async move {
@@ -1950,7 +1940,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 tls_collect_command_duration(CMD, command_duration.elapsed());
                 result
             },
-            token,
+            // TODO: pass token from context
+            SpawnOption::default(),
         );
 
         future::result(res)
@@ -2006,8 +1997,6 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_scan";
         let priority = get_priority_tag(ctx.get_priority());
-        // TODO: get token from context
-        let token = thread_rng().next_u64();
 
         let res = self.read_pool.spawn_handle_legacy(
             async move {
@@ -2067,7 +2056,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 tls_collect_command_duration(CMD, command_duration.elapsed());
                 result
             },
-            token,
+            // TODO: pass token from context
+            SpawnOption::default(),
         );
 
         future::result(res)

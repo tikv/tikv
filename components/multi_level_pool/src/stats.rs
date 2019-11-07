@@ -1,16 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use crossbeam::epoch::{self, Atomic};
-
 use dashmap::DashMap;
 
-// Swap interval (in secs)
-const SWAP_INTERVAL: u64 = 20;
+// Swap interval
+const SWAP_INTERVAL: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Default)]
 pub struct TaskStats {
@@ -27,20 +26,6 @@ impl StatsMap {
     pub fn new() -> Self {
         let new = Atomic::new(DashMap::default());
         let old = Atomic::new(DashMap::default());
-        let new2 = new.clone();
-        let old2 = old.clone();
-        thread::spawn(move || {
-            let guard = &epoch::pin();
-            loop {
-                thread::sleep(Duration::from_secs(SWAP_INTERVAL));
-                let new_ptr = new2.load(Ordering::SeqCst, guard);
-                let old_ptr = old2.swap(new_ptr, Ordering::SeqCst, guard);
-                unsafe {
-                    old_ptr.deref().clear();
-                }
-                new2.store(old_ptr, Ordering::SeqCst);
-            }
-        });
         StatsMap { new, old }
     }
 
@@ -60,6 +45,23 @@ impl StatsMap {
                 .deref()
                 .get_or_insert(&key, Arc::new(TaskStats::default()));
             stats.clone()
+        }
+    }
+
+    pub fn async_cleanup(&self) -> impl Future<Output = ()> {
+        let new = self.new.clone();
+        let old = self.old.clone();
+        async move {
+            loop {
+                tokio_timer::delay_for(SWAP_INTERVAL).await;
+                let guard = &epoch::pin();
+                let new_ptr = new.load(Ordering::SeqCst, guard);
+                let old_ptr = old.swap(new_ptr, Ordering::SeqCst, guard);
+                unsafe {
+                    old_ptr.deref().clear();
+                }
+                new.store(old_ptr, Ordering::SeqCst);
+            }
         }
     }
 }

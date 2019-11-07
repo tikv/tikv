@@ -20,6 +20,7 @@ pub struct Task {
     // this token's total elapsed time
     pub task_stats: Arc<TaskStats>,
     level: usize,
+    pub fixed_level: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -34,7 +35,12 @@ unsafe impl Send for Task {}
 unsafe impl Sync for Task {}
 
 impl ArcTask {
-    pub fn new<F>(future: F, scheduler: Scheduler, task_stats: Arc<TaskStats>) -> ArcTask
+    pub fn new<F>(
+        future: F,
+        scheduler: Scheduler,
+        task_stats: Arc<TaskStats>,
+        fixed_level: Option<usize>,
+    ) -> ArcTask
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -44,6 +50,7 @@ impl ArcTask {
             status: AtomicU8::new(WAITING),
             task_stats,
             level: 0,
+            fixed_level,
         });
         let future: *const Task = Arc::into_raw(future) as *const Task;
         unsafe { task(future) }

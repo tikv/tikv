@@ -4,10 +4,13 @@ use crate::metrics::*;
 use crate::park::Parker;
 use crate::scheduler::Scheduler;
 use crate::stats::StatsMap;
-use crate::worker::Worker;
-use crate::MultiLevelPool;
+use crate::tokio_park::DefaultPark;
+use crate::worker::{self, Proportions, Worker};
+use crate::{MultiLevelPool, SpawnOption};
 
 use crossbeam::deque::Worker as LocalQueue;
+use crossbeam::sync::WaitGroup;
+use tokio_timer::Timer;
 
 use std::sync::Arc;
 use std::thread;
@@ -28,6 +31,8 @@ impl Config {
         }
     }
 }
+
+const BACKGROUND_TASK_NUM: usize = 2;
 
 pub struct Builder {
     name_prefix: Option<String>,
@@ -92,7 +97,7 @@ impl Builder {
     }
 
     pub fn max_tasks(&mut self, val: usize) -> &mut Self {
-        self.max_tasks = val;
+        self.max_tasks = val + BACKGROUND_TASK_NUM;
         self
     }
 
@@ -102,12 +107,10 @@ impl Builder {
         } else {
             "multi_level_pool"
         };
-        let env = Arc::new(super::Env {
-            on_tick: self.on_tick.take(),
-            metrics_running_task_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name]),
-            metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
-        });
         let scheduler = Scheduler::new(self.pool_size);
+        let mut timer = Timer::new(DefaultPark::new());
+        let timer_wg = WaitGroup::new();
+        let proportions = Proportions::new();
 
         // Create workers
         let mut workers: Vec<Worker> = Vec::with_capacity(self.pool_size);
@@ -127,7 +130,10 @@ impl Builder {
                 local,
                 stealers,
                 scheduler: scheduler.clone(),
+                timer_handle: timer.handle(),
+                timer_wg: Some(timer_wg.clone()),
                 parker: Parker::new(),
+                proportions: proportions.clone(),
                 after_start: self.after_start_func.clone(),
             };
             workers.push(worker);
@@ -138,12 +144,47 @@ impl Builder {
                 .stack_size(self.stack_size);
             worker.start(thread_builder);
         }
-        MultiLevelPool {
+
+        let async_update_proportions = worker::update_proportions(scheduler.clone(), proportions);
+        let stats_map = StatsMap::new();
+        let async_cleanup_stats = stats_map.async_cleanup();
+        let env = Arc::new(super::Env {
+            on_tick: self.on_tick.take(),
+            metrics_running_task_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name]),
+            metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
+        });
+
+        thread::Builder::new()
+            .name("multi_level_pool_timer".to_string())
+            .spawn(move || loop {
+                timer.turn(None).expect("multi level pool timer fails");
+            })
+            .expect("unable to spawn multi level pool timer thread");
+
+        let pool = MultiLevelPool {
             scheduler,
-            stats_map: StatsMap::new(),
+            stats_map,
             env,
             pool_size: self.pool_size,
             max_tasks: self.max_tasks,
-        }
+        };
+        timer_wg.wait();
+        pool.spawn(
+            async_update_proportions,
+            SpawnOption {
+                task_id: 0,
+                fixed_level: Some(0),
+            },
+        )
+        .expect("unable to spawn async update proportions task");
+        pool.spawn(
+            async_cleanup_stats,
+            SpawnOption {
+                task_id: 0,
+                fixed_level: Some(0),
+            },
+        )
+        .expect("unable to spawn async cleanup stats task");
+        pool
     }
 }

@@ -312,9 +312,9 @@ dependencies = [
 
 [[package]]
 name = "cfg-if"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b486ce3ccf7ffd79fdeb678eac06a9e6c09fc88d33836340becb8fffe87c5e33"
+checksum = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 
 [[package]]
 name = "chrono"
@@ -1338,12 +1338,12 @@ dependencies = [
  "time",
  "tokio",
  "tokio-buf",
- "tokio-executor",
+ "tokio-executor 0.1.8",
  "tokio-io",
  "tokio-reactor",
  "tokio-tcp",
  "tokio-threadpool",
- "tokio-timer",
+ "tokio-timer 0.2.11",
  "want",
 ]
 
@@ -1795,8 +1795,10 @@ dependencies = [
  "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git?rev=7dd3d42f0c21384950afe6a46ed85352acf71625)",
  "rand 0.7.2",
  "tikv_util",
+ "tokio-executor 0.2.0-alpha.6",
  "tokio-sync 0.1.7",
  "tokio-sync 0.2.0-alpha.6",
+ "tokio-timer 0.3.0-alpha.6",
 ]
 
 [[package]]
@@ -2107,7 +2109,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio-core",
- "tokio-timer",
+ "tokio-timer 0.2.11",
 ]
 
 [[package]]
@@ -2647,10 +2649,10 @@ dependencies = [
  "serde_urlencoded",
  "time",
  "tokio",
- "tokio-executor",
+ "tokio-executor 0.1.8",
  "tokio-io",
  "tokio-threadpool",
- "tokio-timer",
+ "tokio-timer 0.2.11",
  "url 1.7.2",
  "uuid",
  "winreg",
@@ -3190,7 +3192,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tokio-threadpool",
- "tokio-timer",
+ "tokio-timer 0.2.11",
 ]
 
 [[package]]
@@ -3397,12 +3399,12 @@ dependencies = [
  "tipb",
  "tipb_helper",
  "tokio-core",
- "tokio-executor",
+ "tokio-executor 0.1.8",
  "tokio-fs",
  "tokio-io",
  "tokio-sync 0.1.7",
  "tokio-threadpool",
- "tokio-timer",
+ "tokio-timer 0.2.11",
  "toml",
  "url 2.1.0",
  "utime",
@@ -3464,11 +3466,11 @@ dependencies = [
  "tikv_alloc",
  "time",
  "tokio-core",
- "tokio-executor",
+ "tokio-executor 0.1.8",
  "tokio-sync 0.1.7",
  "tokio-sync 0.2.0-alpha.6",
  "tokio-threadpool",
- "tokio-timer",
+ "tokio-timer 0.2.11",
  "toml",
  "url 2.1.0",
  "utime",
@@ -3526,14 +3528,14 @@ dependencies = [
  "num_cpus",
  "tokio-codec",
  "tokio-current-thread",
- "tokio-executor",
+ "tokio-executor 0.1.8",
  "tokio-fs",
  "tokio-io",
  "tokio-reactor",
  "tokio-sync 0.1.7",
  "tokio-tcp",
  "tokio-threadpool",
- "tokio-timer",
+ "tokio-timer 0.2.11",
  "tokio-udp",
  "tokio-uds",
 ]
@@ -3573,10 +3575,10 @@ dependencies = [
  "mio",
  "scoped-tls",
  "tokio",
- "tokio-executor",
+ "tokio-executor 0.1.8",
  "tokio-io",
  "tokio-reactor",
- "tokio-timer",
+ "tokio-timer 0.2.11",
 ]
 
 [[package]]
@@ -3586,7 +3588,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d16217cad7f1b840c5a97dfb3c43b0c871fef423a6e8d2118c604e843662a443"
 dependencies = [
  "futures",
- "tokio-executor",
+ "tokio-executor 0.1.8",
 ]
 
 [[package]]
@@ -3597,6 +3599,15 @@ checksum = "0f27ee0e6db01c5f0b2973824547ce7e637b2ed79b891a9677b0de9bd532b6ac"
 dependencies = [
  "crossbeam-utils",
  "futures",
+]
+
+[[package]]
+name = "tokio-executor"
+version = "0.2.0-alpha.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ee9ceecf69145923834ea73f32ba40c790fd877b74a7817dd0b089f1eb9c7c8"
+dependencies = [
+ "futures-util-preview",
 ]
 
 [[package]]
@@ -3635,7 +3646,7 @@ dependencies = [
  "num_cpus",
  "parking_lot 0.7.1",
  "slab",
- "tokio-executor",
+ "tokio-executor 0.1.8",
  "tokio-io",
  "tokio-sync 0.1.7",
 ]
@@ -3689,7 +3700,7 @@ dependencies = [
  "num_cpus",
  "rand 0.6.5",
  "slab",
- "tokio-executor",
+ "tokio-executor 0.1.8",
 ]
 
 [[package]]
@@ -3701,7 +3712,21 @@ dependencies = [
  "crossbeam-utils",
  "futures",
  "slab",
- "tokio-executor",
+ "tokio-executor 0.1.8",
+]
+
+[[package]]
+name = "tokio-timer"
+version = "0.3.0-alpha.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b97c1587fe71018eb245a4a9daa13a5a3b681bbc1f7fdadfe24720e141472c13"
+dependencies = [
+ "crossbeam-utils",
+ "futures-core-preview",
+ "futures-util-preview",
+ "slab",
+ "tokio-executor 0.2.0-alpha.6",
+ "tokio-sync 0.2.0-alpha.6",
 ]
 
 [[package]]

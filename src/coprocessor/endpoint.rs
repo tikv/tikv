@@ -18,8 +18,7 @@ use tipb::{DagRequest, ExecType};
 use crate::server::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::{self, Engine, SnapshotStore};
-use multi_level_pool::MultiLevelPool;
-use rand::prelude::*;
+use multi_level_pool::{MultiLevelPool, SpawnOption};
 use tikv_util::Either;
 
 use crate::coprocessor::metrics::*;
@@ -279,13 +278,12 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl StdFuture<Output = Result<coppb::Response>>> {
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
-        // TODO: get token from context
-        let token = thread_rng().next_u64();
 
         self.read_pool
             .spawn_handle(
                 Self::handle_unary_request_impl(tracker, handler_builder),
-                token,
+                // TODO: pass token from context
+                SpawnOption::default(),
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)
     }
@@ -420,9 +418,6 @@ impl<E: Engine> Endpoint<E> {
     ) -> Result<impl Stream<Item = coppb::Response, Error = Error>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let tracker = Box::new(Tracker::new(req_ctx));
-        // TODO: get token from context
-        let token = thread_rng().next_u64();
-
         // TODO: remove compat
         use futures03::compat::*;
         self.read_pool
@@ -432,7 +427,8 @@ impl<E: Engine> Endpoint<E> {
                     .forward(tx)
                     .compat()
                     .map(|_| ()),
-                token,
+                // TODO: pass token from context
+                SpawnOption::default(),
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
         Ok(rx.then(|r| r.unwrap()))

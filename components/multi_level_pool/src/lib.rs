@@ -6,6 +6,7 @@ mod park;
 mod scheduler;
 mod stats;
 mod task;
+mod tokio_park;
 mod worker;
 
 use scheduler::Scheduler;
@@ -14,6 +15,7 @@ use task::ArcTask;
 
 use futures::FutureExt;
 use prometheus::{IntCounter, IntGauge};
+use rand::prelude::*;
 use tikv_util::time::Instant;
 
 use std::cell::Cell;
@@ -53,6 +55,20 @@ impl std::error::Error for Full {
     }
 }
 
+pub struct SpawnOption {
+    pub task_id: u64,
+    pub fixed_level: Option<usize>,
+}
+
+impl Default for SpawnOption {
+    fn default() -> SpawnOption {
+        SpawnOption {
+            task_id: thread_rng().next_u64(),
+            fixed_level: None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct MultiLevelPool {
     scheduler: Scheduler,
@@ -87,7 +103,9 @@ impl MultiLevelPool {
         }
     }
 
-    pub fn spawn<F>(&self, task: F, token: u64) -> Result<(), Full>
+    /// Spawns a new `Future` to the thread pool. `token` is a unique ID of a job.
+    /// Multiple `Future`s with the same token share the same statistics.
+    pub fn spawn<F>(&self, task: F, opt: SpawnOption) -> Result<(), Full>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -100,17 +118,26 @@ impl MultiLevelPool {
             env.metrics_running_task_count.dec();
             try_tick_thread(&env);
         };
-        // at begin a token has top priority
-        let stats = self.stats_map.get_stats(token);
+        let stats = self.stats_map.get_stats(opt.task_id);
         self.scheduler.add_task(ArcTask::new(
             wrapped_task,
             self.scheduler.clone(),
             stats.clone(),
+            opt.fixed_level,
         ));
         Ok(())
     }
 
-    pub fn spawn_handle<F, R>(&self, task: F, token: u64) -> Result<impl Future<Output = R>, Full>
+    /// Spawns a new `Future` to the thread pool, returning a `Future` (0.1) representing the
+    /// produced value. Returns `Err(Full)` when running tasks exceed the limit.
+    ///
+    /// `token` is a unique ID of a job. Multiple `Future`s with the same token share the same
+    /// statistics.
+    pub fn spawn_handle<F, R>(
+        &self,
+        task: F,
+        opt: SpawnOption,
+    ) -> Result<impl Future<Output = R>, Full>
     where
         F: Future<Output = R> + Send + 'static,
         R: Send + 'static,
@@ -126,19 +153,26 @@ impl MultiLevelPool {
             try_tick_thread(&env);
             let _ = tx.send(res);
         };
-        let stats = self.stats_map.get_stats(token);
+        let stats = self.stats_map.get_stats(opt.task_id);
         self.scheduler.add_task(ArcTask::new(
             wrapped_task,
             self.scheduler.clone(),
             stats.clone(),
+            opt.fixed_level,
         ));
+        // Panic here because it must be a bug if the channel tx is dropped unexpectedly
         Ok(rx.map(|res| res.expect("oneshot channel cancelled")))
     }
 
+    /// Spawns a new `Future` to the thread pool, returning a `Future` (std) representing the
+    /// produced value. Returns `Err(Full)` when running tasks exceed the limit.
+    ///
+    /// `token` is a unique ID of a job. Multiple `Future`s with the same token share the same
+    /// statistics.
     pub fn spawn_handle_legacy<F, T, E>(
         &self,
         task: F,
-        token: u64,
+        opt: SpawnOption,
     ) -> Result<impl futures01::Future<Item = T, Error = E>, Full>
     where
         F: Future<Output = Result<T, E>> + Send + 'static,
@@ -157,12 +191,14 @@ impl MultiLevelPool {
             try_tick_thread(&env);
             let _ = tx.send(res);
         };
-        let stats = self.stats_map.get_stats(token);
+        let stats = self.stats_map.get_stats(opt.task_id);
         self.scheduler.add_task(ArcTask::new(
             wrapped_task,
             self.scheduler.clone(),
             stats.clone(),
+            opt.fixed_level,
         ));
+        // Panic here because it must be a bug if the channel tx is dropped unexpectedly
         Ok(rx.then(|res| res.expect("oneshot channel cancelled")))
     }
 }
