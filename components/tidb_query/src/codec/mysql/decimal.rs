@@ -1569,10 +1569,24 @@ impl Decimal {
         }
     }
 
+    /// Returns a `Decimal` from a given bytes slice
+    ///
+    /// # Notes
+    ///
+    /// An error will be returned if the given input is as follows:
+    /// 1. empty string
+    /// 2. string which cannot be converted to decimal
     pub fn from_bytes(s: &[u8]) -> Result<Res<Decimal>> {
         Decimal::from_bytes_with_word_buf(s, WORD_BUF_LEN)
     }
 
+    /// Returns a `Decimal` from a given bytes slice buffer and specified buffer length
+    ///
+    /// # Notes
+    ///
+    /// An error will be returned if the given input is as follows:
+    /// 1. an empty string
+    /// 2. a string which cannot be converted to decimal
     fn from_bytes_with_word_buf(s: &[u8], word_buf_len: u8) -> Result<Res<Decimal>> {
         // trim whitespace
         let mut bs = match s.iter().position(|c| !c.is_ascii_whitespace()) {
@@ -1811,7 +1825,7 @@ impl ConvertTo<Decimal> for &[u8] {
     //  TiDB's seems has bug, fix this after fix TiDB's
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<Decimal> {
-        let r = Decimal::from_bytes(self)?;
+        let r = Decimal::from_bytes(self).unwrap_or_else(|_| Res::Ok(Decimal::zero()));
         let err = Error::overflow("DECIMAL", "");
         r.into_result_with_overflow_err(ctx, err)
     }

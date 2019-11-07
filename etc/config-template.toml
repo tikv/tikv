@@ -309,15 +309,21 @@
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
 ## The background tasks include compaction and flush. For detailed information why RocksDB needs to
-## do compaction, see RocksDB-related materials. When write traffic (like the importing data size)
-## is big, it is recommended to enable more threads. But set the number of the enabled threads
-## smaller than that of CPU cores. For example, when importing data, for a machine with a 32-core
-## CPU, set the value to 28.
+## do compaction, see RocksDB-related materials. RocksDB will adjust flush and compaction threads
+## according to the formula:
+##   max_flushes = max_flushes = max(1, max_background_jobs / 4)
+##   max_compactions = max(1, max_background_jobs - max_flushes)
+## When write traffic (like the importing data size)  is big, it is recommended to enable more
+## threads. But set the number of the enabled threads  smaller than that of CPU cores. For example,
+## when importing data, for a machine with a 32-core CPU, set the value to 28.
+## The default value is set to 8 or CPU_NUM - 1, whichever is smaller.
 # max-background-jobs = 8
 
 ## Represents the maximum number of threads that will concurrently perform a sub-compaction job by
 ## breaking it into multiple, smaller ones running simultaneously.
-# max-sub-compactions = 1
+## The default value is set to 3 or the largest number to allow for two compactions, whichever is
+## smaller.
+# max-sub-compactions = 3
 
 ## Number of open files that can be used by the DB.
 ## Value -1 means files opened are always kept open and RocksDB will prefetch index and filter
