@@ -4,6 +4,7 @@ use super::column::{Column, ColumnEncoder};
 use super::Result;
 use crate::codec::data_type::VectorValue;
 use crate::codec::Datum;
+use crate::expr::EvalContext;
 use codec::buffer::BufferWriter;
 use tidb_query_datatype::FieldTypeAccessor;
 use tidb_query_datatype::FieldTypeFlag;
@@ -155,7 +156,7 @@ impl Chunk {
                             col.append_null().unwrap();
                         }
                         Some(val) => {
-                            col.append_time(&val).unwrap();
+                            col.append_time(*val).unwrap();
                         }
                     }
                 }
@@ -251,8 +252,13 @@ impl<'a> Row<'a> {
 
     /// Get the datum of the column with the specified type in the row.
     #[inline]
-    pub fn get_datum(&self, col_idx: usize, fp: &FieldType) -> Result<Datum> {
-        self.c.columns[col_idx].get_datum(self.idx, fp)
+    pub fn get_datum(
+        &self,
+        col_idx: usize,
+        fp: &FieldType,
+        ctx: &mut EvalContext,
+    ) -> Result<Datum> {
+        self.c.columns[col_idx].get_datum(ctx, self.idx, fp)
     }
 }
 
@@ -293,6 +299,7 @@ mod tests {
 
     #[test]
     fn test_append_datum() {
+        let mut ctx = EvalContext::default();
         let fields = vec![
             field_type(FieldTypeTp::LongLong),
             field_type(FieldTypeTp::Float),
@@ -303,7 +310,7 @@ mod tests {
             field_type(FieldTypeTp::String),
         ];
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
-        let time: Time = Time::parse_utc_datetime("2012-12-31 11:30:45", -1).unwrap();
+        let time: Time = Time::parse_datetime(&mut ctx, "2012-12-31 11:30:45", -1, true).unwrap();
         let duration = Duration::parse(b"10:11:12", 0).unwrap();
         let dec: Decimal = "1234.00".parse().unwrap();
         let data = vec![
@@ -322,7 +329,7 @@ mod tests {
         }
         for row in chunk.iter() {
             for col_id in 0..row.len() {
-                let got = row.get_datum(col_id, &fields[col_id]).unwrap();
+                let got = row.get_datum(col_id, &fields[col_id], &mut ctx).unwrap();
                 assert_eq!(got, data[col_id]);
             }
 
@@ -343,6 +350,7 @@ mod tests {
             field_type(FieldTypeTp::JSON),
         ];
         let mut chunk = Chunk::new(&fields, rows);
+        let mut ctx = EvalContext::default();
 
         for row_id in 0..rows {
             let s = format!("{}.123435", row_id);
@@ -363,11 +371,15 @@ mod tests {
         assert_eq!(got.num_rows(), rows);
         for row_id in 0..rows {
             for (col_id, tp) in fields.iter().enumerate() {
-                let dt = got.get_row(row_id).unwrap().get_datum(col_id, tp).unwrap();
+                let dt = got
+                    .get_row(row_id)
+                    .unwrap()
+                    .get_datum(col_id, tp, &mut ctx)
+                    .unwrap();
                 let exp = chunk
                     .get_row(row_id)
                     .unwrap()
-                    .get_datum(col_id, tp)
+                    .get_datum(col_id, tp, &mut ctx)
                     .unwrap();
                 assert_eq!(dt, exp);
             }

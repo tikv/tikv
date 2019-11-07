@@ -219,7 +219,7 @@ mod tests {
 
             let arg = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::JsonTypeSig, &[arg]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -259,7 +259,7 @@ mod tests {
 
             let arg = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::JsonUnquoteSig, &[arg]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -289,7 +289,7 @@ mod tests {
         for (inputs, exp) in cases {
             let args = inputs.into_iter().map(datum_expr).collect::<Vec<_>>();
             let op = scalar_func_expr(ScalarFuncSig::JsonObjectSig, &args);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -319,7 +319,7 @@ mod tests {
         for (inputs, exp) in cases {
             let args = inputs.into_iter().map(datum_expr).collect::<Vec<_>>();
             let op = scalar_func_expr(ScalarFuncSig::JsonArraySig, &args);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -374,7 +374,7 @@ mod tests {
         for (sig, inputs, exp) in cases {
             let args: Vec<_> = inputs.into_iter().map(datum_expr).collect();
             let op = scalar_func_expr(sig, &args);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -405,7 +405,7 @@ mod tests {
         for (inputs, exp) in cases {
             let args: Vec<_> = inputs.into_iter().map(datum_expr).collect();
             let op = scalar_func_expr(ScalarFuncSig::JsonMergeSig, &args);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -419,10 +419,10 @@ mod tests {
             (ScalarFuncSig::JsonInsertSig, make_null_datums(6)),
             (ScalarFuncSig::JsonReplaceSig, make_null_datums(8)),
         ];
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         for (sig, args) in cases {
             let args: Vec<_> = args.into_iter().map(datum_expr).collect();
-            let op = Expression::build(&ctx, scalar_func_expr(sig, &args));
+            let op = Expression::build(&mut ctx, scalar_func_expr(sig, &args));
             assert!(op.is_err());
         }
     }
