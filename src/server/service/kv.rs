@@ -49,11 +49,12 @@ const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
-const REQUEST_LOAD_ESTIMATE_SAMPLE_WINDOW: usize = 30;
-const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f32 = 0.3;
+const REQUEST_LOAD_ESTIMATE_SLOW_SAMPLE_WINDOW: usize = 30;
+const REQUEST_LOAD_ESTIMATE_FAST_SAMPLE_WINDOW: usize = 5;
+const REQUEST_LOAD_ESTIMATE_LOW_LOAD_RATIO: f32 = 0.3;
 const REQUEST_LOAD_ESTIMATE_LOAD_SAMPLE_BAR: usize = 70;
 const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.0;
-const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_WRITING_BYTES: usize = 20480; // 20 KB
+const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_WRITING_BYTES: usize = 25600; // 25 KB
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
@@ -99,6 +100,8 @@ struct RequestLoadEstimator {
     thread_load_reader: Option<Arc<ThreadLoad>>,
     atomic_load_reader: Option<Arc<AtomicUsize>>,
     load_estimation: usize,
+    // record system load of snapshot
+    load_cache: usize,
     load_threshold: usize,
     sample_size: usize,
 }
@@ -112,6 +115,7 @@ impl RequestLoadEstimator {
             thread_load_reader: None,
             atomic_load_reader: None,
             load_estimation: 0,
+            load_cache: 0,
             load_threshold: 0,
             sample_size: 0,
         }
@@ -136,14 +140,9 @@ impl RequestLoadEstimator {
     }
 
     fn in_light_load(&self) -> bool {
-        if let Some(reader) = &self.thread_load_reader {
-            reader.load()
-                < (self.load_estimation as f32 * REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO)
-                    as usize
-        } else if let Some(reader) = &self.atomic_load_reader {
-            reader.load(Ordering::Relaxed)
-                < (self.load_estimation as f32 * REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO)
-                    as usize
+        if self.thread_load_reader.is_some() || self.atomic_load_reader.is_some() {
+            self.load_estimation
+                < (self.load_cache as f32 * REQUEST_LOAD_ESTIMATE_LOW_LOAD_RATIO) as usize
         } else {
             true
         }
@@ -161,10 +160,11 @@ impl RequestLoadEstimator {
         }
     }
 
-    // Collect monitored metrics when system is in low load.
-    fn collect(&mut self) {
+    // Collect monitored metrics. When latency is prioritized metrics, only sample load
+    // when latency is high.
+    fn collect(&mut self, sample_size: usize) {
         self.sample_size += 1;
-        if self.sample_size > REQUEST_LOAD_ESTIMATE_SAMPLE_WINDOW {
+        if self.sample_size > sample_size {
             self.sample_size = 0;
             let load = if let Some(reader) = &self.thread_load_reader {
                 reader.load()
@@ -188,6 +188,10 @@ impl RequestLoadEstimator {
                 self.load_estimation = (self.load_estimation + load) / 2;
             }
         }
+    }
+
+    fn take_snapshot(&mut self) {
+        self.load_cache = self.load_estimation;
     }
 
     // Clear old samples for collector to work unbiasedly. Called once before `collect`.
@@ -302,13 +306,17 @@ impl BatchLimiter {
             return;
         }
         if self.enable_batch {
+            self.estimator
+                .collect(REQUEST_LOAD_ESTIMATE_FAST_SAMPLE_WINDOW);
             if self.estimator.in_light_load() {
                 self.estimator.clear();
                 self.enable_batch = false;
             }
         } else {
-            self.estimator.collect();
+            self.estimator
+                .collect(REQUEST_LOAD_ESTIMATE_SLOW_SAMPLE_WINDOW);
             if self.estimator.in_heavy_load() {
+                self.estimator.take_snapshot();
                 self.enable_batch = true;
             }
         }
