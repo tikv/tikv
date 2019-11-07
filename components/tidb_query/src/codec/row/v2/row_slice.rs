@@ -3,7 +3,6 @@
 #![allow(dead_code)]
 use crate::codec::{Error, Result};
 use codec::prelude::*;
-use num_traits::PrimInt;
 use tikv_util::codec::read_slice;
 
 enum RowSlice<'a> {
@@ -125,18 +124,16 @@ impl RowSlice<'_> {
 }
 
 /// Decodes `len` number of ints from `buf` in little endian
+///
+/// Note:
+/// This method is only implemented on little endianness currently, since x86 use little endianness.
+#[cfg(target_endian = "little")]
 #[inline]
-fn read_ints_le<'a, T>(buf: &mut &'a [u8], len: usize) -> Result<&'a [T]>
-where
-    T: PrimInt,
-{
+fn read_ints_le<'a, T>(buf: &mut &'a [u8], len: usize) -> Result<&'a [T]> {
     use std::{mem, slice};
     let bytes_len = mem::size_of::<T>() * len;
-    let bytes = read_slice(buf, bytes_len)?.as_ptr() as *mut T;
-    let buf = unsafe { slice::from_raw_parts_mut(bytes, len) };
-    for n in buf.iter_mut() {
-        *n = n.to_le()
-    }
+    let bytes = read_slice(buf, bytes_len)?.as_ptr() as *const T;
+    let buf = unsafe { slice::from_raw_parts(bytes, len) };
     Ok(buf)
 }
 
@@ -145,6 +142,7 @@ mod tests {
     use super::super::encoder::{Column, RowEncoder};
     use super::{read_ints_le, RowSlice};
     use crate::codec::data_type::ScalarValue;
+    use crate::expr::EvalContext;
     use codec::prelude::NumberEncoder;
     use std::u16;
 
@@ -174,7 +172,7 @@ mod tests {
             Column::new(3, 3),
         ];
         let mut buf = vec![];
-        buf.write_row(cols).unwrap();
+        buf.write_row(&mut EvalContext::default(), cols).unwrap();
         buf
     }
 
@@ -185,7 +183,7 @@ mod tests {
             Column::new(3, 3),
         ];
         let mut buf = vec![];
-        buf.write_row(cols).unwrap();
+        buf.write_row(&mut EvalContext::default(), cols).unwrap();
         buf
     }
 
@@ -234,6 +232,7 @@ mod benches {
     use super::super::encoder::{Column, RowEncoder};
     use super::RowSlice;
     use crate::codec::data_type::ScalarValue;
+    use crate::expr::EvalContext;
     use test::black_box;
 
     fn encoded_data(len: usize) -> Vec<u8> {
@@ -246,7 +245,7 @@ mod benches {
             }
         }
         let mut buf = vec![];
-        buf.write_row(cols).unwrap();
+        buf.write_row(&mut EvalContext::default(), cols).unwrap();
         buf
     }
 

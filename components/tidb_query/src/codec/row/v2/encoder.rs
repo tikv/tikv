@@ -23,6 +23,7 @@ use crate::codec::{
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag};
 use tipb::FieldType;
 
+use crate::expr::EvalContext;
 use codec::prelude::*;
 use std::{i16, i32, i8, u16, u32, u8};
 
@@ -63,7 +64,7 @@ impl Column {
 }
 
 pub trait RowEncoder: NumberEncoder {
-    fn write_row(&mut self, columns: Vec<Column>) -> Result<()> {
+    fn write_row(&mut self, ctx: &mut EvalContext, columns: Vec<Column>) -> Result<()> {
         let mut is_big = false;
         let mut null_ids = Vec::with_capacity(columns.len());
         let mut non_null_ids = Vec::with_capacity(columns.len());
@@ -89,7 +90,7 @@ pub trait RowEncoder: NumberEncoder {
 
         for col in non_null_cols {
             non_null_ids.push(col.id);
-            value_wtr.write_value(col)?;
+            value_wtr.write_value(ctx, col)?;
             offsets.push(value_wtr.len());
         }
         if value_wtr.len() > (u16::MAX as usize) {
@@ -147,9 +148,9 @@ pub trait RowEncoder: NumberEncoder {
 
 impl<T: BufferWriter> RowEncoder for T {}
 
-trait DatumEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
+trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
     #[inline]
-    fn write_value(&mut self, col: Column) -> Result<()> {
+    fn write_value(&mut self, ctx: &mut EvalContext, col: Column) -> Result<()> {
         match col.value {
             ScalarValue::Int(Some(v)) if col.ft.is_unsigned() => {
                 self.encode_u64(v as u64).map_err(Error::from)
@@ -163,7 +164,7 @@ trait DatumEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
             ScalarValue::Real(Some(v)) => self.encode_u64(v.to_bits()).map_err(Error::from),
             ScalarValue::Bytes(Some(v)) => self.write_bytes(&v).map_err(Error::from),
             ScalarValue::DateTime(Some(v)) => {
-                self.encode_u64(v.to_packed_u64()).map_err(Error::from)
+                self.encode_u64(v.to_packed_u64(ctx)?).map_err(Error::from)
             }
             ScalarValue::Duration(Some(v)) => self.encode_i64(v.to_nanos()).map_err(Error::from),
             ScalarValue::Json(Some(v)) => self.write_json(&v),
@@ -193,7 +194,7 @@ trait DatumEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
         }
     }
 }
-impl<T: BufferWriter> DatumEncoder for T {}
+impl<T: BufferWriter> ScalarValueEncoder for T {}
 
 #[cfg(test)]
 mod tests {
@@ -202,6 +203,7 @@ mod tests {
         data_type::ScalarValue,
         mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
     };
+    use crate::expr::EvalContext;
     use std::str::FromStr;
 
     #[test]
@@ -214,7 +216,7 @@ mod tests {
             128, 0, 2, 0, 0, 0, 1, 2, 8, 0, 9, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
         ];
         let mut buf = vec![];
-        buf.write_row(cols).unwrap();
+        buf.write_row(&mut EvalContext::default(), cols).unwrap();
 
         assert_eq!(buf, exp);
     }
@@ -232,7 +234,8 @@ mod tests {
             Column::new(6, -1.8),
             Column::new(
                 13,
-                Time::parse_utc_datetime("2018-01-19 03:14:07", 0).unwrap(),
+                Time::parse_datetime(&mut EvalContext::default(), "2018-01-19 03:14:07", 0, false)
+                    .unwrap(),
             ),
             Column::new(14, Decimal::from(1i64)),
             Column::new(15, Json::from_str(r#"{"key":"value"}"#).unwrap()),
@@ -247,7 +250,7 @@ mod tests {
             22, 0, 0, 0, 107, 101, 121, 5, 118, 97, 108, 117, 101, 0, 202, 154, 59,
         ];
         let mut buf = vec![];
-        buf.write_row(cols).unwrap();
+        buf.write_row(&mut EvalContext::default(), cols).unwrap();
 
         assert_eq!(buf, exp);
     }
@@ -266,7 +269,7 @@ mod tests {
             0, 0, 3, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 232, 3, 3, 255, 127, 2,
         ];
         let mut buf = vec![];
-        buf.write_row(cols).unwrap();
+        buf.write_row(&mut EvalContext::default(), cols).unwrap();
 
         assert_eq!(exp, buf);
     }
