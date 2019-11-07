@@ -3,6 +3,7 @@
 use std::io::Error as IoError;
 use std::{error, result};
 
+use engine_traits::Error as EngineTraitError;
 use kvproto::backup::Error as ErrorPb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::KeyError;
@@ -97,6 +98,8 @@ pub enum Error {
     Io(IoError),
     #[fail(display = "Engine error {}", _0)]
     Engine(EngineError),
+    #[fail(display = "Engine error {}", _0)]
+    EngineTrait(EngineTraitError),
     #[fail(display = "Transaction error {}", _0)]
     Txn(TxnError),
     #[fail(display = "ClusterID error current {}, request {}", current, request)]
@@ -120,6 +123,7 @@ impl_from! {
     String => Rocks,
     IoError => Io,
     EngineError => Engine,
+    EngineTraitError => EngineTrait,
     TxnError => Txn,
 }
 
