@@ -160,7 +160,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let importer = Arc::clone(&self.importer);
 
         ctx.spawn(self.threads.spawn_fn(move || {
-            let res = importer.download(
+            let res = importer.download::<RocksEngine>(
                 req.get_sst(),
                 req.get_url(),
                 req.get_name(),

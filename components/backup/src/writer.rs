@@ -4,8 +4,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
-use engine::rocks::{SstWriter, SstWriterBuilder};
 use engine::{CF_DEFAULT, CF_WRITE, DB};
+use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+use engine_traits::{SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
@@ -17,14 +18,14 @@ use crate::metrics::*;
 use crate::{Error, Result};
 
 struct Writer {
-    writer: SstWriter,
+    writer: RocksSstWriter,
     total_kvs: u64,
     total_bytes: u64,
     checksum: u64,
 }
 
 impl Writer {
-    fn new(writer: SstWriter) -> Self {
+    fn new(writer: RocksSstWriter) -> Self {
         Writer {
             writer,
             total_kvs: 0,
@@ -98,15 +99,15 @@ pub struct BackupWriter {
 impl BackupWriter {
     /// Create a new BackupWriter.
     pub fn new(db: Arc<DB>, name: &str, limiter: Option<Arc<IOLimiter>>) -> Result<BackupWriter> {
-        let default = SstWriterBuilder::new()
+        let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
-            .set_db(db.clone())
+            .set_db(RocksEngine::from_ref(&db))
             .build(name)?;
-        let write = SstWriterBuilder::new()
+        let write = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
-            .set_db(db.clone())
+            .set_db(RocksEngine::from_ref(&db))
             .build(name)?;
         let name = name.to_owned();
         Ok(BackupWriter {

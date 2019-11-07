@@ -12,5 +12,15 @@ pub trait DBOptionsExt {
 
 /// A handle to a database's options
 pub trait DBOptions {
+    type TitanDBOptions: TitanDBOptions;
+
+    fn new() -> Self;
     fn get_max_background_jobs(&self) -> i32;
+    fn set_titandb_options(&mut self, opts: &Self::TitanDBOptions);
+}
+
+/// Titan-specefic options
+pub trait TitanDBOptions {
+    fn new() -> Self;
+    fn set_min_blob_size(&mut self, size: u64);
 }

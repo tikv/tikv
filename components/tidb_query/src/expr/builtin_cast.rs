@@ -10,7 +10,7 @@ use tidb_query_datatype::{self, FieldTypeFlag, FieldTypeTp};
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::convert::*;
 use crate::codec::mysql::decimal::RoundMode;
-use crate::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
+use crate::codec::mysql::{charset, Decimal, Duration, Json, Time, TimeType};
 use crate::codec::{mysql, Datum};
 use crate::expr::Flag;
 
@@ -147,7 +147,11 @@ impl ScalarFunc {
 
     pub fn cast_json_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val: Cow<Json> = try_opt!(self.children[0].eval_json(ctx, row));
-        let res = val.to_int(ctx, FieldTypeTp::LongLong)?;
+        let res = if self.field_type.is_unsigned() {
+            val.to_uint(ctx, FieldTypeTp::LongLong)? as i64
+        } else {
+            val.to_int(ctx, FieldTypeTp::LongLong)?
+        };
         Ok(Some(res))
     }
 
@@ -284,14 +288,8 @@ impl ScalarFunc {
         let dec = if self.children[0].field_type().is_hybrid() {
             try_opt!(self.children[0].eval_decimal(ctx, row))
         } else {
-            let val = try_opt!(self.children[0].eval_string(ctx, row));
-            match Decimal::from_bytes(&val)? {
-                Res::Ok(d) => Cow::Owned(d),
-                Res::Truncated(d) | Res::Overflow(d) => {
-                    ctx.handle_truncate(true)?;
-                    Cow::Owned(d)
-                }
-            }
+            let val: Cow<[u8]> = try_opt!(self.children[0].eval_string(ctx, row));
+            Cow::Owned(val.convert(ctx)?)
         };
         self.produce_dec_with_specified_tp(ctx, dec).map(Some)
     }
@@ -350,9 +348,14 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let val = try_opt!(self.children[0].eval_real(ctx, row));
-        let s = format!("{}", val);
-        self.produce_str_with_specified_tp(ctx, Cow::Owned(s.into_bytes()))
+        let val: f64 = try_opt!(self.children[0].eval_real(ctx, row));
+        let val = if self.children[0].field_type().tp() == FieldTypeTp::Float {
+            let val = val as f32;
+            val.to_string()
+        } else {
+            val.to_string()
+        };
+        self.produce_str_with_specified_tp(ctx, Cow::Owned(val.into_bytes()))
             .map(Some)
     }
 
