@@ -572,6 +572,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                     let mut forward_txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
                     forward_txn.set_scan_mode(ScanMode::Forward);
                     prewrite_into_txn(&mut forward_txn, &primary, &options, insert_mutations, &mut locks)?;
+                    statistics.add(&forward_txn.take_statistics());
                     forward_modifies = Some(forward_txn.into_modifies());
                 } else {
                     prewrite_into_txn(&mut txn, &primary, &options, insert_mutations, &mut locks)?;
