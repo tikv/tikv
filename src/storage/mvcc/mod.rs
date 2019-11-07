@@ -65,6 +65,10 @@ quick_error! {
             description("txn lock not found")
             display("txn lock not found {}-{} key:{}", start_ts, commit_ts, hex::encode_upper(key))
         }
+        TxnNotFound { start_ts:  u64, key: Vec<u8> } {
+            description("txn not found")
+            display("txn not found {} key: {}", start_ts, hex::encode_upper(key))
+        }
         LockTypeNotMatch { start_ts: u64, key: Vec<u8>, pessimistic: bool } {
             description("lock type not match")
             display("lock type not match, start_ts:{}, key:{}, pessimistic:{}", start_ts, hex::encode_upper(key), pessimistic)
@@ -120,6 +124,10 @@ impl Error {
             } => Some(Error::TxnLockNotFound {
                 start_ts: *start_ts,
                 commit_ts: *commit_ts,
+                key: key.to_owned(),
+            }),
+            Error::TxnNotFound { start_ts, key } => Some(Error::TxnNotFound {
+                start_ts: *start_ts,
                 key: key.to_owned(),
             }),
             Error::LockTypeNotMatch {
@@ -221,7 +229,7 @@ pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error 
 pub mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot};
+    use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
     use engine::CF_WRITE;
 
     use super::*;
@@ -675,18 +683,42 @@ pub mod tests {
         lock_ts: u64,
         caller_start_ts: u64,
         current_ts: u64,
-        expect_lock_ttl: u64,
-        expect_commit_ts: u64,
+        rollback_if_not_exist: bool,
+        expect_status: TxnStatus,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, lock_ts, true).unwrap();
-        let (lock_ttl, commit_ts, _) = txn
-            .check_txn_status(Key::from_raw(primary_key), caller_start_ts, current_ts)
+        let (txn_status, _) = txn
+            .check_txn_status(
+                Key::from_raw(primary_key),
+                caller_start_ts,
+                current_ts,
+                rollback_if_not_exist,
+            )
             .unwrap();
-        assert_eq!(lock_ttl, expect_lock_ttl);
-        assert_eq!(commit_ts, expect_commit_ts);
+        assert_eq!(txn_status, expect_status);
         write(engine, &ctx, txn.into_modifies());
+    }
+
+    pub fn must_check_txn_status_err<E: Engine>(
+        engine: &E,
+        primary_key: &[u8],
+        lock_ts: u64,
+        caller_start_ts: u64,
+        current_ts: u64,
+        rollback_if_not_exist: bool,
+    ) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, lock_ts, true).unwrap();
+        txn.check_txn_status(
+            Key::from_raw(primary_key),
+            caller_start_ts,
+            current_ts,
+            rollback_if_not_exist,
+        )
+        .unwrap_err();
     }
 
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: u64) {

@@ -11,7 +11,7 @@ use tikv_util::deadline::Deadline;
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
 use crate::execute_stats::*;
-use crate::expr::EvalConfig;
+use crate::expr::{EvalConfig, EvalContext};
 use crate::metrics::*;
 use crate::storage::Storage;
 use crate::Result;
@@ -362,6 +362,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
+        let mut ctx = EvalContext::new(self.config.clone());
 
         loop {
             self.deadline.check()?;
@@ -404,7 +405,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                                 &self.output_offsets,
                                 self.out_most_executor.schema(),
                                 data,
-                                &self.config.tz,
+                                &mut ctx,
                             )?;
                         }
                         _ => {
@@ -419,6 +420,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                                 &self.output_offsets,
                                 self.out_most_executor.schema(),
                                 data,
+                                &mut ctx,
                             )?;
                         }
                     }

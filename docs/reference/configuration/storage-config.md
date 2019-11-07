@@ -77,14 +77,6 @@ This configuration section mainly affects storage write operations, including wh
 - Default value: /tmp/tikv/store
 - Make sure that the data directory is moved before changing this configuration
 
-#### `scheduler-notify-capacity`
-
-- Specifies the Scheduler channel size
-- Default value: 10240
-- Do not set it too small, otherwise TiKV might crash
-- Do not set it too large, because it might consume more memory 
-- Generally, you don’t need to adjust this configuration unless you are following trustworthy advice
-
 #### `scheduler-concurrency`
 
 - Specifies the number of slots of Scheduler’s latch, which controls concurrent write requests
