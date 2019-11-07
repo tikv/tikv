@@ -936,6 +936,10 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         self.sched.get_pool_size()
     }
 
+    pub fn sched_writing_bytes(&self) -> Arc<atomic::AtomicUsize> {
+        Arc::clone(self.sched.writing_bytes())
+    }
+
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,

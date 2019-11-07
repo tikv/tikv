@@ -158,7 +158,7 @@ struct SchedulerInner<L: LockMgr> {
     high_priority_pool: SchedPool,
 
     // used to control write flow
-    running_write_bytes: AtomicUsize,
+    running_write_bytes: Arc<AtomicUsize>,
 
     lock_mgr: Option<L>,
 }
@@ -191,9 +191,9 @@ impl<L: LockMgr> SchedulerInner<L> {
         let cid = task.cid;
         let tctx = TaskContext::new(task, &self.latches, callback);
 
-        let running_write_bytes = self
-            .running_write_bytes
-            .fetch_add(tctx.write_bytes, Ordering::AcqRel) as i64;
+        let running_write_bytes =
+            self.running_write_bytes
+                .fetch_add(tctx.write_bytes, Ordering::Relaxed) as i64;
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes + tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.inc();
 
@@ -209,9 +209,9 @@ impl<L: LockMgr> SchedulerInner<L> {
             .remove(&cid)
             .unwrap();
 
-        let running_write_bytes = self
-            .running_write_bytes
-            .fetch_sub(tctx.write_bytes, Ordering::AcqRel) as i64;
+        let running_write_bytes =
+            self.running_write_bytes
+                .fetch_sub(tctx.write_bytes, Ordering::Relaxed) as i64;
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes - tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.dec();
 
@@ -220,7 +220,7 @@ impl<L: LockMgr> SchedulerInner<L> {
 
     fn too_busy(&self) -> bool {
         fail_point!("txn_scheduler_busy", |_| true);
-        self.running_write_bytes.load(Ordering::Acquire) >= self.sched_pending_write_threshold
+        self.running_write_bytes.load(Ordering::Relaxed) >= self.sched_pending_write_threshold
     }
 
     /// Tries to acquire all the required latches for a command.
@@ -268,7 +268,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
             task_contexts,
             id_alloc: AtomicU64::new(0),
             latches: Latches::new(concurrency),
-            running_write_bytes: AtomicUsize::new(0),
+            running_write_bytes: Arc::new(AtomicUsize::new(0)),
             sched_pending_write_threshold,
             worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
             high_priority_pool: SchedPool::new(
@@ -288,6 +288,10 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
 
     pub fn get_pool_size(&self) -> usize {
         self.inner.worker_pool.pool.get_pool_size()
+    }
+
+    pub fn writing_bytes(&self) -> &Arc<AtomicUsize> {
+        &self.inner.running_write_bytes
     }
 
     pub fn run_cmd(&self, cmd: Command, callback: StorageCb) {
