@@ -59,7 +59,7 @@ impl TsSet {
         if ts.is_empty() {
             TsSet::Empty
         } else if ts.len() <= TS_SET_USE_VEC_LIMIT {
-            // If there are too less elements in `ts`, use Vec directly instead of making a
+            // If there are too few elements in `ts`, use Vec directly instead of making a Set.
             TsSet::Vec(Arc::new(ts))
         } else {
             TsSet::Set(Arc::new(ts.into_iter().collect()))
