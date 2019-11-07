@@ -73,6 +73,40 @@ pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
     Ok(())
 }
 
+#[inline]
+pub fn check_record_key(key: &[u8]) -> Result<()> {
+    check_key_type(key, RECORD_PREFIX_SEP)
+}
+
+#[inline]
+pub fn check_index_key(key: &[u8]) -> Result<()> {
+    check_key_type(key, INDEX_PREFIX_SEP)
+}
+
+/// `check_key_type` checks if the key is the type we want, `wanted_type` should be
+/// `table::RECORD_PREFIX_SEP` or `table::INDEX_PREFIX_SEP` .
+#[inline]
+fn check_key_type(key: &[u8], wanted_type: &[u8]) -> Result<()> {
+    let mut buf = key;
+    if buf.read_bytes(TABLE_PREFIX_LEN)? != TABLE_PREFIX {
+        return Err(invalid_type!(
+            "record or index key expected, but got {}",
+            hex::encode_upper(key)
+        ));
+    }
+
+    buf.read_bytes(ID_LEN)?;
+    if buf.read_bytes(SEP_LEN)? != wanted_type {
+        Err(invalid_type!(
+            "expected key sep type {}, but got key {})",
+            hex::encode_upper(wanted_type),
+            hex::encode_upper(key)
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Decodes table ID from the key.
 pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     let mut buf = key;
@@ -87,17 +121,17 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
 
 /// `flatten` flattens the datum.
 #[inline]
-pub fn flatten(data: Datum) -> Result<Datum> {
+pub fn flatten(ctx: &mut EvalContext, data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
-        Datum::Time(t) => Ok(Datum::U64(t.to_packed_u64())),
+        Datum::Time(t) => Ok(Datum::U64(t.to_packed_u64(ctx)?)),
         _ => Ok(data),
     }
 }
 
 // `encode_row` encodes row data and column ids into a slice of byte.
 // Row layout: colID1, value1, colID2, value2, .....
-pub fn encode_row(row: Vec<Datum>, col_ids: &[i64]) -> Result<Vec<u8>> {
+pub fn encode_row(ctx: &mut EvalContext, row: Vec<Datum>, col_ids: &[i64]) -> Result<Vec<u8>> {
     if row.len() != col_ids.len() {
         return Err(box_err!(
             "data and columnID count not match {} vs {}",
@@ -108,13 +142,13 @@ pub fn encode_row(row: Vec<Datum>, col_ids: &[i64]) -> Result<Vec<u8>> {
     let mut values = Vec::with_capacity(cmp::max(row.len() * 2, 1));
     for (&id, col) in col_ids.iter().zip(row) {
         values.push(Datum::I64(id));
-        let fc = flatten(col)?;
+        let fc = flatten(ctx, col)?;
         values.push(fc);
     }
     if values.is_empty() {
         values.push(Datum::Null);
     }
-    datum::encode_value(&values)
+    datum::encode_value(ctx, &values)
 }
 
 /// `encode_row_key` encodes the table id and record handle into a byte array.
@@ -172,7 +206,7 @@ pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<
 
 // `decode_index_key` decodes datums from an index key.
 pub fn decode_index_key(
-    ctx: &EvalContext,
+    ctx: &mut EvalContext,
     encoded: &[u8],
     infos: &[ColumnInfo],
 ) -> Result<Vec<Datum>> {
@@ -192,7 +226,11 @@ pub fn decode_index_key(
 }
 
 /// `unflatten` converts a raw datum to a column datum.
-fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor) -> Result<Datum> {
+fn unflatten(
+    ctx: &mut EvalContext,
+    datum: Datum,
+    field_type: &dyn FieldTypeAccessor,
+) -> Result<Datum> {
     if let Datum::Null = datum {
         return Ok(datum);
     }
@@ -201,7 +239,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
         FieldTypeTp::Float => Ok(Datum::F64(f64::from(datum.f64() as f32))),
         FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
             let fsp = field_type.decimal() as i8;
-            let t = Time::from_packed_u64(datum.u64(), tp.try_into()?, fsp, &ctx.cfg.tz)?;
+            let t = Time::from_packed_u64(ctx, datum.u64(), tp.try_into()?, fsp)?;
             Ok(Datum::Time(t))
         }
         FieldTypeTp::Duration => {
@@ -243,7 +281,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
 // `decode_col_value` decodes data to a Datum according to the column info.
 pub fn decode_col_value(
     data: &mut BytesSlice<'_>,
-    ctx: &EvalContext,
+    ctx: &mut EvalContext,
     col: &ColumnInfo,
 ) -> Result<Datum> {
     let d = data.read_datum()?;
@@ -411,10 +449,14 @@ mod tests {
     use tipb::ColumnInfo;
 
     use crate::codec::datum::{self, Datum};
+    use crate::executor::tests::generate_index_data;
     use tikv_util::collections::{HashMap, HashSet};
     use tikv_util::map;
 
     use super::*;
+
+    const TABLE_ID: i64 = 1;
+    const INDEX_ID: i64 = 1;
 
     #[test]
     fn test_row_key_codec() {
@@ -446,10 +488,10 @@ mod tests {
             FieldTypeTp::LongLong.into(),
             duration_col,
         ];
-        let buf = datum::encode_key(&tests).unwrap();
+        let mut ctx = EvalContext::default();
+        let buf = datum::encode_key(&mut ctx, &tests).unwrap();
         let encoded = encode_index_seek_key(1, 2, &buf);
-        let ctx = EvalContext::default();
-        assert_eq!(tests, decode_index_key(&ctx, &encoded, &types).unwrap());
+        assert_eq!(tests, decode_index_key(&mut ctx, &encoded, &types).unwrap());
     }
 
     fn to_hash_map(row: &RowColsDict) -> HashMap<i64, Vec<u8>> {
@@ -500,18 +542,19 @@ mod tests {
             6 => Datum::Dur(Duration::parse(b"23:23:23.666",2 ).unwrap())
         ];
 
+        let mut ctx = EvalContext::default();
         let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
         let col_values: Vec<_> = row.iter().map(|(_, v)| v.clone()).collect();
         let mut col_encoded: HashMap<_, _> = row
             .iter()
             .map(|(k, v)| {
-                let f = super::flatten(v.clone()).unwrap();
-                (*k, datum::encode_value(&[f]).unwrap())
+                let f = super::flatten(&mut ctx, v.clone()).unwrap();
+                (*k, datum::encode_value(&mut ctx, &[f]).unwrap())
             })
             .collect();
         let mut col_id_set: HashSet<_> = col_ids.iter().cloned().collect();
 
-        let bs = encode_row(col_values, &col_ids).unwrap();
+        let bs = encode_row(&mut ctx, col_values, &col_ids).unwrap();
         assert!(!bs.is_empty());
         let mut ctx = EvalContext::default();
         let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
@@ -541,7 +584,7 @@ mod tests {
         col_encoded.remove(&3);
         assert_eq!(col_encoded, datums);
 
-        let bs = encode_row(vec![], &[]).unwrap();
+        let bs = encode_row(&mut ctx, vec![], &[]).unwrap();
         assert!(!bs.is_empty());
         assert!(decode_row(&mut bs.as_slice(), &mut ctx, &cols)
             .unwrap()
@@ -574,23 +617,23 @@ mod tests {
             Datum::Dur(Duration::parse(b"23:23:23.666", 2).unwrap()),
         ];
 
-        let ctx = EvalContext::default();
+        let mut ctx = EvalContext::default();
         let mut col_encoded: HashMap<_, _> = col_ids
             .iter()
             .zip(&col_types)
             .zip(&col_values)
             .map(|((id, t), v)| {
-                let unflattened = super::unflatten(&ctx, v.clone(), t).unwrap();
-                let encoded = datum::encode_key(&[unflattened]).unwrap();
+                let unflattened = super::unflatten(&mut ctx, v.clone(), t).unwrap();
+                let encoded = datum::encode_key(&mut ctx, &[unflattened]).unwrap();
                 (*id, encoded)
             })
             .collect();
 
-        let key = datum::encode_key(&col_values).unwrap();
+        let key = datum::encode_key(&mut ctx, &col_values).unwrap();
         let bs = encode_index_seek_key(1, 1, &key);
         assert!(!bs.is_empty());
-        let ctx = EvalContext::default();
-        let r = decode_index_key(&ctx, &bs, &col_types).unwrap();
+        let mut ctx = EvalContext::default();
+        let r = decode_index_key(&mut ctx, &bs, &col_types).unwrap();
         assert_eq!(col_values, r);
 
         let mut res: (HashMap<_, _>, _) = cut_idx_key_as_owned(&bs, &col_ids);
@@ -610,7 +653,7 @@ mod tests {
 
         let bs = encode_index_seek_key(1, 1, &[]);
         assert!(!bs.is_empty());
-        assert!(decode_index_key(&ctx, &bs, &[]).unwrap().is_empty());
+        assert!(decode_index_key(&mut ctx, &bs, &[]).unwrap().is_empty());
         res = cut_idx_key_as_owned(&bs, &[]);
         assert!(res.0.is_empty());
         assert!(res.1.is_none());
@@ -667,5 +710,20 @@ mod tests {
             assert_eq!(tid, decode_table_id(&k).unwrap());
             assert!(decode_table_id(b"xxx").is_err());
         }
+    }
+
+    #[test]
+    fn test_check_key_type() {
+        let record_key = encode_row_key(TABLE_ID, 1);
+        assert!(check_key_type(&record_key.as_slice(), RECORD_PREFIX_SEP).is_ok());
+        assert!(check_key_type(&record_key.as_slice(), INDEX_PREFIX_SEP).is_err());
+
+        let (_, index_key) = generate_index_data(TABLE_ID, INDEX_ID, 1, &Datum::I64(1), true);
+        assert!(check_key_type(&index_key.as_slice(), RECORD_PREFIX_SEP).is_err());
+        assert!(check_key_type(&index_key.as_slice(), INDEX_PREFIX_SEP).is_ok());
+
+        let too_small_key = vec![0];
+        assert!(check_key_type(&too_small_key.as_slice(), RECORD_PREFIX_SEP).is_err());
+        assert!(check_key_type(&too_small_key.as_slice(), INDEX_PREFIX_SEP).is_err());
     }
 }

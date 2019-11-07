@@ -1023,7 +1023,7 @@ mod tests {
             ("0000-00-00 00:00:00", 6, "000000"),
         ];
         for (s, fsp, expect) in cases {
-            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
+            let t = DateTime::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let du: Duration = t.convert(&mut ctx).unwrap();
             let get: Decimal = du.convert(&mut ctx).unwrap();
             assert_eq!(
@@ -1048,7 +1048,7 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (s, fsp, expect) in cases {
-            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
+            let t = DateTime::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let du: Duration = t.convert(&mut ctx).unwrap();
             let get: f64 = du.convert(&mut ctx).unwrap();
             assert!(
