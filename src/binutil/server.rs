@@ -186,6 +186,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let storage = create_raft_storage(
         engine.clone(),
         &cfg.storage,
+        &cfg.gc,
         storage_read_pool,
         Some(engines.kv.clone()),
         Some(raft_router.clone()),

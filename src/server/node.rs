@@ -18,6 +18,7 @@ use crate::server::lock_manager::LockManager;
 use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
+use crate::storage::gc_worker::GCConfig;
 use crate::storage::{Config as StorageConfig, RaftKv, Storage};
 use engine::rocks::DB;
 use engine::Engines;
@@ -35,6 +36,7 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
+    gc_cfg: &GCConfig,
     read_pool: ReadPool,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
@@ -46,6 +48,7 @@ where
     let store = Storage::from_engine(
         engine,
         cfg,
+        gc_cfg,
         read_pool,
         local_storage,
         raft_store_router,
