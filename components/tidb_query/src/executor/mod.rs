@@ -416,6 +416,30 @@ pub mod tests {
         key_range
     }
 
+    pub fn generate_index_data(
+        table_id: i64,
+        index_id: i64,
+        handle: i64,
+        col_val: &Datum,
+        unique: bool,
+    ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
+        let indice = vec![(2, (*col_val).clone()), (3, Datum::Dec(handle.into()))];
+        let mut expect_row = HashMap::default();
+        let mut v: Vec<_> = indice
+            .iter()
+            .map(|&(ref cid, ref value)| {
+                expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
+                value.clone()
+            })
+            .collect();
+        if !unique {
+            v.push(Datum::I64(handle));
+        }
+        let encoded = datum::encode_key(&v).unwrap();
+        let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
+        (expect_row, idx_key)
+    }
+
     pub struct TableData {
         pub kv_data: Vec<(Vec<u8>, Vec<u8>)>,
         // expect_rows[row_id][column_id]=>value

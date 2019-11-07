@@ -163,14 +163,8 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
         },
         |(snapshot, test_kvs)| {
             for key in test_kvs {
-                let mut reader = MvccReader::new(
-                    snapshot.clone(),
-                    None,
-                    true,
-                    None,
-                    None,
-                    ctx.get_isolation_level(),
-                );
+                let mut reader =
+                    MvccReader::new(snapshot.clone(), None, true, ctx.get_isolation_level());
                 black_box(reader.load_lock(&key).unwrap());
             }
         },
@@ -200,14 +194,8 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
         },
         |(snapshot, test_keys)| {
             for key in &test_keys {
-                let mut reader = MvccReader::new(
-                    snapshot.clone(),
-                    None,
-                    true,
-                    None,
-                    None,
-                    ctx.get_isolation_level(),
-                );
+                let mut reader =
+                    MvccReader::new(snapshot.clone(), None, true, ctx.get_isolation_level());
                 black_box(reader.seek_write(&key, u64::max_value()).unwrap());
             }
         },
