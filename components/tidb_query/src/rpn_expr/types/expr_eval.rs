@@ -8,7 +8,6 @@ use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
-use crate::codec::mysql::time::Tz;
 use crate::expr::EvalContext;
 use crate::Result;
 
@@ -155,12 +154,7 @@ impl RpnExpression {
         // We iterate two times. The first time we decode all referred columns. The second time
         // we evaluate. This is to make Rust's borrow checker happy because there will be
         // mutable reference during the first iteration and we can't keep these references.
-        self.ensure_columns_decoded(
-            &ctx.cfg.tz,
-            schema,
-            input_physical_columns,
-            input_logical_rows,
-        )?;
+        self.ensure_columns_decoded(ctx, schema, input_physical_columns, input_logical_rows)?;
         self.eval_decoded(
             ctx,
             schema,
@@ -174,7 +168,7 @@ impl RpnExpression {
     /// all referred columns are decoded.
     pub fn ensure_columns_decoded<'a>(
         &'a self,
-        tz: &Tz,
+        ctx: &mut EvalContext,
         schema: &'a [FieldType],
         input_physical_columns: &'a mut LazyBatchColumnVec,
         input_logical_rows: &[usize],
@@ -182,7 +176,7 @@ impl RpnExpression {
         for node in self.as_ref() {
             if let RpnExpressionNode::ColumnRef { offset, .. } = node {
                 input_physical_columns[*offset].ensure_decoded(
-                    tz,
+                    ctx,
                     &schema[*offset],
                     input_logical_rows,
                 )?;
@@ -514,19 +508,26 @@ mod tests {
             Ok(Some(v.unwrap() + 5))
         }
 
+        let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::raw_with_capacity(3);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(-5)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(-5)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(-7)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(-7)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(3)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(3)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             col
@@ -717,19 +718,26 @@ mod tests {
             Ok(Some(v1.unwrap() * v2.unwrap()))
         }
 
+        let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::raw_with_capacity(3);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(-5)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(-5)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(-7)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(-7)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(3)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(3)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             col

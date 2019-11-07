@@ -21,7 +21,7 @@ use tidb_query::codec::data_type::Decimal;
 use tidb_query::codec::datum::{Datum, DatumEncoder};
 use tidb_query::codec::table::RowColsDict;
 use tidb_query::executor::{Executor, Row};
-use tidb_query::expr::EvalWarnings;
+use tidb_query::expr::{EvalContext, EvalWarnings};
 use tidb_query::storage::IntervalRange;
 use tikv::storage::{RocksEngine, Statistics};
 
@@ -252,6 +252,7 @@ impl FixtureBuilder {
 
     pub fn build_batch_fixture_executor(self) -> BatchFixtureExecutor {
         assert!(!self.columns.is_empty());
+        let mut ctx = EvalContext::default();
         let columns: Vec<_> = self
             .columns
             .into_iter()
@@ -259,7 +260,7 @@ impl FixtureBuilder {
                 let mut c = LazyBatchColumn::raw_with_capacity(datums.len());
                 for datum in datums {
                     let mut v = vec![];
-                    v.write_datum(&[datum], false).unwrap();
+                    v.write_datum(&mut ctx, &[datum], false).unwrap();
                     c.mut_raw().push(v);
                 }
                 c
@@ -294,12 +295,17 @@ impl FixtureBuilder {
 
         let rows_len = self.columns[0].len();
         let mut rows = Vec::with_capacity(rows_len);
+        let mut ctx = EvalContext::default();
         for row_index in 0..rows_len {
             let mut data = RowColsDict::new(HashMap::default(), Vec::new());
             for col_index in 0..self.columns.len() {
                 let mut v = vec![];
-                v.write_datum(&[self.columns[col_index][row_index].clone()], false)
-                    .unwrap();
+                v.write_datum(
+                    &mut ctx,
+                    &[self.columns[col_index][row_index].clone()],
+                    false,
+                )
+                .unwrap();
                 data.append(col_index as i64, &mut v);
             }
             rows.push(Row::origin(
