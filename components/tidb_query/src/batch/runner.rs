@@ -50,7 +50,7 @@ pub struct BatchExecutorsRunner<SS> {
     /// The encoding method for the response.
     /// Possible encoding methods are:
     /// 1. default: result is encoded row by row using datum format.
-    /// 2. arrow: result is encoded column by column using arrow format.
+    /// 2. chunk: result is encoded column by column using chunk format.
     encode_type: EncodeType,
 }
 
@@ -394,13 +394,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     // Although `schema()` can be deeply nested, it is ok since we process data in
                     // batch.
                     match self.encode_type {
-                        EncodeType::TypeArrow => {
-                            self.encode_type = EncodeType::TypeArrow;
-                            data.reserve(result.physical_columns.maximum_encoded_size_arrow(
+                        EncodeType::TypeChunk => {
+                            self.encode_type = EncodeType::TypeChunk;
+                            data.reserve(result.physical_columns.maximum_encoded_size_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,
                             )?);
-                            result.physical_columns.encode_arrow(
+                            result.physical_columns.encode_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,
                                 self.out_most_executor.schema(),
