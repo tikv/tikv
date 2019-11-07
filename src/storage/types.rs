@@ -94,7 +94,7 @@ impl TxnStatus {
     }
 }
 
-pub enum StorageCb {
+pub enum StorageCallback {
     Boolean(Callback<()>),
     Booleans(Callback<Vec<Result<()>>>),
     MvccInfoByKey(Callback<MvccInfo>),

@@ -50,7 +50,7 @@ pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
-pub use self::types::{Key, KvPair, Mutation, MvccInfo, StorageCb, TxnStatus, Value};
+pub use self::types::{Key, KvPair, Mutation, MvccInfo, StorageCallback, TxnStatus, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -195,7 +195,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Schedule a command to the transaction scheduler. `cb` will be invoked after finishing
     /// running the command.
     #[inline]
-    fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
+    fn schedule(&self, cmd: Command, cb: StorageCallback) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
         self.sched.run_cmd(cmd, cb);
         Ok(())
@@ -503,7 +503,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             ctx,
             kind: CommandKind::Pause { keys, duration },
         };
-        self.schedule(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.pause.inc();
         Ok(())
     }
@@ -536,7 +536,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 options,
             },
         };
-        self.schedule(cmd, StorageCb::Booleans(callback))?;
+        self.schedule(cmd, StorageCallback::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
         Ok(())
     }
@@ -573,7 +573,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 options,
             },
         };
-        self.schedule(cmd, StorageCb::Booleans(callback))?;
+        self.schedule(cmd, StorageCallback::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.acquire_pessimistic_lock.inc();
         Ok(())
     }
@@ -597,7 +597,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 commit_ts,
             },
         };
-        self.schedule(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
         Ok(())
     }
@@ -657,7 +657,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 current_ts,
             },
         };
-        self.schedule(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
         Ok(())
     }
@@ -676,7 +676,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             ctx,
             kind: CommandKind::Rollback { keys, start_ts },
         };
-        self.schedule(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc();
         Ok(())
     }
@@ -705,7 +705,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 for_update_ts,
             },
         };
-        self.schedule(cmd, StorageCb::Booleans(callback))?;
+        self.schedule(cmd, StorageCallback::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
         Ok(())
     }
@@ -729,7 +729,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 advise_ttl,
             },
         };
-        self.schedule(cmd, StorageCb::TxnStatus(callback))?;
+        self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.txn_heart_beat.inc();
         Ok(())
     }
@@ -764,7 +764,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 rollback_if_not_exist,
             },
         };
-        self.schedule(cmd, StorageCb::TxnStatus(callback))?;
+        self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.check_txn_status.inc();
         Ok(())
     }
@@ -792,7 +792,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 limit,
             },
         };
-        self.schedule(cmd, StorageCb::Locks(callback))?;
+        self.schedule(cmd, StorageCallback::Locks(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.scan_lock.inc();
         Ok(())
     }
@@ -820,7 +820,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 key_locks: vec![],
             },
         };
-        self.schedule(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock.inc();
         Ok(())
     }
@@ -847,7 +847,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 resolve_keys,
             },
         };
-        self.schedule(cmd, StorageCb::Boolean(callback))?;
+        self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc();
         Ok(())
     }
@@ -1432,7 +1432,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             ctx,
             kind: CommandKind::MvccByKey { key },
         };
-        self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
+        self.schedule(cmd, StorageCallback::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.key_mvcc.inc();
 
         Ok(())
@@ -1450,7 +1450,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             ctx,
             kind: CommandKind::MvccByStartTs { start_ts },
         };
-        self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
+        self.schedule(cmd, StorageCallback::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
         Ok(())
     }

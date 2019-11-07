@@ -6,8 +6,8 @@ use super::metrics::*;
 use crate::storage::lock_manager::Lock;
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
-use crate::storage::txn::{execute_callback, ProcessResult};
-use crate::storage::{Error as StorageError, StorageCb};
+use crate::storage::txn::ProcessResult;
+use crate::storage::{Error as StorageError, StorageCallback};
 use futures::Future;
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
@@ -30,7 +30,7 @@ pub enum Task {
     WaitFor {
         // which txn waiting for the lock
         start_ts: u64,
-        cb: StorageCb,
+        cb: StorageCallback,
         pr: ProcessResult,
         lock: Lock,
         timeout: u64,
@@ -74,7 +74,7 @@ impl Display for Task {
 
 struct Waiter {
     start_ts: u64,
-    cb: StorageCb,
+    cb: StorageCallback,
     pr: ProcessResult,
     lock: Lock,
     _lifetime_timer: HistogramTimer,
@@ -172,7 +172,7 @@ impl Scheduler {
         if let Err(Stopped(task)) = self.0.schedule(task) {
             error!("failed to send task to waiter_manager"; "task" => %task);
             if let Task::WaitFor { cb, pr, .. } = task {
-                execute_callback(cb, pr);
+                cb.execute(pr);
             }
             return false;
         }
@@ -182,7 +182,7 @@ impl Scheduler {
     pub fn wait_for(
         &self,
         start_ts: u64,
-        cb: StorageCb,
+        cb: StorageCallback,
         pr: ProcessResult,
         lock: Lock,
         timeout: u64,
@@ -266,7 +266,7 @@ impl WaiterManager {
                         .and_then(|waiter| {
                             // The corresponding `WaitForEntry` in deadlock detector
                             // will be removed by expiration.
-                            execute_callback(waiter.cb, waiter.pr);
+                            waiter.cb.execute(waiter.pr);
                             Some(())
                         });
                     Ok(())
@@ -319,7 +319,7 @@ impl WaiterManager {
                         deadlock_key_hash,
                     })),
                 };
-                execute_callback(waiter.cb, pr);
+                waiter.cb.execute(pr);
                 Some(())
             });
     }
@@ -388,7 +388,7 @@ fn wake_up_waiter(waiter: Waiter, commit_ts: u64) {
     let pr = ProcessResult::Failed {
         err: StorageError::from(TxnError::from(mvcc_err)),
     };
-    execute_callback(waiter.cb, pr);
+    waiter.cb.execute(pr);
 }
 
 fn extract_raw_key_from_process_result(pr: &ProcessResult) -> &[u8] {
@@ -416,7 +416,7 @@ mod tests {
     fn dummy_waiter(start_ts: u64, lock_ts: u64, hash: u64) -> Waiter {
         Waiter {
             start_ts,
-            cb: StorageCb::Boolean(Box::new(|_| ())),
+            cb: StorageCallback::Boolean(Box::new(|_| ())),
             pr: ProcessResult::Res,
             lock: Lock { ts: lock_ts, hash },
             _lifetime_timer: WAITER_LIFETIME_HISTOGRAM.start_coarse_timer(),
@@ -551,7 +551,7 @@ mod tests {
         });
         waiter_mgr_scheduler.wait_for(
             0,
-            StorageCb::Boolean(cb),
+            StorageCallback::Boolean(cb),
             ProcessResult::Res,
             Lock { ts: 0, hash: 0 },
             0,
@@ -571,7 +571,7 @@ mod tests {
         });
         waiter_mgr_scheduler.wait_for(
             0,
-            StorageCb::Boolean(cb),
+            StorageCallback::Boolean(cb),
             ProcessResult::Res,
             Lock { ts: 0, hash: 0 },
             100,
@@ -590,7 +590,7 @@ mod tests {
         });
         waiter_mgr_scheduler.wait_for(
             0,
-            StorageCb::Boolean(cb),
+            StorageCallback::Boolean(cb),
             ProcessResult::Res,
             Lock { ts: 0, hash: 1 },
             0,

@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::txn::ProcessResult;
-use crate::storage::StorageCb;
+use crate::storage::StorageCallback;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Lock {
@@ -21,7 +21,7 @@ pub trait LockManager: Clone + Send + 'static {
     fn wait_for(
         &self,
         start_ts: u64,
-        cb: StorageCb,
+        cb: StorageCallback,
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
@@ -53,7 +53,7 @@ impl LockManager for DummyLockManager {
     fn wait_for(
         &self,
         _start_ts: u64,
-        _cb: StorageCb,
+        _cb: StorageCallback,
         _pr: ProcessResult,
         _lock: Lock,
         _is_first_lock: bool,

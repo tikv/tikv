@@ -16,7 +16,7 @@ use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::txn::{execute_callback, ProcessResult};
-use crate::storage::{lock_manager::Lock, LockManager as LockManagerTrait, StorageCb};
+use crate::storage::{lock_manager::Lock, LockManager as LockManagerTrait, StorageCallback};
 use pd_client::PdClient;
 use spin::Mutex;
 use std::collections::hash_map::DefaultHasher;
@@ -205,7 +205,7 @@ impl LockManagerTrait for LockManager {
     fn wait_for(
         &self,
         start_ts: u64,
-        cb: StorageCb,
+        cb: StorageCallback,
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
@@ -213,7 +213,7 @@ impl LockManagerTrait for LockManager {
     ) {
         // Negative timeout means no wait.
         if timeout < 0 {
-            execute_callback(cb, pr);
+            cb.execute(pr);
             return;
         }
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
@@ -425,7 +425,7 @@ mod tests {
         let (lock_ts, hash) = (10, 1);
         lock_mgr.wait_for(
             20,
-            StorageCb::Boolean(Box::new(|_| ())),
+            StorageCallback::Boolean(Box::new(|_| ())),
             ProcessResult::Res,
             Lock { ts: lock_ts, hash },
             true,
@@ -453,7 +453,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         lock_mgr.wait_for(
             10,
-            StorageCb::Boolean(Box::new(move |x| {
+            StorageCallback::Boolean(Box::new(move |x| {
                 tx.send(x).unwrap();
             })),
             ProcessResult::Res,

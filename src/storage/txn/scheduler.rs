@@ -33,7 +33,7 @@ use tikv_util::{collections::HashMap, time::SlowTimer};
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockManager};
 use crate::storage::txn::latch::{Latches, Lock};
-use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
+use crate::storage::txn::process::{Executor, MsgScheduler, ProcessResult, Task};
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
 use crate::storage::{
@@ -44,7 +44,7 @@ use crate::storage::{
     },
     Key,
 };
-use crate::storage::{Command, CommandKind, Engine, Error as StorageError, StorageCb};
+use crate::storage::{Command, CommandKind, Engine, Error as StorageError, StorageCallback};
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
@@ -52,7 +52,7 @@ const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 pub enum Msg {
     RawCmd {
         cmd: Command,
-        cb: StorageCb,
+        cb: StorageCallback,
     },
     ReadFinished {
         cid: u64,
@@ -105,7 +105,7 @@ struct TaskContext {
     task: Option<Task>,
 
     lock: Lock,
-    cb: StorageCb,
+    cb: StorageCallback,
     write_bytes: usize,
     tag: metrics::CommandKind,
     // How long it waits on latches.
@@ -115,7 +115,7 @@ struct TaskContext {
 }
 
 impl TaskContext {
-    fn new(task: Task, latches: &Latches, cb: StorageCb) -> TaskContext {
+    fn new(task: Task, latches: &Latches, cb: StorageCallback) -> TaskContext {
         let tag = task.cmd().tag();
         let lock = gen_command_lock(latches, task.cmd());
         // Write command should acquire write lock.
@@ -188,7 +188,7 @@ impl<L: LockManager> SchedulerInner<L> {
         task
     }
 
-    fn enqueue_task(&self, task: Task, callback: StorageCb) {
+    fn enqueue_task(&self, task: Task, callback: StorageCallback) {
         let cid = task.cid;
         let tctx = TaskContext::new(task, &self.latches, callback);
 
@@ -287,7 +287,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    pub fn run_cmd(&self, cmd: Command, callback: StorageCb) {
+    pub fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
         self.on_receive_new_cmd(cmd, callback);
     }
 }
@@ -314,7 +314,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn schedule_command(&self, cmd: Command, callback: StorageCb) {
+    fn schedule_command(&self, cmd: Command, callback: StorageCallback) {
         let cid = self.inner.gen_id();
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
 
@@ -338,16 +338,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCb) {
+    fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCallback) {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
-            execute_callback(
-                callback,
-                ProcessResult::Failed {
-                    err: StorageError::SchedTooBusy,
-                },
-            );
+            callback.execute(ProcessResult::Failed {
+                err: StorageError::SchedTooBusy,
+            });
             return;
         }
         self.schedule_command(cmd, callback);
@@ -395,7 +392,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
         };
-        execute_callback(tctx.cb, pr);
+        tctx.cb.execute(pr);
 
         self.release_lock(&tctx.lock, cid);
     }
@@ -413,7 +410,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
             self.schedule_command(cmd, tctx.cb);
         } else {
-            execute_callback(tctx.cb, pr);
+            tctx.cb.execute(pr);
         }
 
         self.release_lock(&tctx.lock, cid);
@@ -441,7 +438,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
             self.schedule_command(cmd, tctx.cb);
         } else {
-            execute_callback(tctx.cb, pr);
+            tctx.cb.execute(pr);
         }
 
         self.release_lock(&tctx.lock, cid);
