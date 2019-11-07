@@ -201,8 +201,9 @@ mod tests {
             (Some(r#"true"#), Some("BOOLEAN")),
             (Some(r#"null"#), Some("NULL")),
             (Some(r#"-3"#), Some("INTEGER")),
-            (Some(r#"3"#), Some("UNSIGNED INTEGER")),
+            (Some(r#"3"#), Some("INTEGER")),
             (Some(r#"3.14"#), Some("DOUBLE")),
+            (Some(r#"9223372036854775808"#), Some("DOUBLE")),
             (Some(r#"[1, 2, 3]"#), Some("ARRAY")),
             (Some(r#"{"name": 123}"#), Some("OBJECT")),
         ];
