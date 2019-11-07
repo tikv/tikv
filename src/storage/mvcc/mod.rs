@@ -33,11 +33,15 @@ pub fn compose_ts(physical: u64, logical: u64) -> u64 {
     (physical << TSO_PHYSICAL_SHIFT_BITS) + logical
 }
 
+/// A hybrid immutable set for timestamps.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TsSet {
-    // When the set is empty, avoid the useless clone of Arc.
+    /// When the set is empty, avoid the useless cloning of Arc.
     Empty,
+    /// `Vec` is suitable when the set is small or the set is barely used, and it doesn't worth
+    /// converting a `Vec` into a `HashSet`.
     Vec(Arc<Vec<u64>>),
+    /// `Set` is suitable when there are many timestamps **and** it will be queried multiple times.
     Set(Arc<HashSet<u64>>),
 }
 
@@ -48,6 +52,8 @@ impl Default for TsSet {
 }
 
 impl TsSet {
+    /// Create a `TsSet` from the given vec of timestamps. It will select the proper internal
+    /// collection type according to the size.
     #[inline]
     pub fn new(ts: Vec<u64>) -> Self {
         if ts.is_empty() {
@@ -60,6 +66,10 @@ impl TsSet {
         }
     }
 
+    /// Create a `TsSet` from the given vec of timestamps, but it will be forced to use `Vec` as the
+    /// internal collection type. When it's sure that the set will be queried at most once, use this
+    /// is better than `TsSet::new`, since both the querying on `Vec` and the conversion from `Vec`
+    /// to `HashSet` is O(N).
     #[inline]
     pub fn vec(ts: Vec<u64>) -> Self {
         if ts.is_empty() {
@@ -69,6 +79,7 @@ impl TsSet {
         }
     }
 
+    /// Query whether the given timestamp is contained in the set.
     #[inline]
     pub fn contains(&self, ts: u64) -> bool {
         match self {

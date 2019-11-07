@@ -971,6 +971,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
+            // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
+            // here.
             let bypass_locks = TsSet::vec(ctx.take_resolved_locks());
             Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
@@ -1043,6 +1045,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                             for mut get in gets {
                                 snap_store.set_start_ts(get.ts.unwrap());
                                 snap_store.set_isolation_level(get.ctx.get_isolation_level());
+                                // The bypass_locks set will be checked at most once. `TsSet::vec`
+                                // is more efficient here.
                                 snap_store
                                     .set_bypass_locks(TsSet::vec(get.ctx.take_resolved_locks()));
                                 results.push(

@@ -387,4 +387,46 @@ mod tests {
         test_scan_with_lock_impl(false);
         test_scan_with_lock_impl(true);
     }
+
+    fn test_scan_bypass_locks_impl(desc: bool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        for i in 0..5 {
+            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 10);
+            must_commit(&engine, &[i], 10, 20);
+        }
+
+        // Locks are: 30, 40, 50, 60, 70
+        for i in 0..5 {
+            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 30 + u64::from(i) * 10);
+        }
+
+        let bypass_locks = TsSet::new(vec![30, 41, 50]);
+
+        // Scan at ts 65 will meet locks at 40 and 60.
+        let mut expected_result = vec![
+            (vec![0], Some(vec![b'v', 0])),
+            (vec![1], None),
+            (vec![2], Some(vec![b'v', 2])),
+            (vec![3], None),
+            (vec![4], Some(vec![b'v', 4])),
+        ];
+
+        if desc {
+            expected_result = expected_result.into_iter().rev().collect();
+        }
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let scanner = ScannerBuilder::new(snapshot.clone(), 65, desc)
+            .bypass_locks(bypass_locks)
+            .build()
+            .unwrap();
+        check_scan_result(scanner, &expected_result);
+    }
+
+    #[test]
+    fn test_scan_bypass_locks() {
+        test_scan_bypass_locks_impl(false);
+        test_scan_bypass_locks_impl(true);
+    }
 }

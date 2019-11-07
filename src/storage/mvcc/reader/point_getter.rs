@@ -677,4 +677,31 @@ mod tests {
         let mut getter = new_single_point_getter(&engine, std::u64::MAX);
         must_get_value(&mut getter, key, val);
     }
+
+    #[test]
+    fn test_get_bypass_locks() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let (key, val) = (b"foo", b"bar");
+        must_prewrite_put(&engine, key, val, key, 10);
+        must_commit(&engine, key, 10, 20);
+
+        must_prewrite_delete(&engine, key, key, 30);
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut getter = PointGetterBuilder::new(snapshot, 60)
+            .isolation_level(IsolationLevel::Si)
+            .bypass_locks(TsSet::new(vec![30, 40, 50]))
+            .build()
+            .unwrap();
+        must_get_value(&mut getter, key, val);
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut getter = PointGetterBuilder::new(snapshot, 60)
+            .isolation_level(IsolationLevel::Si)
+            .bypass_locks(TsSet::new(vec![31, 29]))
+            .build()
+            .unwrap();
+        must_get_err(&mut getter, key);
+    }
 }
