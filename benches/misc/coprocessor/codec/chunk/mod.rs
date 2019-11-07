@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod arrow;
+mod chunk;
 
 use test::Bencher;
 
@@ -75,7 +75,7 @@ fn bench_chunk_build_official(b: &mut Bencher) {
     ];
 
     b.iter(|| {
-        let mut chunk = arrow::ChunkBuilder::new(fields.len(), rows);
+        let mut chunk = chunk::ChunkBuilder::new(fields.len(), rows);
         for row_id in 0..rows {
             chunk.append_datum(0, Datum::Null);
             chunk.append_datum(1, Datum::I64(row_id as i64));
@@ -128,7 +128,7 @@ fn bench_chunk_iter_official(b: &mut Bencher) {
         field_type(FieldTypeTp::LongLong),
         field_type(FieldTypeTp::Double),
     ];
-    let mut chunk = arrow::ChunkBuilder::new(fields.len(), rows);
+    let mut chunk = chunk::ChunkBuilder::new(fields.len(), rows);
     for row_id in 0..rows {
         if row_id & 1 == 0 {
             chunk.append_datum(0, Datum::Null);
