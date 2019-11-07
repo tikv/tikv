@@ -15,7 +15,10 @@ use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::codec::data_type::*;
 use crate::expr::EvalConfig;
-use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::rpn_expr::{
+    GeneratedVectorArg, RefVectorArg, RpnExpression, RpnExpressionBuilder, RpnFnArg,
+    RpnStackNodeVectorValue,
+};
 use crate::storage::IntervalRange;
 use crate::Result;
 use tikv_util::box_try;
@@ -243,26 +246,56 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         )?;
         // Unwrap is fine because we have verified the group by expression before.
         let group_by_value = group_by_result.vector_value().unwrap();
-        let group_by_physical_vec = group_by_value.as_ref();
-        let group_by_logical_rows = group_by_value.logical_rows();
-
-        match_template_hashable! {
-            TT, match group_by_physical_vec {
-                VectorValue::TT(v) => {
-                    if let Groups::TT(group) = &mut self.groups {
-                        calc_groups_each_row(
-                            v,
-                            group_by_logical_rows,
-                            &entities.each_aggr_fn,
-                            group,
-                            &mut self.states,
-                            &mut self.states_offset_each_logical_row
-                        );
-                    } else {
-                        panic!();
+        match group_by_value {
+            RpnStackNodeVectorValue::Generated { value } => {
+                match_template_hashable! {
+                    TT, match value {
+                        VectorValue::TT(value) => {
+                            if let Groups::TT(group) = &mut self.groups {
+                                calc_groups_each_row(
+                                    GeneratedVectorArg{
+                                        value
+                                    },
+                                    value.len(),
+                                    &entities.each_aggr_fn,
+                                    group,
+                                    &mut self.states,
+                                    &mut self.states_offset_each_logical_row
+                                );
+                            } else {
+                                panic!();
+                            }
+                        },
+                        _ => unreachable!(),
                     }
-                },
-                _ => unreachable!(),
+                }
+            }
+            RpnStackNodeVectorValue::Ref {
+                physical_value,
+                logical_rows,
+            } => {
+                match_template_hashable! {
+                    TT, match physical_value {
+                        VectorValue::TT(physical_value) => {
+                            if let Groups::TT(group) = &mut self.groups {
+                                calc_groups_each_row(
+                                    RefVectorArg{
+                                        physical_value,
+                                        logical_rows
+                                    },
+                                    logical_rows.len(),
+                                    &entities.each_aggr_fn,
+                                    group,
+                                    &mut self.states,
+                                    &mut self.states_offset_each_logical_row
+                                );
+                            } else {
+                                panic!();
+                            }
+                        },
+                        _ => unreachable!(),
+                    }
+                }
             }
         }
 
@@ -323,16 +356,20 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     }
 }
 
-fn calc_groups_each_row<T: Evaluable + Eq + std::hash::Hash>(
-    physical_column: &[Option<T>],
-    logical_rows: &[usize],
+fn calc_groups_each_row<
+    'a,
+    T: Evaluable + Eq + std::hash::Hash + 'static,
+    Arg: RpnFnArg<Type = &'a Option<T>>,
+>(
+    arg: Arg,
+    output_rows: usize,
     aggr_fns: &[Box<dyn AggrFunction>],
     group: &mut HashMap<Option<T>, usize>,
     states: &mut Vec<Box<dyn AggrFunctionState>>,
     states_offset_each_logical_row: &mut Vec<usize>,
 ) {
-    for physical_idx in logical_rows {
-        let val = &physical_column[*physical_idx];
+    for row in 0..output_rows {
+        let val = arg.get(row);
 
         // Not using the entry API so that when entry exists there is no clone.
         match group.get(val) {

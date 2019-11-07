@@ -14,7 +14,7 @@ use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::codec::data_type::*;
 use crate::expr::EvalConfig;
-use crate::rpn_expr::RpnStackNode;
+use crate::rpn_expr::{RpnStackNode, RpnStackNodeVectorValue};
 use crate::storage::IntervalRange;
 use crate::Result;
 
@@ -161,21 +161,36 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
                         }
                     }
                 }
-                RpnStackNode::Vector { value, .. } => {
-                    let physical_vec = value.as_ref();
-                    let logical_rows = value.logical_rows();
-                    match_template_evaluable! {
-                        TT, match physical_vec {
-                            VectorValue::TT(vec) => {
-                                aggr_state.update_vector(
-                                    &mut entities.context,
-                                    vec,
-                                    logical_rows,
-                                )?;
-                            },
+                RpnStackNode::Vector { value, .. } => match value {
+                    RpnStackNodeVectorValue::Generated { value } => {
+                        match_template_evaluable! {
+                            TT, match value {
+                                VectorValue::TT(vec) => {
+                                    aggr_state.update_generated_vector(
+                                        &mut entities.context,
+                                        &vec,
+                                    )?;
+                                },
+                            }
                         }
                     }
-                }
+                    RpnStackNodeVectorValue::Ref {
+                        physical_value,
+                        logical_rows,
+                    } => {
+                        match_template_evaluable! {
+                            TT, match physical_value {
+                                VectorValue::TT(vec) => {
+                                    aggr_state.update_ref_vector(
+                                        &mut entities.context,
+                                        vec,
+                                        logical_rows,
+                                    )?;
+                                },
+                            }
+                        }
+                    }
+                },
             }
         }
 

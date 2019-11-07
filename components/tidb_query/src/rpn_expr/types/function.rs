@@ -27,7 +27,7 @@ use std::marker::PhantomData;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, FieldType};
 
-use super::RpnStackNode;
+use super::{RpnStackNode, RpnStackNodeVectorValue};
 use crate::codec::data_type::{Evaluable, ScalarValue, ScalarValueRef, VectorValue};
 use crate::expr::EvalContext;
 use crate::Result;
@@ -82,7 +82,7 @@ pub trait RpnFnArg: std::fmt::Debug {
 
 /// Represents an RPN function argument of a `ScalarValue`.
 #[derive(Clone, Copy, Debug)]
-pub struct ScalarArg<'a, T: Evaluable>(&'a Option<T>);
+pub struct ScalarArg<'a, T: Evaluable>(pub &'a Option<T>);
 
 impl<'a, T: Evaluable> RpnFnArg for ScalarArg<'a, T> {
     type Type = &'a Option<T>;
@@ -96,17 +96,31 @@ impl<'a, T: Evaluable> RpnFnArg for ScalarArg<'a, T> {
 
 /// Represents an RPN function argument of a `VectorValue`.
 #[derive(Clone, Copy, Debug)]
-pub struct VectorArg<'a, T: Evaluable> {
-    physical_col: &'a [Option<T>],
-    logical_rows: &'a [usize],
+pub struct GeneratedVectorArg<'a, T: Evaluable> {
+    pub value: &'a [Option<T>],
 }
 
-impl<'a, T: Evaluable> RpnFnArg for VectorArg<'a, T> {
+impl<'a, T: Evaluable> RpnFnArg for GeneratedVectorArg<'a, T> {
     type Type = &'a Option<T>;
 
     #[inline]
     fn get(&self, row: usize) -> &'a Option<T> {
-        &self.physical_col[self.logical_rows[row]]
+        &self.value[row]
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RefVectorArg<'a, T: Evaluable> {
+    pub physical_value: &'a [Option<T>],
+    pub logical_rows: &'a [usize],
+}
+
+impl<'a, T: Evaluable> RpnFnArg for RefVectorArg<'a, T> {
+    type Type = &'a Option<T>;
+
+    #[inline]
+    fn get(&self, row: usize) -> &'a Option<T> {
+        &self.physical_value[self.logical_rows[row]]
     }
 }
 
@@ -207,19 +221,32 @@ impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
                 self.inner
                     .eval(new_def, ctx, output_rows, args, extra, metadata)
             }
-            RpnStackNode::Vector { value, .. } => {
-                let logical_rows = value.logical_rows();
-                let v = A::borrow_vector_value(value.as_ref());
-                let new_def = Arg {
-                    arg: VectorArg {
-                        physical_col: v,
-                        logical_rows,
-                    },
-                    rem: def,
-                };
-                self.inner
-                    .eval(new_def, ctx, output_rows, args, extra, metadata)
-            }
+            RpnStackNode::Vector { value, .. } => match value {
+                RpnStackNodeVectorValue::Generated { value } => {
+                    let value = A::borrow_vector_value(value);
+                    let new_def = Arg {
+                        arg: GeneratedVectorArg { value },
+                        rem: def,
+                    };
+                    self.inner
+                        .eval(new_def, ctx, output_rows, args, extra, metadata)
+                }
+                RpnStackNodeVectorValue::Ref {
+                    physical_value,
+                    logical_rows,
+                } => {
+                    let physical_value = A::borrow_vector_value(physical_value);
+                    let new_def = Arg {
+                        arg: RefVectorArg {
+                            physical_value,
+                            logical_rows,
+                        },
+                        rem: def,
+                    };
+                    self.inner
+                        .eval(new_def, ctx, output_rows, args, extra, metadata)
+                }
+            },
         }
     }
 }

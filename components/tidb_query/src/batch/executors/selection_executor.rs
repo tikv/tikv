@@ -9,8 +9,10 @@ use tipb::Selection;
 use super::super::interface::*;
 use crate::codec::data_type::*;
 use crate::expr::{EvalConfig, EvalContext};
-use crate::rpn_expr::RpnStackNode;
-use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::rpn_expr::{
+    GeneratedVectorArg, RefVectorArg, RpnExpression, RpnExpressionBuilder, RpnFnArg, RpnStackNode,
+    RpnStackNodeVectorValue,
+};
 use crate::storage::IntervalRange;
 use crate::Result;
 
@@ -92,21 +94,42 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
                         value,
                     )?;
                 }
-                RpnStackNode::Vector { value, .. } => {
-                    let eval_result_logical_rows = value.logical_rows();
-                    match_template_evaluable! {
-                        TT, match value.as_ref() {
-                            VectorValue::TT(eval_result) => {
-                                update_logical_rows_by_vector_value(
-                                    &mut src_result.logical_rows,
-                                    &mut self.context,
-                                    eval_result,
-                                    eval_result_logical_rows,
-                                )?;
-                            },
+                RpnStackNode::Vector { value, .. } => match value {
+                    RpnStackNodeVectorValue::Generated { value } => {
+                        match_template_evaluable! {
+                            TT, match value {
+                                VectorValue::TT(v) => {
+                                    update_logical_rows_by_vector_value(
+                                        &mut src_result.logical_rows,
+                                        &mut self.context,
+                                        GeneratedVectorArg {
+                                            value: &v
+                                        }
+                                    )?;
+                                },
+                            }
                         }
                     }
-                }
+                    RpnStackNodeVectorValue::Ref {
+                        physical_value,
+                        logical_rows,
+                    } => {
+                        match_template_evaluable! {
+                            TT, match physical_value {
+                                VectorValue::TT(physical_value) => {
+                                    update_logical_rows_by_vector_value(
+                                        &mut src_result.logical_rows,
+                                        &mut self.context,
+                                        RefVectorArg {
+                                            physical_value,
+                                            logical_rows
+                                        }
+                                    )?;
+                                },
+                            }
+                        }
+                    }
+                },
             }
 
             condition_index += 1;
@@ -129,11 +152,14 @@ fn update_logical_rows_by_scalar_value(
     Ok(())
 }
 
-fn update_logical_rows_by_vector_value<T: AsMySQLBool>(
+fn update_logical_rows_by_vector_value<
+    'a,
+    T: AsMySQLBool + 'static,
+    Arg: RpnFnArg<Type = &'a Option<T>>,
+>(
     logical_rows: &mut Vec<usize>,
     ctx: &mut EvalContext,
-    eval_result: &[Option<T>],
-    eval_result_logical_rows: &[usize],
+    eval_result: Arg,
 ) -> Result<()> {
     let mut err_result = Ok(());
     let mut logical_index = 0;
@@ -142,10 +168,10 @@ fn update_logical_rows_by_vector_value<T: AsMySQLBool>(
         // does not affect the filtering. Instead, the eval result in corresponding logical index
         // matters.
 
-        let eval_result_physical_index = eval_result_logical_rows[logical_index];
+        let eval_result_bool = eval_result.get(logical_index).as_mysql_bool(ctx);
         logical_index += 1;
 
-        match eval_result[eval_result_physical_index].as_mysql_bool(ctx) {
+        match eval_result_bool {
             Err(e) => {
                 if err_result.is_ok() {
                     err_result = Err(e);

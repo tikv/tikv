@@ -16,8 +16,7 @@ use crate::batch::executors::util::*;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::expr::EvalConfig;
-use crate::rpn_expr::RpnStackNode;
-use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode, RpnStackNodeVectorValue};
 use crate::storage::IntervalRange;
 use crate::Result;
 
@@ -245,11 +244,25 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             for group_by_result in &self.group_by_results_unsafe {
                 match group_by_result {
                     RpnStackNode::Vector { value, field_type } => {
-                        value.as_ref().encode(
-                            value.logical_rows()[logical_row_idx],
-                            field_type,
-                            &mut self.group_key_buffer,
-                        )?;
+                        match value {
+                            RpnStackNodeVectorValue::Generated { value } => {
+                                value.encode(
+                                    logical_row_idx,
+                                    field_type,
+                                    &mut self.group_key_buffer,
+                                )?;
+                            }
+                            RpnStackNodeVectorValue::Ref {
+                                physical_value,
+                                logical_rows,
+                            } => {
+                                physical_value.encode(
+                                    logical_rows[logical_row_idx],
+                                    field_type,
+                                    &mut self.group_key_buffer,
+                                )?;
+                            }
+                        };
                         self.group_key_offsets.push(self.group_key_buffer.len());
                     }
                     // we have checked that group by cannot be a scalar

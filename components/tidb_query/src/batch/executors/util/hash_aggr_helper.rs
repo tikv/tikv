@@ -5,7 +5,7 @@ use crate::aggr_fn::AggrFunctionState;
 use crate::batch::interface::*;
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::codec::data_type::*;
-use crate::rpn_expr::RpnStackNode;
+use crate::rpn_expr::{RpnStackNode, RpnStackNodeVectorValue};
 use crate::Result;
 
 pub struct HashAggregationHelper;
@@ -47,23 +47,40 @@ impl HashAggregationHelper {
                         }
                     }
                 }
-                RpnStackNode::Vector { value, .. } => {
-                    let physical_vec = value.as_ref();
-                    let logical_rows = value.logical_rows();
-                    match_template_evaluable! {
-                        TT, match physical_vec {
-                            VectorValue::TT(vec) => {
-                                for (states_offset, physical_idx) in states_offset_each_logical_row
-                                    .iter()
-                                    .zip(logical_rows)
-                                {
-                                    let aggr_fn_state = &mut states[*states_offset + idx];
-                                    aggr_fn_state.update(&mut entities.context, &vec[*physical_idx])?;
+                RpnStackNode::Vector { value, .. } => match value {
+                    RpnStackNodeVectorValue::Generated { value } => {
+                        match_template_evaluable! {
+                            TT, match value {
+                                VectorValue::TT(vec) => {
+                                    for (row, states_offset) in states_offset_each_logical_row
+                                        .iter().enumerate()
+                                    {
+                                        let aggr_fn_state = &mut states[*states_offset + idx];
+                                        aggr_fn_state.update(&mut entities.context, &vec[row])?;
+                                    }
                                 }
                             }
                         }
                     }
-                }
+                    RpnStackNodeVectorValue::Ref {
+                        physical_value,
+                        logical_rows,
+                    } => {
+                        match_template_evaluable! {
+                            TT, match physical_value {
+                                VectorValue::TT(vec) => {
+                                    for (states_offset, physical_idx) in states_offset_each_logical_row
+                                        .iter()
+                                        .zip(logical_rows)
+                                    {
+                                        let aggr_fn_state = &mut states[*states_offset + idx];
+                                        aggr_fn_state.update(&mut entities.context, &vec[*physical_idx])?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
             }
         }
 

@@ -115,7 +115,19 @@ pub trait AggrFunctionStateUpdatePartial<T: Evaluable> {
     ///
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
-    fn update_vector(
+    fn update_generated_vector(
+        &mut self,
+        ctx: &mut EvalContext,
+        values: &[Option<T>],
+    ) -> Result<()>;
+
+    /// Updates the internal state giving multiple rows data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the aggregate function does not support the supplied concrete data type as its
+    /// parameter.
+    fn update_ref_vector(
         &mut self,
         ctx: &mut EvalContext,
         physical_values: &[Option<T>],
@@ -146,7 +158,16 @@ where
     }
 
     #[inline]
-    default fn update_vector(
+    default fn update_generated_vector(
+        &mut self,
+        _ctx: &mut EvalContext,
+        _values: &[Option<T>],
+    ) -> Result<()> {
+        panic!("Unmatched parameter type")
+    }
+
+    #[inline]
+    default fn update_ref_vector(
         &mut self,
         _ctx: &mut EvalContext,
         _physical_values: &[Option<T>],
@@ -179,7 +200,19 @@ where
     }
 
     #[inline]
-    fn update_vector(
+    fn update_generated_vector(
+        &mut self,
+        ctx: &mut EvalContext,
+        values: &[Option<T>],
+    ) -> Result<()> {
+        for val in values {
+            self.update_concrete(ctx, val)?;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn update_ref_vector(
         &mut self,
         ctx: &mut EvalContext,
         physical_values: &[Option<T>],

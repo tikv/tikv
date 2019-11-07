@@ -9,5 +9,7 @@ pub mod test_util;
 
 pub use self::expr::{RpnExpression, RpnExpressionNode};
 pub use self::expr_builder::RpnExpressionBuilder;
-pub use self::expr_eval::RpnStackNode;
-pub use self::function::{RpnFnCallExtra, RpnFnMeta};
+pub use self::expr_eval::{RpnStackNode, RpnStackNodeVectorValue};
+pub use self::function::{
+    GeneratedVectorArg, RefVectorArg, RpnFnArg, RpnFnCallExtra, RpnFnMeta, ScalarArg,
+};

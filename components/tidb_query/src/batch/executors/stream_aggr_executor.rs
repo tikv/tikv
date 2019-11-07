@@ -14,8 +14,7 @@ use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::codec::data_type::*;
 use crate::expr::{EvalConfig, EvalContext};
-use crate::rpn_expr::RpnStackNode;
-use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode, RpnStackNodeVectorValue};
 use crate::storage::IntervalRange;
 use crate::Result;
 
@@ -386,21 +385,36 @@ fn update_current_states(
                         }
                     }
                 }
-                RpnStackNode::Vector { value, .. } => {
-                    let physical_vec = value.as_ref();
-                    let logical_rows = value.logical_rows();
-                    match_template_evaluable! {
-                        TT, match physical_vec {
-                            VectorValue::TT(vec) => {
-                                state.update_vector(
-                                    ctx,
-                                    vec,
-                                    &logical_rows[start_logical_row..end_logical_row],
-                                )?;
-                            },
+                RpnStackNode::Vector { value, .. } => match value {
+                    RpnStackNodeVectorValue::Generated { value } => {
+                        match_template_evaluable! {
+                            TT, match value {
+                                VectorValue::TT(vec) => {
+                                    state.update_generated_vector(
+                                        ctx,
+                                        &vec[start_logical_row..end_logical_row],
+                                    )?;
+                                },
+                            }
                         }
                     }
-                }
+                    RpnStackNodeVectorValue::Ref {
+                        physical_value,
+                        logical_rows,
+                    } => {
+                        match_template_evaluable! {
+                            TT, match physical_value {
+                                VectorValue::TT(vec) => {
+                                    state.update_ref_vector(
+                                        ctx,
+                                        vec,
+                                        &logical_rows[start_logical_row..end_logical_row],
+                                    )?;
+                                },
+                            }
+                        }
+                    }
+                },
             }
         }
     }
