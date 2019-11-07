@@ -98,11 +98,7 @@ impl<F: CmpOp> Comparer for IntUintComparer<F> {
             (None, None) => F::compare_null(),
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => {
-                let ordering = if *lhs < 0 || *rhs as u64 > std::i64::MAX as u64 {
-                    Ordering::Less
-                } else {
-                    lhs.cmp(&rhs)
-                };
+                let ordering = lhs.cmp(&rhs);
                 Some(F::compare_order(ordering) as i64)
             }
         })
