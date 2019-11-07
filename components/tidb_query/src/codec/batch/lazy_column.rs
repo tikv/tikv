@@ -7,9 +7,9 @@ use tipb::FieldType;
 
 use super::BufferVec;
 use crate::codec::data_type::VectorValue;
-use crate::codec::mysql::Tz;
 use crate::codec::raw_datum::RawDatumDecoder;
 use crate::codec::Result;
+use crate::expr::EvalContext;
 
 /// A container stores an array of datums, which can be either raw (not decoded), or decoded into
 /// the `VectorValue` type.
@@ -154,7 +154,7 @@ impl LazyBatchColumn {
     // TODO: Maybe it's a better idea to assign different eval types for different date types.
     pub fn ensure_decoded(
         &mut self,
-        time_zone: &Tz,
+        ctx: &mut EvalContext,
         field_type: &FieldType,
         logical_rows: &[usize],
     ) -> Result<()> {
@@ -174,7 +174,7 @@ impl LazyBatchColumn {
                         vec.push(None);
                     }
                     for row_index in logical_rows {
-                        vec[*row_index] = raw_vec[*row_index].decode(field_type, time_zone)?;
+                        vec[*row_index] = raw_vec[*row_index].decode(field_type, ctx)?;
                     }
                 }
             }
@@ -186,9 +186,13 @@ impl LazyBatchColumn {
     }
 
     #[cfg(test)]
-    pub fn ensure_all_decoded(&mut self, time_zone: &Tz, field_type: &FieldType) -> Result<()> {
+    pub fn ensure_all_decoded(
+        &mut self,
+        ctx: &mut EvalContext,
+        field_type: &FieldType,
+    ) -> Result<()> {
         let logical_rows: Vec<_> = (0..self.len()).collect();
-        self.ensure_decoded(time_zone, field_type, &logical_rows)
+        self.ensure_decoded(ctx, field_type, &logical_rows)
     }
 
     /// Returns maximum encoded size.
@@ -213,6 +217,7 @@ impl LazyBatchColumn {
         &self,
         row_index: usize,
         field_type: &FieldType,
+        ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
         match self {
@@ -220,7 +225,7 @@ impl LazyBatchColumn {
                 output.extend_from_slice(&v[row_index]);
                 Ok(())
             }
-            LazyBatchColumn::Decoded(ref v) => v.encode(row_index, field_type, output),
+            LazyBatchColumn::Decoded(ref v) => v.encode(row_index, field_type, ctx, output),
         }
     }
 }
@@ -236,6 +241,7 @@ mod tests {
         use tidb_query_datatype::FieldTypeTp;
 
         let mut col = LazyBatchColumn::raw_with_capacity(5);
+        let mut ctx = EvalContext::default();
         assert!(col.is_raw());
         assert_eq!(col.len(), 0);
         assert_eq!(col.capacity(), 5);
@@ -251,7 +257,7 @@ mod tests {
         {
             // Empty raw to empty decoded.
             let mut col = col.clone();
-            col.ensure_all_decoded(&Tz::utc(), &FieldTypeTp::Long.into())
+            col.ensure_all_decoded(&mut ctx, &FieldTypeTp::Long.into())
                 .unwrap();
             assert!(col.is_decoded());
             assert_eq!(col.len(), 0);
@@ -267,16 +273,23 @@ mod tests {
             }
         }
 
+        let mut ctx = EvalContext::default();
         let mut datum_raw_1 = Vec::new();
-        datum_raw_1.write_datum(&[Datum::U64(32)], false).unwrap();
+        datum_raw_1
+            .write_datum(&mut ctx, &[Datum::U64(32)], false)
+            .unwrap();
         col.mut_raw().push(&datum_raw_1);
 
         let mut datum_raw_2 = Vec::new();
-        datum_raw_2.write_datum(&[Datum::U64(7)], true).unwrap();
+        datum_raw_2
+            .write_datum(&mut ctx, &[Datum::U64(7)], true)
+            .unwrap();
         col.mut_raw().push(&datum_raw_2);
 
         let mut datum_raw_3 = Vec::new();
-        datum_raw_3.write_datum(&[Datum::U64(10)], true).unwrap();
+        datum_raw_3
+            .write_datum(&mut ctx, &[Datum::U64(10)], true)
+            .unwrap();
         col.mut_raw().push(&datum_raw_3);
 
         assert!(col.is_raw());
@@ -299,7 +312,7 @@ mod tests {
         }
 
         // Non-empty raw to non-empty decoded.
-        col.ensure_decoded(&Tz::utc(), &FieldTypeTp::Long.into(), &[2, 0])
+        col.ensure_decoded(&mut ctx, &FieldTypeTp::Long.into(), &[2, 0])
             .unwrap();
         assert!(col.is_decoded());
         assert_eq!(col.len(), 3);
@@ -317,7 +330,7 @@ mod tests {
         }
 
         // Decode a decoded column, even using a different logical rows, does not have effect.
-        col.ensure_decoded(&Tz::utc(), &FieldTypeTp::Long.into(), &[0, 1])
+        col.ensure_decoded(&mut ctx, &FieldTypeTp::Long.into(), &[0, 1])
             .unwrap();
         assert!(col.is_decoded());
         assert_eq!(col.len(), 3);
@@ -353,9 +366,10 @@ mod benches {
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
+        let mut ctx = EvalContext::default();
         let mut datum_raw: Vec<u8> = Vec::new();
         datum_raw
-            .write_datum(&[Datum::U64(0xDEADBEEF)], true)
+            .write_datum(&mut ctx, &[Datum::U64(0xDEADBEEF)], true)
             .unwrap();
 
         for _ in 0..1000 {
@@ -364,7 +378,7 @@ mod benches {
         let logical_rows: Vec<_> = (0..1000).collect();
 
         column
-            .ensure_decoded(&Tz::utc(), &FieldTypeTp::LongLong.into(), &logical_rows)
+            .ensure_decoded(&mut ctx, &FieldTypeTp::LongLong.into(), &logical_rows)
             .unwrap();
 
         b.iter(|| {
@@ -380,11 +394,12 @@ mod benches {
         use crate::codec::datum::{Datum, DatumEncoder};
         use tidb_query_datatype::FieldTypeTp;
 
+        let mut ctx = EvalContext::default();
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
         let mut datum_raw: Vec<u8> = Vec::new();
         datum_raw
-            .write_datum(&[Datum::U64(0xDEADBEEF)], true)
+            .write_datum(&mut ctx, &[Datum::U64(0xDEADBEEF)], true)
             .unwrap();
 
         for _ in 0..1000 {
@@ -393,12 +408,14 @@ mod benches {
         let logical_rows: Vec<_> = (0..1000).collect();
 
         let ft = FieldTypeTp::LongLong.into();
-        let tz = Tz::utc();
-
         b.iter(|| {
             let mut col = test::black_box(&column).clone();
-            col.ensure_decoded(test::black_box(&tz), test::black_box(&ft), &logical_rows)
-                .unwrap();
+            col.ensure_decoded(
+                test::black_box(&mut ctx),
+                test::black_box(&ft),
+                &logical_rows,
+            )
+            .unwrap();
             test::black_box(&col);
         });
     }
@@ -413,9 +430,10 @@ mod benches {
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
+        let mut ctx = EvalContext::default();
         let mut datum_raw: Vec<u8> = Vec::new();
         datum_raw
-            .write_datum(&[Datum::U64(0xDEADBEEF)], true)
+            .write_datum(&mut ctx, &[Datum::U64(0xDEADBEEF)], true)
             .unwrap();
 
         for _ in 0..1000 {
@@ -424,14 +442,17 @@ mod benches {
         let logical_rows: Vec<_> = (0..1000).collect();
 
         let ft = FieldTypeTp::LongLong.into();
-        let tz = Tz::utc();
 
-        column.ensure_decoded(&tz, &ft, &logical_rows).unwrap();
+        column.ensure_decoded(&mut ctx, &ft, &logical_rows).unwrap();
 
         b.iter(|| {
             let mut col = test::black_box(&column).clone();
-            col.ensure_decoded(test::black_box(&tz), test::black_box(&ft), &logical_rows)
-                .unwrap();
+            col.ensure_decoded(
+                test::black_box(&mut ctx),
+                test::black_box(&ft),
+                &logical_rows,
+            )
+            .unwrap();
             test::black_box(&col);
         });
     }
