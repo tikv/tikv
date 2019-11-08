@@ -90,7 +90,11 @@ impl<'de> Visitor<'de> for JsonVisitor {
     where
         E: de::Error,
     {
-        Ok(Json::U64(v))
+        if v > (std::i64::MAX as u64) {
+            Ok(Json::Double(v as f64))
+        } else {
+            Ok(Json::I64(v as i64))
+        }
     }
 
     fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
@@ -168,6 +172,20 @@ mod tests {
         for json_str in legal_cases {
             let resp = Json::from_str(json_str);
             assert!(resp.is_ok());
+        }
+
+        let cases = vec![
+            (
+                r#"9223372036854776000"#,
+                Json::Double(9223372036854776000.0),
+            ),
+            (r#"9223372036854775807"#, Json::I64(9223372036854775807)),
+        ];
+
+        for (json_str, json) in cases {
+            let resp = Json::from_str(json_str);
+            assert!(resp.is_ok());
+            assert_eq!(resp.unwrap(), json);
         }
 
         let illegal_cases = vec!["[pxx,apaa]", "hpeheh", ""];

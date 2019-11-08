@@ -7,7 +7,6 @@ use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, ExprType, FieldType};
 
 use crate::codec::data_type::*;
-use crate::codec::mysql::Tz;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::Result;
@@ -80,7 +79,7 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
     fn parse(
         &self,
         mut aggr_def: Expr,
-        time_zone: &Tz,
+        ctx: &mut EvalContext,
         // We use the same structure for all data types, so this parameter is not needed.
         src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
@@ -93,8 +92,7 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
 
         // Rewrite expression to insert CAST() if needed.
         let child = aggr_def.take_children().into_iter().next().unwrap();
-        let mut exp =
-            RpnExpressionBuilder::build_from_expr_tree(child, time_zone, src_schema.len())?;
+        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, ctx, src_schema.len())?;
         super::util::rewrite_exp_for_bit_op(src_schema, &mut exp).unwrap();
         out_exp.push(exp);
 
@@ -388,28 +386,28 @@ mod tests {
         let mut schema = vec![];
         let mut exp = vec![];
 
+        let mut ctx = EvalContext::default();
         let bit_and_fn = bit_and_parser
-            .parse(bit_and, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .parse(bit_and, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 1);
         assert_eq!(schema[0].as_accessor().tp(), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 1);
 
         let bit_or_fn = bit_or_parser
-            .parse(bit_or, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .parse(bit_or, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 2);
         assert_eq!(schema[1].as_accessor().tp(), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 2);
 
         let bit_xor_fn = bit_xor_parser
-            .parse(bit_xor, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .parse(bit_xor, &mut ctx, &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 3);
         assert_eq!(schema[2].as_accessor().tp(), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 3);
 
-        let mut ctx = EvalContext::default();
         let mut bit_and_state = bit_and_fn.create_state();
         let mut bit_or_state = bit_or_fn.create_state();
         let mut bit_xor_state = bit_xor_fn.create_state();

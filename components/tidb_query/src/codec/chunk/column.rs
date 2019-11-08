@@ -10,6 +10,7 @@ use crate::codec::mysql::{
     JsonDecoder, JsonEncoder, Time, TimeDecoder, TimeEncoder,
 };
 use crate::codec::Datum;
+use crate::expr::EvalContext;
 
 use codec::prelude::*;
 #[cfg(test)]
@@ -51,7 +52,12 @@ impl Column {
     }
 
     /// Get the datum of one row with the specified type.
-    pub fn get_datum(&self, idx: usize, field_type: &dyn FieldTypeAccessor) -> Result<Datum> {
+    pub fn get_datum(
+        &self,
+        ctx: &mut EvalContext,
+        idx: usize,
+        field_type: &dyn FieldTypeAccessor,
+    ) -> Result<Datum> {
         if self.is_null(idx) {
             return Ok(Datum::Null);
         }
@@ -71,7 +77,7 @@ impl Column {
             FieldTypeTp::Double => Datum::F64(self.get_f64(idx)?),
             FieldTypeTp::Float => Datum::F64(f64::from(self.get_f32(idx)?)),
             FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
-                Datum::Time(self.get_time(idx)?)
+                Datum::Time(self.get_time(ctx, idx)?)
             }
             FieldTypeTp::Duration => Datum::Dur(self.get_duration(idx, field_type.decimal())?),
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
@@ -110,7 +116,7 @@ impl Column {
             Datum::Bytes(ref v) => self.append_bytes(v),
             Datum::Dec(ref v) => self.append_decimal(v),
             Datum::Dur(v) => self.append_duration(*v),
-            Datum::Time(ref v) => self.append_time(v),
+            Datum::Time(v) => self.append_time(*v),
             Datum::Json(ref v) => self.append_json(v),
             _ => Err(box_err!("unsupported datum {:?}", data)),
         }
@@ -291,17 +297,17 @@ impl Column {
     }
 
     /// Append a time datum to the column.
-    pub fn append_time(&mut self, t: &Time) -> Result<()> {
+    pub fn append_time(&mut self, t: Time) -> Result<()> {
         self.data.write_time(t)?;
         self.finish_append_fixed()
     }
 
     /// Get the time datum of the row in the column.
-    pub fn get_time(&self, idx: usize) -> Result<Time> {
+    pub fn get_time(&self, ctx: &mut EvalContext, idx: usize) -> Result<Time> {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.read_time()
+        data.read_time(ctx)
     }
 
     /// Append a duration datum to the column.
@@ -430,6 +436,7 @@ mod tests {
             Datum::I64(12),
             Datum::I64(1024),
         ];
+        let mut ctx = EvalContext::default();
         for field in &fields {
             let mut column = Column::new(field, data.len());
             for v in &data {
@@ -437,7 +444,7 @@ mod tests {
             }
 
             for (id, expect) in data.iter().enumerate() {
-                let get = column.get_datum(id, field).unwrap();
+                let get = column.get_datum(&mut ctx, id, field).unwrap();
                 assert_eq!(&get, expect);
             }
         }
@@ -466,13 +473,14 @@ mod tests {
     }
 
     fn test_colum_datum(fields: Vec<FieldType>, data: Vec<Datum>) {
+        let mut ctx = EvalContext::default();
         for field in &fields {
             let mut column = Column::new(field, data.len());
             for v in &data {
                 column.append_datum(v).unwrap();
             }
             for (id, expect) in data.iter().enumerate() {
-                let get = column.get_datum(id, field).unwrap();
+                let get = column.get_datum(&mut ctx, id, field).unwrap();
                 assert_eq!(&get, expect);
             }
         }
@@ -498,12 +506,13 @@ mod tests {
 
     #[test]
     fn test_column_time() {
+        let mut ctx = EvalContext::default();
         let fields = vec![
             field_type(FieldTypeTp::Date),
             field_type(FieldTypeTp::DateTime),
             field_type(FieldTypeTp::Timestamp),
         ];
-        let time = Time::parse_utc_datetime("2012-12-31 11:30:45", -1).unwrap();
+        let time = Time::parse_datetime(&mut ctx, "2012-12-31 11:30:45", -1, true).unwrap();
         let data = vec![Datum::Null, Datum::Time(time)];
         test_colum_datum(fields, data);
     }

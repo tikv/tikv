@@ -111,10 +111,11 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         assert_eq!(order_exprs_def.len(), order_is_desc.len());
 
         let mut order_exprs = Vec::with_capacity(order_exprs_def.len());
+        let mut ctx = EvalContext::new(config.clone());
         for def in order_exprs_def {
             order_exprs.push(RpnExpressionBuilder::build_from_expr_tree(
                 def,
-                &config.tz,
+                &mut ctx,
                 src.schema().len(),
             )?);
         }
@@ -161,7 +162,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         logical_rows: Vec<usize>,
     ) -> Result<()> {
         ensure_columns_decoded(
-            &self.context.cfg.tz,
+            &mut self.context,
             &self.order_exprs,
             self.src.schema(),
             &mut physical_columns,
