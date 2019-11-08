@@ -6,7 +6,7 @@ use engine_traits::IngestExternalFileOptions;
 use engine_traits::{Error, Result};
 use rocksdb::set_external_sst_file_global_seq_no;
 use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, ErrorKind};
 use std::path::Path;
 use tikv_util::file::calc_crc32;
@@ -101,6 +101,7 @@ impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
 ///    global seqno directly, because that may corrupt RocksDB's data.
 #[cfg(target_os = "linux")]
 pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone: Q) -> Result<()> {
+    use std::fs;
     use std::os::linux::fs::MetadataExt;
 
     let path = path.as_ref().to_str().unwrap();
