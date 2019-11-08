@@ -1806,7 +1806,7 @@ mod tests {
         // Write a pessimistic lock.
         must_rollback(&engine, k, 10);
         options.for_update_ts = 50;
-        must_acquire_pessimistic_lock(&engine, k, k, 50, options.for_update_ts);
+        must_acquire_pessimistic_lock_impl(&engine, k, k, 50, options.clone());
 
         expected_lock_info.set_lock_version(50);
         expected_lock_info.set_lock_ttl(options.lock_ttl);

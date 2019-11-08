@@ -291,8 +291,7 @@ pub mod tests {
     }
 
     pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
-        let options = Options::default();
-        must_prewrite_put_impl(engine, key, value, pk, ts, false, options);
+        must_prewrite_put_impl(engine, key, value, pk, ts, false, Options::default());
     }
 
     pub fn must_pessimistic_prewrite_put<E: Engine>(
@@ -318,7 +317,7 @@ pub mod tests {
         for_update_ts: u64,
         is_pessimistic_lock: bool,
     ) -> Error {
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         let mut options = Options::default();
@@ -447,6 +446,24 @@ pub mod tests {
         must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
     }
 
+    pub fn must_acquire_pessimistic_lock_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: u64,
+        options: Options,
+    ) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
+            .unwrap();
+        let modifies = txn.into_modifies();
+        if !modifies.is_empty() {
+            engine.write(&ctx, modifies).unwrap();
+        }
+    }
+
     pub fn must_acquire_pessimistic_lock<E: Engine>(
         engine: &E,
         key: &[u8],
@@ -454,7 +471,7 @@ pub mod tests {
         start_ts: u64,
         for_update_ts: u64,
     ) {
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         let mut options = Options::default();
@@ -474,7 +491,7 @@ pub mod tests {
         start_ts: u64,
         for_update_ts: u64,
     ) -> Error {
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         let mut options = Options::default();
