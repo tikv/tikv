@@ -117,6 +117,8 @@ name = "backup"
 version = "0.0.1"
 dependencies = [
  "engine",
+ "engine_rocks",
+ "engine_traits",
  "external_storage",
  "failure",
  "futures",
@@ -187,6 +189,12 @@ name = "bitflags"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d155346769a6855b86399e9bc3814ab343cd3d62c7e985113d46a0ec3c281fd"
+
+[[package]]
+name = "boolinator"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfa8873f51c92e232f9bac4065cddef41b714152812bfc5f7672ba16d6ef8cd9"
 
 [[package]]
 name = "bstr"
@@ -2989,6 +2997,7 @@ dependencies = [
  "base64",
  "bitfield",
  "bitflags",
+ "boolinator",
  "byteorder",
  "chrono",
  "chrono-tz",
@@ -3230,7 +3239,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#e6f0f14af644a4a9cad314bc8c03108c157469bb"
+source = "git+https://github.com/pingcap/tipb.git#bd4b782c8393dc251f6dc15dcce8eec2c7acf315"
 dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf-build",

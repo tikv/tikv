@@ -492,7 +492,6 @@ fn test_serde_custom_tikv_config() {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
         max_key_size: 8192,
-        scheduler_notify_capacity: 123,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
