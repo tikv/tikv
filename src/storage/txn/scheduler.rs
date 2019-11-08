@@ -160,6 +160,8 @@ struct SchedulerInner<L: LockMgr> {
     // used to control write flow
     running_write_bytes: Arc<AtomicUsize>,
 
+    pending_commands: Arc<AtomicUsize>,
+
     lock_mgr: Option<L>,
 }
 
@@ -194,6 +196,7 @@ impl<L: LockMgr> SchedulerInner<L> {
         let running_write_bytes =
             self.running_write_bytes
                 .fetch_add(tctx.write_bytes, Ordering::Relaxed) as i64;
+        self.pending_commands.fetch_add(1, Ordering::Relaxed);
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes + tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.inc();
 
@@ -212,6 +215,7 @@ impl<L: LockMgr> SchedulerInner<L> {
         let running_write_bytes =
             self.running_write_bytes
                 .fetch_sub(tctx.write_bytes, Ordering::Relaxed) as i64;
+        self.pending_commands.fetch_sub(1, Ordering::Relaxed);
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes - tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.dec();
 
@@ -269,6 +273,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
             id_alloc: AtomicU64::new(0),
             latches: Latches::new(concurrency),
             running_write_bytes: Arc::new(AtomicUsize::new(0)),
+            pending_commands: Arc::new(AtomicUsize::new(0)),
             sched_pending_write_threshold,
             worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
             high_priority_pool: SchedPool::new(
@@ -292,6 +297,10 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
 
     pub fn writing_bytes(&self) -> &Arc<AtomicUsize> {
         &self.inner.running_write_bytes
+    }
+
+    pub fn pending_commands(&self) -> &Arc<AtomicUsize> {
+        &self.inner.pending_commands
     }
 
     pub fn run_cmd(&self, cmd: Command, callback: StorageCb) {

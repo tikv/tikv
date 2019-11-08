@@ -940,6 +940,10 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         Arc::clone(self.sched.writing_bytes())
     }
 
+    pub fn sched_pending_commands(&self) -> Arc<atomic::AtomicUsize> {
+        Arc::clone(self.sched.pending_commands())
+    }
+
     /// Create a `Storage` from given engine.
     pub fn from_engine(
         engine: E,

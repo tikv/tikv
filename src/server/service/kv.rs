@@ -49,12 +49,11 @@ const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
-const REQUEST_LOAD_ESTIMATE_SLOW_SAMPLE_WINDOW: usize = 30;
-const REQUEST_LOAD_ESTIMATE_FAST_SAMPLE_WINDOW: usize = 5;
-const REQUEST_LOAD_ESTIMATE_LOW_LOAD_RATIO: f32 = 0.3;
-const REQUEST_LOAD_ESTIMATE_LOAD_SAMPLE_BAR: usize = 70;
+const REQUEST_LOAD_ESTIMATE_SAMPLE_WINDOW: usize = 30;
+const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f32 = 0.3;
+const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 70;
 const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.0;
-const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_WRITING_BYTES: usize = 25600; // 25 KB
+const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_PENDING_COMMANDS: usize = 120;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
@@ -97,12 +96,12 @@ struct RequestLoadEstimator {
     latency_reader: Option<HistogramReader>,
     latency_estimation: f64,
     latency_threshold: f64,
-    thread_load_reader: Option<Arc<ThreadLoad>>,
     atomic_load_reader: Option<Arc<AtomicUsize>>,
-    load_estimation: usize,
-    // record system load of snapshot
-    load_cache: usize,
-    load_threshold: usize,
+    atomic_load_estimation: usize,
+    atomic_load_threshold: usize,
+    thread_load_reader: Option<Arc<ThreadLoad>>,
+    thread_load_estimation: usize,
+    thread_load_threshold: usize,
     sample_size: usize,
 }
 
@@ -112,11 +111,12 @@ impl RequestLoadEstimator {
             latency_reader: None,
             latency_estimation: 0.0,
             latency_threshold: 0.0,
-            thread_load_reader: None,
             atomic_load_reader: None,
-            load_estimation: 0,
-            load_cache: 0,
-            load_threshold: 0,
+            atomic_load_estimation: 0,
+            atomic_load_threshold: 0,
+            thread_load_reader: None,
+            thread_load_estimation: 0,
+            thread_load_threshold: 0,
             sample_size: 0,
         }
     }
@@ -124,25 +124,26 @@ impl RequestLoadEstimator {
     fn monitor_latency(&mut self, reader: HistogramReader, threshold: f64) {
         self.latency_reader.replace(reader);
         self.latency_threshold = threshold;
-        self.load_estimation = REQUEST_LOAD_ESTIMATE_LOAD_SAMPLE_BAR;
+        self.thread_load_estimation = REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR;
     }
 
-    // when latency reader is present, only used to determine light load.
-    fn monitor_thread(&mut self, reader: Arc<ThreadLoad>, threshold: usize) {
-        self.thread_load_reader.replace(reader);
-        self.load_threshold = threshold;
-    }
-
-    // when latency reader is present, only used to determine light load.
     fn monitor_atomic_usize(&mut self, reader: Arc<AtomicUsize>, threshold: usize) {
         self.atomic_load_reader.replace(reader);
-        self.load_threshold = threshold;
+        self.atomic_load_threshold = threshold;
+        self.thread_load_estimation = REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR;
+    }
+
+    // only used to determine light load if another metrics is present.
+    fn monitor_thread(&mut self, reader: Arc<ThreadLoad>, threshold: usize) {
+        self.thread_load_reader.replace(reader);
+        self.thread_load_threshold = threshold;
     }
 
     fn in_light_load(&self) -> bool {
-        if self.thread_load_reader.is_some() || self.atomic_load_reader.is_some() {
-            self.load_estimation
-                < (self.load_cache as f32 * REQUEST_LOAD_ESTIMATE_LOW_LOAD_RATIO) as usize
+        if let Some(reader) = &self.thread_load_reader {
+            reader.load()
+                < (self.thread_load_estimation as f32 * REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO)
+                    as usize
         } else {
             true
         }
@@ -150,11 +151,11 @@ impl RequestLoadEstimator {
 
     fn in_heavy_load(&self) -> bool {
         if self.latency_reader.is_some() {
-            // first priority
-            self.load_estimation > REQUEST_LOAD_ESTIMATE_LOAD_SAMPLE_BAR
+            self.thread_load_estimation > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR
                 && self.latency_estimation > self.latency_threshold
-        } else if self.thread_load_reader.is_some() || self.atomic_load_reader.is_some() {
-            self.load_estimation > self.load_threshold
+        } else if self.atomic_load_reader.is_some() {
+            self.thread_load_estimation > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR
+                && self.atomic_load_estimation > self.atomic_load_threshold
         } else {
             false
         }
@@ -166,10 +167,8 @@ impl RequestLoadEstimator {
         self.sample_size += 1;
         if self.sample_size > sample_size {
             self.sample_size = 0;
-            let load = if let Some(reader) = &self.thread_load_reader {
+            let thread_load = if let Some(reader) = &self.thread_load_reader {
                 reader.load()
-            } else if let Some(reader) = &self.atomic_load_reader {
-                reader.load(Ordering::Relaxed)
             } else {
                 0
             };
@@ -177,27 +176,37 @@ impl RequestLoadEstimator {
                 let latency = reader.read_latest_avg() * 1000.0;
                 self.latency_estimation = (self.latency_estimation + latency) / 2.0;
                 // when latency is the major metrics, sample thread load for busy hours.
-                if load > REQUEST_LOAD_ESTIMATE_LOAD_SAMPLE_BAR {
+                if thread_load > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR {
                     // thread load is less sensitive to workload,
                     // a small barrier here to make sure we have good samples of thread load.
                     if latency > self.latency_threshold {
-                        self.load_estimation = (self.load_estimation + load) / 2;
+                        self.thread_load_estimation =
+                            (self.thread_load_estimation + thread_load) / 2;
+                    }
+                }
+            } else if let Some(reader) = &mut self.atomic_load_reader {
+                let atomic_load = reader.load(Ordering::Relaxed);
+                self.atomic_load_estimation = (self.atomic_load_estimation + atomic_load) / 2;
+                // when latency is the major metrics, sample thread load for busy hours.
+                if thread_load > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR {
+                    // thread load is less sensitive to workload,
+                    // a small barrier here to make sure we have good samples of thread load.
+                    if atomic_load > self.atomic_load_estimation {
+                        self.thread_load_estimation =
+                            (self.thread_load_estimation + thread_load) / 2;
                     }
                 }
             } else {
-                self.load_estimation = (self.load_estimation + load) / 2;
+                self.thread_load_estimation = (self.thread_load_estimation + thread_load) / 2;
             }
         }
     }
 
-    fn take_snapshot(&mut self) {
-        self.load_cache = self.load_estimation;
-    }
-
     // Clear old samples for collector to work unbiasedly. Called once before `collect`.
     fn clear(&mut self) {
-        self.load_estimation = 0;
+        self.thread_load_estimation = REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR;
         self.latency_estimation = 0.0;
+        self.atomic_load_estimation = 0;
     }
 }
 
@@ -264,9 +273,11 @@ impl BatchLimiter {
         timeout: Option<Duration>,
         load_threshold: usize,
         atomic_usize: Arc<AtomicUsize>,
+        thread_load_reader: Arc<ThreadLoad>,
     ) -> Self {
         let mut estimator = RequestLoadEstimator::new();
         estimator.monitor_atomic_usize(atomic_usize, load_threshold);
+        estimator.monitor_thread(thread_load_reader, 0);
         BatchLimiter {
             cmd,
             timeout,
@@ -306,17 +317,13 @@ impl BatchLimiter {
             return;
         }
         if self.enable_batch {
-            self.estimator
-                .collect(REQUEST_LOAD_ESTIMATE_FAST_SAMPLE_WINDOW);
             if self.estimator.in_light_load() {
                 self.estimator.clear();
                 self.enable_batch = false;
             }
         } else {
-            self.estimator
-                .collect(REQUEST_LOAD_ESTIMATE_SLOW_SAMPLE_WINDOW);
+            self.estimator.collect(REQUEST_LOAD_ESTIMATE_SAMPLE_WINDOW);
             if self.estimator.in_heavy_load() {
-                self.estimator.take_snapshot();
                 self.enable_batch = true;
             }
         }
@@ -720,8 +727,9 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
         tx: Sender<(u64, batch_commands_response::Response)>,
         timeout: Option<Duration>,
         readpool_thread_load: Arc<ThreadLoad>,
-        sched_writing_bytes: Arc<AtomicUsize>,
-        _sched_pool_thread_load: Arc<ThreadLoad>,
+        _sched_writing_bytes: Arc<AtomicUsize>,
+        sched_pending_commands: Arc<AtomicUsize>,
+        sched_pool_thread_load: Arc<ThreadLoad>,
     ) -> Self {
         let mut inners = BTreeMap::<BatchableRequestKind, ReqBatcherInner<E, L>>::default();
         inners.insert(
@@ -744,8 +752,9 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
                 BatchLimiter::with_atomic_usize(
                     BatchableRequestKind::Prewrite,
                     timeout,
-                    REQUEST_LOAD_ESTIMATE_WRITE_HIGH_WRITING_BYTES,
-                    sched_writing_bytes.clone(),
+                    REQUEST_LOAD_ESTIMATE_WRITE_HIGH_PENDING_COMMANDS,
+                    sched_pending_commands.clone(),
+                    sched_pool_thread_load.clone(),
                 ),
                 Box::new(WriteBatcher::new(BatchableRequestKind::Prewrite)),
             ),
@@ -756,8 +765,9 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
                 BatchLimiter::with_atomic_usize(
                     BatchableRequestKind::Commit,
                     timeout,
-                    REQUEST_LOAD_ESTIMATE_WRITE_HIGH_WRITING_BYTES,
-                    sched_writing_bytes.clone(),
+                    REQUEST_LOAD_ESTIMATE_WRITE_HIGH_PENDING_COMMANDS,
+                    sched_pending_commands.clone(),
+                    sched_pool_thread_load.clone(),
                 ),
                 Box::new(WriteBatcher::new(BatchableRequestKind::Commit)),
             ),
@@ -1848,6 +1858,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
                 self.req_batch_wait_duration,
                 Arc::clone(&self.readpool_normal_thread_load),
                 self.storage.sched_writing_bytes(),
+                self.storage.sched_pending_commands(),
                 Arc::clone(&self.sched_pool_thread_load),
             );
             let req_batcher = Arc::new(Mutex::new(req_batcher));
