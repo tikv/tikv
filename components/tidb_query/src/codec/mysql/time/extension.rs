@@ -1,8 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use chrono::{DateTime, Datelike, TimeZone, Weekday};
+use chrono::Weekday;
 
 use super::weekmode::WeekMode;
+use super::Time;
 
 pub trait WeekdayExtension {
     fn name(&self) -> &'static str;
@@ -50,15 +51,11 @@ pub trait DateTimeExtension {
     fn day_number(&self) -> i32;
 }
 
-impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
+impl DateTimeExtension for Time {
     /// returns the day of year starting from 1.
     /// implements TiDB YearDay().
     fn days(&self) -> i32 {
-        if self.month() == 0 || self.day() == 0 {
-            (0)
-        } else {
-            self.ordinal() as i32
-        }
+        self.ordinal()
     }
 
     /// returns the week of year and year. should not be called directly.
@@ -74,10 +71,9 @@ impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
         first_weekday: bool,
     ) -> (i32, i32) {
         let week: i32;
-        let mut year = self.year();
-
-        let daynr = calc_day_number(self.year(), self.month() as i32, self.day() as i32);
-        let mut first_daynr = calc_day_number(self.year(), 1, 1);
+        let mut year = self.year() as i32;
+        let daynr = calc_day_number(year, self.month() as i32, self.day() as i32);
+        let mut first_daynr = calc_day_number(year, 1, 1);
         let mut weekday = calc_weekday(first_daynr, !monday_first);
         let mut days: i32;
 
@@ -99,7 +95,7 @@ impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
         }
 
         if week_year && days >= 52 * 7 {
-            weekday = (weekday + calc_days_in_year(year)) % 7;
+            weekday = (weekday + calc_days_in_year(year as i32)) % 7;
             if (!first_weekday && weekday < 4) || (first_weekday && weekday == 0) {
                 year += 1;
                 return (year, 1);
@@ -147,7 +143,7 @@ impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
 
     /// returns the days since 0000-00-00
     fn day_number(&self) -> i32 {
-        calc_day_number(self.year(), self.month() as i32, self.day() as i32)
+        calc_day_number(self.year() as i32, self.month() as i32, self.day() as i32)
     }
 }
 

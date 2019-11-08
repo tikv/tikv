@@ -168,7 +168,7 @@ mod tests {
         for (input_str, exp_str) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::Md5, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "md5('{:?}')", input_str);
@@ -177,7 +177,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::Md5, &[input]);
-        let op = Expression::build(&ctx, op).unwrap();
+        let op = Expression::build(&mut ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "md5(NULL)");
@@ -197,7 +197,7 @@ mod tests {
         for (input_str, exp_str) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::Sha1, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "sha1('{:?}')", input_str);
@@ -206,7 +206,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::Sha1, &[input]);
-        let op = Expression::build(&ctx, op).unwrap();
+        let op = Expression::build(&mut ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "sha1(NULL)");
@@ -234,7 +234,7 @@ mod tests {
             let hash_length = datum_expr(Datum::I64(hash_length_i64));
 
             let op = scalar_func_expr(ScalarFuncSig::Sha2, &[input, hash_length]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "sha2('{:?}', {:?})", input_str, hash_length_i64);
@@ -256,7 +256,7 @@ mod tests {
                 ScalarFuncSig::Sha2,
                 &[datum_expr(input.clone()), datum_expr(hash_length.clone())],
             );
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp, "sha2('{:?}', {:?})", input, hash_length);
         }
