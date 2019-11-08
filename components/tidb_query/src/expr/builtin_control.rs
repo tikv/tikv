@@ -227,6 +227,7 @@ mod tests {
 
     #[test]
     fn test_if_null() {
+        let mut ctx = EvalContext::default();
         let tests = vec![
             (
                 ScalarFuncSig::IfNullInt,
@@ -303,8 +304,12 @@ mod tests {
             (
                 ScalarFuncSig::IfNullTime,
                 Datum::Null,
-                Datum::Time(Time::parse_utc_datetime("1970-01-01 12:00:00", 6).unwrap()),
-                Datum::Time(Time::parse_utc_datetime("1970-01-01 12:00:00", 6).unwrap()),
+                Datum::Time(
+                    Time::parse_datetime(&mut ctx, "1970-01-01 12:00:00", 6, true).unwrap(),
+                ),
+                Datum::Time(
+                    Time::parse_datetime(&mut ctx, "1970-01-01 12:00:00", 6, true).unwrap(),
+                ),
             ),
             (
                 ScalarFuncSig::IfNullJson,
@@ -313,11 +318,11 @@ mod tests {
                 Datum::Json(Json::String("hello".to_owned())),
             ),
         ];
-        let mut ctx = EvalContext::default();
         for (operator, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(branch1);
             let arg2 = datum_expr(branch2);
-            let op = Expression::build(&ctx, scalar_func_expr(operator, &[arg1, arg2])).unwrap();
+            let op =
+                Expression::build(&mut ctx, scalar_func_expr(operator, &[arg1, arg2])).unwrap();
             let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -325,6 +330,7 @@ mod tests {
 
     #[test]
     fn test_if() {
+        let mut ctx = EvalContext::default();
         let tests = vec![
             (
                 ScalarFuncSig::IfInt,
@@ -434,9 +440,15 @@ mod tests {
             (
                 ScalarFuncSig::IfTime,
                 Datum::I64(0),
-                Datum::Time(Time::parse_utc_datetime("1970-01-01 12:00:00", 6).unwrap()),
-                Datum::Time(Time::parse_utc_datetime("1971-01-01 12:00:00", 6).unwrap()),
-                Datum::Time(Time::parse_utc_datetime("1971-01-01 12:00:00", 6).unwrap()),
+                Datum::Time(
+                    Time::parse_datetime(&mut ctx, "1970-01-01 12:00:00", 6, true).unwrap(),
+                ),
+                Datum::Time(
+                    Time::parse_datetime(&mut ctx, "1971-01-01 12:00:00", 6, true).unwrap(),
+                ),
+                Datum::Time(
+                    Time::parse_datetime(&mut ctx, "1971-01-01 12:00:00", 6, true).unwrap(),
+                ),
             ),
             (
                 ScalarFuncSig::IfJson,
@@ -446,14 +458,13 @@ mod tests {
                 Datum::Json(Json::String("hello".to_owned())),
             ),
         ];
-        let mut ctx = EvalContext::default();
         for (operator, cond, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(cond);
             let arg2 = datum_expr(branch1);
             let arg3 = datum_expr(branch2);
-            let expected = Expression::build(&ctx, datum_expr(exp)).unwrap();
-            let op =
-                Expression::build(&ctx, scalar_func_expr(operator, &[arg1, arg2, arg3])).unwrap();
+            let expected = Expression::build(&mut ctx, datum_expr(exp)).unwrap();
+            let op = Expression::build(&mut ctx, scalar_func_expr(operator, &[arg1, arg2, arg3]))
+                .unwrap();
             let lhs = op.eval(&mut ctx, &[]).unwrap();
             let rhs = expected.eval(&mut ctx, &[]).unwrap();
             assert_eq!(lhs, rhs);
@@ -470,11 +481,13 @@ mod tests {
 
     #[test]
     fn test_case_when() {
+        let mut ctx = EvalContext::default();
         let dec1 = Datum::Dec("1.1".parse().unwrap());
         let dec2 = Datum::Dec("2.2".parse().unwrap());
         let dur1 = Datum::Dur(Duration::parse(b"01:00:00", 0).unwrap());
         let dur2 = Datum::Dur(Duration::parse(b"12:00:12", 0).unwrap());
-        let time1 = Datum::Time(Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap());
+        let time1 =
+            Datum::Time(Time::parse_datetime(&mut ctx, "2012-12-12 12:00:23", 0, false).unwrap());
         let s = "你好".as_bytes().to_owned();
 
         let cases = vec![
@@ -517,8 +530,6 @@ mod tests {
             ),
         ];
 
-        let mut ctx = EvalContext::default();
-
         for (sig, row, exp) in cases {
             let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
             let mut expr = Expr::default();
@@ -526,7 +537,7 @@ mod tests {
             expr.set_sig(sig);
 
             expr.set_children(children.into());
-            let e = Expression::build(&ctx, expr).unwrap();
+            let e = Expression::build(&mut ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &row).unwrap();
             assert_eq!(res, exp);
         }

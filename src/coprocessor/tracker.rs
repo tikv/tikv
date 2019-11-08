@@ -198,27 +198,27 @@ impl Tracker {
             cop_metrics
                 .local_copr_rocksdb_perf_counter
                 .with_label_values(&[self.req_ctx.tag, "internal_key_skipped_count"])
-                .inc_by(self.total_perf_stats.internal_key_skipped_count as i64);
+                .inc_by(self.total_perf_stats.0.internal_key_skipped_count as i64);
 
             cop_metrics
                 .local_copr_rocksdb_perf_counter
                 .with_label_values(&[self.req_ctx.tag, "internal_delete_skipped_count"])
-                .inc_by(self.total_perf_stats.internal_delete_skipped_count as i64);
+                .inc_by(self.total_perf_stats.0.internal_delete_skipped_count as i64);
 
             cop_metrics
                 .local_copr_rocksdb_perf_counter
                 .with_label_values(&[self.req_ctx.tag, "block_cache_hit_count"])
-                .inc_by(self.total_perf_stats.block_cache_hit_count as i64);
+                .inc_by(self.total_perf_stats.0.block_cache_hit_count as i64);
 
             cop_metrics
                 .local_copr_rocksdb_perf_counter
                 .with_label_values(&[self.req_ctx.tag, "block_read_count"])
-                .inc_by(self.total_perf_stats.block_read_count as i64);
+                .inc_by(self.total_perf_stats.0.block_read_count as i64);
 
             cop_metrics
                 .local_copr_rocksdb_perf_counter
                 .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
-                .inc_by(self.total_perf_stats.block_read_byte as i64);
+                .inc_by(self.total_perf_stats.0.block_read_byte as i64);
         });
 
         tls_collect_scan_details(self.req_ctx.tag, &total_storage_stats);
