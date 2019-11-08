@@ -6,6 +6,8 @@ use futures::Stream;
 use futures::{self, Future};
 use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
+use pprof;
+use prost::Message;
 use regex::Regex;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -17,7 +19,6 @@ use std::str::FromStr;
 
 use super::Result;
 use crate::config::TiKvConfig;
-use pprof;
 use tikv_alloc::error::ProfError;
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::dump;
@@ -171,7 +172,7 @@ impl StatusServer {
                     return Box::new(ok(response));
                 }
             },
-            None => 99,
+            None => 10,
         };
 
         Box::new(
@@ -298,10 +299,10 @@ impl StatusServer {
         let seconds: u64 = match query_pairs.get("seconds") {
             Some(val) => match val.parse() {
                 Ok(val) => val,
-                Err(_) => {
+                Err(err) => {
                     let response = Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .body(Body::empty())
+                        .body(Body::from(err.to_string()))
                         .unwrap();
                     return Box::new(ok(response));
                 }
@@ -312,30 +313,51 @@ impl StatusServer {
         let frequency: i32 = match query_pairs.get("frequency") {
             Some(val) => match val.parse() {
                 Ok(val) => val,
-                Err(_) => {
+                Err(err) => {
                     let response = Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .body(Body::empty())
+                        .body(Body::from(err.to_string()))
                         .unwrap();
                     return Box::new(ok(response));
                 }
             },
-            None => 10,
+            None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
         };
 
+        let prototype_content_type: hyper::http::HeaderValue =
+            hyper::http::HeaderValue::from_str("application/protobuf").unwrap();
         Box::new(
             Self::dump_rsprof(seconds, frequency)
-                .and_then(|report| {
+                .and_then(move |report| {
                     let mut body: Vec<u8> = Vec::new();
-                    match report.flamegraph(&mut body) {
-                        Ok(_) => {
-                            info!("write report successfully");
-                            Box::new(ok(Response::new(Body::from(body))))
+                    if req.headers().get("Content-Type") == Some(&prototype_content_type) {
+                        match report.pprof() {
+                            Ok(profile) => match profile.encode(&mut body) {
+                                Ok(()) => {
+                                    info!("write report successfully");
+                                    Box::new(ok(Response::new(Body::from(body))))
+                                }
+                                Err(err) => Box::new(ok(Response::builder()
+                                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                    .body(Body::from(err.to_string()))
+                                    .unwrap())),
+                            },
+                            Err(err) => Box::new(ok(Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Body::from(err.to_string()))
+                                .unwrap())),
                         }
-                        Err(err) => Box::new(ok(Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(Body::from(format!("{:?}", err)))
-                            .unwrap())),
+                    } else {
+                        match report.flamegraph(&mut body) {
+                            Ok(_) => {
+                                info!("write report successfully");
+                                Box::new(ok(Response::new(Body::from(body))))
+                            }
+                            Err(err) => Box::new(ok(Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Body::from(err.to_string()))
+                                .unwrap())),
+                        }
                     }
                 })
                 .or_else(|err| {

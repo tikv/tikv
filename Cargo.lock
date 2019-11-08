@@ -853,6 +853,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f35ce9c8fb9891c75ceadbc330752951a4e369b50af10775955aeb9af3eee34b"
 
 [[package]]
+name = "fixedbitset"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86d4de0081402f5e88cdac65c8dcdcc73118c1a7a465e2a05f0da05843a8ea33"
+
+[[package]]
 name = "flate2"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1646,6 +1652,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf21d96e87e5d48e3b50ab1512142f2fbe06fc48b7b032dead87fbfcb83f9a89"
 
 [[package]]
+name = "multimap"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eb04b9f127583ed176e163fb9ec6f3e793b87e21deedd5734a69386a18a0151"
+
+[[package]]
 name = "murmur3"
 version = "0.4.0"
 source = "git+https://github.com/pingcap/murmur3.git#4af9e1a8f2d4206d90d81f11e513fb03c87208bf"
@@ -1997,6 +2009,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4fd5641d01c8f18a23da7b6fe29298ff4b55afcccdf78973b24cf3175fee32e"
 
 [[package]]
+name = "petgraph"
+version = "0.4.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c3659d1ee90221741f65dd128d9998311b0e40c5d3c23a62445938214abce4f"
+dependencies = [
+ "fixedbitset",
+]
+
+[[package]]
 name = "pkg-config"
 version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2004,17 +2025,21 @@ checksum = "72d5370d90f49f70bd033c3d75e87fc529fbfff9d6f7cccef07d6170079d91ea"
 
 [[package]]
 name = "pprof"
-version = "0.3.6"
+version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9eee55d2d1683403e76d649147de9eced441897a453813bb1f829d4e89f7f3a6"
+checksum = "f3cd37ce310a51c32a6b49022d373d7083e4be1a7d7e04494e643806bda8dda4"
 dependencies = [
  "backtrace",
+ "bytes",
  "inferno",
  "lazy_static",
  "libc",
  "log",
  "memmap",
  "nix 0.15.0",
+ "prost",
+ "prost-build",
+ "prost-derive",
  "quick-error",
  "rustc-demangle",
  "spin",
@@ -2115,6 +2140,58 @@ dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.13",
  "syn 0.15.44",
+]
+
+[[package]]
+name = "prost"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96d14b1c185652833d24aaad41c5832b0be5616a590227c1fbff57c616754b23"
+dependencies = [
+ "byteorder",
+ "bytes",
+ "prost-derive",
+]
+
+[[package]]
+name = "prost-build"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb788126ea840817128183f8f603dce02cb7aea25c2a0b764359d8e20010702e"
+dependencies = [
+ "bytes",
+ "heck",
+ "itertools",
+ "log",
+ "multimap",
+ "petgraph",
+ "prost",
+ "prost-types",
+ "tempfile",
+ "which",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e7dc378b94ac374644181a2247cebf59a6ec1c88b49ac77f3a94b86b79d0e11"
+dependencies = [
+ "failure",
+ "itertools",
+ "proc-macro2 0.4.30",
+ "quote 0.6.13",
+ "syn 0.15.44",
+]
+
+[[package]]
+name = "prost-types"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1de482a366941c8d56d19b650fac09ca08508f2a696119ee7513ad590c8bac6f"
+dependencies = [
+ "bytes",
+ "prost",
 ]
 
 [[package]]
@@ -3243,6 +3320,7 @@ dependencies = [
  "backtrace",
  "bitflags",
  "byteorder",
+ "bytes",
  "chrono",
  "crc",
  "criterion",
@@ -3280,6 +3358,7 @@ dependencies = [
  "profiler",
  "prometheus",
  "prometheus-static-metric",
+ "prost",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
