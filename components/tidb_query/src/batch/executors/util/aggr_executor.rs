@@ -136,6 +136,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
         let mut each_aggr_fn = Vec::with_capacity(aggr_fn_len);
         let mut each_aggr_cardinality = Vec::with_capacity(aggr_fn_len);
         let mut each_aggr_exprs = Vec::with_capacity(aggr_fn_len);
+        let mut ctx = EvalContext::new(config.clone());
 
         for aggr_def in aggr_defs {
             let schema_len = schema.len();
@@ -143,7 +144,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
 
             let aggr_fn = aggr_def_parser.parse(
                 aggr_def,
-                &config.tz,
+                &mut ctx,
                 src_schema,
                 &mut schema,
                 &mut each_aggr_exprs,

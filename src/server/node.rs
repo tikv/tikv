@@ -75,6 +75,12 @@ where
             store.set_address(cfg.advertise_addr.clone())
         }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
+        store.set_status_address(cfg.status_addr.clone());
+        store.set_git_hash(
+            option_env!("TIKV_BUILD_GIT_HASH")
+                .unwrap_or("Unknown git hash")
+                .to_string(),
+        );
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {

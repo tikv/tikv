@@ -61,7 +61,7 @@ impl RotatingFileLogger {
         Utc::now() > self.next_rotation_time
     }
 
-    fn rename(&self) -> io::Result<()> {
+    fn rename(&self) -> io::Result<PathBuf> {
         fail_point!("file_log_rename", |t| {
             if let Some(t) = t {
                 Err(match t.as_ref() {
@@ -76,28 +76,30 @@ impl RotatingFileLogger {
                 }
                 .into())
             } else {
-                Ok(())
+                let mut buf = PathBuf::new();
+                buf.push("rotated_file");
+                Ok(buf)
             }
         });
         // Note: renaming files while they're open only works on Linux and macOS.
         let new_path = rotation_file_path_with_timestamp(&self.file_path, &Utc::now());
-        fs::rename(&self.file_path, new_path)
+        fs::rename(&self.file_path, &new_path).map(|_| new_path)
     }
 
     /// Rotates the current file and updates the next rotation time.
-    fn rotate(&mut self) -> io::Result<()> {
+    fn rotate(&mut self) -> io::Result<Option<PathBuf>> {
         self.flush()?;
 
-        match self.rename() {
-            Ok(_) => Ok(()),
-            Err(ref e) if e.kind() == ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
-        }?;
+        let old_file = match self.rename() {
+            Ok(p) => Some(p),
+            Err(ref e) if e.kind() == ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
 
         let new_file = open_log_file(&self.file_path)?;
         self.update_rotation_time();
         self.file = new_file;
-        Ok(())
+        Ok(old_file)
     }
 
     /// Updates the next rotation time.
@@ -141,7 +143,7 @@ mod tests {
     use tempfile::TempDir;
     use utime;
 
-    use super::{rotation_file_path_with_timestamp, RotatingFileLogger};
+    use super::RotatingFileLogger;
 
     fn file_exists(file: impl AsRef<Path>) -> bool {
         let path = file.as_ref();
@@ -174,9 +176,8 @@ mod tests {
         // initialize the logger
         let mut logger = RotatingFileLogger::new(&log_file, one_day).unwrap();
         assert!(logger.should_rotate());
-        logger.rotate().unwrap();
+        let rotated_file = logger.rotate().unwrap().unwrap();
         // check the rotated file exist
-        let rotated_file = rotation_file_path_with_timestamp(&log_file, &now);
         assert!(file_exists(&rotated_file));
         assert!(!logger.should_rotate());
     }

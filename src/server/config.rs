@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::i32;
+use std::{i32, isize};
 
 use super::Result;
 use grpcio::CompressionAlgorithms;
@@ -19,6 +19,7 @@ const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
+const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 
 // Number of rows in each chunk.
@@ -64,6 +65,7 @@ pub struct Config {
     pub grpc_concurrency: usize,
     pub grpc_concurrent_stream: i32,
     pub grpc_raft_conn_num: usize,
+    pub grpc_memory_pool_quota: ReadableSize,
     pub grpc_stream_initial_window_size: ReadableSize,
     pub grpc_keepalive_time: ReadableDuration,
     pub grpc_keepalive_timeout: ReadableDuration,
@@ -82,6 +84,11 @@ pub struct Config {
     pub stats_concurrency: usize,
     pub heavy_load_threshold: usize,
     pub heavy_load_wait_duration: ReadableDuration,
+    pub enable_request_batch: bool,
+    // Whether to collect batch across commands under heavy workload.
+    pub request_batch_enable_cross_command: bool,
+    // Wait duration before each request batch is processed.
+    pub request_batch_wait_duration: ReadableDuration,
 
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
@@ -116,6 +123,7 @@ impl Default for Config {
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
+            grpc_memory_pool_quota: ReadableSize(DEFAULT_GRPC_MEMORY_POOL_QUOTA),
             // There will be a heartbeat every secs, it's weird a connection will be idle for more
             // than 10 senconds.
             grpc_keepalive_time: ReadableDuration::secs(10),
@@ -141,6 +149,9 @@ impl Default for Config {
             heavy_load_threshold: 300,
             // The resolution of timer in tokio is 1ms.
             heavy_load_wait_duration: ReadableDuration::millis(1),
+            enable_request_batch: true,
+            request_batch_enable_cross_command: true,
+            request_batch_wait_duration: ReadableDuration::millis(1),
         }
     }
 }

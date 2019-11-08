@@ -19,6 +19,10 @@ pub use self::allocator_metrics::monitor_allocator_stats;
 
 pub mod allocator_metrics;
 
+pub use self::metrics_reader::HistogramReader;
+
+mod metrics_reader;
+
 /// Runs a background Prometheus client.
 pub fn run_prometheus(
     interval: Duration,

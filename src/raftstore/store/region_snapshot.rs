@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
+use engine_traits::util::check_key_in_range;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -132,12 +133,13 @@ impl Clone for RegionSnapshot {
 
 impl Peekable for RegionSnapshot {
     fn get_value(&self, key: &[u8]) -> EngineResult<Option<DBVector>> {
-        engine::util::check_key_in_range(
+        check_key_in_range(
             key,
             self.region.get_id(),
             self.region.get_start_key(),
             self.region.get_end_key(),
-        )?;
+        )
+        .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key).map_err(|e| {
             CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
@@ -162,12 +164,13 @@ impl Peekable for RegionSnapshot {
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
-        engine::util::check_key_in_range(
+        check_key_in_range(
             key,
             self.region.get_id(),
             self.region.get_start_key(),
             self.region.get_end_key(),
-        )?;
+        )
+        .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
         self.snap.get_value_cf(cf, &data_key).map_err(|e| {
             CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
@@ -403,11 +406,13 @@ mod tests {
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::{IngestExternalFileOptions, Snapshot, SstWriterBuilder, Writable};
+    use engine::rocks::{IngestExternalFileOptions, Snapshot, Writable};
     use engine::util::{delete_all_files_in_range, delete_all_in_range};
     use engine::Engines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
+    use engine_rocks::RocksSstWriterBuilder;
+    use engine_traits::{SstWriter, SstWriterBuilder};
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;
 
@@ -932,7 +937,7 @@ mod tests {
         // Delete one mvcc kvs we have written above.
         // Here we make the kvs on the L5 by ingesting SST.
         let sst_file_path = Path::new(db.path()).join("for_ingest.sst");
-        let mut writer = SstWriterBuilder::new()
+        let mut writer = RocksSstWriterBuilder::new()
             .build(&sst_file_path.to_str().unwrap())
             .unwrap();
         writer

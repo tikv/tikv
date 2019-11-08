@@ -1,8 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod db;
-mod sst;
-pub use sst::{SstReader, SstWriter, SstWriterBuilder};
 
 pub mod util;
 
@@ -18,8 +16,8 @@ pub use rocksdb::{
     DBCompressionType, DBEntryType, DBIterator, DBOptions, DBRateLimiterMode, DBRecoveryMode,
     DBStatisticsHistogramType, DBStatisticsTickerType, DBTitanDBBlobRunMode, DBVector, Env,
     EnvOptions, EventListener, ExternalSstFileInfo, FlushJobInfo, HistogramData,
-    IngestExternalFileOptions, IngestionInfo, Kv, LRUCacheOptions, MemoryAllocator, PerfContext,
-    Range, RateLimiter, ReadOptions, SeekKey, SequentialFile, SliceTransform,
+    IngestExternalFileOptions, IngestionInfo, Kv, LRUCacheOptions, MapProperty, MemoryAllocator,
+    PerfContext, Range, RateLimiter, ReadOptions, SeekKey, SequentialFile, SliceTransform,
     TablePropertiesCollection, TablePropertiesCollector, TablePropertiesCollectorFactory,
     TitanBlobIndex, TitanDBOptions, TransactionWritePolicy, TxnDBOptions, UserCollectedProperties,
     Writable, WriteBatch, WriteOptions, WriteStallCondition, WriteStallInfo, DB,

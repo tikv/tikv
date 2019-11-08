@@ -17,7 +17,7 @@ use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_rocks::Rocks;
+use engine_rocks::RocksEngine;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::raft_cmdpb::{
@@ -1338,7 +1338,7 @@ impl ApplyDelegate {
         }
 
         ctx.importer
-            .ingest(sst, AsRef::<Rocks>::as_ref(&ctx.engines.kv))
+            .ingest(sst, RocksEngine::from_ref(&ctx.engines.kv))
             .unwrap_or_else(|e| {
                 // If this failed, it means that the file is corrupted or something
                 // is wrong with the engine, but we can do nothing about that.
@@ -2924,7 +2924,7 @@ mod tests {
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use engine::rocks::Writable;
     use engine::{WriteBatch, DB};
-    use engine_rocks::Rocks;
+    use engine_rocks::RocksEngine;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
@@ -3608,7 +3608,7 @@ mod tests {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        check_db_range(&Rocks::from_db(engines.kv.clone()), sst_range);
+        check_db_range(&RocksEngine::from_db(engines.kv.clone()), sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
         let apply_res = fetch_apply_res(&rx);

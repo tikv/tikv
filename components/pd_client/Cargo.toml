@@ -27,5 +27,5 @@ hex = "0.3"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
+rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
 features = ["nightly", "push", "process"]

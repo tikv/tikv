@@ -14,7 +14,7 @@ use kvproto::raft_cmdpb::*;
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::Rocks;
+use engine_rocks::RocksEngine;
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
@@ -78,10 +78,10 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
             match req.get_mode() {
                 SwitchMode::Normal => {
-                    switcher.enter_normal_mode(AsRef::<Rocks>::as_ref(&self.engine), mf)
+                    switcher.enter_normal_mode(RocksEngine::from_ref(&self.engine), mf)
                 }
                 SwitchMode::Import => {
-                    switcher.enter_import_mode(AsRef::<Rocks>::as_ref(&self.engine), mf)
+                    switcher.enter_import_mode(RocksEngine::from_ref(&self.engine), mf)
                 }
             }
         };
@@ -160,7 +160,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let importer = Arc::clone(&self.importer);
 
         ctx.spawn(self.threads.spawn_fn(move || {
-            let res = importer.download(
+            let res = importer.download::<RocksEngine>(
                 req.get_sst(),
                 req.get_url(),
                 req.get_name(),

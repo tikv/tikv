@@ -59,6 +59,7 @@ fn test_serde_custom_tikv_config() {
         grpc_compression_type: GrpcCompressionType::Gzip,
         grpc_concurrency: 123,
         grpc_concurrent_stream: 1_234,
+        grpc_memory_pool_quota: ReadableSize(123_456),
         grpc_raft_conn_num: 123,
         grpc_stream_initial_window_size: ReadableSize(12_345),
         grpc_keepalive_time: ReadableDuration::secs(3),
@@ -77,6 +78,9 @@ fn test_serde_custom_tikv_config() {
         stats_concurrency: 10,
         heavy_load_threshold: 1000,
         heavy_load_wait_duration: ReadableDuration::millis(2),
+        enable_request_batch: false,
+        request_batch_enable_cross_command: false,
+        request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {
@@ -488,7 +492,6 @@ fn test_serde_custom_tikv_config() {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
         max_key_size: 8192,
-        scheduler_notify_capacity: 123,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),

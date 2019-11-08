@@ -11,6 +11,7 @@ use tipb::IndexScan;
 use super::util::scan_executor::*;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::codec::table::check_index_key;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::storage::{IntervalRange, Storage};
 use crate::Result;
@@ -166,6 +167,7 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
         use crate::codec::{datum, table};
         use codec::prelude::NumberDecoder;
 
+        check_index_key(key)?;
         // The payload part of the key
         let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
 
@@ -232,7 +234,6 @@ mod tests {
     use tipb::ColumnInfo;
 
     use crate::codec::data_type::*;
-    use crate::codec::mysql::Tz;
     use crate::codec::{datum, table, Datum};
     use crate::expr::EvalConfig;
     use crate::storage::fixture::FixtureStorage;
@@ -242,6 +243,7 @@ mod tests {
     fn test_basic() {
         const TABLE_ID: i64 = 3;
         const INDEX_ID: i64 = 42;
+        let mut ctx = EvalContext::default();
 
         // Index schema: (INT, FLOAT)
 
@@ -288,7 +290,7 @@ mod tests {
             let kv: Vec<_> = data
                 .iter()
                 .map(|datums| {
-                    let index_data = datum::encode_key(datums).unwrap();
+                    let index_data = datum::encode_key(&mut ctx, datums).unwrap();
                     let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
                     let value = vec![];
                     (key, value)
@@ -302,10 +304,10 @@ mod tests {
 
             let key_ranges = vec![{
                 let mut range = KeyRange::default();
-                let start_data = datum::encode_key(&[Datum::Min]).unwrap();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::Min]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
-                let end_data = datum::encode_key(&[Datum::Max]).unwrap();
+                let end_data = datum::encode_key(&mut ctx, &[Datum::Max]).unwrap();
                 let end_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &end_data);
                 range.set_end(end_key);
                 range
@@ -327,7 +329,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 3);
             assert!(result.physical_columns[0].is_raw());
             result.physical_columns[0]
-                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .ensure_all_decoded(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[0].decoded().as_int_slice(),
@@ -335,7 +337,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .ensure_all_decoded(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_real_slice(),
@@ -352,10 +354,10 @@ mod tests {
 
             let key_ranges = vec![{
                 let mut range = KeyRange::default();
-                let start_data = datum::encode_key(&[Datum::I64(2)]).unwrap();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::I64(2)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
-                let end_data = datum::encode_key(&[Datum::I64(6)]).unwrap();
+                let end_data = datum::encode_key(&mut ctx, &[Datum::I64(6)]).unwrap();
                 let end_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &end_data);
                 range.set_end(end_key);
                 range
@@ -381,7 +383,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_raw());
             result.physical_columns[0]
-                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .ensure_all_decoded(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[0].decoded().as_int_slice(),
@@ -389,7 +391,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .ensure_all_decoded(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_real_slice(),
@@ -410,7 +412,7 @@ mod tests {
             let kv: Vec<_> = data
                 .iter()
                 .map(|datums| {
-                    let index_data = datum::encode_key(&datums[0..2]).unwrap();
+                    let index_data = datum::encode_key(&mut ctx, &datums[0..2]).unwrap();
                     let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
                     // PK handle in the value
                     let mut value = vec![];
@@ -428,7 +430,7 @@ mod tests {
 
             let key_ranges = vec![{
                 let mut range = KeyRange::default();
-                let start_data = datum::encode_key(&[Datum::I64(5)]).unwrap();
+                let start_data = datum::encode_key(&mut ctx, &[Datum::I64(5)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
                 range.set_end(range.get_start().to_vec());
@@ -456,7 +458,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 2);
             assert!(result.physical_columns[0].is_raw());
             result.physical_columns[0]
-                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .ensure_all_decoded(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[0].decoded().as_int_slice(),
@@ -464,7 +466,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .ensure_all_decoded(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_real_slice(),
@@ -482,7 +484,8 @@ mod tests {
 
             let key_ranges = vec![{
                 let mut range = KeyRange::default();
-                let start_data = datum::encode_key(&[Datum::I64(5), Datum::F64(5.1)]).unwrap();
+                let start_data =
+                    datum::encode_key(&mut ctx, &[Datum::I64(5), Datum::F64(5.1)]).unwrap();
                 let start_key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &start_data);
                 range.set_start(start_key);
                 range.set_end(range.get_start().to_vec());
@@ -510,7 +513,7 @@ mod tests {
             assert_eq!(result.physical_columns.rows_len(), 1);
             assert!(result.physical_columns[0].is_raw());
             result.physical_columns[0]
-                .ensure_all_decoded(&Tz::utc(), &schema[0])
+                .ensure_all_decoded(&mut ctx, &schema[0])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[0].decoded().as_int_slice(),
@@ -518,7 +521,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .ensure_all_decoded(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_real_slice(),

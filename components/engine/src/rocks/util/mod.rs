@@ -9,8 +9,7 @@ pub mod security;
 pub mod stats;
 
 use std::cmp;
-use std::fs::{self, File};
-use std::io::{self, ErrorKind};
+use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -22,35 +21,16 @@ use self::engine_metrics::{
     ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
 use crate::rocks::load_latest_options;
-use crate::rocks::set_external_sst_file_global_seq_no;
 use crate::rocks::supported_compression;
 use crate::rocks::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, TxnDBOptions, DB,
 };
 use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
-use tikv_util::file::calc_crc32;
 
 pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
 pub use crate::rocks::CFHandle;
-
-/// Copies the source file to a newly created file.
-pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
-    if !from.as_ref().is_file() {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "the source path is not an existing regular file",
-        ));
-    }
-
-    let mut reader = File::open(from)?;
-    let mut writer = File::create(to)?;
-
-    let res = io::copy(&mut reader, &mut writer)?;
-    writer.sync_all()?;
-    Ok(res)
-}
 
 // Zlib and bzip2 are too slow.
 const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
@@ -547,95 +527,6 @@ pub fn compact_files_in_range_cf(
     Ok(())
 }
 
-/// Prepares the SST file for ingestion.
-/// The purpose is to make the ingestion retryable when using the `move_files` option.
-/// Things we need to consider here:
-/// 1. We need to access the original file on retry, so we should make a clone
-///    before ingestion.
-/// 2. `RocksDB` will modified the global seqno of the ingested file, so we need
-///    to modified the global seqno back to 0 so that we can pass the checksum
-///    validation.
-/// 3. If the file has been ingested to `RocksDB`, we should not modified the
-///    global seqno directly, because that may corrupt RocksDB's data.
-#[cfg(target_os = "linux")]
-pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone: Q) -> Result<()> {
-    use std::os::linux::fs::MetadataExt;
-
-    let path = path.as_ref().to_str().unwrap();
-    let clone = clone.as_ref().to_str().unwrap();
-
-    if Path::new(clone).exists() {
-        fs::remove_file(clone).map_err(|e| format!("remove {}: {:?}", clone, e))?;
-    }
-
-    let meta = fs::metadata(path).map_err(|e| format!("read metadata from {}: {:?}", path, e))?;
-
-    if meta.st_nlink() == 1 {
-        // RocksDB must not have this file, we can make a hard link.
-        fs::hard_link(path, clone)
-            .map_err(|e| format!("link from {} to {}: {:?}", path, clone, e))?;
-    } else {
-        // RocksDB may have this file, we should make a copy.
-        copy_and_sync(path, clone)
-            .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
-    }
-
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone: Q) -> Result<()> {
-    let path = path.as_ref().to_str().unwrap();
-    let clone = clone.as_ref().to_str().unwrap();
-    if !Path::new(clone).exists() {
-        copy_and_sync(path, clone)
-            .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
-    }
-    Ok(())
-}
-
-pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
-    db: &DB,
-    cf: &str,
-    path: P,
-    expected_size: u64,
-    expected_checksum: u32,
-) -> Result<()> {
-    let path = path.as_ref().to_str().unwrap();
-    let f = File::open(path)?;
-
-    let meta = f.metadata()?;
-    if meta.len() != expected_size {
-        return Err(Error::RocksDb(format!(
-            "invalid size {} for {}, expected {}",
-            meta.len(),
-            path,
-            expected_size
-        )));
-    }
-
-    let checksum = calc_crc32(path)?;
-    if checksum == expected_checksum {
-        return Ok(());
-    }
-
-    // RocksDB may have modified the global seqno.
-    let cf_handle = get_cf_handle(db, cf)?;
-    set_external_sst_file_global_seq_no(db, cf_handle, path, 0)?;
-    f.sync_all()
-        .map_err(|e| format!("sync {}: {:?}", path, e))?;
-
-    let checksum = calc_crc32(path)?;
-    if checksum != expected_checksum {
-        return Err(Error::RocksDb(format!(
-            "invalid checksum {} for {}, expected {}",
-            checksum, path, expected_checksum
-        )));
-    }
-
-    Ok(())
-}
-
 /// Returns a Vec of cf which is in `a' but not in `b'.
 fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter()
@@ -647,11 +538,8 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rocks::{
-        ColumnFamilyOptions, DBOptions, IngestExternalFileOptions, SstWriterBuilder,
-        TitanDBOptions, Writable, DB,
-    };
-    use crate::{CfName, CF_DEFAULT};
+    use crate::rocks::{ColumnFamilyOptions, DBOptions, Writable, DB};
+    use crate::CF_DEFAULT;
     use tempfile::Builder;
 
     #[test]
@@ -755,114 +643,6 @@ mod tests {
         db.put_cf(cf, b"a", b"a").unwrap();
         db.flush_cf(cf, true).unwrap();
         assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_some());
-    }
-
-    #[cfg(target_os = "linux")]
-    fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
-        use std::os::linux::fs::MetadataExt;
-        assert_eq!(fs::metadata(path).unwrap().st_nlink(), nlink);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn check_hard_link<P: AsRef<Path>>(_: P, _: u64) {
-        // Just do nothing
-    }
-
-    fn gen_sst_with_kvs(db: Arc<DB>, cf: CfName, path: &str, kvs: &[(&str, &str)]) {
-        let mut writer = SstWriterBuilder::new()
-            .set_db(db)
-            .set_cf(cf)
-            .build(path)
-            .unwrap();
-        for &(k, v) in kvs {
-            writer.put(k.as_bytes(), v.as_bytes()).unwrap();
-        }
-        writer.finish().unwrap();
-    }
-
-    fn check_db_with_kvs(db: &DB, cf: &CFHandle, kvs: &[(&str, &str)]) {
-        for &(k, v) in kvs {
-            assert_eq!(db.get_cf(cf, k.as_bytes()).unwrap().unwrap(), v.as_bytes());
-        }
-    }
-
-    fn check_prepare_sst_for_ingestion(
-        db_opts: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions<'_>>>,
-    ) {
-        let path = Builder::new()
-            .prefix("_util_rocksdb_test_prepare_sst_for_ingestion")
-            .tempdir()
-            .unwrap();
-        let path_str = path.path().to_str().unwrap();
-
-        let sst_dir = Builder::new()
-            .prefix("_util_rocksdb_test_prepare_sst_for_ingestion_sst")
-            .tempdir()
-            .unwrap();
-        let sst_path = sst_dir.path().join("abc.sst");
-        let sst_clone = sst_dir.path().join("abc.sst.clone");
-
-        let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
-
-        let cf_name = "default";
-        let db = new_engine(path_str, db_opts, &[cf_name], cf_opts)
-            .map(Arc::new)
-            .unwrap();
-        let cf = db.cf_handle(cf_name).unwrap();
-        let mut ingest_opts = IngestExternalFileOptions::new();
-        ingest_opts.move_files(true);
-
-        gen_sst_with_kvs(db.clone(), cf_name, sst_path.to_str().unwrap(), &kvs);
-        let size = fs::metadata(&sst_path).unwrap().len();
-        let checksum = calc_crc32(&sst_path).unwrap();
-
-        // The first ingestion will hard link sst_path to sst_clone.
-        check_hard_link(&sst_path, 1);
-        prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
-        validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
-        check_hard_link(&sst_path, 2);
-        check_hard_link(&sst_clone, 2);
-        // If we prepare again, it will use hard link too.
-        prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
-        validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
-        check_hard_link(&sst_path, 2);
-        check_hard_link(&sst_clone, 2);
-        db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])
-            .unwrap();
-        check_db_with_kvs(&db, cf, &kvs);
-        assert!(!sst_clone.exists());
-
-        // The second ingestion will copy sst_path to sst_clone.
-        check_hard_link(&sst_path, 2);
-        prepare_sst_for_ingestion(&sst_path, &sst_clone).unwrap();
-        validate_sst_for_ingestion(&db, cf_name, &sst_clone, size, checksum).unwrap();
-        check_hard_link(&sst_path, 2);
-        check_hard_link(&sst_clone, 1);
-        db.ingest_external_file_cf(cf, &ingest_opts, &[sst_clone.to_str().unwrap()])
-            .unwrap();
-        check_db_with_kvs(&db, cf, &kvs);
-        assert!(!sst_clone.exists());
-    }
-
-    #[test]
-    fn test_prepare_sst_for_ingestion() {
-        check_prepare_sst_for_ingestion(None, None);
-    }
-
-    #[test]
-    fn test_prepare_sst_for_ingestion_titan() {
-        let mut db_opts = DBOptions::new();
-        let mut titan_opts = TitanDBOptions::new();
-        // Force all values write out to blob files.
-        titan_opts.set_min_blob_size(0);
-        db_opts.set_titandb_options(&titan_opts);
-        let mut cf_opts = ColumnFamilyOptions::new();
-        cf_opts.set_titandb_options(&titan_opts);
-        check_prepare_sst_for_ingestion(
-            Some(db_opts),
-            Some(vec![CFOptions::new("default", cf_opts)]),
-        );
     }
 
     #[test]

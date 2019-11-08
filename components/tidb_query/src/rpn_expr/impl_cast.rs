@@ -195,6 +195,7 @@ pub fn get_cast_fn_rpn_node(
         args_len: 1,
         field_type: to_field_type,
         implicit_args: Vec::new(),
+        metadata: Box::new(()),
     })
 }
 
@@ -800,26 +801,16 @@ fn cast_int_as_duration(
         None => Ok(None),
         Some(val) => {
             let fsp = extra.ret_field_type.get_decimal() as i8;
-            let (dur, err) = Duration::from_i64_without_ctx(*val, fsp);
-            match err {
-                // in TiDB, if there is overflow err and overflow as warning,
-                // then it will return isNull==true
-                Some(err) => {
+            Duration::from_i64_without_ctx(*val, fsp)
+                .map(Some)
+                .or_else(|err| {
                     if err.is_overflow() {
                         ctx.handle_overflow_err(err)?;
                         Ok(None)
                     } else {
                         Err(err.into())
                     }
-                }
-                None => {
-                    if let Some(dur) = dur {
-                        Ok(Some(dur))
-                    } else {
-                        Err(other_err!("Expect a not none result here, this is a bug"))
-                    }
-                }
-            }
+                })
         }
     }
 }
@@ -1658,15 +1649,16 @@ mod tests {
 
     #[test]
     fn test_time_as_int_and_uint() {
+        let mut ctx = EvalContext::default();
         // TODO: add more test case
         // TODO: add test that make cast_any_as_any::<Time, Int> returning truncated error
         let cs: Vec<(Time, i64)> = vec![
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14", 0).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
                 20000101121314,
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 0).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 0, true).unwrap(),
                 20000101121315,
             ),
             // FiXME
@@ -1679,8 +1671,7 @@ mod tests {
         ];
 
         for (input, expect) in cs {
-            let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Time, Int>(&mut ctx, &Some(input.clone()));
+            let r = cast_any_as_any::<Time, Int>(&mut ctx, &Some(input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
@@ -1753,6 +1744,8 @@ mod tests {
 
     #[test]
     fn test_json_as_uint() {
+        test_none_with_ctx(cast_json_as_uint);
+
         // no clip to zero
         let cs: Vec<(Json, u64, Option<i32>)> = vec![
             // (origin, expect, error_code)
@@ -2394,31 +2387,32 @@ mod tests {
 
     #[test]
     fn test_time_as_real() {
+        let mut ctx = EvalContext::default();
         test_none_with_ctx(cast_any_as_any::<Time, Real>);
 
         // TODO: add more test case
         let cs = vec![
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 6).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 6, true).unwrap(),
                 20000101121314.666600,
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 0).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 0, true).unwrap(),
                 20000101121315.0,
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 3).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 3, true).unwrap(),
                 20000101121314.667,
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 4, true).unwrap(),
                 20000101121314.6666,
             ),
         ];
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Time, Real>(&mut ctx, &Some(input.clone()));
+            let r = cast_any_as_any::<Time, Real>(&mut ctx, &Some(input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2952,30 +2946,31 @@ mod tests {
     fn test_time_as_string() {
         test_none_with_ctx_and_extra(cast_any_as_string::<Time>);
 
+        let mut ctx = EvalContext::default();
         // TODO: add more test case
         let cs: Vec<(Time, Vec<u8>, String)> = vec![
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14", 0).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
                 "2000-01-01 12:13:14".to_string().into_bytes(),
                 "2000-01-01 12:13:14".to_string(),
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 0).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 0, true).unwrap(),
                 "2000-01-01 12:13:15".to_string().into_bytes(),
                 "2000-01-01 12:13:15".to_string(),
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 3).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 3, true).unwrap(),
                 "2000-01-01 12:13:14.667".to_string().into_bytes(),
                 "2000-01-01 12:13:14.667".to_string(),
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 4).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 4, true).unwrap(),
                 "2000-01-01 12:13:14.6666".to_string().into_bytes(),
                 "2000-01-01 12:13:14.6666".to_string(),
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 6).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 6, true).unwrap(),
                 "2000-01-01 12:13:14.666600".to_string().into_bytes(),
                 "2000-01-01 12:13:14.666600".to_string(),
             ),
@@ -3816,6 +3811,19 @@ mod tests {
                     .unwrap()
                     .unwrap(),
             ),
+            // can not convert to decimal
+            ("abcde", false, false, Decimal::zero()),
+            ("", false, false, Decimal::zero()),
+            ("s", false, false, Decimal::zero()),
+            ("abcde", true, false, Decimal::zero()),
+            ("", true, false, Decimal::zero()),
+            ("s", true, false, Decimal::zero()),
+            ("abcde", false, true, Decimal::zero()),
+            ("", false, true, Decimal::zero()),
+            ("s", false, true, Decimal::zero()),
+            ("abcde", true, true, Decimal::zero()),
+            ("", true, true, Decimal::zero()),
+            ("s", true, true, Decimal::zero()),
         ];
 
         test_as_decimal_helper(
@@ -4010,6 +4018,19 @@ mod tests {
                     .unwrap()
                     .unwrap(),
             ),
+            // can not convert to decimal
+            ("abcde", false, false, Decimal::zero()),
+            ("", false, false, Decimal::zero()),
+            ("s", false, false, Decimal::zero()),
+            ("abcde", true, false, Decimal::zero()),
+            ("", true, false, Decimal::zero()),
+            ("s", true, false, Decimal::zero()),
+            ("abcde", false, true, Decimal::zero()),
+            ("", false, true, Decimal::zero()),
+            ("s", false, true, Decimal::zero()),
+            ("abcde", true, true, Decimal::zero()),
+            ("", true, true, Decimal::zero()),
+            ("s", true, true, Decimal::zero()),
         ];
 
         test_as_decimal_helper(
@@ -4155,18 +4176,19 @@ mod tests {
     #[test]
     fn test_time_as_decimal() {
         test_none_with_ctx_and_extra(cast_any_as_decimal::<Time>);
+        let mut ctx = EvalContext::default();
 
         // TODO: add more test case
         let cs: Vec<(Time, bool, bool, Decimal)> = vec![
             // (cast_func_input, in_union, is_res_unsigned, base_result)
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14", 0).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, false).unwrap(),
                 false,
                 false,
                 Decimal::from_bytes(b"20000101121314").unwrap().unwrap(),
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 0).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 0, true).unwrap(),
                 false,
                 false,
                 Decimal::from_bytes(b"20000101121315").unwrap().unwrap(),
@@ -4652,7 +4674,7 @@ mod tests {
             let rft = make_ret_field_type_5(expect_fsp);
             let extra = make_extra(&rft, &ia);
 
-            let input_time = Time::parse_utc_datetime(s, fsp).unwrap();
+            let input_time = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let expect_time = Duration::parse(expect.as_bytes(), expect_fsp as i8).unwrap();
             let result = cast_time_as_duration(&mut ctx, &extra, &Some(input_time));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
@@ -4915,44 +4937,45 @@ mod tests {
     #[test]
     fn test_time_as_json() {
         test_none_with_ctx(cast_any_as_any::<Time, Json>);
+        let mut ctx = EvalContext::default();
 
         // TODO: add more case for other TimeType
         let cs = vec![
             // Add time_type filed here is to make maintainer know clearly that what is the type of the time.
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14", 0).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 0, true).unwrap(),
                 TimeType::DateTime,
                 Json::String("2000-01-01 12:13:14.000000".to_string()),
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 0).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 0, true).unwrap(),
                 TimeType::DateTime,
                 Json::String("2000-01-01 12:13:15.000000".to_string()),
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14", 6).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14", 6, true).unwrap(),
                 TimeType::DateTime,
                 Json::String("2000-01-01 12:13:14.000000".to_string()),
             ),
             (
-                Time::parse_utc_datetime("2000-01-01T12:13:14.6666", 6).unwrap(),
+                Time::parse_datetime(&mut ctx, "2000-01-01T12:13:14.6666", 6, true).unwrap(),
                 TimeType::DateTime,
                 Json::String("2000-01-01 12:13:14.666600".to_string()),
             ),
             (
-                Time::parse_utc_datetime("2019-09-01", 0).unwrap(),
+                Time::parse_datetime(&mut ctx, "2019-09-01", 0, true).unwrap(),
                 TimeType::DateTime,
                 Json::String("2019-09-01 00:00:00.000000".to_string()),
             ),
             (
-                Time::parse_utc_datetime("2019-09-01", 6).unwrap(),
+                Time::parse_datetime(&mut ctx, "2019-09-01", 6, true).unwrap(),
                 TimeType::DateTime,
                 Json::String("2019-09-01 00:00:00.000000".to_string()),
             ),
         ];
         for (input, time_type, expect) in cs {
             let mut ctx = EvalContext::default();
-            let result = cast_any_as_any::<Time, Json>(&mut ctx, &Some(input.clone()));
+            let result = cast_any_as_any::<Time, Json>(&mut ctx, &Some(input));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
                 "input: {}, expect_time_type: {:?}, real_time_type: {:?}, expect: {}, result: {:?}",

@@ -81,6 +81,11 @@
 ## The number of max concurrent streams/requests on a client connection.
 # grpc-concurrent-stream = 1024
 
+## Limit the memory size can be used by gRPC. Default is unlimited.
+## gRPC usually works well to reclaim memory by itself. Limit the memory in case OOM
+## is observed. Note that limit the usage can lead to potential stall.
+# grpc-memory-pool-quota = "32G"
+
 ## The number of connections with each TiKV server to send Raft messages.
 # grpc-raft-conn-num = 10
 
@@ -110,15 +115,24 @@
 ## It should be set based on your disk performance.
 # snap-max-write-bytes-per-sec = "100MB"
 
+## Whether to enable request batch.
+# enable-request-batch = true
+
+## Whether to collect batch across commands.
+## When disabled, wait duration is ignored. When enabled, collect batch for specified duration
+## when load is high.
+# request-batch-enable-cross-command = true
+
+## Wait duration before each request batch is processed. Wait is triggered when cross-command
+## option is enabled and system load is high.
+# request-batch-wait-duration = "1ms"
+
 ## Attributes about this server, e.g. `{ zone = "us-west-1", disk = "ssd" }`.
 # labels = {}
 
 [storage]
 ## The path to RocksDB directory.
 # data-dir = "/tmp/tikv/store"
-
-## Internal notify capacity of Scheduler's channel.
-# scheduler-notify-capacity = 10240
 
 ## The number of slots in Scheduler latches, which controls write concurrency.
 ## In most cases you can use the default value. When importing data, you can set it to a larger
@@ -300,15 +314,21 @@
 [rocksdb]
 ## Maximum number of threads of RocksDB background jobs.
 ## The background tasks include compaction and flush. For detailed information why RocksDB needs to
-## do compaction, see RocksDB-related materials. When write traffic (like the importing data size)
-## is big, it is recommended to enable more threads. But set the number of the enabled threads
-## smaller than that of CPU cores. For example, when importing data, for a machine with a 32-core
-## CPU, set the value to 28.
+## do compaction, see RocksDB-related materials. RocksDB will adjust flush and compaction threads
+## according to the formula:
+##   max_flushes = max_flushes = max(1, max_background_jobs / 4)
+##   max_compactions = max(1, max_background_jobs - max_flushes)
+## When write traffic (like the importing data size)  is big, it is recommended to enable more
+## threads. But set the number of the enabled threads  smaller than that of CPU cores. For example,
+## when importing data, for a machine with a 32-core CPU, set the value to 28.
+## The default value is set to 8 or CPU_NUM - 1, whichever is smaller.
 # max-background-jobs = 8
 
 ## Represents the maximum number of threads that will concurrently perform a sub-compaction job by
 ## breaking it into multiple, smaller ones running simultaneously.
-# max-sub-compactions = 1
+## The default value is set to 3 or the largest number to allow for two compactions, whichever is
+## smaller.
+# max-sub-compactions = 3
 
 ## Number of open files that can be used by the DB.
 ## Value -1 means files opened are always kept open and RocksDB will prefetch index and filter

@@ -48,16 +48,16 @@ pub trait Iterator {
 }
 
 pub trait Iterable {
-    type Iter: Iterator;
+    type Iterator: Iterator;
 
-    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iter>;
-    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iter>;
+    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iterator>;
+    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iterator>;
 
-    fn iterator(&self) -> Result<Self::Iter> {
+    fn iterator(&self) -> Result<Self::Iterator> {
         self.iterator_opt(&IterOptions::default())
     }
 
-    fn iterator_cf(&self, cf: &str) -> Result<Self::Iter> {
+    fn iterator_cf(&self, cf: &str) -> Result<Self::Iterator> {
         self.iterator_cf_opt(&IterOptions::default(), cf)
     }
 

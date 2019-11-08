@@ -64,11 +64,6 @@ ifneq ($(ROCKSDB_SYS_SSE),0)
 ENABLE_FEATURES += sse
 endif
 
-# Update Titan to latest master before build
-ifneq ($(UPDATE_TITAN), 0)
-ENABLE_FEATURES += update_titan
-endif
-
 ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
@@ -139,13 +134,6 @@ prof_release:
 # This is used for schrodinger chaos testing.
 fail_release:
 	FAIL_POINT=1 make release
-
-# Build with latest Titan. Mainly used for test bot.
-# You can use environment variables `TITAN_REPO` and `TITAN_BRANCH` to update to specified Titan codeabse
-# -- https://github.com/{TITAN_REPO}/titan/tree/{TITAN_BRANCH}.
-# Default: TITAN_REPO=pingcap, TITAN_BRANCH=master
-titan_release:
-	UPDATE_TITAN=1 make release
 
 ## Distribution builds (true release builds)
 ## -------------------
@@ -252,6 +240,9 @@ ctl:
 expression: format clippy
 	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package tidb_query "expr" -- --nocapture
 
+# A special target for building TiKV docker image.
+docker:
+	scripts/gen-dockerfile.sh && docker build .
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------

@@ -124,9 +124,10 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
     ) -> Result<Self> {
         let schema_len = src.schema().len();
         let mut group_by_exps = Vec::with_capacity(group_by_exp_defs.len());
+        let mut ctx = EvalContext::new(config.clone());
         for def in group_by_exp_defs {
             group_by_exps.push(RpnExpressionBuilder::build_from_expr_tree(
-                def, &config.tz, schema_len,
+                def, &mut ctx, schema_len,
             )?);
         }
 
@@ -205,14 +206,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         // Decode columns with mutable input first, so subsequent access to input can be immutable
         // (and the borrow checker will be happy)
         ensure_columns_decoded(
-            &context.cfg.tz,
+            context,
             &self.group_by_exps,
             src_schema,
             &mut input_physical_columns,
             input_logical_rows,
         )?;
         ensure_columns_decoded(
-            &context.cfg.tz,
+            context,
             &entities.each_aggr_exprs,
             src_schema,
             &mut input_physical_columns,
