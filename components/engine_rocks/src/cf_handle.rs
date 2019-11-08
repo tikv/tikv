@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cf_options::RocksCFOptions;
+use crate::cf_options::RocksColumnFamilyOptions;
 use crate::engine::RocksEngine;
 use engine_traits::CFHandle;
 use engine_traits::CFHandleExt;
@@ -9,14 +9,14 @@ use rocksdb::CFHandle as RawCFHandle;
 
 impl CFHandleExt for RocksEngine {
     type CFHandle = RocksCFHandle;
-    type CFOptions = RocksCFOptions;
+    type ColumnFamilyOptions = RocksColumnFamilyOptions;
 
-    fn get_cf_handle(&self, name: &str) -> Option<&Self::CFHandle> {
+    fn cf_handle(&self, name: &str) -> Option<&Self::CFHandle> {
         self.as_inner().cf_handle(name).map(RocksCFHandle::from_raw)
     }
 
-    fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::CFOptions {
-        RocksCFOptions::from_raw(self.as_inner().get_options_cf(cf.as_inner()))
+    fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::ColumnFamilyOptions {
+        RocksColumnFamilyOptions::from_raw(self.as_inner().get_options_cf(cf.as_inner()))
     }
 
     fn set_options_cf(&self, cf: &Self::CFHandle, options: &[(&str, &str)]) -> Result<()> {

@@ -79,6 +79,11 @@ quick_error! {
             description("Engine error")
             display("Engine {:?}", err)
         }
+        EngineTraits(err: engine_traits::Error) {
+            from()
+            description("Engine error")
+            display("Engine {:?}", err)
+        }
         Protobuf(err: ProtobufError) {
             from()
             cause(err)
