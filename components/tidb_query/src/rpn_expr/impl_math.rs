@@ -292,17 +292,18 @@ mod tests {
     #[test]
     fn test_log_1_arg() {
         let test_cases = vec![
-            (std::f64::consts::E, Some(Real::from(1.0_f64))),
-            (100.0, Some(Real::from(4.605170185988092_f64))),
-            (-1.0, None),
-            (0.0, None),
+            (Some(std::f64::consts::E), Some(Real::from(1.0_f64))),
+            (Some(100.0), Some(Real::from(4.605170185988092_f64))),
+            (Some(-1.0), None),
+            (Some(0.0), None),
+            (None, None),
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(Real::from(input))
+                .push_param(input)
                 .evaluate(ScalarFuncSig::Log1Arg)
                 .unwrap();
-            assert_eq!(output, expect, "{}", input);
+            assert_eq!(output, expect, "{:?}", input);
         }
     }
 
@@ -319,8 +320,8 @@ mod tests {
         ];
         for (a1, a2, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(a1.map(|a| Real::from(a)))
-                .push_param(a2.map(|a| Real::from(a)))
+                .push_param(a1)
+                .push_param(a2)
                 .evaluate(ScalarFuncSig::Log2Args)
                 .unwrap();
             assert_eq!(output, expect, "arg1 {:?}, arg2 {:?}", a1, a2);
@@ -338,7 +339,7 @@ mod tests {
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(input.map(|a| Real::from(a)))
+                .push_param(input)
                 .evaluate(ScalarFuncSig::Log2)
                 .unwrap();
             assert_eq!(output, expect, "{:?}", input);
@@ -356,7 +357,7 @@ mod tests {
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(input.map(|a| Real::from(a)))
+                .push_param(input)
                 .evaluate(ScalarFuncSig::Log10)
                 .unwrap();
             assert_eq!(output, expect, "{:?}", input);
