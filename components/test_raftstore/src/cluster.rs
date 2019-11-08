@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
+use std::error::Error as StdError;
 use std::sync::{self, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
@@ -24,6 +24,7 @@ use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, Raf
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
+use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 
@@ -127,10 +128,18 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
+    pub fn pre_start_check(&mut self) -> result::Result<(), Box<dyn StdError>> {
+        for path in &self.paths {
+            self.cfg.storage.data_dir = path.path().to_str().unwrap().to_owned();
+            self.cfg.validate()?
+        }
+        Ok(())
+    }
+
     pub fn create_engines(&mut self) {
         for _ in 0..self.count {
             let dir = TempDir::new("test_cluster").unwrap();
-            let kv_path = dir.path().join("kv");
+            let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
             let cache = self.cfg.storage.block_cache.build_shared_cache();
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
@@ -138,7 +147,7 @@ impl<T: Simulator> Cluster<T> {
                 rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
-            let raft_path = dir.path().join(Path::new("raft"));
+            let raft_path = dir.path().join("raft");
             let raft_engine = Arc::new(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
