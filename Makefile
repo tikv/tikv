@@ -188,9 +188,6 @@ test:
 
 ci-test:
 	@env FAIL_POINT=1 && \
-	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
-	export LOG_LEVEL=DEBUG && \
-	export RUST_BACKTRACE=1 && \
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} --all-targets
 
 ## Static analysis
