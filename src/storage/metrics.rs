@@ -66,6 +66,12 @@ lazy_static! {
         "Total number of pending commands."
     )
     .unwrap();
+    pub static ref SCHED_PENDING_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_scheduler_running_by_task",
+        "Running scheduler tasks",
+        &["tag"]
+    )
+    .unwrap();
     pub static ref SCHED_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_command_duration_seconds",
         "Bucketed histogram of command execution",

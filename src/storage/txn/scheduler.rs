@@ -182,6 +182,8 @@ impl<L: LockMgr> SchedulerInner<L> {
     }
 
     fn enqueue_task(&self, task: Task, callback: StorageCb) {
+        SCHED_PENDING_GAUGE_VEC.with_label_values(&[task.tag]).inc();
+
         let cid = task.cid;
         let tctx = TaskContext::new(task, &self.latches, callback);
 
@@ -209,6 +211,7 @@ impl<L: LockMgr> SchedulerInner<L> {
             .fetch_sub(tctx.write_bytes, Ordering::AcqRel) as i64;
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes - tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.dec();
+        SCHED_PENDING_GAUGE_VEC.with_label_values(&[tctx.tag]).dec();
 
         tctx
     }
