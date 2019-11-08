@@ -201,7 +201,12 @@ fn sqrt(arg: &Option<Real>) -> Result<Option<Real>> {
         if *n < 0f64 {
             None
         } else {
-            Some(Real::from(n.sqrt()))
+            let res = n.sqrt();
+            if res.is_nan() {
+                None
+            } else {
+                Some(Real::from(res))
+            }
         }
     }))
 }
@@ -487,6 +492,7 @@ mod tests {
             (Some(64f64), Some(Real::from(8f64))),
             (Some(2f64), Some(Real::from(std::f64::consts::SQRT_2))),
             (Some(-16f64), None),
+            (Some(0.0 / 0.0), None),
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
