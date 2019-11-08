@@ -747,3 +747,11 @@
 ## Time to delay in milliseconds before responding to TiDB when other transactions
 ## release locks that pessimistic transactions are waiting for(0 to disable).
 # wake-up-delay-duration = 1
+
+[gc]
+## The number of keys to GC in one batch.
+# batch-keys = 512
+
+## Max bytes that GC worker can write to rocksdb in one second.
+## If it is set to 0, there is no limit.
+# max-write-bytes-per-sec = "0"
