@@ -26,13 +26,13 @@ struct AggFuncExpr {
 }
 
 impl AggFuncExpr {
-    fn batch_build(ctx: &EvalContext, expr: Vec<Expr>) -> Result<Vec<AggFuncExpr>> {
+    fn batch_build(ctx: &mut EvalContext, expr: Vec<Expr>) -> Result<Vec<AggFuncExpr>> {
         expr.into_iter()
             .map(|v| AggFuncExpr::build(ctx, v))
             .collect()
     }
 
-    fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
+    fn build(ctx: &mut EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
         let args = Expression::batch_build(ctx, expr.take_children().into())?;
         let tp = expr.get_tp();
         let eval_buffer = Vec::with_capacity(args.len());
@@ -85,10 +85,10 @@ impl<Src: Executor> AggExecutor<Src> {
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&group_by)?;
         visitor.batch_visit(&aggr_func)?;
-        let ctx = EvalContext::new(eval_config);
+        let mut ctx = EvalContext::new(eval_config);
         Ok(AggExecutor {
-            group_by: Expression::batch_build(&ctx, group_by)?,
-            aggr_func: AggFuncExpr::batch_build(&ctx, aggr_func)?,
+            group_by: Expression::batch_build(&mut ctx, group_by)?,
+            aggr_func: AggFuncExpr::batch_build(&mut ctx, aggr_func)?,
             executed: false,
             ctx,
             related_cols_offset: visitor.column_offsets(),
@@ -99,7 +99,7 @@ impl<Src: Executor> AggExecutor<Src> {
     fn next(&mut self) -> Result<Option<Vec<Datum>>> {
         if let Some(row) = self.src.next()? {
             let row = row.take_origin()?;
-            row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)
+            row.inflate_cols_with_offsets(&mut self.ctx, &self.related_cols_offset)
                 .map(Some)
         } else {
             Ok(None)
@@ -172,9 +172,12 @@ impl<Src: Executor> HashAggExecutor<Src> {
         let group_by_cols = self.inner.get_group_by_cols(row)?;
         if group_by_cols.is_empty() {
             let single_group = Datum::Bytes(SINGLE_GROUP.to_vec());
-            return Ok(box_try!(datum::encode_value(&[single_group])));
+            return Ok(box_try!(datum::encode_value(
+                &mut self.inner.ctx,
+                &[single_group],
+            )));
         }
-        let res = box_try!(datum::encode_value(&group_by_cols));
+        let res = box_try!(datum::encode_value(&mut self.inner.ctx, &group_by_cols,));
         Ok(res)
     }
 
@@ -443,15 +446,16 @@ mod tests {
         idx_vals: Vec<(i64, Datum)>,
     ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
         let mut expect_row = HashMap::default();
+        let mut ctx = EvalContext::default();
         let mut v: Vec<_> = idx_vals
             .iter()
             .map(|&(ref cid, ref value)| {
-                expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
+                expect_row.insert(*cid, datum::encode_key(&mut ctx, &[value.clone()]).unwrap());
                 value.clone()
             })
             .collect();
         v.push(Datum::I64(handle));
-        let encoded = datum::encode_key(&v).unwrap();
+        let encoded = datum::encode_key(&mut ctx, &v).unwrap();
         let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
         (expect_row, idx_key)
     }
@@ -507,6 +511,7 @@ mod tests {
         let wrapper = IndexTestWrapper::new(unique, idx_data);
         let is_executor = IndexScanExecutor::index_scan(
             wrapper.scan,
+            EvalContext::default(),
             wrapper.ranges,
             wrapper.store,
             unique,
@@ -542,6 +547,7 @@ mod tests {
         let wrapper = IndexTestWrapper::new(unique, idx_data);
         let is_executor = IndexScanExecutor::index_scan(
             wrapper.scan,
+            EvalContext::default(),
             wrapper.ranges,
             wrapper.store,
             unique,
@@ -558,7 +564,7 @@ mod tests {
         let expect_row_cnt = 1;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = agg_ect.next().unwrap() {
-            row_data.push(row.get_binary().unwrap());
+            row_data.push(row.get_binary(&mut EvalContext::default()).unwrap());
         }
         assert_eq!(row_data.len(), expect_row_cnt);
         let expect_row_data = vec![(
@@ -595,6 +601,7 @@ mod tests {
         let wrapper = IndexTestWrapper::new(unique, idx_data);
         let is_executor = IndexScanExecutor::index_scan(
             wrapper.scan,
+            EvalContext::default(),
             wrapper.ranges,
             wrapper.store,
             unique,
@@ -611,7 +618,7 @@ mod tests {
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = agg_ect.next().unwrap() {
-            row_data.push(row.get_binary().unwrap());
+            row_data.push(row.get_binary(&mut EvalContext::default()).unwrap());
         }
         assert_eq!(row_data.len(), expect_row_cnt);
         let expect_row_data = vec![
@@ -748,7 +755,7 @@ mod tests {
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = aggr_ect.next().unwrap() {
-            row_data.push(row.get_binary().unwrap());
+            row_data.push(row.get_binary(&mut EvalContext::default()).unwrap());
         }
         assert_eq!(row_data.len(), expect_row_cnt);
         let expect_row_data = vec![
