@@ -219,8 +219,8 @@ impl VectorValue {
         }
     }
 
-    /// Returns maximum encoded size in arrow format.
-    pub fn maximum_encoded_size_arrow(&self, logical_rows: &[usize]) -> Result<usize> {
+    /// Returns maximum encoded size in chunk format.
+    pub fn maximum_encoded_size_chunk(&self, logical_rows: &[usize]) -> Result<usize> {
         match self {
             VectorValue::Int(_) => Ok(logical_rows.len() * 9 + 10),
             VectorValue::Real(_) => Ok(logical_rows.len() * 9 + 10),
@@ -265,6 +265,7 @@ impl VectorValue {
         &self,
         row_index: usize,
         field_type: &FieldType,
+        ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
         use crate::codec::mysql::DecimalEncoder;
@@ -338,7 +339,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::UINT_FLAG);
-                        output.write_u64(val.to_packed_u64())?;
+                        output.write_u64(val.to_packed_u64(ctx)?)?;
                     }
                 }
                 Ok(())

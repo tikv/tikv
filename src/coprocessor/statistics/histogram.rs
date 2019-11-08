@@ -159,6 +159,7 @@ mod tests {
 
     use tidb_query::codec::datum;
     use tidb_query::codec::datum::Datum;
+    use tidb_query::expr::EvalContext;
 
     #[test]
     fn test_histogram() {
@@ -167,7 +168,7 @@ mod tests {
         assert_eq!(hist.buckets.len(), 0);
 
         for item in (0..3).map(Datum::I64) {
-            let bytes = datum::encode_value(&[item]).unwrap();
+            let bytes = datum::encode_value(&mut EvalContext::default(), &[item]).unwrap();
             hist.append(&bytes);
         }
         // b0: [0]
@@ -178,7 +179,7 @@ mod tests {
         assert_eq!(hist.ndv, 3);
 
         // bucket is full now, need to merge
-        let bytes = datum::encode_value(&[Datum::I64(3)]).unwrap();
+        let bytes = datum::encode_value(&mut EvalContext::default(), &[Datum::I64(3)]).unwrap();
         hist.append(&bytes);
         // b0: [0, 1]
         // b1: [2, 3]
@@ -188,7 +189,7 @@ mod tests {
 
         // push repeated item
         for item in repeat(3).take(3).map(Datum::I64) {
-            let bytes = datum::encode_value(&[item]).unwrap();
+            let bytes = datum::encode_value(&mut EvalContext::default(), &[item]).unwrap();
             hist.append(&bytes);
         }
 
@@ -199,7 +200,7 @@ mod tests {
         assert_eq!(hist.ndv, 4);
 
         for item in repeat(4).take(4).map(Datum::I64) {
-            let bytes = datum::encode_value(&[item]).unwrap();
+            let bytes = datum::encode_value(&mut EvalContext::default(), &[item]).unwrap();
             hist.append(&bytes);
         }
         // b0: [0, 1]
@@ -210,7 +211,7 @@ mod tests {
         assert_eq!(hist.ndv, 5);
 
         // bucket is full now, need to merge
-        let bytes = datum::encode_value(&[Datum::I64(5)]).unwrap();
+        let bytes = datum::encode_value(&mut EvalContext::default(), &[Datum::I64(5)]).unwrap();
         hist.append(&bytes);
         // b0: [0, 1, 2, 3, 3, 3, 3]
         // b1: [4, 4, 4, 4, 4]
@@ -225,13 +226,13 @@ mod tests {
         let buckets_num = 1;
         let mut hist = Histogram::new(buckets_num);
         assert_eq!(hist.buckets.len(), 0);
-        hist.append(&datum::encode_value(&[Datum::I64(1)]).unwrap());
+        hist.append(&datum::encode_value(&mut EvalContext::default(), &[Datum::I64(1)]).unwrap());
         assert_eq!(hist.buckets.len(), 1);
         assert_eq!(hist.per_bucket_limit, 1);
-        hist.append(&datum::encode_value(&[Datum::I64(2)]).unwrap());
+        hist.append(&datum::encode_value(&mut EvalContext::default(), &[Datum::I64(2)]).unwrap());
         assert_eq!(hist.buckets.len(), 1);
         assert_eq!(hist.per_bucket_limit, 2);
-        hist.append(&datum::encode_value(&[Datum::I64(3)]).unwrap());
+        hist.append(&datum::encode_value(&mut EvalContext::default(), &[Datum::I64(3)]).unwrap());
         assert_eq!(hist.per_bucket_limit, 4);
     }
 }
