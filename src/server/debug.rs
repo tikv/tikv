@@ -2081,7 +2081,7 @@ mod tests {
 
         for (region_id, (start, end)) in metadata.into_iter().enumerate() {
             let region_id = region_id as u64;
-            let cf_raft = engine.get_cf_handle(CF_RAFT).unwrap();
+            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
             let mut region = Region::default();
             region.set_id(region_id);
             region.set_start_key(start.to_owned().into_bytes());
@@ -2099,7 +2099,7 @@ mod tests {
 
         let remove_region_state = |region_id: u64| {
             let key = keys::region_state_key(region_id);
-            let cf_raft = engine.get_cf_handle(CF_RAFT).unwrap();
+            let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
             engine
                 .as_inner()
                 .delete_cf(cf_raft.as_inner(), &key)

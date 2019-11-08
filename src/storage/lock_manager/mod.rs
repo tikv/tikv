@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod util;
+use std::borrow::Borrow;
 
-pub use self::util::*;
-
-use crate::storage::txn::ProcessResult;
-use crate::storage::StorageCb;
+use crate::storage::mvcc::Error as MvccError;
+use crate::storage::txn::{Error as TxnError, ProcessResult};
+use crate::storage::Error as StorageError;
+use crate::storage::{Key, StorageCb};
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Lock {
@@ -29,6 +29,7 @@ pub trait LockMgr: Clone + Send + 'static {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
+        timeout: i64,
     );
 
     /// The locks with `lock_ts` and `hashes` are released, trys to wake up transactions.
@@ -60,6 +61,7 @@ impl LockMgr for DummyLockMgr {
         _pr: ProcessResult,
         _lock: Lock,
         _is_first_lock: bool,
+        _wait_timeout: i64,
     ) {
     }
 
@@ -70,5 +72,45 @@ impl LockMgr for DummyLockMgr {
         _commit_ts: u64,
         _is_pessimistic_txn: bool,
     ) {
+    }
+}
+
+pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
+    match res {
+        Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info)))) => Lock {
+            ts: info.get_lock_version(),
+            hash: gen_key_hash(&Key::from_raw(info.get_key())),
+        },
+        _ => panic!("unexpected mvcc error"),
+    }
+}
+
+// TiDB uses the same hash algorithm.
+pub fn gen_key_hash(key: &Key) -> u64 {
+    farmhash::fingerprint64(&key.to_raw().unwrap())
+}
+
+pub fn gen_key_hashes<K: Borrow<Key>>(keys: &[K]) -> Vec<u64> {
+    keys.iter().map(|key| gen_key_hash(key.borrow())).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kvproto::kvrpcpb::LockInfo;
+
+    #[test]
+    fn test_extract_lock_from_result() {
+        let raw_key = b"key".to_vec();
+        let key = Key::from_raw(&raw_key);
+        let ts = 100;
+        let mut info = LockInfo::default();
+        info.set_key(raw_key);
+        info.set_lock_version(ts);
+        info.set_lock_ttl(100);
+        let case = StorageError::from(TxnError::from(MvccError::KeyIsLocked(info)));
+        let lock = extract_lock_from_result(&Err(case));
+        assert_eq!(lock.ts, ts);
+        assert_eq!(lock.hash, gen_key_hash(&key));
     }
 }

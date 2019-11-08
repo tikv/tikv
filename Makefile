@@ -240,6 +240,9 @@ ctl:
 expression: format clippy
 	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package tidb_query "expr" -- --nocapture
 
+# A special target for building TiKV docker image.
+docker:
+	scripts/gen-dockerfile.sh && docker build .
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------

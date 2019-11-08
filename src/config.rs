@@ -122,6 +122,26 @@ impl TitanCfConfig {
     }
 }
 
+fn get_background_job_limit(
+    default_background_jobs: i32,
+    default_sub_compactions: u32,
+) -> (i32, u32) {
+    let cpu_num = sys_info::cpu_num().unwrap();
+    // At the minimum, we should have two background jobs: one for flush and one for compaction.
+    // Otherwise, the number of background jobs should not exceed cpu_num - 1.
+    // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
+    // the rest shared by flush and compaction.
+    let max_background_jobs: i32 =
+        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1) as i32));
+    // Cap max_sub_compactions to allow at least two compactions.
+    let max_compactions = max_background_jobs - max_background_jobs / 4;
+    let max_sub_compactions: u32 = cmp::max(
+        1,
+        cmp::min(default_sub_compactions, (max_compactions - 1) as u32),
+    );
+    (max_background_jobs, max_sub_compactions)
+}
+
 macro_rules! cf_config {
     ($name:ident) => {
         #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -692,13 +712,14 @@ pub struct DbConfig {
 
 impl Default for DbConfig {
     fn default() -> DbConfig {
+        let (max_background_jobs, max_sub_compactions) = get_background_job_limit(8, 3);
         DbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
-            max_background_jobs: 6,
+            max_background_jobs,
             max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
@@ -714,7 +735,7 @@ impl Default for DbConfig {
             auto_tuned: false,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
-            max_sub_compactions: 1,
+            max_sub_compactions,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
@@ -875,6 +896,7 @@ impl RaftDefaultCfConfig {
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -912,17 +934,19 @@ pub struct RaftDbConfig {
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     pub defaultcf: RaftDefaultCfConfig,
+    pub titan: TitanDBConfig,
 }
 
 impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
+        let (max_background_jobs, max_sub_compactions) = get_background_job_limit(4, 2);
         RaftDbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
-            max_background_jobs: 4,
+            max_background_jobs,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -933,7 +957,7 @@ impl Default for RaftDbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
-            max_sub_compactions: 2,
+            max_sub_compactions,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
@@ -941,6 +965,7 @@ impl Default for RaftDbConfig {
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
+            titan: TitanDBConfig::default(),
         }
     }
 }
@@ -985,6 +1010,9 @@ impl RaftDbConfig {
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         // TODO maybe create a new env for raft engine
+        if self.titan.enabled {
+            opts.set_titandb_options(&self.titan.build_opts());
+        }
 
         opts
     }

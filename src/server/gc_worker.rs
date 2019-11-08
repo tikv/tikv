@@ -238,8 +238,6 @@ impl<E: Engine> GCRunner<E> {
             snapshot,
             Some(ScanMode::Forward),
             !ctx.get_not_fill_cache(),
-            None,
-            None,
             ctx.get_isolation_level(),
         );
 
