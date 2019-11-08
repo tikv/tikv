@@ -4963,6 +4963,7 @@ mod tests {
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
+        rx.recv().unwrap();
         let mut options = Options::default();
         options.for_update_ts = 10;
         options.is_pessimistic_lock = vec![true];
@@ -4976,6 +4977,7 @@ mod tests {
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
+        rx.recv().unwrap();
         storage
             .async_commit(
                 Context::default(),
@@ -4985,8 +4987,6 @@ mod tests {
                 expect_ok_callback(tx.clone(), 2),
             )
             .unwrap();
-        rx.recv().unwrap();
-        rx.recv().unwrap();
         rx.recv().unwrap();
         expect_value(
             b"v".to_vec(),
