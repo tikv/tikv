@@ -16,9 +16,8 @@ use crate::storage::mvcc::{
 };
 use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
 use crate::storage::{
-    metrics::*, Command, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
-    ScanMode, Snapshot, Statistics, StorageCb, TxnStatus, Value, Mutation, Options
-
+    metrics::*, Command, Engine, Error as StorageError, Key, Mutation, MvccInfo, Options,
+    Result as StorageResult, ScanMode, Snapshot, Statistics, StorageCb, TxnStatus, Value,
 };
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
@@ -502,11 +501,13 @@ struct WriteResult {
     lock_info: Option<(lock_manager::Lock, bool, i64)>,
 }
 
-fn prewrite_into_txn<S: Snapshot>(txn: &mut MvccTxn<S>,
-                                  primary: &[u8],
-                                  options: &Options,
-                                  mutations: Vec<Mutation>,
-                            locks: &mut Vec<StorageResult<()>>) -> Result<()> {
+fn prewrite_into_txn<S: Snapshot>(
+    txn: &mut MvccTxn<S>,
+    primary: &[u8],
+    options: &Options,
+    mutations: Vec<Mutation>,
+    locks: &mut Vec<StorageResult<()>>,
+) -> Result<()> {
     for m in mutations {
         match txn.prewrite(m, &primary, &options) {
             Ok(_) => {}
@@ -517,7 +518,6 @@ fn prewrite_into_txn<S: Snapshot>(txn: &mut MvccTxn<S>,
         }
     }
     return Ok(());
-
 }
 
 fn process_write_impl<S: Snapshot, L: LockMgr>(
@@ -559,10 +559,17 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 }
                 // We only use forward seek for INSERT mutation. Because INSERT mutations are almost continuous.
                 if insert_mutations.len() > FORWARD_MIN_MUTATIONS_NUM {
-                    insert_mutations.sort_by(|a,b| a.key().cmp(b.key()));
-                    let mut forward_txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
+                    insert_mutations.sort_by(|a, b| a.key().cmp(b.key()));
+                    let mut forward_txn =
+                        MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
                     forward_txn.set_scan_mode(ScanMode::Forward);
-                    prewrite_into_txn(&mut forward_txn, &primary, &options, insert_mutations, &mut locks)?;
+                    prewrite_into_txn(
+                        &mut forward_txn,
+                        &primary,
+                        &options,
+                        insert_mutations,
+                        &mut locks,
+                    )?;
                     statistics.add(&forward_txn.take_statistics());
                     forward_modifies = Some(forward_txn.into_modifies());
                 } else {
