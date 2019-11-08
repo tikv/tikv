@@ -29,6 +29,16 @@ pub fn logical_or(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>>
 
 #[rpn_fn]
 #[inline]
+pub fn logical_xor(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>> {
+    // evaluates to 1 if an odd number of operands is nonzero, otherwise 0 is returned.
+    Ok(match (arg0, arg1) {
+        (Some(arg0), Some(arg1)) => Some(((*arg0 == 0) ^ (*arg1 == 0)) as i64),
+        _ => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
 pub fn unary_not_int(arg: &Option<i64>) -> Result<Option<i64>> {
     Ok(arg.map(|v| (v == 0) as i64))
 }
@@ -92,7 +102,7 @@ mod tests {
     use super::*;
     use tipb::ScalarFuncSig;
 
-    use crate::codec::mysql::{time, Tz};
+    use crate::codec::mysql::TimeType;
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[test]
@@ -130,6 +140,27 @@ mod tests {
                 .push_param(arg0)
                 .push_param(arg1)
                 .evaluate(ScalarFuncSig::LogicalOr)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_logical_xor() {
+        let test_cases = vec![
+            (Some(1), Some(1), Some(0)),
+            (Some(1), Some(0), Some(1)),
+            (Some(0), Some(0), Some(0)),
+            (Some(2), Some(-1), Some(0)),
+            (Some(-1), Some(0), Some(1)),
+            (Some(0), None, None),
+            (None, Some(1), None),
+        ];
+        for (arg0, arg1, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::LogicalXor)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
@@ -215,7 +246,7 @@ mod tests {
                 Some(1),
             ),
             (
-                time::zero_datetime(&Tz::utc()).into(),
+                DateTime::zero(0, TimeType::DateTime).unwrap().into(),
                 ScalarFuncSig::TimeIsNull,
                 Some(0),
             ),
