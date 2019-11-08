@@ -46,6 +46,7 @@ pub enum TsSet {
 }
 
 impl Default for TsSet {
+    #[inline]
     fn default() -> TsSet {
         TsSet::Empty
     }
