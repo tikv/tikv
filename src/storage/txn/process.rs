@@ -517,7 +517,7 @@ fn prewrite_into_txn<S: Snapshot>(
             Err(e) => return Err(Error::from(e)),
         }
     }
-    return Ok(());
+    Ok(())
 }
 
 fn process_write_impl<S: Snapshot, L: LockMgr>(
