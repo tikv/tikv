@@ -492,7 +492,7 @@ mod tests {
             (Some(64f64), Some(Real::from(8f64))),
             (Some(2f64), Some(Real::from(std::f64::consts::SQRT_2))),
             (Some(-16f64), None),
-            (Some(0.0 / 0.0), None),
+            (Some(std::f64::NAN), None),
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
