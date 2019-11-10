@@ -379,8 +379,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Pi => (0, 0),
 
             // unimplemented signature
-            ScalarFuncSig::Unspecified
-            | ScalarFuncSig::AddDateAndDuration
+            ScalarFuncSig::AddDateAndDuration
             | ScalarFuncSig::AddDateAndString
             | ScalarFuncSig::AddDateDatetimeInt
             | ScalarFuncSig::AddDateDatetimeString
@@ -513,6 +512,11 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonKeys2ArgsSig
             | ScalarFuncSig::JsonValidStringSig
             | ScalarFuncSig::JsonValidOthersSig => return Err(Error::UnknownSignature(sig)),
+
+            // PbCode is unspecified
+            ScalarFuncSig::Unspecified => {
+                return Err(box_err!("TiDB internal error (unspecified PbCode)"))
+            }
         };
         if args < min_args || args > max_args {
             return Err(box_err!(
@@ -552,7 +556,6 @@ macro_rules! dispatch_call {
         impl ScalarFunc {
             pub fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
                 match self.sig {
-                    ScalarFuncSig::Unspecified => Err(box_err!("Internal error, unspecified PbCode")),
                     $(ScalarFuncSig::$i_sig => self.$i_func(ctx, row, $($i_arg),*)),*,
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
@@ -560,7 +563,6 @@ macro_rules! dispatch_call {
 
             pub fn eval_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
                 match self.sig {
-                    ScalarFuncSig::Unspecified => Err(box_err!("Internal error, unspecified PbCode")),
                     $(ScalarFuncSig::$r_sig => self.$r_func(ctx, row, $($r_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
@@ -571,7 +573,6 @@ macro_rules! dispatch_call {
                 row: &'a [Datum]
             ) -> Result<Option<Cow<'a, Decimal>>> {
                 match self.sig {
-                    ScalarFuncSig::Unspecified => Err(box_err!("Internal error, unspecified PbCode")),
                     $(ScalarFuncSig::$d_sig => self.$d_func(ctx, row, $($d_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
@@ -583,7 +584,6 @@ macro_rules! dispatch_call {
                 row: &'a [Datum]
             ) -> Result<Option<Cow<'a, [u8]>>> {
                 match self.sig {
-                    ScalarFuncSig::Unspecified => Err(box_err!("Internal error, unspecified PbCode")),
                     $(ScalarFuncSig::$b_sig => self.$b_func(ctx, row, $($b_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
@@ -595,7 +595,6 @@ macro_rules! dispatch_call {
                 row: &'a [Datum]
             ) -> Result<Option<Cow<'a, Time>>> {
                 match self.sig {
-                    ScalarFuncSig::Unspecified => Err(box_err!("Internal error, unspecified PbCode")),
                     $(ScalarFuncSig::$t_sig => self.$t_func(ctx, row, $($t_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
@@ -607,7 +606,6 @@ macro_rules! dispatch_call {
                 row: &'a [Datum]
             ) -> Result<Option<Duration>> {
                 match self.sig {
-                    ScalarFuncSig::Unspecified => Err(box_err!("Internal error, unspecified PbCode")),
                     $(ScalarFuncSig::$u_sig => self.$u_func(ctx, row, $($u_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
@@ -619,7 +617,6 @@ macro_rules! dispatch_call {
                 row: &'a [Datum]
             ) -> Result<Option<Cow<'a, Json>>> {
                 match self.sig {
-                    ScalarFuncSig::Unspecified => Err(box_err!("Internal error, unspecified PbCode")),
                     $(ScalarFuncSig::$j_sig => self.$j_func(ctx, row, $($j_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
                 }
@@ -627,7 +624,6 @@ macro_rules! dispatch_call {
 
             pub fn eval(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Datum> {
                 match self.sig {
-                    ScalarFuncSig::Unspecified => Err(box_err!("Internal error, unspecified PbCode")),
                     $(ScalarFuncSig::$i_sig => {
                         match self.$i_func(ctx, row, $($i_arg)*) {
                             Ok(Some(i)) => {
