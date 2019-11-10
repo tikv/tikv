@@ -22,5 +22,5 @@ git = "https://github.com/pingcap/kvproto.git"
 branch="release-2.1"
 
 [dependencies.rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
-branch = "release-2.1"
+git = "https://github.com/Little-Wallace/rust-rocksdb.git"
+branch = "checksum"
