@@ -102,7 +102,7 @@ mod tests {
     use super::*;
     use tipb::ScalarFuncSig;
 
-    use crate::codec::mysql::{time, Tz};
+    use crate::codec::mysql::TimeType;
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[test]
@@ -246,7 +246,7 @@ mod tests {
                 Some(1),
             ),
             (
-                time::zero_datetime(&Tz::utc()).into(),
+                DateTime::zero(0, TimeType::DateTime).unwrap().into(),
                 ScalarFuncSig::TimeIsNull,
                 Some(0),
             ),

@@ -89,7 +89,8 @@ mod tests {
             ),
         ];
         for (date, format, expect) in cases {
-            let date = Some(DateTime::parse_utc_datetime(date, 6).unwrap());
+            let date =
+                Some(DateTime::parse_datetime(&mut EvalContext::default(), date, 6, true).unwrap());
             let format = Some(format.as_bytes().to_vec());
             let expect = Some(expect.as_bytes().to_vec());
 
@@ -149,7 +150,9 @@ mod tests {
         ];
 
         for (date, format) in cases {
-            let date = date.map(|d| DateTime::parse_utc_datetime(d, 6).unwrap());
+            let date = date.map(|d| {
+                DateTime::parse_datetime(&mut EvalContext::default(), d, 6, true).unwrap()
+            });
             let format = format.map(|s| s.as_bytes().to_vec());
 
             let output = RpnFnScalarEvaluator::new()
