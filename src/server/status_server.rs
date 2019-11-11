@@ -213,34 +213,30 @@ impl StatusServer {
         Box::new(ok(res))
     }
 
-    fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
-        let thread_rename = [
-            (Regex::new(r"^grpc-server-\d*$").unwrap(), "grpc-server"),
-            (Regex::new(r"^cop-high\d*$").unwrap(), "cop-high"),
-            (Regex::new(r"^cop-normal\d*$").unwrap(), "cop-normal"),
-            (Regex::new(r"^cop-low\d*$").unwrap(), "cop-low"),
-            (Regex::new(r"^raftstore-\d*$").unwrap(), "raftstore"),
-            (Regex::new(r"^raftstore-\d*-\d*$").unwrap(), "raftstore"),
-            (Regex::new(r"^sst-importer\d*$").unwrap(), "sst-importer"),
-            (
-                Regex::new(r"^store-read-low\d*$").unwrap(),
-                "store-read-low",
-            ),
-            (Regex::new(r"^rocksdb:bg\d*$").unwrap(), "rocksdb:bg"),
-            (Regex::new(r"^rocksdb:low\d*$").unwrap(), "rocksdb:low"),
-            (Regex::new(r"^rocksdb:high\d*$").unwrap(), "rocksdb:high"),
-            (Regex::new(r"^snap sender\d*$").unwrap(), "snap-sender"),
-            (Regex::new(r"^snap-sender\d*$").unwrap(), "snap-sender"),
-            (Regex::new(r"^apply-\d*$").unwrap(), "apply"),
-            (Regex::new(r"^future-poller-\d*$").unwrap(), "future-poller"),
-        ];
+    fn extract_thread_name(thread_name: &str) -> String {
+        lazy_static! {
+            static ref THREAD_NAME_RE: Regex =
+                Regex::new(r"^(?P<thread_name>[a-z-_ :]+?)(-?\d)*$").unwrap();
+            static ref THREAD_NAME_REPLACE_SEPERATOR_RE: Regex = Regex::new(r"[_ ]").unwrap();
+        }
 
-        move |frames| {
-            for (regex, name) in thread_rename.iter() {
-                if regex.is_match(&frames.thread_name) {
-                    frames.thread_name = name.to_string();
-                }
+        if let Some(cap) = THREAD_NAME_RE.captures(thread_name) {
+            if let Some(thread_name) = cap.name("thread_name") {
+                THREAD_NAME_REPLACE_SEPERATOR_RE
+                    .replace_all(thread_name.as_str(), "-")
+                    .into_owned()
+            } else {
+                thread_name.to_owned()
             }
+        } else {
+            thread_name.to_owned()
+        }
+    }
+
+    fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
+        move |frames| {
+            let name = Self::extract_thread_name(&frames.thread_name);
+            frames.thread_name = name;
         }
     }
 
@@ -789,5 +785,33 @@ mod tests {
 
         handle.wait().unwrap();
         status_server.stop();
+    }
+
+    #[test]
+    fn test_extract_thread_name() {
+        assert_eq!(
+            &StatusServer::extract_thread_name("test-name-1"),
+            "test-name"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("grpc-server-5"),
+            "grpc-server"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("rocksdb:bg1000"),
+            "rocksdb:bg"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("raftstore-1-100"),
+            "raftstore"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("snap sender1000"),
+            "snap-sender"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("snap_sender1000"),
+            "snap-sender"
+        );
     }
 }
