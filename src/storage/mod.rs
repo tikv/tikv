@@ -30,7 +30,7 @@ use self::metrics::*;
 use self::mvcc::Lock;
 
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
+pub use self::gc_worker::{AutoGCConfig, GCConfig, GCSafePointProvider};
 pub use self::kv::raftkv::RaftKv;
 pub use self::kv::{
     destroy_tls_engine, set_tls_engine, with_tls_engine, CFStatistics, Cursor, CursorBuilder,
@@ -521,6 +521,7 @@ impl Options {
 pub struct TestStorageBuilder<E: Engine> {
     engine: E,
     config: Config,
+    gc_config: GCConfig,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
 }
@@ -531,6 +532,7 @@ impl TestStorageBuilder<RocksEngine> {
         Self {
             engine: TestEngineBuilder::new().build().unwrap(),
             config: Config::default(),
+            gc_config: GCConfig::default(),
             local_storage: None,
             raft_store_router: None,
         }
@@ -542,6 +544,7 @@ impl<E: Engine> TestStorageBuilder<E> {
         Self {
             engine,
             config: Config::default(),
+            gc_config: GCConfig::default(),
             local_storage: None,
             raft_store_router: None,
         }
@@ -552,6 +555,14 @@ impl<E: Engine> TestStorageBuilder<E> {
     /// By default, `Config::default()` will be used.
     pub fn config(mut self, config: Config) -> Self {
         self.config = config;
+        self
+    }
+
+    /// Customize the config of the `GC`.
+    ///
+    /// By default, `GCConfig::default()` will be used.
+    pub fn gc_config(mut self, gc_config: GCConfig) -> Self {
+        self.gc_config = gc_config;
         self
     }
 
@@ -581,6 +592,7 @@ impl<E: Engine> TestStorageBuilder<E> {
         Storage::from_engine(
             self.engine,
             &self.config,
+            &self.gc_config,
             read_pool,
             self.local_storage,
             self.raft_store_router,
@@ -679,6 +691,7 @@ impl<E: Engine> Storage<E> {
     pub fn from_engine(
         engine: E,
         config: &Config,
+        gc_config: &GCConfig,
         read_pool: ReadPool,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
@@ -699,7 +712,7 @@ impl<E: Engine> Storage<E> {
             engine.clone(),
             local_storage,
             raft_store_router,
-            config.gc_ratio_threshold,
+            gc_config.clone(),
         );
 
         gc_worker.start()?;

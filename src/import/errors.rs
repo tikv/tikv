@@ -106,6 +106,18 @@ quick_error! {
         ResourceTemporarilyUnavailable(msg: String) {
             display("{}", msg)
         }
+        CannotReadExternalStorage(url: String, name: String, err: IoError) {
+            cause(err)
+            display("Cannot read {}/{}", url, name)
+        }
+        WrongKeyPrefix(what: &'static str, key: Vec<u8>, prefix: Vec<u8>) {
+            display("\
+                {} has wrong prefix: key {} does not start with {}",
+                what,
+                hex::encode_upper(&key),
+                hex::encode_upper(&prefix),
+            )
+        }
     }
 }
 
