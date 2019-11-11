@@ -55,6 +55,8 @@ const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 70;
 const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.0;
 const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_PENDING_COMMANDS: usize = 200;
 
+const WRITE_BATCH_WRITE_BYTES_LIMIT: usize = 2097152; // 2MB
+
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
     region_id: u64,
@@ -505,19 +507,20 @@ impl WriteId {
 }
 
 struct WriteBatch {
-    key_set: HashSet<Vec<u8>>,
-    // TODO(tabokie): size limit here
     command: Command,
+    key_set: HashSet<Vec<u8>>,
+    write_bytes: usize,
 }
 
 impl Default for WriteBatch {
     fn default() -> Self {
         WriteBatch {
-            key_set: HashSet::default(),
             command: Command::Batch {
                 ids: Vec::new(),
                 commands: Vec::new(),
             },
+            key_set: HashSet::default(),
+            write_bytes: 0,
         }
     }
 }
@@ -579,6 +582,11 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
             }
         };
         let batch = self.router.entry(ver).or_default();
+        if batch.write_bytes > WRITE_BATCH_WRITE_BYTES_LIMIT {
+            // allow one command to exceed the limit since we can't construct
+            // a command without consuming the request.
+            return false;
+        }
         if !batch.key_set.is_empty() {
             for key in &keys {
                 if batch.key_set.contains(key.as_encoded()) {
@@ -625,6 +633,7 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for WriteBatcher {
             },
             _ => unreachable!(),
         };
+        batch.write_bytes += cmd.write_bytes();
         if let Command::Batch {
             ref mut commands,
             ref mut ids,
