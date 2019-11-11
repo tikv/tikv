@@ -4,12 +4,6 @@ use tikv_util::keybuilder::KeyBuilder;
 
 use crate::*;
 
-#[derive(Clone, PartialEq)]
-pub enum SeekMode {
-    TotalOrder,
-    Prefix,
-}
-
 pub enum SeekKey<'a> {
     Start,
     End,

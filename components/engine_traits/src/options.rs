@@ -1,8 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use tikv_util::keybuilder::KeyBuilder;
 
-use crate::SeekMode;
-
 #[derive(Clone)]
 pub struct ReadOptions {}
 
@@ -41,6 +39,12 @@ impl Default for WriteOptions {
     fn default() -> WriteOptions {
         WriteOptions { sync: false }
     }
+}
+
+#[derive(Clone, PartialEq)]
+pub enum SeekMode {
+    TotalOrder,
+    Prefix,
 }
 
 #[derive(Clone)]
