@@ -710,6 +710,7 @@ name = "engine"
 version = "0.0.1"
 dependencies = [
  "crc",
+ "engine_traits",
  "hex",
  "kvproto",
  "lazy_static",
