@@ -169,6 +169,7 @@ mod tests {
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
     use tidb_query::codec::{datum, table, Datum};
+    use tidb_query::expr::EvalContext;
     use tikv_util::codec::bytes::encode_bytes;
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
@@ -199,8 +200,11 @@ mod tests {
     }
 
     fn new_index_key(table_id: i64, idx_id: i64, datums: &[Datum], version_id: u64) -> Vec<u8> {
-        let mut key =
-            table::encode_index_seek_key(table_id, idx_id, &datum::encode_key(datums).unwrap());
+        let mut key = table::encode_index_seek_key(
+            table_id,
+            idx_id,
+            &datum::encode_key(&mut EvalContext::default(), datums).unwrap(),
+        );
         key = encode_bytes(&key);
         key.write_u64::<BigEndian>(version_id).unwrap();
         key
