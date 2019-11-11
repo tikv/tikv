@@ -14,6 +14,7 @@ use engine::rocks::{
 };
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine::IterOptionsExt;
 use kvproto::debugpb::{self, Db as DBType, Module};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};

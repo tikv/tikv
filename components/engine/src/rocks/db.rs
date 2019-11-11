@@ -4,6 +4,7 @@ use std::option::Option;
 
 use super::{util, DBIterator, DBVector, WriteBatch, DB};
 use crate::{IterOption, Iterable, Mutable, Peekable, Result};
+use crate::iterable::IterOptionsExt;
 
 impl Peekable for DB {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
