@@ -5,7 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-futures-preview = { version = "=0.3.0-alpha.19", features = ["async-await"] }
+futures = "0.3.1"
 crossbeam  = "0.7.2"
 dashmap = "1.2.0"
 num_cpus = "1.2.0"

@@ -32,8 +32,6 @@ impl Config {
     }
 }
 
-const BACKGROUND_TASK_NUM: usize = 2;
-
 pub struct Builder {
     name_prefix: Option<String>,
     on_tick: Option<Box<dyn Fn() + Send + Sync>>,
@@ -97,7 +95,7 @@ impl Builder {
     }
 
     pub fn max_tasks(&mut self, val: usize) -> &mut Self {
-        self.max_tasks = val + BACKGROUND_TASK_NUM;
+        self.max_tasks = val;
         self
     }
 

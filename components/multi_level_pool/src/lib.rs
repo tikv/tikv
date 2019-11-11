@@ -69,6 +69,8 @@ impl Default for SpawnOption {
     }
 }
 
+const BACKGROUND_TASK_NUM: usize = 2;
+
 #[derive(Clone)]
 pub struct MultiLevelPool {
     scheduler: Scheduler,
@@ -79,12 +81,14 @@ pub struct MultiLevelPool {
 }
 
 impl MultiLevelPool {
-    /// Gets current running task count.
+    /// Gets current running task count, excluding the background tasks.
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
         // As long as different future pool has different name prefix, we can safely use the value
         // in metrics.
-        self.env.metrics_running_task_count.get() as usize
+        // The background tasks may be not running when this method is called, so we saturates
+        // the subtraction.
+        (self.env.metrics_running_task_count.get() as usize).saturating_sub(BACKGROUND_TASK_NUM)
     }
 
     pub fn get_pool_size(&self) -> usize {
@@ -154,14 +158,18 @@ impl MultiLevelPool {
             let _ = tx.send(res);
         };
         let stats = self.stats_map.get_stats(opt.task_id);
-        self.scheduler.add_task(ArcTask::new(
-            wrapped_task,
-            self.scheduler.clone(),
-            stats.clone(),
-            opt.fixed_level,
-        ));
-        // Panic here because it must be a bug if the channel tx is dropped unexpectedly
-        Ok(rx.map(|res| res.expect("oneshot channel cancelled")))
+        let scheduler = self.scheduler.clone();
+
+        Ok(async move {
+            scheduler.add_task(ArcTask::new(
+                wrapped_task,
+                scheduler.clone(),
+                stats,
+                opt.fixed_level,
+            ));
+            // Panic here because it must be a bug if the channel tx is dropped unexpectedly
+            rx.map(|res| res.expect("oneshot channel cancelled")).await
+        })
     }
 
     /// Spawns a new `Future` to the thread pool, returning a `Future` (std) representing the
@@ -220,4 +228,252 @@ fn try_tick_thread(env: &Env) {
             f();
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    use std::thread;
+
+    use futures::executor::block_on;
+    use tokio_timer::delay_for;
+
+    fn spawn_future_and_wait(pool: &MultiLevelPool, duration: Duration) {
+        block_on(
+            pool.spawn_handle(
+                async move {
+                    delay_for(duration).await;
+                },
+                SpawnOption::default(),
+            )
+            .unwrap(),
+        );
+    }
+
+    fn spawn_future_without_wait(pool: &MultiLevelPool, duration: Duration) {
+        pool.spawn(
+            async move {
+                delay_for(duration).await;
+            },
+            SpawnOption::default(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_tick() {
+        let tick_sequence = Arc::new(AtomicUsize::new(0));
+
+        let tick_sequence2 = tick_sequence.clone();
+        let (tx, rx) = mpsc::sync_channel(1000);
+
+        let pool = Builder::new()
+            .pool_size(1)
+            .on_tick(move || {
+                let seq = tick_sequence2.fetch_add(1, Ordering::SeqCst);
+                tx.send(seq).unwrap();
+            })
+            .build();
+
+        assert!(rx.try_recv().is_err());
+
+        // Tick is not emitted since there is no task
+        thread::sleep(TICK_INTERVAL * 2);
+        assert!(rx.try_recv().is_err());
+
+        // Tick is emitted because long enough time has elapsed since pool is created
+        spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
+        assert!(rx.try_recv().is_err());
+
+        spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
+        spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
+        spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
+        spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
+
+        // So far we have only elapsed TICK_INTERVAL * 0.2, so no ticks so far.
+        assert!(rx.try_recv().is_err());
+
+        // Even if long enough time has elapsed, tick is not emitted until next task arrives
+        thread::sleep(TICK_INTERVAL * 2);
+        assert!(rx.try_recv().is_err());
+
+        spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
+        assert_eq!(rx.try_recv().unwrap(), 0);
+        assert!(rx.try_recv().is_err());
+
+        // Tick is not emitted if there is no task
+        thread::sleep(TICK_INTERVAL * 2);
+        assert!(rx.try_recv().is_err());
+
+        // Tick is emitted since long enough time has passed
+        spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
+        assert_eq!(rx.try_recv().unwrap(), 1);
+        assert!(rx.try_recv().is_err());
+
+        // Tick is emitted immediately after a long task
+        spawn_future_and_wait(&pool, TICK_INTERVAL * 2);
+        assert_eq!(rx.try_recv().unwrap(), 2);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_handle_drop() {
+        let pool = Builder::new().pool_size(1).build();
+
+        let (tx, rx) = mpsc::sync_channel(10);
+
+        let tx2 = tx.clone();
+        pool.spawn(
+            async move {
+                delay_for(Duration::from_millis(200)).await;
+                tx2.send(11).unwrap();
+            },
+            SpawnOption::default(),
+        )
+        .unwrap();
+
+        let tx2 = tx.clone();
+        drop(
+            pool.spawn_handle(
+                async move {
+                    tx2.send(7).unwrap();
+                },
+                SpawnOption::default(),
+            )
+            .unwrap(),
+        );
+
+        thread::sleep(Duration::from_millis(500));
+
+        assert_eq!(rx.try_recv().unwrap(), 11);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_handle_result() {
+        let pool = Builder::new().pool_size(1).build();
+
+        let handle = pool.spawn_handle(async { 42 }, SpawnOption::default());
+
+        assert_eq!(block_on(handle.unwrap()), 42);
+    }
+
+    #[test]
+    fn test_running_task_count() {
+        let pool = Builder::new()
+            .name_prefix("future_pool_for_running_task_test") // The name is important
+            .pool_size(2)
+            .build();
+
+        assert_eq!(pool.get_running_task_count(), 0);
+
+        spawn_future_without_wait(&pool, Duration::from_millis(500)); // f1
+        assert_eq!(pool.get_running_task_count(), 1);
+
+        spawn_future_without_wait(&pool, Duration::from_millis(1000)); // f2
+        assert_eq!(pool.get_running_task_count(), 2);
+
+        spawn_future_without_wait(&pool, Duration::from_millis(1500));
+        assert_eq!(pool.get_running_task_count(), 3);
+
+        thread::sleep(Duration::from_millis(700)); // f1 completed, f2 elapsed 700
+        assert_eq!(pool.get_running_task_count(), 2);
+
+        spawn_future_without_wait(&pool, Duration::from_millis(1500));
+        assert_eq!(pool.get_running_task_count(), 3);
+
+        thread::sleep(Duration::from_millis(2700));
+        assert_eq!(pool.get_running_task_count(), 0);
+    }
+
+    fn spawn_long_time_future(
+        pool: &MultiLevelPool,
+        id: u64,
+        future_duration_ms: u64,
+    ) -> Result<impl Future<Output = u64>, Full> {
+        pool.spawn_handle(
+            async move {
+                delay_for(Duration::from_millis(future_duration_ms)).await;
+                id
+            },
+            SpawnOption::default(),
+        )
+    }
+
+    fn wait_on_new_thread<F>(sender: mpsc::Sender<F::Output>, future: F)
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        thread::spawn(move || {
+            let r = block_on(future);
+            sender.send(r).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_full() {
+        let (tx, rx) = mpsc::channel();
+
+        let read_pool = Builder::new()
+            .name_prefix("future_pool_test_full")
+            .pool_size(2)
+            .max_tasks(4)
+            .build();
+
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 0, 5).unwrap(),
+        );
+        // not full
+        assert_eq!(rx.recv().unwrap(), 0);
+
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 1, 100).unwrap(),
+        );
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 2, 200).unwrap(),
+        );
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 3, 300).unwrap(),
+        );
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 4, 400).unwrap(),
+        );
+        // no available results (running = 4)
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+        // full
+        assert!(spawn_long_time_future(&read_pool, 5, 100).is_err());
+
+        // full
+        assert!(spawn_long_time_future(&read_pool, 6, 100).is_err());
+
+        // wait a future completes (running = 3)
+        assert_eq!(rx.recv().unwrap(), 1);
+
+        // add new (running = 4)
+        wait_on_new_thread(
+            tx.clone(),
+            spawn_long_time_future(&read_pool, 7, 5).unwrap(),
+        );
+
+        // full
+        assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
+
+        assert!(rx.recv().is_ok());
+        assert!(rx.recv().is_ok());
+        assert!(rx.recv().is_ok());
+        assert!(rx.recv().is_ok());
+
+        // no more results
+        assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
+    }
 }

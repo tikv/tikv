@@ -36,7 +36,6 @@ impl Worker {
         let mut rng = thread_rng();
         let mut step = 0;
         let _guard = tokio_timer::set_default(&self.timer_handle);
-        println!("timer set");
         self.timer_wg.take().expect("timer wg missing").wait();
         loop {
             if let Some(task) = self.find_task(&mut rng) {
@@ -83,15 +82,17 @@ impl Worker {
                 }
             }
             // Fail to steal from injectors, steal from others
-            let i = rng.gen::<usize>() % self.stealers.len();
-            for j in 0..self.stealers.len() {
-                let idx = (i + j) % self.stealers.len();
-                match self.stealers[idx].steal_batch_and_pop(&self.local) {
-                    Steal::Success(task) => {
-                        return Some(task);
+            if !self.stealers.is_empty() {
+                let i = rng.gen::<usize>() % self.stealers.len();
+                for j in 0..self.stealers.len() {
+                    let idx = (i + j) % self.stealers.len();
+                    match self.stealers[idx].steal_batch_and_pop(&self.local) {
+                        Steal::Success(task) => {
+                            return Some(task);
+                        }
+                        Steal::Retry => retry = true,
+                        _ => {}
                     }
-                    Steal::Retry => retry = true,
-                    _ => {}
                 }
             }
         }
