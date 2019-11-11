@@ -661,14 +661,9 @@ mod tests {
         data.insert(Key::from_raw(b"bb"), Ok(b"alphaalpha".to_vec()));
         data.insert(
             Key::from_raw(b"bba"),
-            Err(Error::Mvcc(MvccError::KeyIsLocked {
-                // We won't check error detail in tests, so we can just fill fields casually
-                key: vec![],
-                primary: vec![],
-                ts: 1,
-                ttl: 2,
-                txn_size: 0,
-            })),
+            Err(Error::Mvcc(MvccError::KeyIsLocked(
+                kvproto::kvrpcpb::LockInfo::default(),
+            ))),
         );
         data.insert(Key::from_raw(b"z"), Ok(b"beta".to_vec()));
         data.insert(Key::from_raw(b"ca"), Ok(b"hello".to_vec()));
