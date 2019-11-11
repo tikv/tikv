@@ -4,15 +4,15 @@ use lazy_static::lazy_static;
 use prometheus::*;
 
 lazy_static! {
-    pub static ref FUTUREPOOL_RUNNING_TASK_VEC: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_futurepool_pending_task_total",
-        "Current future_pool pending + running tasks.",
+    pub static ref MULTI_LEVEL_POOL_RUNNING_TASK_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_multi_level_pool_pending_task_total",
+        "Current multi-level pool pending + running tasks.",
         &["name"]
     )
     .unwrap();
-    pub static ref FUTUREPOOL_HANDLED_TASK_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_futurepool_handled_task_total",
-        "Total number of future_pool handled tasks.",
+    pub static ref MULTI_LEVEL_POOL_HANDLED_TASK_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_multi_level_pool_handled_task_total",
+        "Total number of multi-level pool handled tasks.",
         &["name"]
     )
     .unwrap();

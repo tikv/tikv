@@ -146,7 +146,7 @@ dependencies = [
  "hex",
  "kvproto",
  "lazy_static",
- "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be)",
+ "prometheus",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.2",
@@ -771,7 +771,7 @@ dependencies = [
  "hex",
  "kvproto",
  "lazy_static",
- "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be)",
+ "prometheus",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
@@ -798,7 +798,7 @@ dependencies = [
  "hex",
  "kvproto",
  "lazy_static",
- "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be)",
+ "prometheus",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "raft 0.6.0-alpha (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1862,7 +1862,7 @@ dependencies = [
  "lazy_static",
  "num_cpus",
  "parking_lot 0.9.0",
- "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git?rev=7dd3d42f0c21384950afe6a46ed85352acf71625)",
+ "prometheus",
  "rand 0.7.2",
  "tikv_util",
  "tokio-executor 0.2.0-alpha.6",
@@ -2160,7 +2160,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log",
- "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be)",
+ "prometheus",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "serde",
@@ -2279,22 +2279,6 @@ dependencies = [
  "lazy_static",
  "tikv_alloc",
  "valgrind_request",
-]
-
-[[package]]
-name = "prometheus"
-version = "0.8.0"
-source = "git+https://github.com/pingcap/rust-prometheus.git?rev=7dd3d42f0c21384950afe6a46ed85352acf71625#7dd3d42f0c21384950afe6a46ed85352acf71625"
-dependencies = [
- "cfg-if",
- "fnv",
- "lazy_static",
- "libc",
- "procinfo 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "quick-error",
- "reqwest",
- "spin",
 ]
 
 [[package]]
@@ -3040,7 +3024,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
- "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be)",
+ "prometheus",
  "quick-error",
  "serde",
  "serde_derive",
@@ -3341,7 +3325,7 @@ dependencies = [
  "ordered-float",
  "panic_hook",
  "profiler",
- "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be)",
+ "prometheus",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "rand 0.6.5",
@@ -3431,7 +3415,7 @@ dependencies = [
  "pd_client",
  "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs)",
  "profiler",
- "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be)",
+ "prometheus",
  "prometheus-static-metric",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
@@ -3513,7 +3497,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs)",
- "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be)",
+ "prometheus",
  "prometheus-static-metric",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",

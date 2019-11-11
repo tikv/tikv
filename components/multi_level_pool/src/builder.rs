@@ -109,8 +109,10 @@ impl Builder {
         let timer_wg = WaitGroup::new();
         let env = Arc::new(super::Env {
             on_tick: self.on_tick.take(),
-            metrics_running_task_count: FUTUREPOOL_RUNNING_TASK_VEC.with_label_values(&[name]),
-            metrics_handled_task_count: FUTUREPOOL_HANDLED_TASK_VEC.with_label_values(&[name]),
+            metrics_running_task_count: MULTI_LEVEL_POOL_RUNNING_TASK_VEC
+                .with_label_values(&[name]),
+            metrics_handled_task_count: MULTI_LEVEL_POOL_HANDLED_TASK_VEC
+                .with_label_values(&[name]),
             level_elapsed: [
                 MULTI_LEVEL_POOL_LEVEL_ELAPSED.with_label_values(&[name, "0"]),
                 MULTI_LEVEL_POOL_LEVEL_ELAPSED.with_label_values(&[name, "1"]),
