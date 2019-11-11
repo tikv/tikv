@@ -180,6 +180,9 @@ clean:
 expression: format clippy
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" --no-default-features -- --nocapture
 
+# A special target for building TiKV docker image.
+docker:
+	scripts/gen-dockerfile.sh && docker build .
 
 
 # The below x- targets are temporary, for experimenting with new profiles,

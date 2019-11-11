@@ -1,4 +1,4 @@
-# TiKV root 
+# TiKV root
 dir="."
 output="./Dockerfile"
 
@@ -13,19 +13,20 @@ WORKDIR /tikv
 
 # Install Rust
 COPY rust-toolchain ./
+RUN rustup self update
+RUN rustup set profile minimal
 RUN rustup default $(cat "rust-toolchain")
-
-# Install dependencies at first
-COPY Cargo.toml Cargo.lock ./
-
-# Remove fuzz and test workspace, remove profiler feature
-RUN sed -i '/fuzz/d' Cargo.toml && \\
-    sed -i '/test\_/d' Cargo.toml && \\
-    sed -i '/profiler/d' Cargo.toml
 
 # Use Makefile to build
 COPY Makefile ./
 
+# For cargo
+COPY scripts/run-cargo.sh ./scripts/run-cargo.sh
+
+# Install dependencies at first
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p ./cmd/
+COPY cmd/Cargo.toml ./cmd/
 EOT
 
 # Get components, remove test and profiler components
@@ -35,7 +36,7 @@ components=$(ls -d ${dir}/components/*  | xargs -n 1 basename | grep -v "test" |
 echo "# Add components Cargo files
 # Notice: every time we add a new component, we must regenerate the dockerfile" >> ${output}
 
-for i in ${components}; do 
+for i in ${components}; do
     echo "COPY ${dir}/components/${i}/Cargo.toml ./components/${i}/Cargo.toml" >> ${output}
 done
 
@@ -44,20 +45,33 @@ cat <<EOT >> ${output}
 
 # Create dummy files, build the dependencies
 # then remove TiKV fingerprint for following rebuild
-RUN mkdir -p ./src/bin && \\
-    echo 'fn main() {}' > ./src/bin/tikv-ctl.rs && \\
-    echo 'fn main() {}' > ./src/bin/tikv-server.rs && \\
-    echo 'fn main() {}' > ./src/bin/tikv-importer.rs && \\
+RUN mkdir -p ./cmd/src/bin && \\
+    echo 'fn main() {}' > ./cmd/src/bin/tikv-ctl.rs && \\
+    echo 'fn main() {}' > ./cmd/src/bin/tikv-server.rs && \\
+    echo 'fn main() {}' > ./cmd/src/bin/tikv-importer.rs && \\
+    echo '' > ./cmd/src/lib.rs && \\
+    mkdir -p ./src/ && \\
     echo '' > ./src/lib.rs && \\
 EOT
 
-for i in ${components}; do 
+for i in ${components}; do
     echo "    mkdir ./components/${i}/src && echo '' > ./components/${i}/src/lib.rs && \\" >> ${output}
 done
 
-echo '    make build_release && \' >> ${output}
+cat <<EOT >> ${output}
+    # Remove test dependencies and profile features.
+    for cargotoml in \$(find . -name "Cargo.toml"); do \\
+        sed -i '/fuzz/d' \${cargotoml} && \\
+        sed -i '/test\_/d' \${cargotoml} && \\
+        sed -i '/profiling/d' \${cargotoml} && \\
+        sed -i '/profiler/d' \${cargotoml} ; \\
+    done
 
-for i in ${components}; do 
+EOT
+
+echo 'RUN make build_release && \' >> ${output}
+
+for i in ${components}; do
     echo "    rm -rf ./target/release/.fingerprint/${i}-* && \\" >> ${output}
 done
 
@@ -67,6 +81,7 @@ cat <<EOT >> ${output}
 
 # Build real binaries now
 COPY ${dir}/src ./src
+COPY ${dir}/cmd/src ./cmd/src
 COPY ${dir}/components ./components
 
 RUN make build_release
@@ -83,3 +98,5 @@ EXPOSE 20160 20180
 
 ENTRYPOINT ["/tikv-server"]
 EOT
+
+cat .gitignore > .dockerignore
