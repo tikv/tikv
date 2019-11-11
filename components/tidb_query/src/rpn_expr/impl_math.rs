@@ -7,7 +7,7 @@ use crate::Result;
 
 #[rpn_fn]
 #[inline]
-pub fn pi(_arg: &Option<Real>) -> Result<Option<Real>> {
+pub fn pi() -> Result<Option<Real>> {
     Ok(Some(Real::from(std::f64::consts::PI)))
 }
 
@@ -197,22 +197,10 @@ mod tests {
 
     #[test]
     fn test_pi() {
-        let test_cases = vec![
-            (1.1, PI),
-            (0.0, PI),
-            (-1.1, PI),
-            (std::f64::MAX, PI),
-            (std::f64::MIN, PI),
-        ];
-        for (arg, expect) in test_cases {
-            let arg = Real::from(arg);
-            let expect = Real::new(expect).ok();
-            let output = RpnFnScalarEvaluator::new()
-                .push_param(arg)
-                .evaluate(ScalarFuncSig::Pi)
-                .unwrap();
-            assert_eq!(output, expect, "{:?}", arg);
-        }
+        let output = RpnFnScalarEvaluator::new()
+            .evaluate(ScalarFuncSig::Pi)
+            .unwrap();
+        assert_eq!(output, Some(Real::from(PI)));
     }
 
     #[test]
