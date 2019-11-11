@@ -837,15 +837,9 @@ mod tests {
         {
             // row 1: locked
             let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 1));
-            let value =
-                crate::storage::txn::Error::Mvcc(crate::storage::mvcc::Error::KeyIsLocked {
-                    // We won't check error detail in tests, so we can just fill fields casually.
-                    key: vec![],
-                    primary: vec![],
-                    ts: 1,
-                    ttl: 2,
-                    txn_size: 0,
-                });
+            let value = crate::storage::txn::Error::Mvcc(crate::storage::mvcc::Error::KeyIsLocked(
+                kvproto::kvrpcpb::LockInfo::default(),
+            ));
             kv.push((key, Err(value)));
         }
         {
