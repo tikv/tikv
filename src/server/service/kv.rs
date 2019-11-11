@@ -50,7 +50,6 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 30;
 const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
-const REQUEST_BATCH_LIMITER_INPUT_THRESHOLD: usize = 30;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
@@ -145,7 +144,7 @@ impl BatchLimiter {
     /// Whether current batch needs more requests.
     #[inline]
     fn needs_more(&self) -> bool {
-        self.batch_input < REQUEST_BATCH_LIMITER_INPUT_THRESHOLD && self.enable_batch
+        self.enable_batch
     }
 
     /// Observe a tick from timer guard. Limiter will update statistics at this point.
@@ -175,7 +174,7 @@ impl BatchLimiter {
                 if latency > timeout.as_millis() as f64 * 2.0 {
                     self.thread_load_estimation = (self.thread_load_estimation + load) / 2;
                 }
-                if self.latency_estimation > timeout.as_millis() as f64 * 2.0 + 0.2 {
+                if self.latency_estimation > timeout.as_millis() as f64 * 2.0 + 0.4 {
                     self.enable_batch = true;
                     self.latency_estimation = 0.0;
                 }
