@@ -8,6 +8,7 @@ use std::sync::Arc;
 use super::{CFHandle, DBVector, ReadOptions, UnsafeSnap, DB};
 use crate::{DBIterator, Error, IterOption, Iterable, Peekable, Result};
 
+#[repr(C)] // Guarantee same representation as in engine_rocks
 pub struct Snapshot {
     db: Arc<DB>,
     snap: UnsafeSnap,

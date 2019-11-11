@@ -7,11 +7,13 @@ use std::sync::Arc;
 use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
+use engine::rocks::Snapshot as RawSnapshot;
 
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
 use crate::RocksEngineIterator;
 
+#[repr(C)] // Guarantee same representation as in engine/rocks
 pub struct RocksSnapshot {
     // TODO: use &DB.
     db: Arc<DB>,
@@ -29,6 +31,10 @@ impl RocksSnapshot {
                 db,
             }
         }
+    }
+
+    pub fn from_ref(raw: &RawSnapshot) -> &RocksSnapshot {
+        unsafe { &*(raw as *const _ as *const _) }
     }
 
     pub fn into_sync(self) -> RocksSyncSnapshot {
