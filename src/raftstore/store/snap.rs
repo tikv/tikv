@@ -1315,12 +1315,12 @@ impl SnapshotDeleter for SnapManager {
 
 #[derive(Debug, Default)]
 pub struct SnapManagerBuilder {
-    max_write_bytes_per_sec: u64,
+    max_write_bytes_per_sec: i64,
     max_total_size: u64,
 }
 
 impl SnapManagerBuilder {
-    pub fn max_write_bytes_per_sec(&mut self, bytes: u64) -> &mut SnapManagerBuilder {
+    pub fn max_write_bytes_per_sec(&mut self, bytes: i64) -> &mut SnapManagerBuilder {
         self.max_write_bytes_per_sec = bytes;
         self
     }

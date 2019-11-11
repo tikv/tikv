@@ -21,9 +21,9 @@ impl IOLimiter for RocksIOLimiter {
     /// # Arguments
     ///
     /// - `bytes_per_sec`: controls the total write rate of compaction and flush in bytes per second.
-    fn new(bytes_per_sec: u64) -> Self {
+    fn new(bytes_per_sec: i64) -> Self {
         RocksIOLimiter {
-            inner: RateLimiter::new(bytes_per_sec as i64, REFILL_PERIOD, FARENESS),
+            inner: RateLimiter::new(bytes_per_sec, REFILL_PERIOD, FARENESS),
         }
     }
 

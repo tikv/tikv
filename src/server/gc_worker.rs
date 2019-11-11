@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryFrom;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
@@ -182,7 +183,9 @@ impl<E: Engine> GCRunner<E> {
         cfg: GCConfig,
     ) -> Self {
         let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
-            Some(RocksIOLimiter::new(cfg.max_write_bytes_per_sec.0))
+            let bps = i64::try_from(cfg.max_write_bytes_per_sec.0)
+                .expect("snap_max_write_bytes_per_sec > i64::max_value");
+            Some(RocksIOLimiter::new(bps))
         } else {
             None
         };

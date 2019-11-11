@@ -14,7 +14,7 @@ pub trait IOLimiter {
     /// # Arguments
     ///
     /// - `bytes_per_sec`: controls the total write rate of compaction and flush in bytes per second.
-    fn new(bytes_per_sec: u64) -> Self;
+    fn new(bytes_per_sec: i64) -> Self;
 
     /// Sets the rate limit in bytes per second
     fn set_bytes_per_second(&self, bytes_per_sec: i64);

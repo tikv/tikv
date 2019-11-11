@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{Arc, Mutex};
+use std::convert::TryFrom;
 
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
@@ -294,9 +295,17 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let label = "set_download_speed_limit";
         let timer = Instant::now_coarse();
 
-        match (req.get_speed_limit(), &mut self.limiter) {
+        let s = i64::try_from(req.get_speed_limit());
+        let s = if let Ok(s) = s {
+            s
+        } else {
+            warn!("SetDownloadSpeedLimitRequest out of range: {}. Using i64::max_value", req.get_speed_limit());
+            i64::max_value()
+        };
+
+        match (s, &mut self.limiter) {
             (0, limiter) => *limiter = None,
-            (s, Some(l)) => l.set_bytes_per_second(s as i64),
+            (s, Some(l)) => l.set_bytes_per_second(s),
             (s, limiter) => *limiter = Some(Arc::new(RocksIOLimiter::new(s))),
         }
 
