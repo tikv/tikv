@@ -16,7 +16,7 @@ pub fn like(
     match (target, pattern, escape) {
         (Some(target), Some(pattern), Some(escape)) => {
             Ok(Some(
-                expr_util::like::like(target.as_slice(), pattern.as_slice(), *escape as u32, 0)?
+                expr_util::like::like(target.as_slice(), pattern.as_slice(), *escape as u32)?
                     as i64,
             ))
         }
@@ -63,6 +63,7 @@ mod tests {
             (r#"3hello"#, r#"3%hello"#, '3', Some(0)),
             (r#"3hello"#, r#"__hello"#, '_', Some(0)),
             (r#"3hello"#, r#"%_hello"#, '%', Some(1)),
+            (r#"aaaaaaaaaaaaaaaaaaaaaaaaaaa"#, r#"a%a%a%a%a%a%a%a%b"#, '\\', Some(0)),
         ];
         for (target, pattern, escape, expected) in cases {
             let output = RpnFnScalarEvaluator::new()
