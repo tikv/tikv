@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::i32;
+use std::{i32, isize};
 
 use super::Result;
 use grpcio::CompressionAlgorithms;
@@ -18,6 +18,7 @@ const DEFAULT_STATUS_ADDR: &str = "127.0.0.1:20180";
 const DEFAULT_GRPC_CONCURRENCY: usize = 4;
 const DEFAULT_GRPC_CONCURRENT_STREAM: i32 = 1024;
 const DEFAULT_GRPC_RAFT_CONN_NUM: usize = 1;
+const DEFAULT_GRPC_MEMORY_POOL_QUOTA: u64 = isize::MAX as u64;
 const DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE: u64 = 2 * 1024 * 1024;
 
 // Number of rows in each chunk.
@@ -65,6 +66,7 @@ pub struct Config {
     pub grpc_concurrency: usize,
     pub grpc_concurrent_stream: i32,
     pub grpc_raft_conn_num: usize,
+    pub grpc_memory_pool_quota: ReadableSize,
     pub grpc_stream_initial_window_size: ReadableSize,
     pub grpc_keepalive_time: ReadableDuration,
     pub grpc_keepalive_timeout: ReadableDuration,
@@ -122,6 +124,7 @@ impl Default for Config {
             grpc_concurrent_stream: DEFAULT_GRPC_CONCURRENT_STREAM,
             grpc_raft_conn_num: DEFAULT_GRPC_RAFT_CONN_NUM,
             grpc_stream_initial_window_size: ReadableSize(DEFAULT_GRPC_STREAM_INITIAL_WINDOW_SIZE),
+            grpc_memory_pool_quota: ReadableSize(DEFAULT_GRPC_MEMORY_POOL_QUOTA),
             // There will be a heartbeat every secs, it's weird a connection will be idle for more
             // than 10 senconds.
             grpc_keepalive_time: ReadableDuration::secs(10),

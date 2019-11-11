@@ -1047,13 +1047,12 @@ dependencies = [
 
 [[package]]
 name = "grpcio-compiler"
-version = "0.5.0-alpha.2"
+version = "0.5.0-alpha.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd8b3213a332a2865a307e553f43d632bc4a81f0e0f5a90d194dee5b9c02d8a7"
+checksum = "42a798606ea0be49963c287984b30b1fda3a1a6c32d0fe59cf9dab0c42ffb22b"
 dependencies = [
  "derive-new",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf-codegen 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempfile",
 ]
 
@@ -1334,7 +1333,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#40f562012fb1121bf35bebf7f158d730ee791290"
+source = "git+https://github.com/pingcap/kvproto.git#138c055bc8e490a9727568ad8c990bd09fc93f45"
 dependencies = [
  "futures",
  "grpcio",
@@ -3238,7 +3237,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#bd4b782c8393dc251f6dc15dcce8eec2c7acf315"
+source = "git+https://github.com/pingcap/tipb.git#a594830fb004783d4fb7ec4fbdf184d05fd7ab13"
 dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf-build",

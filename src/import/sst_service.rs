@@ -14,7 +14,8 @@ use kvproto::raft_cmdpb::*;
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::RocksEngine;
+use engine_traits::IOLimiter;
+use engine_rocks::{RocksEngine, RocksIOLimiter};
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
@@ -36,6 +37,7 @@ pub struct ImportSSTService<Router> {
     threads: CpuPool,
     importer: Arc<SSTImporter>,
     switcher: Arc<Mutex<ImportModeSwitcher>>,
+    limiter: Option<Arc<RocksIOLimiter>>,
 }
 
 impl<Router: RaftStoreRouter> ImportSSTService<Router> {
@@ -56,6 +58,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
             threads,
             importer,
             switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
+            limiter: None,
         }
     }
 }
@@ -158,6 +161,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let label = "download";
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
+        let limiter = self.limiter.clone();
 
         ctx.spawn(self.threads.spawn_fn(move || {
             let res = importer.download::<RocksEngine>(
@@ -165,7 +169,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 req.get_url(),
                 req.get_name(),
                 req.get_rewrite_rule(),
-                req.get_speed_limit(),
+                limiter,
             );
 
             future::result(res)
@@ -279,5 +283,26 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 .map(|_| CompactResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer))
         }))
+    }
+
+    fn set_download_speed_limit(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: SetDownloadSpeedLimitRequest,
+        sink: UnarySink<SetDownloadSpeedLimitResponse>,
+    ) {
+        let label = "set_download_speed_limit";
+        let timer = Instant::now_coarse();
+
+        match (req.get_speed_limit(), &mut self.limiter) {
+            (0, limiter) => *limiter = None,
+            (s, Some(l)) => l.set_bytes_per_second(s as i64),
+            (s, limiter) => *limiter = Some(Arc::new(RocksIOLimiter::new(s))),
+        }
+
+        ctx.spawn(
+            future::ok::<_, ()>(SetDownloadSpeedLimitResponse::default())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
     }
 }
