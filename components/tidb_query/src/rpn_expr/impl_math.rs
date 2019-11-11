@@ -180,6 +180,37 @@ fn abs_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
     }
 }
 
+#[inline]
+#[rpn_fn]
+fn sign(arg: &Option<Real>) -> Result<Option<Int>> {
+    Ok(arg.and_then(|n| {
+        if *n > 0f64 {
+            Some(1)
+        } else if *n == 0f64 {
+            Some(0)
+        } else {
+            Some(-1)
+        }
+    }))
+}
+
+#[inline]
+#[rpn_fn]
+fn sqrt(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| {
+        if *n < 0f64 {
+            None
+        } else {
+            let res = n.sqrt();
+            if res.is_nan() {
+                None
+            } else {
+                Some(Real::from(res))
+            }
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +466,40 @@ mod tests {
         }
 
         test_unary_func_ok_none::<Int, Int>(ScalarFuncSig::FloorIntToInt);
+    }
+
+    #[test]
+    fn test_sign() {
+        let test_cases = vec![
+            (None, None),
+            (Some(42f64), Some(1)),
+            (Some(0f64), Some(0)),
+            (Some(-47f64), Some(-1)),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Sign)
+                .unwrap();
+            assert_eq!(expect, output, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_sqrt() {
+        let test_cases = vec![
+            (None, None),
+            (Some(64f64), Some(Real::from(8f64))),
+            (Some(2f64), Some(Real::from(std::f64::consts::SQRT_2))),
+            (Some(-16f64), None),
+            (Some(std::f64::NAN), None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Sqrt)
+                .unwrap();
+            assert_eq!(expect, output, "{:?}", input);
+        }
     }
 }
