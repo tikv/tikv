@@ -60,8 +60,25 @@ impl<S: Snapshot> MvccTxn<S> {
         })
     }
 
-    pub fn start_ts(&mut self, start_ts: u64) {
-        self.start_ts = start_ts;
+    pub fn from_reader(
+        snapshot: S,
+        reader: MvccReader<S>,
+        start_ts: u64,
+        fill_cache: bool,
+    ) -> Result<Self> {
+        Ok(Self {
+            reader,
+            gc_reader: MvccReader::new(
+                snapshot,
+                Some(ScanMode::Forward),
+                fill_cache,
+                IsolationLevel::Si,
+            ),
+            start_ts,
+            writes: vec![],
+            write_size: 0,
+            collapse_rollback: true,
+        })
     }
 
     pub fn collapse_rollback(&mut self, collapse: bool) {
@@ -79,6 +96,10 @@ impl<S: Snapshot> MvccTxn<S> {
 
     pub fn into_modifies(self) -> Vec<Modify> {
         self.writes
+    }
+
+    pub fn into_reader_and_modifies(self) -> (MvccReader<S>, Vec<Modify>) {
+        (self.reader, self.writes)
     }
 
     pub fn take_statistics(&mut self) -> Statistics {

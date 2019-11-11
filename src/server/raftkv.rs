@@ -79,8 +79,7 @@ fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
 
         kv::Error::Timeout(_) => RequestStatusKind::err_timeout,
         kv::Error::EmptyRequest => RequestStatusKind::err_empty_request,
-        kv::Error::Other(_) => RequestStatusKind::err_other,
-        kv::Error::OtherFlattened(_) => RequestStatusKind::err_other,
+        kv::Error::Other(_) | kv::Error::OtherFlattened(_) => RequestStatusKind::err_other,
     }
 }
 

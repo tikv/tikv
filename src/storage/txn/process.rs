@@ -1098,7 +1098,8 @@ fn process_batch_write_impl<S: Snapshot, L: LockMgr>(
             _ => unreachable!(),
         };
         let multi_res = tag == CommandKind::batch_prewrite;
-        let mut txn = MvccTxn::new(snapshot, 0, !ctx.get_not_fill_cache())?;
+        let mut reader = None;
+        let mut to_be_write = Vec::new();
         // check conflict
         match tag {
             CommandKind::batch_prewrite => {
@@ -1108,6 +1109,7 @@ fn process_batch_write_impl<S: Snapshot, L: LockMgr>(
                         continue;
                     }
                     if let Command::Prewrite {
+                        ctx,
                         mutations,
                         primary,
                         start_ts,
@@ -1118,8 +1120,16 @@ fn process_batch_write_impl<S: Snapshot, L: LockMgr>(
                         if options.for_update_ts != 0 {
                             panic!("batch command does not accept pessimistic prewrite request");
                         }
-                        txn.start_ts(*start_ts);
-                        let checkpoint = txn.get_checkpoint();
+                        let mut txn = if let Some(reader) = reader.take() {
+                            MvccTxn::from_reader(
+                                snapshot.clone(),
+                                reader,
+                                *start_ts,
+                                !ctx.get_not_fill_cache(),
+                            )?
+                        } else {
+                            MvccTxn::new(snapshot.clone(), *start_ts, !ctx.get_not_fill_cache())?
+                        };
                         let mut locks = Vec::new();
                         let mut failed = false;
                         let mutations = std::mem::replace(mutations, vec![]);
@@ -1155,8 +1165,11 @@ fn process_batch_write_impl<S: Snapshot, L: LockMgr>(
                             ));
                             failed = true;
                         }
-                        if failed {
-                            txn.reset_to_checkpoint(checkpoint);
+                        statistics.add(&txn.take_statistics());
+                        let (r, mut modifies) = txn.into_reader_and_modifies();
+                        reader.replace(r);
+                        if !failed {
+                            to_be_write.append(&mut modifies);
                         }
                     } else {
                         unreachable!();
@@ -1170,6 +1183,7 @@ fn process_batch_write_impl<S: Snapshot, L: LockMgr>(
                         continue;
                     }
                     if let Command::Commit {
+                        ctx,
                         keys,
                         commit_ts,
                         lock_ts,
@@ -1190,8 +1204,16 @@ fn process_batch_write_impl<S: Snapshot, L: LockMgr>(
                             ));
                             continue;
                         }
-                        txn.start_ts(*lock_ts);
-                        let checkpoint = txn.get_checkpoint();
+                        let mut txn = if let Some(reader) = reader.take() {
+                            MvccTxn::from_reader(
+                                snapshot.clone(),
+                                reader,
+                                *lock_ts,
+                                !ctx.get_not_fill_cache(),
+                            )?
+                        } else {
+                            MvccTxn::new(snapshot.clone(), *lock_ts, !ctx.get_not_fill_cache())?
+                        };
                         let mut failed = false;
                         // Pessimistic txn needs key_hashes to wake up waiters
                         let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
@@ -1222,8 +1244,11 @@ fn process_batch_write_impl<S: Snapshot, L: LockMgr>(
                             *commit_ts,
                             is_pessimistic_txn,
                         );
-                        if failed {
-                            txn.reset_to_checkpoint(checkpoint);
+                        statistics.add(&txn.take_statistics());
+                        let (r, mut modifies) = txn.into_reader_and_modifies();
+                        reader.replace(r);
+                        if !failed {
+                            to_be_write.append(&mut modifies);
                         }
                     } else {
                         unreachable!();
@@ -1232,13 +1257,12 @@ fn process_batch_write_impl<S: Snapshot, L: LockMgr>(
             }
             _ => unreachable!(),
         };
-        statistics.add(&txn.take_statistics());
         Ok(BatchWriteResults {
             ctx,
             ids,
             multi_res,
             results,
-            to_be_write: txn.into_modifies(),
+            to_be_write,
         })
     } else {
         unreachable!();
