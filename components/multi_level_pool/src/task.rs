@@ -9,7 +9,7 @@ use tikv_util::time::Instant;
 use std::cell::UnsafeCell;
 use std::future::Future;
 use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
@@ -19,7 +19,7 @@ pub struct Task {
     status: AtomicU8,
     // this token's total elapsed time
     pub task_stats: Arc<TaskStats>,
-    level: usize,
+    pub level: AtomicUsize,
     pub fixed_level: Option<usize>,
 }
 
@@ -49,7 +49,7 @@ impl ArcTask {
             scheduler,
             status: AtomicU8::new(WAITING),
             task_stats,
-            level: 0,
+            level: AtomicUsize::new(0),
             fixed_level,
         });
         let future: *const Task = Arc::into_raw(future) as *const Task;
@@ -63,7 +63,9 @@ impl ArcTask {
         let begin = Instant::now();
         let poll_res = (&mut *self.0.task.get()).poll_unpin(&mut cx);
         let elapsed = begin.elapsed().as_micros() as u64;
-        self.0.scheduler.add_level_elapsed(self.0.level, elapsed);
+        self.0
+            .scheduler
+            .add_level_elapsed(self.0.level.load(Ordering::SeqCst), elapsed);
         if let Poll::Ready(_) = poll_res {
             self.0.status.store(COMPLETE, Ordering::SeqCst);
             return;

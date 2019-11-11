@@ -40,6 +40,7 @@ impl Scheduler {
                 _ => 2,
             }
         });
+        task.0.level.store(level, Ordering::SeqCst);
         self.0.injectors[level].push(task);
         if let Ok(parker) = self.0.sleepers.pop() {
             parker.unpark();
