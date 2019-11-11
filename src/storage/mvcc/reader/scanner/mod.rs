@@ -9,10 +9,11 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
-use crate::storage::mvcc::Result;
+use crate::storage::mvcc::{default_not_found_error, Result, Write};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
-    Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics, Value,
+    Cursor, CursorBuilder, Iterator, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics,
+    Value,
 };
 
 pub use self::txn_entry::Scanner as EntryScanner;
@@ -177,6 +178,71 @@ impl<S: Snapshot> ScannerConfig<S> {
             .build()?;
         Ok(cursor)
     }
+}
+
+/// Reads user key's value in default CF according to the given write CF value
+/// (`write`).
+///
+/// Internally, there will be a `near_seek` operation.
+///
+/// Notice that the value may be already carried in the `write` (short value). In this
+/// case, you should not call this function.
+///
+/// # Panics
+///
+/// Panics if there is a short value carried in the given `write`.
+///
+/// Panics if key in default CF does not exist. This means there is a data corruption.
+fn near_load_data_by_write<I>(
+    default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
+    user_key: &Key,
+    write: Write,
+    statistics: &mut Statistics,
+) -> Result<Value>
+where
+    I: Iterator,
+{
+    assert!(write.short_value.is_none());
+    let seek_key = user_key.clone().append_ts(write.start_ts);
+    default_cursor.near_seek(&seek_key, &mut statistics.data)?;
+    if !default_cursor.valid()?
+        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
+    {
+        return Err(default_not_found_error(
+            user_key.to_raw()?,
+            write,
+            "near_load_data_by_write",
+        ));
+    }
+    statistics.data.processed += 1;
+    Ok(default_cursor.value(&mut statistics.data).to_vec())
+}
+
+/// Similar to `near_load_data_by_write`, but accepts a `BackwardCursor` and use
+/// `near_seek_for_prev` internally.
+fn near_reverse_load_data_by_write<I>(
+    default_cursor: &mut Cursor<I>, // TODO: make it `BackwardCursor`.
+    user_key: &Key,
+    write: Write,
+    statistics: &mut Statistics,
+) -> Result<Value>
+where
+    I: Iterator,
+{
+    assert!(write.short_value.is_none());
+    let seek_key = user_key.clone().append_ts(write.start_ts);
+    default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
+    if !default_cursor.valid()?
+        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
+    {
+        return Err(default_not_found_error(
+            user_key.to_raw()?,
+            write,
+            "near_reverse_load_data_by_write",
+        ));
+    }
+    statistics.data.processed += 1;
+    Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
 #[cfg(test)]
