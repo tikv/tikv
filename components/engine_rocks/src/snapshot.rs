@@ -20,6 +20,9 @@ pub struct RocksSnapshot {
     snap: UnsafeSnap,
 }
 
+static_assertions::assert_eq_size!(RocksSnapshot, RawSnapshot);
+static_assertions::assert_eq_align!(RocksSnapshot, RawSnapshot);
+
 unsafe impl Send for RocksSnapshot {}
 unsafe impl Sync for RocksSnapshot {}
 
