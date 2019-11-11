@@ -11,7 +11,7 @@ use rocksdb::{DBIterator, Writable, DB};
 
 use crate::options::{RocksReadOptions, RocksWriteOptions};
 use crate::util::get_cf_handle;
-use crate::{RocksEngineIterator, Snapshot};
+use crate::{RocksEngineIterator, RocksSnapshot};
 
 #[derive(Clone, Debug)]
 #[repr(transparent)]
@@ -48,7 +48,7 @@ impl RocksEngine {
 }
 
 impl KvEngine for RocksEngine {
-    type Snapshot = Snapshot;
+    type Snapshot = RocksSnapshot;
     type WriteBatch = crate::WriteBatch;
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()> {
@@ -69,8 +69,8 @@ impl KvEngine for RocksEngine {
         Self::WriteBatch::new(Arc::clone(&self.0))
     }
 
-    fn snapshot(&self) -> Snapshot {
-        Snapshot::new(self.0.clone())
+    fn snapshot(&self) -> RocksSnapshot {
+        RocksSnapshot::new(self.0.clone())
     }
 
     fn sync(&self) -> Result<()> {
@@ -147,7 +147,7 @@ mod tests {
     use std::sync::Arc;
     use tempfile::Builder;
 
-    use crate::{RocksEngine, Snapshot};
+    use crate::{RocksEngine, RocksSnapshot};
 
     #[test]
     fn test_base() {
@@ -264,7 +264,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let snap = Snapshot::new(engine.get_sync_db());
+        let snap = RocksSnapshot::new(engine.get_sync_db());
 
         engine.put(b"a3", b"v3").unwrap();
         assert!(engine.seek(b"a3").unwrap().is_some());
