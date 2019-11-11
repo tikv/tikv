@@ -8,7 +8,7 @@ use kvproto::kvrpcpb::LockInfo;
 
 use crate::storage::{
     mvcc::{Lock, Write},
-    Callback, Result,
+    BatchCallback, Callback, Result,
 };
 
 pub use keys::{Key, KvPair, Value};
@@ -91,7 +91,9 @@ impl TxnStatus {
 
 pub enum StorageCb {
     Boolean(Callback<()>),
+    BatchBoolean(BatchCallback<()>),
     Booleans(Callback<Vec<Result<()>>>),
+    BatchBooleans(BatchCallback<Vec<Result<()>>>),
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),

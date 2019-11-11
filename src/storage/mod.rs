@@ -29,13 +29,13 @@ use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
 use tikv_util::collections::HashMap;
 use tikv_util::future_pool::FuturePool;
 
-use self::commands::{get_priority_tag, Command};
+use self::commands::get_priority_tag;
 use self::kv::with_tls_engine;
 use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::scheduler::Scheduler as TxnScheduler;
 
-pub use self::commands::{is_normal_priority, Options, PointGetCommand};
+pub use self::commands::{is_normal_priority, Command, Options, PointGetCommand};
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind};
 pub use self::kv::{
