@@ -15,7 +15,7 @@ use std::mem;
 pub mod rewrite;
 mod types;
 
-pub use types::{Key, KvPair, Value};
+pub use types::{Instant, Key, KvPair, TimeStamp, Value};
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];

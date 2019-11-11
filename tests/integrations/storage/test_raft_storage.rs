@@ -9,8 +9,7 @@ use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
 use tikv::server::gc_worker::{AutoGCConfig, GCConfig};
-use tikv::storage::{self, Engine, Key, Mutation};
-use tikv::storage::{kv, mvcc, txn};
+use tikv::storage::{self, kv, mvcc, txn, Engine, Key, Mutation, TimeStamp};
 use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 
@@ -197,8 +196,9 @@ fn write_test_data<E: Engine>(
     storage: &SyncTestStorage<E>,
     ctx: &Context,
     data: &[(Vec<u8>, Vec<u8>)],
-    mut ts: u64,
+    ts: impl Into<TimeStamp>,
 ) {
+    let mut ts = ts.into();
     for (k, v) in data {
         storage
             .prewrite(
@@ -211,9 +211,9 @@ fn write_test_data<E: Engine>(
             .into_iter()
             .for_each(|res| res.unwrap());
         storage
-            .commit(ctx.clone(), vec![Key::from_raw(k)], ts, ts + 1)
+            .commit(ctx.clone(), vec![Key::from_raw(k)], ts, ts.incr())
             .unwrap();
-        ts += 2;
+        ts = ts.incr().incr();
     }
 }
 
@@ -221,9 +221,10 @@ fn check_data<E: Engine>(
     cluster: &mut Cluster<ServerCluster>,
     storages: &HashMap<u64, SyncTestStorage<E>>,
     test_data: &[(Vec<u8>, Vec<u8>)],
-    ts: u64,
+    ts: impl Into<TimeStamp>,
     expect_success: bool,
 ) {
+    let ts = ts.into();
     for (k, v) in test_data {
         let mut region = cluster.get_region(k);
         let leader = cluster.leader_of_region(region.get_id()).unwrap();

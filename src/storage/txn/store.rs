@@ -3,10 +3,9 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
-use crate::storage::mvcc::EntryScanner;
 use crate::storage::mvcc::Error as MvccError;
-use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TsSet};
-use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder, WriteRef};
+use crate::storage::mvcc::{EntryScanner, Scanner as MvccScanner, ScannerBuilder, WriteRef};
+use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TimeStamp, TsSet};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
@@ -170,7 +169,7 @@ impl EntryBatch {
 
 pub struct SnapshotStore<S: Snapshot> {
     snapshot: S,
-    start_ts: u64,
+    start_ts: TimeStamp,
     isolation_level: IsolationLevel,
     fill_cache: bool,
     bypass_locks: TsSet,
@@ -301,7 +300,7 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
 impl<S: Snapshot> SnapshotStore<S> {
     pub fn new(
         snapshot: S,
-        start_ts: u64,
+        start_ts: TimeStamp,
         isolation_level: IsolationLevel,
         fill_cache: bool,
         bypass_locks: TsSet,
@@ -318,7 +317,7 @@ impl<S: Snapshot> SnapshotStore<S> {
     }
 
     #[inline]
-    pub fn set_start_ts(&mut self, start_ts: u64) {
+    pub fn set_start_ts(&mut self, start_ts: TimeStamp) {
         self.start_ts = start_ts;
     }
 
@@ -506,9 +505,7 @@ impl Scanner for FixtureStoreScanner {
 
 #[cfg(test)]
 mod tests {
-    use super::Error;
-    use super::{FixtureStore, Scanner, SnapshotStore, Store};
-
+    use super::*;
     use crate::storage::kv::{
         Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
     };
@@ -522,8 +519,8 @@ mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     const KEY_PREFIX: &str = "key_prefix";
-    const START_TS: u64 = 10;
-    const COMMIT_TS: u64 = 20;
+    const START_TS: TimeStamp = TimeStamp::new(10);
+    const COMMIT_TS: TimeStamp = TimeStamp::new(20);
     const START_ID: u64 = 1000;
 
     struct TestStore {
@@ -590,7 +587,7 @@ mod tests {
         fn store(&self) -> SnapshotStore<RocksSnapshot> {
             SnapshotStore::new(
                 self.snapshot.clone(),
-                COMMIT_TS + 1,
+                COMMIT_TS.incr(),
                 IsolationLevel::Si,
                 true,
                 Default::default(),
@@ -811,7 +808,13 @@ mod tests {
     fn test_scanner_verify_bound() {
         // Store with a limited range
         let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
-        let store = SnapshotStore::new(snap, 0, IsolationLevel::Si, true, Default::default());
+        let store = SnapshotStore::new(
+            snap,
+            TimeStamp::min(),
+            IsolationLevel::Si,
+            true,
+            Default::default(),
+        );
         let bound_a = Key::from_encoded(b"a".to_vec());
         let bound_b = Key::from_encoded(b"b".to_vec());
         let bound_c = Key::from_encoded(b"c".to_vec());
@@ -832,7 +835,13 @@ mod tests {
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
-        let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::Si, true, Default::default());
+        let store2 = SnapshotStore::new(
+            snap2,
+            TimeStamp::min(),
+            IsolationLevel::Si,
+            true,
+            Default::default(),
+        );
         assert!(store2.scanner(false, false, None, None).is_ok());
         assert!(store2
             .scanner(false, false, Some(bound_a.clone()), None)

@@ -25,7 +25,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::store::StoreMeta;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::SnapManager;
-use tikv::storage::mvcc::{Lock, LockType};
+use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
 use tikv::storage::Key;
 use tikv_util::worker::FutureWorker;
 use tikv_util::HandyRwLock;
@@ -785,7 +785,17 @@ fn test_debug_scan_mvcc() {
         keys::data_key(b"meta_lock_2"),
     ];
     for k in &keys {
-        let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 0, 0, 0).to_bytes();
+        let v = Lock::new(
+            LockType::Put,
+            b"pk".to_vec(),
+            1.into(),
+            10,
+            None,
+            TimeStamp::min(),
+            0,
+            TimeStamp::min(),
+        )
+        .to_bytes();
         let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
         engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
     }

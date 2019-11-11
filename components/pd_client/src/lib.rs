@@ -32,6 +32,7 @@ pub use self::util::RECONNECT_INTERVAL_SEC;
 use std::ops::Deref;
 
 use futures::Future;
+use keys::Instant;
 use kvproto::metapb;
 use kvproto::pdpb;
 
@@ -48,7 +49,7 @@ pub struct RegionStat {
     pub read_keys: u64,
     pub approximate_size: u64,
     pub approximate_keys: u64,
-    pub last_report_ts: u64,
+    pub last_report_ts: Instant,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -117,7 +117,13 @@ impl ReqContext {
         txn_start_ts: Option<u64>,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
-        let bypass_locks = TsSet::new(context.take_resolved_locks());
+        let bypass_locks = TsSet::new(
+            context
+                .take_resolved_locks()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        );
         Self {
             tag,
             context,

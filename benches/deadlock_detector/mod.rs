@@ -4,20 +4,21 @@ use criterion::{Bencher, Criterion};
 use kvproto::deadlock::*;
 use rand::prelude::*;
 use tikv::server::lock_manager::deadlock::DetectTable;
+use tikv::storage::TimeStamp;
 use tikv_util::time::Duration;
 
 struct DetectGenerator {
     rng: ThreadRng,
-    range: u64,
-    timestamp: u64,
+    range: TimeStamp,
+    timestamp: TimeStamp,
 }
 
 impl DetectGenerator {
-    pub fn new(range: u64) -> Self {
+    pub fn new(range: TimeStamp) -> Self {
         Self {
             rng: ThreadRng::default(),
             range,
-            timestamp: 0,
+            timestamp: TimeStamp::min(),
         }
     }
 
@@ -26,23 +27,26 @@ impl DetectGenerator {
         let mut entries = Vec::with_capacity(n as usize);
         (0..n).for_each(|_| {
             let mut entry = WaitForEntry::new();
-            entry.set_txn(self.timestamp);
+            entry.set_txn(self.timestamp.into_inner());
             let mut wait_for_txn = self.timestamp;
             while wait_for_txn == self.timestamp {
-                wait_for_txn = self.rng.gen_range(
-                    if self.timestamp < self.range {
-                        0
-                    } else {
-                        self.timestamp - self.range
-                    },
-                    self.timestamp + self.range,
-                );
+                wait_for_txn = self
+                    .rng
+                    .gen_range(
+                        if self.timestamp < self.range {
+                            0
+                        } else {
+                            (self.timestamp.into_inner() - self.range.into_inner())
+                        },
+                        self.timestamp.into_inner() + self.range.into_inner(),
+                    )
+                    .into();
             }
-            entry.set_wait_for_txn(wait_for_txn);
+            entry.set_wait_for_txn(wait_for_txn.into_inner());
             entry.set_key_hash(self.rng.gen());
             entries.push(entry);
         });
-        self.timestamp += 1;
+        self.timestamp = self.timestamp.incr();
         entries
     }
 }
@@ -50,7 +54,7 @@ impl DetectGenerator {
 #[derive(Debug)]
 struct Config {
     n: u64,
-    range: u64,
+    range: TimeStamp,
     ttl: Duration,
 }
 
@@ -60,8 +64,8 @@ fn bench_detect(b: &mut Bencher, cfg: &Config) {
     b.iter(|| {
         for entry in generator.generate(cfg.n) {
             detect_table.detect(
-                entry.get_txn(),
-                entry.get_wait_for_txn(),
+                entry.get_txn().into(),
+                entry.get_wait_for_txn().into(),
                 entry.get_key_hash(),
             );
         }
@@ -84,7 +88,7 @@ fn bench_dense_detect_without_cleanup(c: &mut Criterion) {
     for range in ranges {
         cfgs.push(Config {
             n: 10,
-            range,
+            range: range.into(),
             ttl: Duration::from_secs(100000000),
         });
     }
@@ -97,7 +101,7 @@ fn bench_dense_detect_with_cleanup(c: &mut Criterion) {
     for ttl in &ttls {
         cfgs.push(Config {
             n: 10,
-            range: 1000,
+            range: 1000.into(),
             ttl: Duration::from_millis(*ttl),
         })
     }

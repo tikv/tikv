@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use kvproto::kvrpcpb::LockInfo;
 
 use crate::storage::{
-    mvcc::{Lock, Write},
+    mvcc::{Lock, TimeStamp, Write},
     Callback, Result,
 };
 
@@ -19,9 +19,9 @@ pub use keys::{Key, KvPair, Value};
 pub struct MvccInfo {
     pub lock: Option<Lock>,
     /// commit_ts and write
-    pub writes: Vec<(u64, Write)>,
+    pub writes: Vec<(TimeStamp, Write)>,
     /// start_ts and value
-    pub values: Vec<(u64, Value)>,
+    pub values: Vec<(TimeStamp, Value)>,
 }
 
 /// A row mutation.
@@ -76,20 +76,23 @@ pub enum TxnStatus {
     /// The txn is just rolled back due to lock not exist.
     LockNotExist,
     /// The txn haven't yet been committed.
-    Uncommitted { lock_ttl: u64, min_commit_ts: u64 },
+    Uncommitted {
+        lock_ttl: u64,
+        min_commit_ts: TimeStamp,
+    },
     /// The txn was committed.
-    Committed { commit_ts: u64 },
+    Committed { commit_ts: TimeStamp },
 }
 
 impl TxnStatus {
-    pub fn uncommitted(lock_ttl: u64, min_commit_ts: u64) -> Self {
+    pub fn uncommitted(lock_ttl: u64, min_commit_ts: TimeStamp) -> Self {
         Self::Uncommitted {
             lock_ttl,
             min_commit_ts,
         }
     }
 
-    pub fn committed(commit_ts: u64) -> Self {
+    pub fn committed(commit_ts: TimeStamp) -> Self {
         Self::Committed { commit_ts }
     }
 }

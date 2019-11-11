@@ -4,7 +4,7 @@ use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
 use crate::storage::lock_manager::Lock;
-use crate::storage::mvcc::Error as MvccError;
+use crate::storage::mvcc::{Error as MvccError, TimeStamp};
 use crate::storage::txn::Error as TxnError;
 use crate::storage::txn::ProcessResult;
 use crate::storage::{Error as StorageError, StorageCallback};
@@ -29,7 +29,7 @@ pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 pub enum Task {
     WaitFor {
         // which txn waiting for the lock
-        start_ts: u64,
+        start_ts: TimeStamp,
         cb: StorageCallback,
         pr: ProcessResult,
         lock: Lock,
@@ -37,15 +37,15 @@ pub enum Task {
     },
     WakeUp {
         // lock info
-        lock_ts: u64,
+        lock_ts: TimeStamp,
         hashes: Vec<u64>,
-        commit_ts: u64,
+        commit_ts: TimeStamp,
     },
     Dump {
         cb: Callback,
     },
     Deadlock {
-        start_ts: u64,
+        start_ts: TimeStamp,
         lock: Lock,
         deadlock_key_hash: u64,
     },
@@ -73,7 +73,7 @@ impl Display for Task {
 }
 
 struct Waiter {
-    start_ts: u64,
+    start_ts: TimeStamp,
     cb: StorageCallback,
     pr: ProcessResult,
     lock: Lock,
@@ -83,7 +83,7 @@ struct Waiter {
 type Waiters = Vec<Waiter>;
 
 struct WaitTable {
-    wait_table: HashMap<u64, Waiters>,
+    wait_table: HashMap<TimeStamp, Waiters>,
     waiter_count: Arc<AtomicUsize>,
 }
 
@@ -100,13 +100,13 @@ impl WaitTable {
         self.wait_table.iter().map(|(_, v)| v.len()).sum()
     }
 
-    fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
+    fn add_waiter(&mut self, ts: TimeStamp, waiter: Waiter) -> bool {
         self.wait_table.entry(ts).or_default().push(waiter);
         // Here we don't update waiter_count because its already updated in LockManager::wait_for()
         true
     }
 
-    fn take_ready_waiters(&mut self, ts: u64, mut hashes: Vec<u64>) -> Waiters {
+    fn take_ready_waiters(&mut self, ts: TimeStamp, mut hashes: Vec<u64>) -> Waiters {
         hashes.sort_unstable();
         let mut ready_waiters = vec![];
         if let Some(waiters) = self.wait_table.get_mut(&ts) {
@@ -127,7 +127,7 @@ impl WaitTable {
         ready_waiters
     }
 
-    fn remove_waiter(&mut self, start_ts: u64, lock: Lock) -> Option<Waiter> {
+    fn remove_waiter(&mut self, start_ts: TimeStamp, lock: Lock) -> Option<Waiter> {
         if let Some(waiters) = self.wait_table.get_mut(&lock.ts) {
             let idx = waiters
                 .iter()
@@ -150,8 +150,8 @@ impl WaitTable {
             .flat_map(|(_, waiters)| {
                 waiters.iter().map(|waiter| {
                     let mut wait_for_entry = WaitForEntry::default();
-                    wait_for_entry.set_txn(waiter.start_ts);
-                    wait_for_entry.set_wait_for_txn(waiter.lock.ts);
+                    wait_for_entry.set_txn(waiter.start_ts.into_inner());
+                    wait_for_entry.set_wait_for_txn(waiter.lock.ts.into_inner());
                     wait_for_entry.set_key_hash(waiter.lock.hash);
                     wait_for_entry
                 })
@@ -181,7 +181,7 @@ impl Scheduler {
 
     pub fn wait_for(
         &self,
-        start_ts: u64,
+        start_ts: TimeStamp,
         cb: StorageCallback,
         pr: ProcessResult,
         lock: Lock,
@@ -196,7 +196,7 @@ impl Scheduler {
         });
     }
 
-    pub fn wake_up(&self, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64) {
+    pub fn wake_up(&self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
         self.notify_scheduler(Task::WakeUp {
             lock_ts,
             hashes,
@@ -208,7 +208,7 @@ impl Scheduler {
         self.notify_scheduler(Task::Dump { cb })
     }
 
-    pub fn deadlock(&self, txn_ts: u64, lock: Lock, deadlock_key_hash: u64) {
+    pub fn deadlock(&self, txn_ts: TimeStamp, lock: Lock, deadlock_key_hash: u64) {
         self.notify_scheduler(Task::Deadlock {
             start_ts: txn_ts,
             lock,
@@ -275,7 +275,13 @@ impl WaiterManager {
         }
     }
 
-    fn handle_wake_up(&mut self, handle: &Handle, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64) {
+    fn handle_wake_up(
+        &mut self,
+        handle: &Handle,
+        lock_ts: TimeStamp,
+        hashes: Vec<u64>,
+        commit_ts: TimeStamp,
+    ) {
         let mut ready_waiters = self
             .wait_table
             .borrow_mut()
@@ -306,7 +312,7 @@ impl WaiterManager {
         cb(self.wait_table.borrow().to_wait_for_entries());
     }
 
-    fn handle_deadlock(&mut self, start_ts: u64, lock: Lock, deadlock_key_hash: u64) {
+    fn handle_deadlock(&mut self, start_ts: TimeStamp, lock: Lock, deadlock_key_hash: u64) {
         self.wait_table
             .borrow_mut()
             .remove_waiter(start_ts, lock)
@@ -371,7 +377,7 @@ impl FutureRunnable<Task> for WaiterManager {
     }
 }
 
-fn wake_up_waiter(waiter: Waiter, commit_ts: u64) {
+fn wake_up_waiter(waiter: Waiter, commit_ts: TimeStamp) {
     // Maybe we can store the latest commit_ts in TiKV, and use
     // it as `conflict_start_ts` when waker's `conflict_commit_ts`
     // is smaller than waiter's for_update_ts.
@@ -413,7 +419,7 @@ mod tests {
     use std::time::Duration;
     use test_util::KvGenerator;
 
-    fn dummy_waiter(start_ts: u64, lock_ts: u64, hash: u64) -> Waiter {
+    fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {
             start_ts,
             cb: StorageCallback::Boolean(Box::new(|_| ())),
@@ -428,25 +434,37 @@ mod tests {
         let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
         for i in 0..10 {
             let n = i as u64;
-            wait_table.add_waiter(n, dummy_waiter(0, n, n));
+            wait_table.add_waiter(n.into(), dummy_waiter(TimeStamp::min(), n.into(), n));
         }
         assert_eq!(10, wait_table.size());
         for i in (0..10).rev() {
             let n = i as u64;
             assert!(wait_table
-                .remove_waiter(0, Lock { ts: n, hash: n })
+                .remove_waiter(
+                    TimeStamp::min(),
+                    Lock {
+                        ts: n.into(),
+                        hash: n
+                    }
+                )
                 .is_some());
         }
         assert_eq!(0, wait_table.size());
         assert!(wait_table
-            .remove_waiter(0, Lock { ts: 0, hash: 0 })
+            .remove_waiter(
+                TimeStamp::min(),
+                Lock {
+                    ts: TimeStamp::min(),
+                    hash: 0
+                }
+            )
             .is_none());
     }
 
     #[test]
     fn test_wait_table_take_ready_waiters() {
         let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
-        let ts = 100;
+        let ts = 100.into();
         let mut hashes: Vec<u64> = KvGenerator::new(64, 0)
             .generate(10)
             .into_iter()
@@ -456,7 +474,7 @@ mod tests {
         assert!(wait_table.take_ready_waiters(ts, hashes.clone()).is_empty());
 
         for hash in hashes.iter() {
-            wait_table.add_waiter(ts, dummy_waiter(0, ts, *hash));
+            wait_table.add_waiter(ts, dummy_waiter(TimeStamp::min(), ts, *hash));
         }
         hashes.sort();
 
@@ -480,7 +498,7 @@ mod tests {
 
         for i in 1..5 {
             for j in 0..i {
-                wait_table.add_waiter(i, dummy_waiter(i * 10 + j, i, j));
+                wait_table.add_waiter(i.into(), dummy_waiter((i * 10 + j).into(), i.into(), j));
             }
         }
 
@@ -502,28 +520,34 @@ mod tests {
     fn test_wait_table_is_empty() {
         let waiter_count = Arc::new(AtomicUsize::new(0));
         let mut wait_table = WaitTable::new(Arc::clone(&waiter_count));
-        wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
+        wait_table.add_waiter(2.into(), dummy_waiter(1.into(), 2.into(), 2));
         // Increase waiter_count manually and assert the previous value is zero
         assert_eq!(waiter_count.fetch_add(1, Ordering::SeqCst), 0);
 
         assert!(wait_table
-            .remove_waiter(1, Lock { ts: 2, hash: 2 })
+            .remove_waiter(
+                1.into(),
+                Lock {
+                    ts: 2.into(),
+                    hash: 2
+                }
+            )
             .is_some());
         assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
 
-        wait_table.add_waiter(2, dummy_waiter(1, 2, 2));
-        wait_table.add_waiter(3, dummy_waiter(2, 3, 3));
+        wait_table.add_waiter(2.into(), dummy_waiter(1.into(), 2.into(), 2));
+        wait_table.add_waiter(3.into(), dummy_waiter(2.into(), 3.into(), 3));
         waiter_count.fetch_add(2, Ordering::SeqCst);
 
-        wait_table.take_ready_waiters(2, vec![2]);
+        wait_table.take_ready_waiters(2.into(), vec![2]);
         assert_eq!(waiter_count.load(Ordering::SeqCst), 1);
-        wait_table.take_ready_waiters(3, vec![3]);
+        wait_table.take_ready_waiters(3.into(), vec![3]);
         assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
 
-        wait_table.add_waiter(4, dummy_waiter(1, 4, 5));
-        wait_table.add_waiter(4, dummy_waiter(2, 4, 6));
+        wait_table.add_waiter(4.into(), dummy_waiter(1.into(), 4.into(), 5));
+        wait_table.add_waiter(4.into(), dummy_waiter(2.into(), 4.into(), 6));
         waiter_count.fetch_add(2, Ordering::SeqCst);
-        wait_table.take_ready_waiters(4, vec![5, 6]);
+        wait_table.take_ready_waiters(4.into(), vec![5, 6]);
         assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
     }
 
@@ -550,10 +574,13 @@ mod tests {
             tx.send(result).unwrap();
         });
         waiter_mgr_scheduler.wait_for(
-            0,
+            TimeStamp::min(),
             StorageCallback::Boolean(cb),
             ProcessResult::Res,
-            Lock { ts: 0, hash: 0 },
+            Lock {
+                ts: TimeStamp::min(),
+                hash: 0,
+            },
             0,
         );
         assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
@@ -570,10 +597,13 @@ mod tests {
             tx.send(result).unwrap();
         });
         waiter_mgr_scheduler.wait_for(
-            0,
+            TimeStamp::min(),
             StorageCallback::Boolean(cb),
             ProcessResult::Res,
-            Lock { ts: 0, hash: 0 },
+            Lock {
+                ts: TimeStamp::min(),
+                hash: 0,
+            },
             100,
         );
         assert_eq!(
@@ -589,13 +619,16 @@ mod tests {
             tx.send(result).unwrap();
         });
         waiter_mgr_scheduler.wait_for(
-            0,
+            TimeStamp::min(),
             StorageCallback::Boolean(cb),
             ProcessResult::Res,
-            Lock { ts: 0, hash: 1 },
+            Lock {
+                ts: TimeStamp::min(),
+                hash: 1,
+            },
             0,
         );
-        waiter_mgr_scheduler.wake_up(0, vec![3, 1, 2], 1);
+        waiter_mgr_scheduler.wake_up(TimeStamp::min(), vec![3, 1, 2], 1.into());
         assert!(rx
             .recv_timeout(Duration::from_millis(500))
             .unwrap()

@@ -11,6 +11,8 @@ mod store;
 use std::error;
 use std::io::Error as IoError;
 
+use crate::storage::mvcc::TimeStamp;
+
 pub use self::process::{ProcessResult, RESOLVE_LOCK_BATCH_SIZE};
 pub use self::scheduler::{Msg, Scheduler};
 pub use self::store::{EntryBatch, TxnEntry, TxnEntryScanner, TxnEntryStore};
@@ -51,7 +53,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        InvalidTxnTso {start_ts: u64, commit_ts: u64} {
+        InvalidTxnTso {start_ts: TimeStamp, commit_ts: TimeStamp} {
             description("Invalid transaction tso")
             display("Invalid transaction tso with start_ts:{},commit_ts:{}",
                         start_ts,

@@ -13,6 +13,7 @@ use external_storage::*;
 use futures::lazy;
 use futures::prelude::Future;
 use futures::sync::mpsc::*;
+use keys::TimeStamp;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
@@ -38,8 +39,8 @@ const IDLE_THREADPOOL_DURATION: u64 = 30 * 60 * 1000; // 30 mins
 pub struct Task {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
-    start_ts: u64,
-    end_ts: u64,
+    start_ts: TimeStamp,
+    end_ts: TimeStamp,
     storage: LimitedStorage,
     pub(crate) resp: UnboundedSender<BackupResponse>,
     concurrency: u32,
@@ -90,8 +91,8 @@ impl Task {
             Task {
                 start_key: req.get_start_key().to_owned(),
                 end_key: req.get_end_key().to_owned(),
-                start_ts: req.get_start_version(),
-                end_ts: req.get_end_version(),
+                start_ts: req.get_start_version().into(),
+                end_ts: req.get_end_version().into(),
                 resp,
                 storage,
                 concurrency: req.get_concurrency(),
@@ -121,7 +122,7 @@ impl BackupRange {
         &self,
         writer: &mut BackupWriter,
         engine: &E,
-        backup_ts: u64,
+        backup_ts: TimeStamp,
     ) -> Result<Statistics> {
         let mut ctx = Context::new();
         ctx.set_region_id(self.region.get_id());
@@ -352,8 +353,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     fn spawn_backup_worker(
         &self,
         prs: Arc<Mutex<Progress<R>>>,
-        start_ts: u64,
-        end_ts: u64,
+        start_ts: TimeStamp,
+        end_ts: TimeStamp,
         storage: LimitedStorage,
         tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
         cancel: Arc<AtomicBool>,
@@ -463,8 +464,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     for file in files.iter_mut() {
                         file.set_start_key(start_key.clone());
                         file.set_end_key(end_key.clone());
-                        file.set_start_version(task.start_ts);
-                        file.set_end_version(task.end_ts);
+                        file.set_start_version(task.start_ts.into_inner());
+                        file.set_end_version(task.end_ts.into_inner());
                     }
                     response.set_files(files.into());
                 }
@@ -746,8 +747,8 @@ pub mod tests {
                 let task = Task {
                     start_key: start_key.to_vec(),
                     end_key: end_key.to_vec(),
-                    start_ts: 1,
-                    end_ts: 1,
+                    start_ts: 1.into(),
+                    end_ts: 1.into(),
                     resp: tx,
                     storage,
                     concurrency: 4,
@@ -814,9 +815,9 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut ts = 1;
+        let mut ts: TimeStamp = 1.into();
         let mut alloc_ts = || {
-            ts += 1;
+            ts = ts.incr();
             ts
         };
         let mut backup_tss = vec![];
@@ -844,8 +845,8 @@ pub mod tests {
             let mut req = BackupRequest::new();
             req.set_start_key(vec![]);
             req.set_end_key(vec![b'5']);
-            req.set_start_version(ts);
-            req.set_end_version(ts);
+            req.set_start_version(ts.into_inner());
+            req.set_end_version(ts.into_inner());
             req.set_concurrency(4);
             let (tx, rx) = unbounded();
             // Empty path should return an error.
@@ -891,9 +892,9 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut ts = 1;
+        let mut ts: TimeStamp = 1.into();
         let mut alloc_ts = || {
-            ts += 1;
+            ts = ts.incr();
             ts
         };
         let start = alloc_ts();
@@ -910,8 +911,8 @@ pub mod tests {
         let mut req = BackupRequest::new();
         req.set_start_key(vec![]);
         req.set_end_key(vec![b'5']);
-        req.set_start_version(now);
-        req.set_end_version(now);
+        req.set_start_version(now.into_inner());
+        req.set_end_version(now.into_inner());
         req.set_concurrency(4);
         // Set an unique path to avoid AlreadyExists error.
         req.set_path(format!(
@@ -935,8 +936,8 @@ pub mod tests {
         // Test whether it can correctly convert not leader to region error.
         engine.trigger_not_leader();
         let now = alloc_ts();
-        req.set_start_version(now);
-        req.set_end_version(now);
+        req.set_start_version(now.into_inner());
+        req.set_end_version(now.into_inner());
         // Set an unique path to avoid AlreadyExists error.
         req.set_path(format!(
             "local://{}",
@@ -965,9 +966,9 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut ts = 1;
+        let mut ts: TimeStamp = 1.into();
         let mut alloc_ts = || {
-            ts += 1;
+            ts = ts.incr();
             ts
         };
         let start = alloc_ts();
@@ -987,8 +988,8 @@ pub mod tests {
         let mut req = BackupRequest::new();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
-        req.set_start_version(now);
-        req.set_end_version(now);
+        req.set_start_version(now.into_inner());
+        req.set_end_version(now.into_inner());
         req.set_concurrency(4);
         req.set_path(format!("local://{}", temp.path().display()));
 

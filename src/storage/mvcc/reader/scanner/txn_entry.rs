@@ -8,7 +8,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::{Result, WriteRef};
+use crate::storage::mvcc::{Result, TimeStamp, WriteRef};
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics};
 
@@ -200,7 +200,7 @@ impl<S: Snapshot> Scanner<S> {
     fn get(
         &mut self,
         user_key: &Key,
-        ts: u64,
+        ts: TimeStamp,
         met_next_user_key: &mut bool,
     ) -> Result<Option<TxnEntry>> {
         assert!(self.write_cursor.valid()?);
@@ -352,7 +352,7 @@ impl<S: Snapshot> Scanner<S> {
         // `current_user_key` must have reserved space here, so its clone has reserved space too.
         // So no reallocation happens in `append_ts`.
         self.write_cursor.internal_seek(
-            &current_user_key.clone().append_ts(0),
+            &current_user_key.clone().append_ts(TimeStamp::min()),
             &mut self.statistics.write,
         )?;
 
@@ -373,8 +373,8 @@ mod tests {
     struct EntryBuilder {
         key: Vec<u8>,
         value: Vec<u8>,
-        start_ts: u64,
-        commit_ts: u64,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
     }
 
     impl EntryBuilder {
@@ -386,11 +386,11 @@ mod tests {
             self.value = val.to_owned();
             self
         }
-        fn start_ts(&mut self, start_ts: u64) -> &mut Self {
+        fn start_ts(&mut self, start_ts: TimeStamp) -> &mut Self {
             self.start_ts = start_ts;
             self
         }
-        fn commit_ts(&mut self, commit_ts: u64) -> &mut Self {
+        fn commit_ts(&mut self, commit_ts: TimeStamp) -> &mut Self {
             self.commit_ts = commit_ts;
             self
         }
@@ -430,7 +430,7 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
             .build_entry_scanner()
             .unwrap();
@@ -446,8 +446,8 @@ mod tests {
         let entry = builder
             .key(b"a")
             .value(b"value")
-            .start_ts(7)
-            .commit_ts(7)
+            .start_ts(7.into())
+            .commit_ts(7.into())
             .build_commit(WriteType::Put, true);
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
@@ -489,7 +489,7 @@ mod tests {
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2, false)
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
             .build_entry_scanner()
             .unwrap();
@@ -505,8 +505,8 @@ mod tests {
         let entry = EntryBuilder::default()
             .key(b"a")
             .value(b"a_value")
-            .start_ts(16)
-            .commit_ts(16)
+            .start_ts(16.into())
+            .commit_ts(16.into())
             .build_commit(WriteType::Put, true);
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
@@ -523,8 +523,8 @@ mod tests {
         let entry = EntryBuilder::default()
             .key(b"b")
             .value(b"b_value")
-            .start_ts(4)
-            .commit_ts(4)
+            .start_ts(4.into())
+            .commit_ts(4.into())
             .build_commit(WriteType::Put, true);
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
@@ -558,7 +558,7 @@ mod tests {
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2, false)
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
             .build_entry_scanner()
             .unwrap();
@@ -574,8 +574,8 @@ mod tests {
         let entry = EntryBuilder::default()
             .key(b"a")
             .value(b"a_value")
-            .start_ts(16)
-            .commit_ts(16)
+            .start_ts(16.into())
+            .commit_ts(16.into())
             .build_commit(WriteType::Put, true);
         assert_eq!(scanner.next_entry().unwrap(), Some(entry));
         let statistics = scanner.take_statistics();
@@ -595,8 +595,8 @@ mod tests {
         let entry = EntryBuilder::default()
             .key(b"b")
             .value(b"b_value")
-            .start_ts(8)
-            .commit_ts(8)
+            .start_ts(8.into())
+            .commit_ts(8.into())
             .build_commit(WriteType::Put, true);
         assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
         let statistics = scanner.take_statistics();
@@ -633,7 +633,7 @@ mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build_entry_scanner()
             .unwrap();
@@ -647,39 +647,39 @@ mod tests {
                 .build_commit(WriteType::Put, true)
         };
 
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[3u8], 7)));
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[4u8], 7)));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[3u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[4u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test left bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(None, Some(Key::from_raw(&[3u8])))
             .build_entry_scanner()
             .unwrap();
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7)));
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7)));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test right bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(Some(Key::from_raw(&[5u8])), None)
             .build_entry_scanner()
             .unwrap();
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7)));
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7)));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(None, None)
             .build_entry_scanner()
             .unwrap();
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7)));
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7)));
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[3u8], 7)));
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[4u8], 7)));
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7)));
-        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7)));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[3u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[4u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), None);
     }
 }

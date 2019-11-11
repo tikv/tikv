@@ -25,7 +25,7 @@ use tidb_query::storage::{IntervalRange, Range};
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::storage::kv::Engine;
-use tikv::storage::SnapshotStore;
+use tikv::storage::{SnapshotStore, TimeStamp};
 use tikv_util::collections::HashMap;
 use tikv_util::file::calc_crc32_bytes;
 use tikv_util::worker::Worker;
@@ -36,7 +36,7 @@ struct TestSuite {
     endpoints: HashMap<u64, Worker<Task>>,
     tikv_cli: TikvClient,
     context: Context,
-    ts: u64,
+    ts: TimeStamp,
 
     _env: Arc<Environment>,
 }
@@ -104,13 +104,13 @@ impl TestSuite {
             endpoints,
             tikv_cli,
             context,
-            ts: 0,
+            ts: TimeStamp::min(),
             _env: env,
         }
     }
 
-    fn alloc_ts(&mut self) -> u64 {
-        self.ts += 1;
+    fn alloc_ts(&mut self) -> TimeStamp {
+        self.ts = self.ts.incr();
         self.ts
     }
 
@@ -121,12 +121,12 @@ impl TestSuite {
         self.cluster.shutdown();
     }
 
-    fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+    fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
         let mut prewrite_req = PrewriteRequest::default();
         prewrite_req.set_context(self.context.clone());
         prewrite_req.set_mutations(muts.into_iter().collect());
         prewrite_req.primary_lock = pk;
-        prewrite_req.start_version = ts;
+        prewrite_req.start_version = ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
         let mut prewrite_resp = self.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
         retry_req!(
@@ -148,12 +148,12 @@ impl TestSuite {
         );
     }
 
-    fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
+    fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
         let mut commit_req = CommitRequest::default();
         commit_req.set_context(self.context.clone());
-        commit_req.start_version = start_ts;
+        commit_req.start_version = start_ts.into_inner();
         commit_req.set_keys(keys.into_iter().collect());
-        commit_req.commit_version = commit_ts;
+        commit_req.commit_version = commit_ts.into_inner();
         let mut commit_resp = self.tikv_cli.kv_commit(&commit_req).unwrap();
         retry_req!(
             self.tikv_cli.kv_commit(&commit_req).unwrap(),
@@ -174,14 +174,14 @@ impl TestSuite {
         &self,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-        backup_ts: u64,
+        backup_ts: TimeStamp,
         path: String,
     ) -> future_mpsc::UnboundedReceiver<BackupResponse> {
         let mut req = BackupRequest::new();
         req.set_start_key(start_key);
         req.set_end_key(end_key);
-        req.start_version = backup_ts;
-        req.end_version = backup_ts;
+        req.start_version = backup_ts.into_inner();
+        req.end_version = backup_ts.into_inner();
         req.set_path(path);
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
@@ -191,7 +191,7 @@ impl TestSuite {
         rx
     }
 
-    fn admin_checksum(&self, backup_ts: u64, start: String, end: String) -> (u64, u64, u64) {
+    fn admin_checksum(&self, backup_ts: TimeStamp, start: String, end: String) -> (u64, u64, u64) {
         let mut checksum = 0;
         let mut total_kvs = 0;
         let mut total_bytes = 0;
@@ -285,7 +285,7 @@ fn test_backup_and_import() {
         backup_ts,
         format!(
             "local://{}",
-            tmp.path().join(format!("{}", backup_ts + 1)).display()
+            tmp.path().join(format!("{}", backup_ts.incr())).display()
         ),
     );
     let resps2 = rx.collect().wait().unwrap();
@@ -344,7 +344,9 @@ fn test_backup_and_import() {
         backup_ts,
         format!(
             "local://{}",
-            tmp.path().join(format!("{}", backup_ts + 2)).display()
+            tmp.path()
+                .join(format!("{}", backup_ts.incr().incr()))
+                .display()
         ),
     );
     let resps3 = rx.collect().wait().unwrap();

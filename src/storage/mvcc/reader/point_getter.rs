@@ -3,7 +3,7 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::write::{WriteRef, WriteType};
-use crate::storage::mvcc::{default_not_found_error, Lock, Result, TsSet};
+use crate::storage::mvcc::{default_not_found_error, Lock, Result, TimeStamp, TsSet};
 use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value, CF_LOCK};
 use crate::storage::{CF_DEFAULT, CF_WRITE};
 
@@ -14,13 +14,13 @@ pub struct PointGetterBuilder<S: Snapshot> {
     fill_cache: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
-    ts: u64,
+    ts: TimeStamp,
     bypass_locks: TsSet,
 }
 
 impl<S: Snapshot> PointGetterBuilder<S> {
     /// Initialize a new `PointGetterBuilder`.
-    pub fn new(snapshot: S, ts: u64) -> Self {
+    pub fn new(snapshot: S, ts: TimeStamp) -> Self {
         Self {
             snapshot,
             multi: true,
@@ -119,7 +119,7 @@ pub struct PointGetter<S: Snapshot> {
     multi: bool,
     omit_value: bool,
     isolation_level: IsolationLevel,
-    ts: u64,
+    ts: TimeStamp,
     bypass_locks: TsSet,
 
     statistics: Statistics,
@@ -241,7 +241,11 @@ impl<S: Snapshot> PointGetter<S> {
     /// We assume that mostly the keys given to batch get keys are not very close to each other.
     /// `near_seek` will likely fall back to `seek` in such scenario, which takes 2x time
     /// compared to `get_cf`. Thus we use `get_cf` directly here.
-    fn load_data_from_default_cf(&mut self, write_start_ts: u64, user_key: &Key) -> Result<Value> {
+    fn load_data_from_default_cf(
+        &mut self,
+        write_start_ts: TimeStamp,
+        user_key: &Key,
+    ) -> Result<Value> {
         // TODO: Not necessary to receive a `Write`.
         self.statistics.data.get += 1;
         // TODO: We can avoid this clone.
@@ -272,7 +276,7 @@ mod tests {
     use crate::storage::SHORT_VALUE_MAX_LEN;
     use crate::storage::{CFStatistics, Engine, Key, RocksEngine, TestEngineBuilder};
 
-    fn new_multi_point_getter<E: Engine>(engine: &E, ts: u64) -> PointGetter<E::Snap> {
+    fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
@@ -280,7 +284,7 @@ mod tests {
             .unwrap()
     }
 
-    fn new_single_point_getter<E: Engine>(engine: &E, ts: u64) -> PointGetter<E::Snap> {
+    fn new_single_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
@@ -431,7 +435,7 @@ mod tests {
     fn test_multi_basic_1() {
         let engine = new_sample_engine();
 
-        let mut getter = new_multi_point_getter(&engine, 200);
+        let mut getter = new_multi_point_getter(&engine, 200.into());
 
         // Get a deleted key
         must_get_none(&mut getter, b"foo1");
@@ -477,7 +481,7 @@ mod tests {
     fn test_multi_basic_2() {
         let engine = new_sample_engine();
 
-        let mut getter = new_multi_point_getter(&engine, 5);
+        let mut getter = new_multi_point_getter(&engine, 5.into());
 
         must_get_value(&mut getter, b"bar", b"barv");
         let s = getter.take_statistics();
@@ -517,7 +521,7 @@ mod tests {
     fn test_multi_basic_3() {
         let engine = new_sample_engine();
 
-        let mut getter = new_multi_point_getter(&engine, 2);
+        let mut getter = new_multi_point_getter(&engine, 2.into());
 
         must_get_none(&mut getter, b"foo1");
         let s = getter.take_statistics();
@@ -538,7 +542,7 @@ mod tests {
     fn test_multi_locked() {
         let engine = new_sample_engine_2();
 
-        let mut getter = new_multi_point_getter(&engine, 1);
+        let mut getter = new_multi_point_getter(&engine, 1.into());
         must_get_none(&mut getter, b"a");
         must_get_none(&mut getter, b"bar");
         must_get_none(&mut getter, b"foo1");
@@ -546,7 +550,7 @@ mod tests {
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 3, 0, 0);
 
-        let mut getter = new_multi_point_getter(&engine, 3);
+        let mut getter = new_multi_point_getter(&engine, 3.into());
         must_get_none(&mut getter, b"a");
         must_get_value(&mut getter, b"bar", b"barv");
         must_get_value(&mut getter, b"bar", b"barv");
@@ -557,7 +561,7 @@ mod tests {
         let s = getter.take_statistics();
         assert_seek_next_prev(&s.write, 6, 0, 0);
 
-        let mut getter = new_multi_point_getter(&engine, 4);
+        let mut getter = new_multi_point_getter(&engine, 4.into());
         must_get_none(&mut getter, b"a");
         must_get_err(&mut getter, b"bar");
         must_get_err(&mut getter, b"bar");
@@ -573,29 +577,29 @@ mod tests {
     fn test_single_basic() {
         let engine = new_sample_engine_2();
 
-        let mut getter = new_single_point_getter(&engine, 1);
+        let mut getter = new_single_point_getter(&engine, 1.into());
         must_get_none(&mut getter, b"foo1");
 
-        let mut getter = new_single_point_getter(&engine, 3);
+        let mut getter = new_single_point_getter(&engine, 3.into());
         must_get_value(&mut getter, b"bar", b"barv");
         must_get_none(&mut getter, b"bar");
         must_get_none(&mut getter, b"foo1");
 
-        let mut getter = new_single_point_getter(&engine, 3);
+        let mut getter = new_single_point_getter(&engine, 3.into());
         must_get_value(&mut getter, b"foo1", b"foo1v");
         must_get_none(&mut getter, b"foo2");
 
-        let mut getter = new_single_point_getter(&engine, 3);
+        let mut getter = new_single_point_getter(&engine, 3.into());
         must_get_none(&mut getter, b"foo2");
         must_get_none(&mut getter, b"foo2");
 
-        let mut getter = new_single_point_getter(&engine, 4);
+        let mut getter = new_single_point_getter(&engine, 4.into());
         must_get_err(&mut getter, b"bar");
         must_get_none(&mut getter, b"bar");
         must_get_none(&mut getter, b"a");
         must_get_none(&mut getter, b"foo1");
 
-        let mut getter = new_single_point_getter(&engine, 4);
+        let mut getter = new_single_point_getter(&engine, 4.into());
         must_get_value(&mut getter, b"foo1", b"foo1v");
         must_get_none(&mut getter, b"foo1");
     }
@@ -606,7 +610,7 @@ mod tests {
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
 
-        let mut getter = PointGetterBuilder::new(snapshot.clone(), 4)
+        let mut getter = PointGetterBuilder::new(snapshot.clone(), 4.into())
             .isolation_level(IsolationLevel::Si)
             .omit_value(true)
             .build()
@@ -618,7 +622,7 @@ mod tests {
 
         fn new_omit_value_single_point_getter(
             snapshot: SyncSnapshot,
-            ts: u64,
+            ts: TimeStamp,
         ) -> PointGetter<SyncSnapshot> {
             PointGetterBuilder::new(snapshot, ts)
                 .isolation_level(IsolationLevel::Si)
@@ -628,15 +632,15 @@ mod tests {
                 .unwrap()
         }
 
-        let mut getter = new_omit_value_single_point_getter(snapshot.clone(), 4);
+        let mut getter = new_omit_value_single_point_getter(snapshot.clone(), 4.into());
         must_get_err(&mut getter, b"bar");
         must_get_none(&mut getter, b"bar");
 
-        let mut getter = new_omit_value_single_point_getter(snapshot.clone(), 4);
+        let mut getter = new_omit_value_single_point_getter(snapshot.clone(), 4.into());
         must_get_key(&mut getter, b"foo1");
         must_get_none(&mut getter, b"foo1");
 
-        let mut getter = new_omit_value_single_point_getter(snapshot.clone(), 4);
+        let mut getter = new_omit_value_single_point_getter(snapshot.clone(), 4.into());
         must_get_none(&mut getter, b"foo3");
         must_get_none(&mut getter, b"foo3");
     }
@@ -649,18 +653,18 @@ mod tests {
         must_prewrite_put(&engine, key, val, key, 10);
         must_commit(&engine, key, 10, 20);
 
-        let mut getter = new_single_point_getter(&engine, std::u64::MAX);
+        let mut getter = new_single_point_getter(&engine, TimeStamp::max());
         must_get_value(&mut getter, key, val);
 
         // Ignore the primary lock if read with max ts.
         must_prewrite_delete(&engine, key, key, 30);
-        let mut getter = new_single_point_getter(&engine, std::u64::MAX);
+        let mut getter = new_single_point_getter(&engine, TimeStamp::max());
         must_get_value(&mut getter, key, val);
         must_rollback(&engine, key, 30);
 
         // Should not ignore the secondary lock even though reading the latest version
         must_prewrite_delete(&engine, key, b"bar", 40);
-        let mut getter = new_single_point_getter(&engine, std::u64::MAX);
+        let mut getter = new_single_point_getter(&engine, TimeStamp::max());
         must_get_err(&mut getter, key);
         must_rollback(&engine, key, 40);
 
@@ -670,7 +674,7 @@ mod tests {
         // write.start_ts(10) < primary_lock.start_ts(15) < write.commit_ts(20)
         must_acquire_pessimistic_lock(&engine, key, key, 15, 50);
         must_pessimistic_prewrite_delete(&engine, key, key, 15, 50, true);
-        let mut getter = new_single_point_getter(&engine, std::u64::MAX);
+        let mut getter = new_single_point_getter(&engine, TimeStamp::max());
         must_get_value(&mut getter, key, val);
     }
 
@@ -685,17 +689,17 @@ mod tests {
         must_prewrite_delete(&engine, key, key, 30);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut getter = PointGetterBuilder::new(snapshot, 60)
+        let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
-            .bypass_locks(TsSet::new(vec![30, 40, 50]))
+            .bypass_locks(TsSet::from_u64s(vec![30, 40, 50]))
             .build()
             .unwrap();
         must_get_value(&mut getter, key, val);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut getter = PointGetterBuilder::new(snapshot, 60)
+        let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
-            .bypass_locks(TsSet::new(vec![31, 29]))
+            .bypass_locks(TsSet::from_u64s(vec![31, 29]))
             .build()
             .unwrap();
         must_get_err(&mut getter, key);
