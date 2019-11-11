@@ -1076,7 +1076,7 @@ impl ApplyDelegate {
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         fail_point!(
             "on_apply_write_cmd",
-            cfg!(not(test)) || self.id() == 3,
+            cfg!(release) || self.id() == 3,
             |_| {
                 unimplemented!();
             }
