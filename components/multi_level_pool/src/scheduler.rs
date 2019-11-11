@@ -5,6 +5,7 @@ use crate::task::ArcTask;
 
 use crossbeam::deque::Injector;
 use crossbeam::queue::ArrayQueue;
+use prometheus::*;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -15,15 +16,15 @@ pub struct Scheduler(Arc<SchedulerInner>);
 
 struct SchedulerInner {
     injectors: [Injector<ArcTask>; 3],
-    level_elapsed: [AtomicU64; 3],
+    level_elapsed: [IntCounter; 3],
     sleepers: ArrayQueue<Parker>,
 }
 
 impl Scheduler {
-    pub fn new(sleeper_capacity: usize) -> Self {
+    pub fn new(sleeper_capacity: usize, level_elapsed: [IntCounter; 3]) -> Self {
         let inner = SchedulerInner {
             injectors: [Injector::new(), Injector::new(), Injector::new()],
-            level_elapsed: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
+            level_elapsed,
             sleepers: ArrayQueue::new(sleeper_capacity),
         };
         Scheduler(Arc::new(inner))
@@ -34,8 +35,8 @@ impl Scheduler {
             let stats = &task.0.task_stats;
             let elapsed = stats.elapsed.load(Ordering::SeqCst);
             match elapsed {
-                0..=4_999 => 0,
-                5_000..=299_999 => 1,
+                0..=999 => 0,
+                1_000..=99_999 => 1,
                 _ => 2,
             }
         });
@@ -46,11 +47,11 @@ impl Scheduler {
     }
 
     pub fn add_level_elapsed(&self, level: usize, elapsed: u64) {
-        self.0.level_elapsed[level].fetch_add(elapsed, Ordering::SeqCst);
+        self.0.level_elapsed[level].inc_by(elapsed as i64);
     }
 
     pub fn get_level_elapsed(&self, level: usize) -> u64 {
-        self.0.level_elapsed[level].load(Ordering::SeqCst)
+        self.0.level_elapsed[level].get() as u64
     }
 
     pub fn injector(&self, level: usize) -> &Injector<ArcTask> {
