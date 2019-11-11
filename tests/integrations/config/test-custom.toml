@@ -29,6 +29,7 @@ status-thread-pool-size = 1
 grpc-compression-type = "gzip"
 grpc-concurrency = 123
 grpc-concurrent-stream = 1234
+grpc-memory-pool-quota = 123456
 grpc-raft-conn-num = 123
 grpc-stream-initial-window-size = 12345
 grpc-keepalive-time = "3s"
@@ -383,6 +384,13 @@ allow-concurrent-memtable-write = true
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 
+[raftdb.titan]
+enabled = true
+dirname = "bar"
+disable-gc = false
+max-background-gc = 9
+purge-obsolete-files-period = "1s"
+
 [raftdb.defaultcf]
 block-size = "12KB"
 block-cache-size = "12GB"
@@ -424,6 +432,17 @@ hard-pending-compaction-bytes-limit = "12GB"
 force-consistency-checks = false
 prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
+
+[raftdb.defaultcf.titan]
+min-blob-size = "2018B"
+blob-file-compression = "zstd"
+blob-cache-size = "12GB"
+min-gc-batch-size = "12KB"
+max-gc-batch-size = "12MB"
+discardable-ratio = 0.00156
+sample-ratio = 0.982
+merge-small-file-threshold = "21KB"
+blob-run-mode = "fallback"
 
 [security]
 ca-path = "invalid path"
