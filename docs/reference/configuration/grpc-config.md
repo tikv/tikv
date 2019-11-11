@@ -27,6 +27,12 @@ TiKV uses gRPC, a remote procedure call (RPC) framework, to build a distributed 
 - Default: 1024. It is suitable for most workload
 - Increase the number if you find that most of your requests are not time consuming, e.g., RawKV Get
 
+## grpc-memory-pool-quota
+
+- Limit the memory size can be used by gRPC
+- Default: unlimited. gRPC usually works well to reclaim memory by itself
+- Limit the memory in case OOM is observed. Note that limit the usage can lead to potential stall
+
 ## grpc-keepalive-time
 
 - Time to wait before sending out a ping to check whether the server is still alive. This is only for the communication between TiKV instances
