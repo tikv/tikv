@@ -3238,7 +3238,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#bd4b782c8393dc251f6dc15dcce8eec2c7acf315"
+source = "git+https://github.com/wshwsh12/tipb.git?branch=endian#f1a95b0c185d62887a842d4acb889ee1304482a0"
 dependencies = [
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf-build",

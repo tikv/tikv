@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 tikv = { path = "../../", default-features = false }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { git = "https://github.com/wshwsh12/tipb.git" ,branch = "endian"}
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 protobuf = "2"
 futures = "0.1"

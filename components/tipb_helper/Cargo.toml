@@ -5,6 +5,6 @@ edition = "2018"
 publish = false
 
 [dependencies]
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { git = "https://github.com/wshwsh12/tipb.git" ,branch = "endian"}
 codec = { path = "../codec" }
 tidb_query_datatype = { path = "../tidb_query_datatype" }
