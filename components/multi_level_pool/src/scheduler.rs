@@ -7,7 +7,7 @@ use crossbeam::deque::Injector;
 use crossbeam::queue::ArrayQueue;
 use prometheus::*;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// `Scheduler` is responsible for adding new tasks into the thread pool injectors.

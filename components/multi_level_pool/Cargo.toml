@@ -10,7 +10,7 @@ crossbeam  = "0.7.2"
 dashmap = "1.2.0"
 num_cpus = "1.2.0"
 rand = "0.7.2"
-once_cell = "1.2.0"
+lazy_static = "1.4.0"
 parking_lot = "0.9.0"
 tokio-sync = "0.2.0-alpha.6"
 tokio01-sync = { package = "tokio-sync", version = "0.1.7" }

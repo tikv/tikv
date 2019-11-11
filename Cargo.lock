@@ -1859,8 +1859,8 @@ dependencies = [
  "dashmap",
  "futures 0.1.29",
  "futures 0.3.1",
+ "lazy_static",
  "num_cpus",
- "once_cell",
  "parking_lot 0.9.0",
  "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git?rev=7dd3d42f0c21384950afe6a46ed85352acf71625)",
  "rand 0.7.2",
@@ -2026,12 +2026,6 @@ checksum = "bcef43580c035376c0705c42792c294b66974abbfd2789b511784023f71f3273"
 dependencies = [
  "libc",
 ]
-
-[[package]]
-name = "once_cell"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891f486f630e5c5a4916c7e16c4b24a53e78c860b646e9f8e005e4f16847bfed"
 
 [[package]]
 name = "openssl"
