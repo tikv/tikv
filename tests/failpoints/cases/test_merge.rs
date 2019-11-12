@@ -673,7 +673,7 @@ fn test_node_merge_crash_after_premerge_before_compact_log() {
 
     // make log gap between store 1 and store 3, for 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
-    for i in 0..9 {
+    for i in 0..6 {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
     }
     // prevent on_apply_res to update merge_state in Peer
