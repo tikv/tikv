@@ -63,6 +63,12 @@ pub fn is_null<T: Evaluable>(arg: &Option<T>) -> Result<Option<i64>> {
 
 #[rpn_fn]
 #[inline]
+pub fn bit_neg(arg: &Option<Int>) -> Result<Option<Int>> {
+    Ok(arg.map(|arg| !arg))
+}
+
+#[rpn_fn]
+#[inline]
 pub fn int_is_true(arg: &Option<Int>) -> Result<Option<i64>> {
     Ok(Some(arg.map_or(0, |v| (v != 0) as i64)))
 }
@@ -273,6 +279,23 @@ mod tests {
                 .evaluate(sig)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}, {:?}", arg, sig);
+        }
+    }
+
+    #[test]
+    fn test_bit_neg() {
+        let cases = vec![
+            (Some(123), Some(-124)),
+            (Some(-123), Some(122)),
+            (Some(0), Some(-1)),
+            (None, None),
+        ];
+        for (arg, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::BitNegSig)
+                .unwrap();
+            assert_eq!(output, expected);
         }
     }
 

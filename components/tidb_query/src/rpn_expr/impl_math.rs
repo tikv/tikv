@@ -5,6 +5,48 @@ use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::Result;
 
+#[rpn_fn]
+#[inline]
+pub fn pi() -> Result<Option<Real>> {
+    Ok(Some(Real::from(std::f64::consts::PI)))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| f64_to_real(n.ln())))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
+    Ok(match (arg0, arg1) {
+        (Some(base), Some(n)) => f64_to_real(n.log(**base)),
+        _ => None,
+    })
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log2(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| f64_to_real(n.log2())))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log10(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| f64_to_real(n.log10())))
+}
+
+// If the given f64 is finite, returns `Some(Real)`. Otherwise returns None.
+fn f64_to_real(n: f64) -> Option<Real> {
+    if n.is_finite() {
+        Some(Real::from(n))
+    } else {
+        None
+    }
+}
+
 #[inline]
 #[rpn_fn(capture = [ctx])]
 pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: &Option<C::Input>) -> Result<Option<C::Output>> {
@@ -218,6 +260,90 @@ mod tests {
     use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+    use std::f64::consts::PI;
+
+    #[test]
+    fn test_pi() {
+        let output = RpnFnScalarEvaluator::new()
+            .evaluate(ScalarFuncSig::Pi)
+            .unwrap();
+        assert_eq!(output, Some(Real::from(PI)));
+    }
+
+    #[test]
+    fn test_log_1_arg() {
+        let test_cases = vec![
+            (Some(std::f64::consts::E), Some(Real::from(1.0_f64))),
+            (Some(100.0), Some(Real::from(4.605170185988092_f64))),
+            (Some(-1.0), None),
+            (Some(0.0), None),
+            (None, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Log1Arg)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_log_2_arg() {
+        let test_cases = vec![
+            (Some(10.0_f64), Some(100.0_f64), Some(Real::from(2.0_f64))),
+            (Some(2.0_f64), Some(1.0_f64), Some(Real::from(0.0_f64))),
+            (Some(0.5_f64), Some(0.25_f64), Some(Real::from(2.0_f64))),
+            (Some(-0.23323_f64), Some(2.0_f64), None),
+            (None, None, None),
+            (Some(2.0_f64), None, None),
+            (None, Some(2.0_f64), None),
+        ];
+        for (a1, a2, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(a1)
+                .push_param(a2)
+                .evaluate(ScalarFuncSig::Log2Args)
+                .unwrap();
+            assert_eq!(output, expect, "arg1 {:?}, arg2 {:?}", a1, a2);
+        }
+    }
+
+    #[test]
+    fn test_log2() {
+        let test_cases = vec![
+            (Some(16_f64), Some(Real::from(4_f64))),
+            (Some(5_f64), Some(Real::from(2.321928094887362_f64))),
+            (Some(-1.234_f64), None),
+            (Some(0_f64), None),
+            (None, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Log2)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_log10() {
+        let test_cases = vec![
+            (Some(100_f64), Some(Real::from(2_f64))),
+            (Some(101_f64), Some(Real::from(2.0043213737826426_f64))),
+            (Some(-1.234_f64), None),
+            (Some(0_f64), None),
+            (None, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Log10)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", input);
+        }
+    }
 
     #[test]
     fn test_abs_int() {
