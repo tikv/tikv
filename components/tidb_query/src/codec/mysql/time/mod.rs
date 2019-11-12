@@ -469,6 +469,7 @@ mod parser {
         }
     }
 
+    /// Try to parse a `u64` into a `Time` with given type and fsp
     pub fn parse_from_u64(
         ctx: &mut EvalContext,
         input: u64,
