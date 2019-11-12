@@ -539,7 +539,7 @@ impl ApplyDelegate {
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
-            is_merging: false,
+            is_merging: reg.is_merging,
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
@@ -1938,6 +1938,7 @@ pub struct Registration {
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
     pub region: Region,
+    pub is_merging: bool,
 }
 
 impl Registration {
@@ -1948,6 +1949,7 @@ impl Registration {
             apply_state: peer.get_store().apply_state().clone(),
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
+            is_merging: peer.pending_merge_state.is_some(),
         }
     }
 }
