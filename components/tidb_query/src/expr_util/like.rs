@@ -10,8 +10,6 @@
 //! 2. It should support non-binary mode (and binary mode) and do case insensitive comparing
 //!    in non-binary mode.
 
-use std::slice::Iter;
-
 use crate::expr::Result;
 
 pub fn like(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
