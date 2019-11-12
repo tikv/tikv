@@ -96,6 +96,7 @@ default: release
 
 clean:
 	cargo clean
+	rm -rf bin dist
 
 
 ## Development builds
@@ -177,7 +178,7 @@ dist_artifacts: dist_tarballs
 .PHONY: dist_tarballs
 dist_tarballs: docker
 	docker rm -f tikv-binary-extraction-dummy || true
-	docker create --name tikv-binary-extraction-dummy tikv/tikv
+	docker create --name tikv-binary-extraction-dummy pingcap/tikv
 	mkdir -p dist bin
 	docker cp tikv-binary-extraction-dummy:/tikv-server bin/tikv-server
 	docker cp tikv-binary-extraction-dummy:/tikv-ctl bin/tikv-ctl
