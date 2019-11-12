@@ -56,5 +56,5 @@ pub fn like(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
         return Ok(false);
     }
 
-    Ok(px == pattern.len())
+    Ok(true)
 }
