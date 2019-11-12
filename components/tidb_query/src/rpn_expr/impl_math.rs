@@ -253,21 +253,57 @@ fn sqrt(arg: &Option<Real>) -> Result<Option<Real>> {
     }))
 }
 
+#[inline]
+#[rpn_fn]
+fn sin(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map(|arg| Real::from(arg.sin())))
+}
+
+#[inline]
+#[rpn_fn]
+fn cos(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map(|arg| Real::from(arg.cos())))
+}
+
+#[inline]
+#[rpn_fn]
+fn tan(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map(|arg| Real::from(arg.tan())))
+}
+
+#[inline]
+#[rpn_fn(capture = [ctx])]
+fn cot(ctx: &mut EvalContext, arg: &Option<Real>) -> Result<Option<Real>> {
+    match arg {
+        Some(arg) => {
+            let tan = arg.tan();
+            if tan != 0.0 {
+                let cot = 1.0 / tan;
+                if !cot.is_infinite() && !cot.is_nan() {
+                    return Ok(Some(Real::from(cot)));
+                }
+            }
+            Ok(ctx
+                .handle_overflow_err(Error::overflow("DOUBLE", format!("cot({})", arg)))
+                .map(|_| None)?)
+        }
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
-    use std::f64::consts::PI;
 
     #[test]
     fn test_pi() {
         let output = RpnFnScalarEvaluator::new()
             .evaluate(ScalarFuncSig::Pi)
             .unwrap();
-        assert_eq!(output, Some(Real::from(PI)));
+        assert_eq!(output, Some(Real::from(std::f64::consts::PI)));
     }
 
     #[test]
@@ -627,5 +663,94 @@ mod tests {
                 .unwrap();
             assert_eq!(expect, output, "{:?}", input);
         }
+    }
+
+    #[test]
+    fn test_sin() {
+        let valid_test_cases = vec![
+            (0.0_f64, 0.0_f64),
+            (
+                std::f64::consts::PI / 4.0_f64,
+                std::f64::consts::FRAC_1_SQRT_2,
+            ),
+            (std::f64::consts::PI / 2.0_f64, 1.0_f64),
+            (std::f64::consts::PI, 0.0_f64),
+        ];
+        for (input, expect) in valid_test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(input)))
+                .evaluate(ScalarFuncSig::Sin)
+                .unwrap();
+            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_cos() {
+        let test_cases = vec![
+            (0f64, 1f64),
+            (std::f64::consts::PI / 2f64, 0f64),
+            (std::f64::consts::PI, -1f64),
+            (-std::f64::consts::PI, -1f64),
+        ];
+        for (input, expect) in test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(input)))
+                .evaluate(ScalarFuncSig::Cos)
+                .unwrap();
+            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_tan() {
+        let test_cases = vec![
+            (0.0_f64, 0.0_f64),
+            (std::f64::consts::PI / 4.0_f64, 1.0_f64),
+            (-std::f64::consts::PI / 4.0_f64, -1.0_f64),
+            (std::f64::consts::PI, 0.0_f64),
+            (
+                (std::f64::consts::PI * 3.0) / 4.0,
+                f64::tan((std::f64::consts::PI * 3.0) / 4.0), //in mysql and rust, it equals -1.0000000000000002, not -1
+            ),
+        ];
+        for (input, expect) in test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(input)))
+                .evaluate(ScalarFuncSig::Tan)
+                .unwrap();
+            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_cot() {
+        let test_cases = vec![
+            (-1.0_f64, -0.6420926159343308_f64),
+            (1.0_f64, 0.6420926159343308_f64),
+            (
+                std::f64::consts::PI / 4.0_f64,
+                1.0_f64 / f64::tan(std::f64::consts::PI / 4.0_f64),
+            ),
+            (
+                std::f64::consts::PI / 2.0_f64,
+                1.0_f64 / f64::tan(std::f64::consts::PI / 2.0_f64),
+            ),
+            (
+                std::f64::consts::PI,
+                1.0_f64 / f64::tan(std::f64::consts::PI),
+            ),
+        ];
+        for (input, expect) in test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(input)))
+                .evaluate(ScalarFuncSig::Cot)
+                .unwrap();
+            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+        }
+        let result: Result<Option<Real>> = RpnFnScalarEvaluator::new()
+            .push_param(Some(Real::from(0.0_f64)))
+            .evaluate(ScalarFuncSig::Cot);
+        assert!(result.is_err())
     }
 }
