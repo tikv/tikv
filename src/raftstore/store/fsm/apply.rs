@@ -656,7 +656,7 @@ impl ApplyDelegate {
             merged: false,
             ready_source_region_id: 0,
             wait_merge_state: None,
-            is_merging: false,
+            is_merging: reg.is_merging,
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
@@ -2140,6 +2140,7 @@ pub struct Registration {
     pub applied_index_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
+    pub is_merging: bool,
 }
 
 impl Registration {
@@ -2151,6 +2152,7 @@ impl Registration {
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
+            is_merging: peer.pending_merge_state.is_some()
         }
     }
 }

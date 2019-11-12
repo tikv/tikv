@@ -722,6 +722,6 @@ fn test_node_merge_crash_after_premerge_before_compact_log() {
     fail::remove(schedule_merge_fp);
 
     // propose to left region and wait for merge to succeed conveniently
-    cluster.must_put(b"k11", b"v2");
-    must_get_equal(&cluster.get_engine(3), b"k11", b"v2");
+    cluster.must_put(b"k123", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k123", b"v2");
 }
