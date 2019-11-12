@@ -214,79 +214,116 @@ impl Floor for FloorIntToInt {
     }
 }
 
-#[rpn_fn]
 #[inline]
-fn round_int(arg: &Option<Int>) -> Result<Option<Int>> {
-    Ok(*arg)
+#[rpn_fn]
+pub fn round<R: Round>(arg: &Option<R::Type>) -> Result<Option<R::Type>> {
+    if let Some(arg) = arg {
+        R::round(arg)
+    } else {
+        Ok(None)
+    }
 }
 
-#[rpn_fn]
 #[inline]
-fn round_real(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(match arg {
-        Some(arg) => Some(Real::from(arg.round())),
-        None => None,
-    })
+#[rpn_fn]
+pub fn round_with_frac<R: Round>(arg0: &Option<R::Type>, arg1: &Option<Int>) -> Result<Option<R::Type>> {
+    match (arg0, arg1) {
+        (Some(number), Some(digits)) => R::round_with_frac(number, digits),
+        _ => Ok(None)
+    }
 }
 
-#[rpn_fn]
-#[inline]
-fn round_dec(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
-    Ok(match arg {
-        Some(arg) => {
-            let result: codec::Result<Decimal> = arg
-                .to_owned()
-                .round(DEFAULT_FSP, RoundMode::HalfEven)
-                .into();
-            Some(result?)
-        }
-        None => None,
-    })
+pub trait Round {
+    type Type: Evaluable;
+
+    fn round(_arg: &Self::Type) -> Result<Option<Self::Type>> {
+        Ok(None)
+    }
+    fn round_with_frac(_number: &Self::Type, _digits: &Int) -> Result<Option<Self::Type>> {
+        Ok(None)
+    }
 }
 
-#[rpn_fn]
-#[inline]
-fn round_with_frac_int(arg0: &Option<Int>, arg1: &Option<Int>) -> Result<Option<Int>> {
-    Ok(match (arg0, arg1) {
-        (Some(number), Some(digits)) => {
-            if *digits >= 0 {
-                Some(*number)
-            } else {
-                let power = 10.0_f64.powi(-digits as i32);
-                let frac = *number as f64 / power;
-                Some((frac.round() * power) as i64)
-            }
-        }
-        _ => None,
-    })
+pub struct RoundInt;
+
+impl Round for RoundInt {
+    type Type = Int;
+
+    #[inline]
+    fn round(arg: &Self::Type) -> Result<Option<Self::Type>> {
+        Ok(Some(*arg))
+    }
 }
 
-#[rpn_fn]
-#[inline]
-fn round_with_frac_real(arg0: &Option<Real>, arg1: &Option<Int>) -> Result<Option<Real>> {
-    Ok(match (arg0, arg1) {
-        (Some(number), Some(digits)) => {
+pub struct RoundReal;
+
+impl Round for RoundReal {
+    type Type = Real;
+
+    #[inline]
+    fn round(arg: &Self::Type) -> Result<Option<Self::Type>> {
+        Ok(Some(Real::from(arg.round())))
+    }
+}
+
+pub struct RoundDec;
+
+impl Round for RoundDec {
+    type Type = Decimal;
+
+    #[inline]
+    fn round(arg: &Self::Type) -> Result<Option<Self::Type>> {
+        let result: codec::Result<Decimal> = arg
+            .to_owned()
+            .round(DEFAULT_FSP, RoundMode::HalfEven)
+            .into();
+        Ok(Some(result?))
+    }
+}
+
+pub struct RoundWithFracInt;
+
+impl Round for RoundWithFracInt {
+    type Type = Int;
+
+    #[inline]
+    fn round_with_frac(number: &Self::Type, digits: &Int) -> Result<Option<Self::Type>> {
+        if *digits >= 0 {
+            Ok(Some(*number))
+        } else {
             let power = 10.0_f64.powi(-digits as i32);
-            let frac = number.into_inner() / power;
-            Some(Real::from(frac.round() * power))
+            let frac = *number as f64 / power;
+            Ok(Some((frac.round() * power) as i64))
         }
-        _ => None,
-    })
+    }
 }
 
-#[rpn_fn]
-#[inline]
-fn round_with_frac_dec(arg0: &Option<Decimal>, arg1: &Option<Int>) -> Result<Option<Decimal>> {
-    Ok(match (arg0, arg1) {
-        (Some(number), Some(digits)) => {
-            let result: codec::Result<Decimal> = number
-                .to_owned()
-                .round(*digits as i8, RoundMode::HalfEven)
-                .into();
-            Some(result?)
-        }
-        _ => None,
-    })
+pub struct RoundWithFracReal;
+
+impl Round for RoundWithFracReal {
+    type Type = Real;
+
+    #[inline]
+    fn round_with_frac(number: &Self::Type, digits: &Int) -> Result<Option<Self::Type>> {
+        let power = 10.0_f64.powi(-digits as i32);
+        let frac = number.into_inner() / power;
+        Ok(Some(Real::from(frac.round() * power)))
+    }
+}
+
+pub struct RoundWithFracDec;
+
+impl Round for RoundWithFracDec {
+    type Type = Decimal;
+
+    #[inline]
+    fn round_with_frac(number: &Self::Type, digits: &Int) -> Result<Option<Self::Type>> {
+        let result: codec::Result<Decimal> = number
+            .to_owned()
+            .round(*digits as i8, RoundMode::HalfEven)
+            .into();
+        Ok(Some(result?))
+    }
 }
 
 #[inline]
