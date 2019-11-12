@@ -16,6 +16,7 @@ pub fn length(arg: &Option<Bytes>) -> Result<Option<i64>> {
 mod tests {
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
@@ -38,5 +39,7 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output);
         }
+
+        assert_eq!(length(&None).unwrap(), None);
     }
 }
