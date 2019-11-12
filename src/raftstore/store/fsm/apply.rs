@@ -2395,6 +2395,8 @@ impl ApplyFsm {
             self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
             |_| {}
         );
+        fail_point!("on_handle_apply", |_|{});
+        
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
