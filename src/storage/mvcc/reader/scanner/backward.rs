@@ -138,7 +138,9 @@ impl<S: Snapshot> BackwardScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        result = lock.check_ts_conflict(&current_user_key, ts).map(|_| None);
+                        result = lock
+                            .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
+                            .map(|_| None);
                     }
                     IsolationLevel::Rc => {}
                 }

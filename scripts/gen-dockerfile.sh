@@ -1,3 +1,4 @@
+#! /bin/bash
 # This Docker image contains a minimal build environment for TiKV
 #
 # It contains all the tools necessary to reproduce official production builds of TiKV
@@ -23,13 +24,15 @@ RUN yum clean all && \
 	yum update -y && \
 	yum install -y tar wget git which file unzip python-pip openssl-devel \
 		make cmake3 gcc gcc-c++ libstdc++-static pkg-config psmisc gdb \
-		libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel && \
+		libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
+        dwz && \
 	yum clean all
 EOT
 
+
 # CentOS gives cmake 3 a weird binary name, so we link it to something more normal
 # This is required by many build scripts, including ours.
-CAT <<EOT
+cat <<EOT
 RUN ln -s /usr/bin/cmake3 /usr/bin/cmake
 ENV LIBRARY_PATH /usr/local/lib:\$LIBRARY_PATH
 ENV LD_LIBRARY_PATH /usr/local/lib:\$LD_LIBRARY_PATH

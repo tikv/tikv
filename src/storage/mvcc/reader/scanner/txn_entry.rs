@@ -163,7 +163,9 @@ impl<S: Snapshot> Scanner<S> {
                         };
                         // TODO: We need to scan locks into batch
                         //       in the future.
-                        result = lock.check_ts_conflict(&current_user_key, ts).map(|_| None);
+                        result = lock
+                            .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
+                            .map(|_| None);
                     }
                     IsolationLevel::Rc => {}
                 }
