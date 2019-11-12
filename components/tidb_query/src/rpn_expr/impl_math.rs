@@ -14,28 +14,14 @@ pub fn pi() -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 pub fn log_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| {
-        let res = n.ln();
-        if res.is_finite() {
-            Some(Real::from(res))
-        } else {
-            None
-        }
-    }))
+    Ok(arg.and_then(|n| to_real(n.ln())))
 }
 
 #[inline]
 #[rpn_fn]
 pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
     Ok(match (arg0, arg1) {
-        (Some(base), Some(n)) => {
-            let res = n.log(**base);
-            if res.is_finite() {
-                Some(Real::from(res))
-            } else {
-                None
-            }
-        }
+        (Some(base), Some(n)) => to_real(n.log(**base)),
         _ => None,
     })
 }
@@ -43,27 +29,22 @@ pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real
 #[inline]
 #[rpn_fn]
 pub fn log2(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| {
-        let res = n.log2();
-        if res.is_finite() {
-            Some(Real::from(res))
-        } else {
-            None
-        }
-    }))
+    Ok(arg.and_then(|n| to_real(n.log2())))
 }
 
 #[inline]
 #[rpn_fn]
 pub fn log10(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| {
-        let res = n.log10();
-        if res.is_finite() {
-            Some(Real::from(res))
-        } else {
-            None
-        }
-    }))
+    Ok(arg.and_then(|n| to_real(n.log10())))
+}
+
+// If the given f64 is finite, returns `Some(Real)`. Otherwise returns None.
+fn to_real(n: f64) -> Option<Real> {
+    if n.is_finite() {
+        Some(Real::from(n))
+    } else {
+        None
+    }
 }
 
 #[inline]
