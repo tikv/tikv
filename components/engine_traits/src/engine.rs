@@ -11,6 +11,7 @@ pub trait KvEngine:
     + DBOptionsExt
     + CFHandleExt
     + ImportExt
+    + SstExt
     + Send
     + Sync
     + Clone
