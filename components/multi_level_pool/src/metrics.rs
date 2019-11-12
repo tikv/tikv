@@ -28,4 +28,16 @@ lazy_static! {
         &["name", "level"]
     )
     .unwrap();
+    pub static ref MULTI_LEVEL_POOL_LEVEL_STOLEN: IntCounterVec = register_int_counter_vec!(
+        "tikv_multi_level_pool_level_stolen",
+        "Stolen count of each level",
+        &["name", "level"]
+    )
+    .unwrap();
+    pub static ref MULTI_LEVEL_POOL_LEVEL_POLL_TIME: HistogramVec = register_histogram_vec!(
+        "tikv_multi_level_pool_level_poll_time",
+        "Poll time of each level",
+        &["name", "level"]
+    )
+    .unwrap();
 }

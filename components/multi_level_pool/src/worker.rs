@@ -110,23 +110,25 @@ const MIN_LEVEL0_PROPORTION: u32 = 1 << 16;
 const DEFAULT_LEVEL0_PROPORTION: u32 = (1 << 27) * ((1 << 5) - 1);
 
 #[derive(Clone)]
-pub struct Proportions([IntGauge; 2]);
+pub struct Proportions([IntGauge; 2], [IntCounter; 3]);
 
 impl Proportions {
-    pub fn init(level_proportions: [IntGauge; 2]) -> Proportions {
+    pub fn init(level_proportions: [IntGauge; 2], level_stolen: [IntCounter; 3]) -> Proportions {
         level_proportions[0].set(DEFAULT_LEVEL0_PROPORTION as i64);
         level_proportions[1].set((DEFAULT_LEVEL0_PROPORTION / 8 + (1 << 24) * 7) as i64);
-        Proportions(level_proportions)
+        Proportions(level_proportions, level_stolen)
     }
 
     fn get_level(&self, rand_val: u32) -> usize {
-        if rand_val < self.0[0].get() as u32 {
+        let level = if rand_val < self.0[0].get() as u32 {
             0
         } else if rand_val < self.0[1].get() as u32 {
             1
         } else {
             2
-        }
+        };
+        self.1[level].inc();
+        level
     }
 }
 
@@ -152,7 +154,7 @@ pub async fn update_proportions(scheduler: Scheduler, proportions: Proportions) 
         let old_proportions = [proportions.0[0].get() as u32, proportions.0[1].get() as u32];
         let mut new_proportions = old_proportions;
         if level0_percentage < 0.75 {
-            new_proportions[0] = u32::max(
+            new_proportions[0] = u32::min(
                 ((u64::from(old_proportions[0]) + (1 << 32)) / 2) as u32,
                 MAX_LEVEL0_PROPORTION,
             );

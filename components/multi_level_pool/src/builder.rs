@@ -120,11 +120,18 @@ impl Builder {
             ],
             level_proportions: [
                 MULTI_LEVEL_POOL_PROPORTIONS.with_label_values(&[name, "0"]),
-                MULTI_LEVEL_POOL_PROPORTIONS.with_label_values(&[name, "2"]),
+                MULTI_LEVEL_POOL_PROPORTIONS.with_label_values(&[name, "1"]),
             ],
         });
         let scheduler = Scheduler::new(self.pool_size, env.level_elapsed.clone());
-        let proportions = Proportions::init(env.level_proportions.clone());
+        let proportions = Proportions::init(
+            env.level_proportions.clone(),
+            [
+                MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "0"]),
+                MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "1"]),
+                MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "2"]),
+            ],
+        );
 
         // Create workers
         let mut workers: Vec<Worker> = Vec::with_capacity(self.pool_size);
