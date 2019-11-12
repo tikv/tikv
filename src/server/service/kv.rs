@@ -1447,6 +1447,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E,
         let storage = self.storage.clone();
         let cop = self.cop.clone();
         let gc_worker = self.gc_worker.clone();
+        self.enable_req_batch = false;
         if self.enable_req_batch {
             let stopped = Arc::new(AtomicBool::new(false));
             let req_batcher = ReqBatcher::new(
