@@ -10,6 +10,7 @@ pub mod impl_json;
 pub mod impl_like;
 pub mod impl_math;
 pub mod impl_op;
+pub mod impl_string;
 pub mod impl_time;
 
 pub use self::types::*;
@@ -28,6 +29,7 @@ use self::impl_json::*;
 use self::impl_like::*;
 use self::impl_math::*;
 use self::impl_op::*;
+use self::impl_string::*;
 use self::impl_time::*;
 
 fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
@@ -260,6 +262,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonUnquoteSig => json_unquote_fn_meta(),
         ScalarFuncSig::JsonExtractSig => json_extract_fn_meta(),
         ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
+        ScalarFuncSig::Bin => bin_fn_meta(),
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
         ScalarFuncSig::CastIntAsString |
