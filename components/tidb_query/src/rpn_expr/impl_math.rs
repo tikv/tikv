@@ -14,14 +14,14 @@ pub fn pi() -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 pub fn log_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| to_real(n.ln())))
+    Ok(arg.and_then(|n| f64_to_real(n.ln())))
 }
 
 #[inline]
 #[rpn_fn]
 pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
     Ok(match (arg0, arg1) {
-        (Some(base), Some(n)) => to_real(n.log(**base)),
+        (Some(base), Some(n)) => f64_to_real(n.log(**base)),
         _ => None,
     })
 }
@@ -29,17 +29,17 @@ pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real
 #[inline]
 #[rpn_fn]
 pub fn log2(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| to_real(n.log2())))
+    Ok(arg.and_then(|n| f64_to_real(n.log2())))
 }
 
 #[inline]
 #[rpn_fn]
 pub fn log10(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| to_real(n.log10())))
+    Ok(arg.and_then(|n| f64_to_real(n.log10())))
 }
 
 // If the given f64 is finite, returns `Some(Real)`. Otherwise returns None.
-fn to_real(n: f64) -> Option<Real> {
+fn f64_to_real(n: f64) -> Option<Real> {
     if n.is_finite() {
         Some(Real::from(n))
     } else {
