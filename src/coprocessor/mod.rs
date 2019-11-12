@@ -38,6 +38,7 @@ use kvproto::{coprocessor as coppb, kvrpcpb};
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 
+use crate::storage::mvcc::TsSet;
 use crate::storage::Statistics;
 
 pub const REQ_TYPE_DAG: i64 = 103;
@@ -100,12 +101,15 @@ pub struct ReqContext {
 
     /// The transaction start_ts of the request
     pub txn_start_ts: Option<u64>,
+
+    /// The set of timestamps of locks that can be bypassed during the reading.
+    pub bypass_locks: TsSet,
 }
 
 impl ReqContext {
     pub fn new(
         tag: &'static str,
-        context: kvrpcpb::Context,
+        mut context: kvrpcpb::Context,
         ranges: &[coppb::KeyRange],
         max_handle_duration: Duration,
         peer: Option<String>,
@@ -113,6 +117,7 @@ impl ReqContext {
         txn_start_ts: Option<u64>,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
+        let bypass_locks = TsSet::new(context.take_resolved_locks());
         Self {
             tag,
             context,
@@ -122,6 +127,7 @@ impl ReqContext {
             txn_start_ts,
             first_range: ranges.first().cloned(),
             ranges_len: ranges.len(),
+            bypass_locks,
         }
     }
 
