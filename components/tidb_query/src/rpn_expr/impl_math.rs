@@ -2,7 +2,7 @@ use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::codec::mysql::{RoundMode, DEFAULT_FSP};
-use crate::codec::{self, Error};
+use crate::codec::Error;
 use crate::expr::EvalContext;
 use crate::Result;
 
@@ -14,9 +14,45 @@ pub fn pi() -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
-pub fn abs<A: Abs>(arg: &Option<A::Type>) -> Result<Option<A::Type>> {
+pub fn log_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| f64_to_real(n.ln())))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
+    Ok(match (arg0, arg1) {
+        (Some(base), Some(n)) => f64_to_real(n.log(**base)),
+        _ => None,
+    })
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log2(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| f64_to_real(n.log2())))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log10(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| f64_to_real(n.log10())))
+}
+
+// If the given f64 is finite, returns `Some(Real)`. Otherwise returns None.
+fn f64_to_real(n: f64) -> Option<Real> {
+    if n.is_finite() {
+        Some(Real::from(n))
+    } else {
+        None
+    }
+}
+
+#[inline]
+#[rpn_fn(capture = [ctx])]
+pub fn abs<A: Abs>(ctx: &mut EvalContext, arg: &Option<A::Type>) -> Result<Option<A::Type>> {
     if let Some(arg) = arg {
-        A::abs(arg)
+        A::abs(ctx, arg)
     } else {
         Ok(None)
     }
@@ -25,7 +61,7 @@ pub fn abs<A: Abs>(arg: &Option<A::Type>) -> Result<Option<A::Type>> {
 pub trait Abs {
     type Type: Evaluable;
 
-    fn abs(arg: &Self::Type) -> Result<Option<Self::Type>>;
+    fn abs(_ctx: &mut EvalContext, arg: &Self::Type) -> Result<Option<Self::Type>>;
 }
 
 pub struct AbsInt;
@@ -34,21 +70,23 @@ impl Abs for AbsInt {
     type Type = Int;
 
     #[inline]
-    fn abs(arg: &Self::Type) -> Result<Option<Self::Type>> {
-        match (*arg).checked_abs() {
-            None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)).into()),
-            Some(arg_abs) => Ok(Some(arg_abs)),
-        }
+    fn abs(ctx: &mut EvalContext, arg: &Self::Type) -> Result<Option<Self::Type>> {
+        Ok(match (*arg).checked_abs() {
+            None => ctx
+                .handle_overflow_err(Error::overflow("BIGINT", format!("abs({})", *arg)))
+                .map(|_| None)?,
+            Some(arg_abs) => Some(arg_abs),
+        })
     }
 }
 
-pub struct AbsUint;
+pub struct AbsUInt;
 
-impl Abs for AbsUint {
+impl Abs for AbsUInt {
     type Type = Int;
 
     #[inline]
-    fn abs(arg: &Self::Type) -> Result<Option<Self::Type>> {
+    fn abs(_ctx: &mut EvalContext, arg: &Self::Type) -> Result<Option<Self::Type>> {
         Ok(Some(*arg))
     }
 }
@@ -59,7 +97,7 @@ impl Abs for AbsReal {
     type Type = Real;
 
     #[inline]
-    fn abs(arg: &Self::Type) -> Result<Option<Self::Type>> {
+    fn abs(_ctx: &mut EvalContext, arg: &Self::Type) -> Result<Option<Self::Type>> {
         Ok(Some(num_traits::Signed::abs(arg)))
     }
 }
@@ -70,9 +108,8 @@ impl Abs for AbsDecimal {
     type Type = Decimal;
 
     #[inline]
-    fn abs(arg: &Self::Type) -> Result<Option<Self::Type>> {
-        let res: codec::Result<Decimal> = arg.to_owned().abs().into();
-        Ok(Some(res?))
+    fn abs(ctx: &mut EvalContext, arg: &Self::Type) -> Result<Option<Self::Type>> {
+        Ok(arg.to_owned().abs().into_result(ctx).map(Some)?)
     }
 }
 
@@ -215,31 +252,39 @@ impl Floor for FloorIntToInt {
 }
 
 #[inline]
-#[rpn_fn]
-pub fn round<R: Round>(arg: &Option<R::Type>) -> Result<Option<R::Type>> {
+#[rpn_fn(capture = [ctx])]
+pub fn round<R: Round>(ctx: &mut EvalContext, arg: &Option<R::Type>) -> Result<Option<R::Type>> {
     if let Some(arg) = arg {
-        R::round(arg)
+        R::round(ctx, arg)
     } else {
         Ok(None)
     }
 }
 
 #[inline]
-#[rpn_fn]
-pub fn round_with_frac<R: Round>(arg0: &Option<R::Type>, arg1: &Option<Int>) -> Result<Option<R::Type>> {
+#[rpn_fn(capture = [ctx])]
+pub fn round_with_frac<R: Round>(
+    ctx: &mut EvalContext,
+    arg0: &Option<R::Type>,
+    arg1: &Option<Int>,
+) -> Result<Option<R::Type>> {
     match (arg0, arg1) {
-        (Some(number), Some(digits)) => R::round_with_frac(number, digits),
-        _ => Ok(None)
+        (Some(number), Some(digits)) => R::round_with_frac(ctx, number, *digits),
+        _ => Ok(None),
     }
 }
 
 pub trait Round {
     type Type: Evaluable;
 
-    fn round(_arg: &Self::Type) -> Result<Option<Self::Type>> {
+    fn round(_ctx: &mut EvalContext, _arg: &Self::Type) -> Result<Option<Self::Type>> {
         Ok(None)
     }
-    fn round_with_frac(_number: &Self::Type, _digits: &Int) -> Result<Option<Self::Type>> {
+    fn round_with_frac(
+        _ctx: &mut EvalContext,
+        _number: &Self::Type,
+        _digits: Int,
+    ) -> Result<Option<Self::Type>> {
         Ok(None)
     }
 }
@@ -250,7 +295,7 @@ impl Round for RoundInt {
     type Type = Int;
 
     #[inline]
-    fn round(arg: &Self::Type) -> Result<Option<Self::Type>> {
+    fn round(_ctx: &mut EvalContext, arg: &Self::Type) -> Result<Option<Self::Type>> {
         Ok(Some(*arg))
     }
 }
@@ -261,7 +306,7 @@ impl Round for RoundReal {
     type Type = Real;
 
     #[inline]
-    fn round(arg: &Self::Type) -> Result<Option<Self::Type>> {
+    fn round(_ctx: &mut EvalContext, arg: &Self::Type) -> Result<Option<Self::Type>> {
         Ok(Some(Real::from(arg.round())))
     }
 }
@@ -272,12 +317,12 @@ impl Round for RoundDec {
     type Type = Decimal;
 
     #[inline]
-    fn round(arg: &Self::Type) -> Result<Option<Self::Type>> {
-        let result: codec::Result<Decimal> = arg
+    fn round(ctx: &mut EvalContext, arg: &Self::Type) -> Result<Option<Self::Type>> {
+        Ok(arg
             .to_owned()
             .round(DEFAULT_FSP, RoundMode::HalfEven)
-            .into();
-        Ok(Some(result?))
+            .into_result(ctx)
+            .map(Some)?)
     }
 }
 
@@ -287,8 +332,12 @@ impl Round for RoundWithFracInt {
     type Type = Int;
 
     #[inline]
-    fn round_with_frac(number: &Self::Type, digits: &Int) -> Result<Option<Self::Type>> {
-        if *digits >= 0 {
+    fn round_with_frac(
+        _ctx: &mut EvalContext,
+        number: &Self::Type,
+        digits: Int,
+    ) -> Result<Option<Self::Type>> {
+        if digits >= 0 {
             Ok(Some(*number))
         } else {
             let power = 10.0_f64.powi(-digits as i32);
@@ -304,7 +353,11 @@ impl Round for RoundWithFracReal {
     type Type = Real;
 
     #[inline]
-    fn round_with_frac(number: &Self::Type, digits: &Int) -> Result<Option<Self::Type>> {
+    fn round_with_frac(
+        _ctx: &mut EvalContext,
+        number: &Self::Type,
+        digits: Int,
+    ) -> Result<Option<Self::Type>> {
         let power = 10.0_f64.powi(-digits as i32);
         let frac = number.into_inner() / power;
         Ok(Some(Real::from(frac.round() * power)))
@@ -317,12 +370,16 @@ impl Round for RoundWithFracDec {
     type Type = Decimal;
 
     #[inline]
-    fn round_with_frac(number: &Self::Type, digits: &Int) -> Result<Option<Self::Type>> {
-        let result: codec::Result<Decimal> = number
+    fn round_with_frac(
+        ctx: &mut EvalContext,
+        number: &Self::Type,
+        digits: Int,
+    ) -> Result<Option<Self::Type>> {
+        Ok(number
             .to_owned()
-            .round(*digits as i8, RoundMode::HalfEven)
-            .into();
-        Ok(Some(result?))
+            .round(digits as i8, RoundMode::HalfEven)
+            .into_result(ctx)
+            .map(Some)?)
     }
 }
 
@@ -370,6 +427,81 @@ mod tests {
             .evaluate(ScalarFuncSig::Pi)
             .unwrap();
         assert_eq!(output, Some(Real::from(std::f64::consts::PI)));
+    }
+
+    #[test]
+    fn test_log_1_arg() {
+        let test_cases = vec![
+            (Some(std::f64::consts::E), Some(Real::from(1.0_f64))),
+            (Some(100.0), Some(Real::from(4.605170185988092_f64))),
+            (Some(-1.0), None),
+            (Some(0.0), None),
+            (None, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Log1Arg)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_log_2_arg() {
+        let test_cases = vec![
+            (Some(10.0_f64), Some(100.0_f64), Some(Real::from(2.0_f64))),
+            (Some(2.0_f64), Some(1.0_f64), Some(Real::from(0.0_f64))),
+            (Some(0.5_f64), Some(0.25_f64), Some(Real::from(2.0_f64))),
+            (Some(-0.23323_f64), Some(2.0_f64), None),
+            (None, None, None),
+            (Some(2.0_f64), None, None),
+            (None, Some(2.0_f64), None),
+        ];
+        for (a1, a2, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(a1)
+                .push_param(a2)
+                .evaluate(ScalarFuncSig::Log2Args)
+                .unwrap();
+            assert_eq!(output, expect, "arg1 {:?}, arg2 {:?}", a1, a2);
+        }
+    }
+
+    #[test]
+    fn test_log2() {
+        let test_cases = vec![
+            (Some(16_f64), Some(Real::from(4_f64))),
+            (Some(5_f64), Some(Real::from(2.321928094887362_f64))),
+            (Some(-1.234_f64), None),
+            (Some(0_f64), None),
+            (None, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Log2)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_log10() {
+        let test_cases = vec![
+            (Some(100_f64), Some(Real::from(2_f64))),
+            (Some(101_f64), Some(Real::from(2.0043213737826426_f64))),
+            (Some(-1.234_f64), None),
+            (Some(0_f64), None),
+            (None, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Log10)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", input);
+        }
     }
 
     #[test]
