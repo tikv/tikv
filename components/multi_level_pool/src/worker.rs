@@ -40,89 +40,88 @@ impl Worker {
     fn start_impl(mut self, level_run: [IntCounter; 3], level_stolen: [IntCounter; 7]) {
         (self.after_start)();
         let mut rng = thread_rng();
-        let mut step = 0;
         let _guard = tokio_timer::set_default(&self.timer_handle);
         self.timer_wg.take().expect("timer wg missing").wait();
         loop {
-            if let Some(task) = self.find_task(&mut rng, &level_stolen) {
-                step = 0;
-                let level = task.0.level.load(Ordering::SeqCst);
-                level_run[level].inc();
-                unsafe {
-                    task.poll();
-                }
-            } else {
-                match step {
-                    0..=2 => {
-                        std::thread::yield_now();
-                        step += 1;
-                    }
-                    _ => {
-                        self.parker.park(self.scheduler.sleepers());
-                        step = 0;
-                    }
-                }
+            let task = self.find_task(&mut rng, &level_stolen);
+            let level = task.0.level.load(Ordering::SeqCst);
+            level_run[level].inc();
+            unsafe {
+                task.poll();
             }
         }
     }
 
-    fn find_task(&self, rng: &mut ThreadRng, level_stolen: &[IntCounter; 7]) -> Option<ArcTask> {
+    fn find_task(&self, rng: &mut ThreadRng, level_stolen: &[IntCounter; 7]) -> ArcTask {
         if let Some(task) = self.local.pop() {
             level_stolen[5].inc();
-            return Some(task);
+            return task;
         }
-        let mut retry = true;
-        while retry {
-            retry = false;
+        // TODO: experimenting now
+        loop {
             // Local is empty, steal from injector
             let level = self.proportions.get_level(rng.next_u32());
-            match self
-                .scheduler
-                .injector(level)
-                .steal_batch_and_pop(&self.local)
-            {
-                Steal::Success(task) => {
-                    level_stolen[level].inc();
-                    return Some(task);
+            let mut step = 0;
+            loop {
+                match self
+                    .scheduler
+                    .injector(level)
+                    .steal_batch_and_pop(&self.local)
+                {
+                    Steal::Success(task) => {
+                        level_stolen[level].inc();
+                        return task;
+                    }
+                    Steal::Retry => {
+                        level_stolen[6].inc();
+                        continue;
+                    }
+                    _ => match step {
+                        0..=2 => {
+                            std::thread::yield_now();
+                            step += 1;
+                        }
+                        _ => {
+                            break;
+                        }
+                    },
                 }
-                Steal::Retry => {
-                    level_stolen[6].inc();
-                    retry = true;
-                }
-                _ => {}
             }
-
             // Fail to steal from expected injector, steal from other workers
             if !self.stealers.is_empty() {
-                let i = rng.gen::<usize>() % self.stealers.len();
-                for j in 0..self.stealers.len() {
-                    let idx = (i + j) % self.stealers.len();
-                    match self.stealers[idx].steal_batch_and_pop(&self.local) {
-                        Steal::Success(task) => {
-                            level_stolen[3].inc();
-                            return Some(task);
+                'outer: loop {
+                    let i = rng.gen::<usize>() % self.stealers.len();
+                    for j in 0..self.stealers.len() {
+                        let idx = (i + j) % self.stealers.len();
+                        match self.stealers[idx].steal_batch_and_pop(&self.local) {
+                            Steal::Success(task) => {
+                                level_stolen[3].inc();
+                                return task;
+                            }
+                            Steal::Retry => {
+                                level_stolen[6].inc();
+                                break;
+                            }
+                            _ => break 'outer,
                         }
-                        _ => {}
                     }
                 }
             }
-
             // steal from other injectors
             for j in 0..3 {
                 let idx = (level + j) % 3;
                 match self.scheduler.injector(idx).steal() {
                     Steal::Success(task) => {
                         level_stolen[idx].inc();
-                        return Some(task);
+                        return task;
                     }
                     _ => {}
                 }
             }
+            // Fail to find a task, sleep
+            level_stolen[4].inc();
+            self.parker.park(self.scheduler.sleepers());
         }
-
-        // Fail to find a task
-        level_stolen[4].inc();
-        None
     }
 }
 
