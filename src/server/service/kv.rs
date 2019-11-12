@@ -51,7 +51,8 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 30;
 const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
 const REQUEST_BATCH_LIMITER_HIGH_LATENCY: f64 = 2.2;
-const REQUEST_BATCH_LIMITER_READ_SIZE_LIMIT: usize = 30;
+
+const READ_BATCH_SIZE_LIMIT: usize = 15;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
@@ -146,7 +147,7 @@ impl BatchLimiter {
     /// Whether current batch needs more requests.
     #[inline]
     fn needs_more(&self) -> bool {
-        self.batch_input < REQUEST_BATCH_LIMITER_READ_SIZE_LIMIT && self.enable_batch
+        self.enable_batch
     }
 
     /// Observe a tick from timer guard. Limiter will update statistics at this point.
@@ -263,33 +264,48 @@ impl ReadBatcher {
         storage::is_normal_priority(ctx.get_priority()) && !ctx.get_replica_read()
     }
 
-    fn add_get(&mut self, request_id: u64, request: &mut GetRequest) {
+    fn filter_get(&mut self, request_id: u64, request: &mut GetRequest) -> bool {
         let id = ReadId::from_context_cf(request.get_context(), None);
-        let command = PointGetCommand::from_get(request);
         match self.router.get_mut(&id) {
             Some((reqs, commands)) => {
+                if reqs.len() > READ_BATCH_SIZE_LIMIT {
+                    return false;
+                }
                 reqs.push(request_id);
-                commands.push(command);
+                commands.push(PointGetCommand::from_get(request));
             }
             None => {
-                self.router.insert(id, (vec![request_id], vec![command]));
+                self.router.insert(
+                    id,
+                    (vec![request_id], vec![PointGetCommand::from_get(request)]),
+                );
             }
         }
+        true
     }
 
-    fn add_raw_get(&mut self, request_id: u64, request: &mut RawGetRequest) {
-        let cf = Some(request.take_cf());
+    fn filter_raw_get(&mut self, request_id: u64, request: &mut RawGetRequest) -> bool {
+        let cf = Some(request.get_cf().to_owned());
         let id = ReadId::from_context_cf(request.get_context(), cf);
-        let command = PointGetCommand::from_raw_get(request);
         match self.router.get_mut(&id) {
             Some((reqs, commands)) => {
+                if reqs.len() > READ_BATCH_SIZE_LIMIT {
+                    return false;
+                }
                 reqs.push(request_id);
-                commands.push(command);
+                commands.push(PointGetCommand::from_raw_get(request));
             }
             None => {
-                self.router.insert(id, (vec![request_id], vec![command]));
+                self.router.insert(
+                    id,
+                    (
+                        vec![request_id],
+                        vec![PointGetCommand::from_raw_get(request)],
+                    ),
+                );
             }
         }
+        true
     }
 }
 
@@ -303,14 +319,12 @@ impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
             batch_commands_request::request::Cmd::Get(req)
                 if Self::is_batchable_context(req.get_context()) =>
             {
-                self.add_get(request_id, req);
-                true
+                self.filter_get(request_id, req)
             }
             batch_commands_request::request::Cmd::RawGet(req)
                 if Self::is_batchable_context(req.get_context()) =>
             {
-                self.add_raw_get(request_id, req);
-                true
+                self.filter_raw_get(request_id, req)
             }
             _ => false,
         }
