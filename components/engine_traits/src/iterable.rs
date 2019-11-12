@@ -137,3 +137,9 @@ impl<'a, I: Iterator> std::iter::Iterator for StdIterator<'a, I> {
         kv
     }
 }
+
+impl<'a> From<&'a [u8]> for SeekKey<'a> {
+    fn from(bs: &'a [u8]) -> SeekKey {
+        SeekKey::Key(bs)
+    }
+}
