@@ -35,7 +35,7 @@ pub fn like(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
                     continue;
                 }
                 mut pc => {
-                    if pc as u32 == escape && px + 1 < pattern.len() {
+                    if u32::from(pc) == escape && px + 1 < pattern.len() {
                         px += 1;
                         pc = pattern[px];
                     }
