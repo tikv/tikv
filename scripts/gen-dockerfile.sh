@@ -9,31 +9,36 @@
 # We require epel packages, so enable the fedora EPEL repo then install dependencies.
 cat <<EOT
 FROM centos:7.6.1810 as builder
-RUN yum install -y epel-release
+RUN yum clean all && \
+    yum makecache && \
+    yum update -y && \
+    yum install -y epel-release
 EOT
 
 # Install the system dependencies
 # Attempt to clean and rebuild the cache to avoid 404s
 cat <<EOT
-RUN yum clean all \
-	&& yum makecache \
-	&& yum update -y \
-	&& yum install -y tar wget git which file unzip python-pip openssl-devel \
+RUN yum clean all && \
+    yum makecache && \
+	yum update -y && \
+	yum install -y tar wget git which file unzip python-pip openssl-devel \
 		make cmake3 gcc gcc-c++ libstdc++-static pkg-config psmisc gdb \
-		libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
-	&& yum clean all
+		libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel && \
+	yum clean all
+EOT
 
 # CentOS gives cmake 3 a weird binary name, so we link it to something more normal
 # This is required by many build scripts, including ours.
+CAT <<EOT
 RUN ln -s /usr/bin/cmake3 /usr/bin/cmake
-ENV LIBRARY_PATH /usr/local/lib:$LIBRARY_PATH
-ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
+ENV LIBRARY_PATH /usr/local/lib:\$LIBRARY_PATH
+ENV LD_LIBRARY_PATH /usr/local/lib:\$LD_LIBRARY_PATH
 EOT
 
 # Install Rustup
 cat <<EOT
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
-ENV PATH /root/.cargo/bin/:$PATH
+ENV PATH /root/.cargo/bin/:\$PATH
 EOT
 
 # Install the Rust toolchain
@@ -42,7 +47,7 @@ WORKDIR /tikv
 COPY rust-toolchain ./
 RUN rustup self update
 RUN rustup set profile minimal
-RUN rustup default $(cat "rust-toolchain")
+RUN rustup default \$(cat "rust-toolchain")
 EOT
 
 # Use Makefile to build
@@ -52,8 +57,8 @@ EOT
 
 # For cargo
 cat <<EOT
-COPY scripts/run-cargo.sh ./scripts/run-cargo.sh
-COPY etc/cargo.config.dist ./etc/cargo.config.dist
+COPY scripts ./scripts
+COPY etc ./etc
 EOT
 
 # Install dependencies at first
@@ -94,7 +99,6 @@ RUN for cargotoml in \$(find . -name "Cargo.toml"); do \\
         sed -i '/profiling/d' \${cargotoml} && \\
         sed -i '/profiler/d' \${cargotoml} ; \\
     done
-
 EOT
 
 # 
@@ -110,6 +114,7 @@ cat <<EOT
 COPY ./src ./src
 COPY ./cmd/src ./cmd/src
 COPY ./components ./components
+COPY ./.git ./.git
 RUN make build_dist_release
 EOT
 

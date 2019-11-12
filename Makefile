@@ -162,10 +162,12 @@ dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make dist_release
 
 # Create distributable artifacts. Binaries and Docker image tarballs.
+.PHONY: dist_artifacts
 dist_artifacts: dist_tarballs
 
 # Build gzipped tarballs of the binaries and docker images.
 # Used to build a `dist/` folder containing the release artifacts.
+.PHONY: dist_tarballs
 dist_tarballs: docker
 	docker rm -f tikv-binary-extraction-dummy || true
 	docker create --name tikv-binary-extraction-dummy tikv/tikv
@@ -177,13 +179,16 @@ dist_tarballs: docker
 	docker rm tikv-binary-extraction-dummy
 
 # Create tags of the docker images
+.PHONY: docker-tag
 docker-tag: docker-tag-with-git-hash docker-tag-with-git-tag
 
 # Tag docker images with the git hash
+.PHONY: docker-tag-with-git-hash
 docker-tag-with-git-hash:
 	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_HASH}
 
 # Tag docker images with the git tag
+.PHONY: docker-tag-with-git-tag
 docker-tag-with-git-tag:
 	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_TAG}
 
