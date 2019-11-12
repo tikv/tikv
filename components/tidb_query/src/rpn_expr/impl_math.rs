@@ -12,6 +12,61 @@ pub fn pi() -> Result<Option<Real>> {
 }
 
 #[inline]
+#[rpn_fn]
+pub fn log_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| {
+        let res = n.ln();
+        if res.is_finite() {
+            Some(Real::from(res))
+        } else {
+            None
+        }
+    }))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
+    Ok(match (arg0, arg1) {
+        (Some(base), Some(n)) => {
+            let res = n.log(**base);
+            if res.is_finite() {
+                Some(Real::from(res))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    })
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log2(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| {
+        let res = n.log2();
+        if res.is_finite() {
+            Some(Real::from(res))
+        } else {
+            None
+        }
+    }))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log10(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| {
+        let res = n.log10();
+        if res.is_finite() {
+            Some(Real::from(res))
+        } else {
+            None
+        }
+    }))
+}
+
+#[inline]
 #[rpn_fn(capture = [ctx])]
 pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: &Option<C::Input>) -> Result<Option<C::Output>> {
     if let Some(arg) = arg {
@@ -232,6 +287,80 @@ mod tests {
             .evaluate(ScalarFuncSig::Pi)
             .unwrap();
         assert_eq!(output, Some(Real::from(PI)));
+    }
+
+    #[test]
+    fn test_log_1_arg() {
+        let test_cases = vec![
+            (std::f64::consts::E, Some(Real::from(1.0_f64))),
+            (100.0, Some(Real::from(4.605170185988092_f64))),
+            (-1.0, None),
+            (0.0, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Real::from(input))
+                .evaluate(ScalarFuncSig::Log1Arg)
+                .unwrap();
+            assert_eq!(output, expect, "{}", input);
+        }
+    }
+
+    #[test]
+    fn test_log_2_arg() {
+        let test_cases = vec![
+            (Some(10.0_f64), Some(100.0_f64), Some(Real::from(2.0_f64))),
+            (Some(2.0_f64), Some(1.0_f64), Some(Real::from(0.0_f64))),
+            (Some(0.5_f64), Some(0.25_f64), Some(Real::from(2.0_f64))),
+            (Some(-0.23323_f64), Some(2.0_f64), None),
+            (None, None, None),
+            (Some(2.0_f64), None, None),
+            (None, Some(2.0_f64), None),
+        ];
+        for (a1, a2, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(a1.and_then(|a| Some(Real::from(a))))
+                .push_param(a2.and_then(|a| Some(Real::from(a))))
+                .evaluate(ScalarFuncSig::Log2Args)
+                .unwrap();
+            assert_eq!(output, expect, "arg1 {:?}, arg2 {:?}", a1, a2);
+        }
+    }
+
+    #[test]
+    fn test_log2() {
+        let test_cases = vec![
+            (Some(16_f64), Some(Real::from(4_f64))),
+            (Some(5_f64), Some(Real::from(2.321928094887362_f64))),
+            (Some(-1.234_f64), None),
+            (Some(0_f64), None),
+            (None, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input.and_then(|a| Some(Real::from(a))))
+                .evaluate(ScalarFuncSig::Log2)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_log10() {
+        let test_cases = vec![
+            (Some(100_f64), Some(Real::from(2_f64))),
+            (Some(101_f64), Some(Real::from(2.0043213737826426_f64))),
+            (Some(-1.234_f64), None),
+            (Some(0_f64), None),
+            (None, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input.and_then(|a| Some(Real::from(a))))
+                .evaluate(ScalarFuncSig::Log10)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", input);
+        }
     }
 
     #[test]
