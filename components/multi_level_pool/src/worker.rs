@@ -111,8 +111,7 @@ impl Worker {
     }
 }
 
-// 127/128
-const MAX_LEVEL0_PROPORTION: u32 = (1 << 25) * ((1 << 7) - 1);
+const MAX_LEVEL0_PROPORTION: u32 = std::u32::MAX;
 
 // 1/2
 const MIN_LEVEL0_PROPORTION: u32 = 1 << 31;
