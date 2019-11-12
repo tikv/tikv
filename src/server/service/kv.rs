@@ -50,6 +50,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 30;
 const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
+const REQUEST_BATCH_LIMITER_HIGH_LATENCY: f64 = 2.2;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
@@ -170,11 +171,10 @@ impl BatchLimiter {
             if load > 70 {
                 // thread load is less sensitive to workload,
                 // a small barrier here to make sure we have good samples of thread load.
-                let timeout = self.timeout.unwrap();
-                if latency > timeout.as_millis() as f64 * 2.0 {
+                if latency > REQUEST_BATCH_LIMITER_HIGH_LATENCY {
                     self.thread_load_estimation = (self.thread_load_estimation + load) / 2;
                 }
-                if self.latency_estimation > timeout.as_millis() as f64 * 2.0 {
+                if self.latency_estimation > REQUEST_BATCH_LIMITER_HIGH_LATENCY {
                     self.enable_batch = true;
                     self.latency_estimation = 0.0;
                 }

@@ -1639,7 +1639,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 Ok(x) => x,
                                 Err(e) => return future::err(e),
                             };
-                            let mut results = vec![];
+                            let mut results = Vec::with_capacity(gets.len());
                             // TODO: optimize using seek.
                             for get in gets {
                                 results.push(snapshot.get_cf(cf, &get.key).map_err(Error::from));
