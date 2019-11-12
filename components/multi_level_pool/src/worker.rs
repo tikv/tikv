@@ -26,20 +26,25 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn start(self, thread_builder: thread::Builder, level_run: [IntCounter; 3]) {
+    pub fn start(
+        self,
+        thread_builder: thread::Builder,
+        level_run: [IntCounter; 3],
+        level_stolen: [IntCounter; 5],
+    ) {
         thread_builder
-            .spawn(move || self.start_impl(level_run))
+            .spawn(move || self.start_impl(level_run, level_stolen))
             .expect("start worker thread error");
     }
 
-    fn start_impl(mut self, level_run: [IntCounter; 3]) {
+    fn start_impl(mut self, level_run: [IntCounter; 3], level_stolen: [IntCounter; 5]) {
         (self.after_start)();
         let mut rng = thread_rng();
         let mut step = 0;
         let _guard = tokio_timer::set_default(&self.timer_handle);
         self.timer_wg.take().expect("timer wg missing").wait();
         loop {
-            if let Some(task) = self.find_task(&mut rng) {
+            if let Some(task) = self.find_task(&mut rng, &level_stolen) {
                 step = 0;
                 let level = task.0.level.load(Ordering::SeqCst);
                 level_run[level].inc();
@@ -61,7 +66,7 @@ impl Worker {
         }
     }
 
-    fn find_task(&self, rng: &mut ThreadRng) -> Option<ArcTask> {
+    fn find_task(&self, rng: &mut ThreadRng, level_stolen: &[IntCounter; 5]) -> Option<ArcTask> {
         if let Some(task) = self.local.pop() {
             return Some(task);
         }
@@ -78,6 +83,7 @@ impl Worker {
                     .steal_batch_and_pop(&self.local)
                 {
                     Steal::Success(task) => {
+                        level_stolen[idx].inc();
                         return Some(task);
                     }
                     Steal::Retry => retry = true,
@@ -91,6 +97,7 @@ impl Worker {
                     let idx = (i + j) % self.stealers.len();
                     match self.stealers[idx].steal_batch_and_pop(&self.local) {
                         Steal::Success(task) => {
+                            level_stolen[3].inc();
                             return Some(task);
                         }
                         Steal::Retry => retry = true,
@@ -99,6 +106,7 @@ impl Worker {
                 }
             }
         }
+        level_stolen[4].inc();
         None
     }
 }
@@ -113,13 +121,13 @@ const MIN_LEVEL0_PROPORTION: u32 = 1 << 31;
 const DEFAULT_LEVEL0_PROPORTION: u32 = (1 << 27) * ((1 << 5) - 1);
 
 #[derive(Clone)]
-pub struct Proportions([IntGauge; 2], [IntCounter; 3]);
+pub struct Proportions([IntGauge; 2]);
 
 impl Proportions {
-    pub fn init(level_proportions: [IntGauge; 2], level_stolen: [IntCounter; 3]) -> Proportions {
+    pub fn init(level_proportions: [IntGauge; 2]) -> Proportions {
         level_proportions[0].set(DEFAULT_LEVEL0_PROPORTION as i64);
         level_proportions[1].set((DEFAULT_LEVEL0_PROPORTION / 8 + (1 << 29) * 7) as i64);
-        Proportions(level_proportions, level_stolen)
+        Proportions(level_proportions)
     }
 
     fn get_level(&self, rand_val: u32) -> usize {
@@ -130,7 +138,6 @@ impl Proportions {
         } else {
             2
         };
-        self.1[level].inc();
         level
     }
 }

@@ -124,18 +124,18 @@ impl Builder {
             ],
         });
         let scheduler = Scheduler::new(self.pool_size, env.level_elapsed.clone());
-        let proportions = Proportions::init(
-            env.level_proportions.clone(),
-            [
-                MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "0"]),
-                MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "1"]),
-                MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "2"]),
-            ],
-        );
+        let proportions = Proportions::init(env.level_proportions.clone());
         let level_run = [
             MULTI_LEVEL_POOL_LEVEL_RUN.with_label_values(&[name, "0"]),
             MULTI_LEVEL_POOL_LEVEL_RUN.with_label_values(&[name, "1"]),
             MULTI_LEVEL_POOL_LEVEL_RUN.with_label_values(&[name, "2"]),
+        ];
+        let level_stoken = [
+            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "0"]),
+            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "1"]),
+            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "2"]),
+            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "other"]),
+            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "fail"]),
         ];
 
         // Create workers
@@ -168,7 +168,7 @@ impl Builder {
             let thread_builder = thread::Builder::new()
                 .name(format!("{}-{}", name, i + 1))
                 .stack_size(self.stack_size);
-            worker.start(thread_builder, level_run.clone());
+            worker.start(thread_builder, level_run.clone(), level_stoken.clone());
         }
 
         let async_update_proportions = worker::update_proportions(scheduler.clone(), proportions);
