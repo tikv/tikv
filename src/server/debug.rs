@@ -5,7 +5,6 @@ use std::iter::FromIterator;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
-use std::time::Duration;
 use std::{error, result};
 
 use engine::rocks::util::get_cf_handle;
@@ -44,6 +43,8 @@ use tikv_util::config::ReadableSize;
 use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
+
+const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = RocksIterator<Arc<DB>>;
@@ -806,23 +807,20 @@ impl<E: Engine> Debugger<E> {
                 Ok(())
             }
             Module::Server => {
-                // The change config task may be blocked by other GC tasks,
-                // so try to wait for it completed.
-                match wait_op!(
-                    |cb| self
-                        .gc_worker
-                        .as_ref()
-                        .expect("must be some")
-                        .async_change_config(config_name, config_value, cb)
-                        .map_err(|e| Error::Other(e.into())),
-                    Duration::from_secs(3)
-                ) {
-                    Some(Ok(())) => Ok(()),
-                    Some(Err(e)) => Err(Error::Other(e.into())),
-                    None => Err(box_err!(
-                        "Waiting for config changed timed out. The config will be changed soon."
-                    )),
+                if config_name == GC_IO_LIMITER_CONFIG_NAME {
+                    if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
+                        return self
+                            .gc_worker
+                            .as_ref()
+                            .expect("must be some")
+                            .change_io_limit(bytes_per_sec.0)
+                            .map_err(|e| Error::Other(e.into()));
+                    }
                 }
+                Err(Error::InvalidArgument(format!(
+                    "bad argument: {} {}",
+                    config_name, config_value
+                )))
             }
             _ => Err(Error::NotFound(format!("unsupported module: {:?}", module))),
         }
@@ -2354,17 +2352,15 @@ mod tests {
 
     #[test]
     fn test_modify_gc_io_limit() {
-        use crate::server::gc_worker::GC_IO_LIMITER_CONFIG_NAME;
-
         let debugger = new_debugger();
-        assert!(debugger
+        debugger
             .modify_tikv_config(Module::Server, "gc", "10MB")
-            .is_err());
-        assert!(debugger
+            .unwrap_err();
+        debugger
             .modify_tikv_config(Module::Storage, GC_IO_LIMITER_CONFIG_NAME, "10MB")
-            .is_err());
-        assert!(debugger
+            .unwrap_err();
+        debugger
             .modify_tikv_config(Module::Server, GC_IO_LIMITER_CONFIG_NAME, "10MB")
-            .is_ok());
+            .unwrap();
     }
 }

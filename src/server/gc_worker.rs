@@ -3,7 +3,6 @@
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
-use std::str::FromStr;
 use std::sync::mpsc;
 use std::sync::{atomic, Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
@@ -56,8 +55,6 @@ const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
-
-pub const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -115,10 +112,6 @@ enum GCTask {
         end_key: Key,
         callback: Callback<()>,
     },
-    ChangeIoLimit {
-        limit: u64,
-        callback: Callback<()>,
-    },
 }
 
 impl GCTask {
@@ -130,9 +123,6 @@ impl GCTask {
             GCTask::UnsafeDestroyRange {
                 ref mut callback, ..
             } => callback,
-            GCTask::ChangeIoLimit {
-                ref mut callback, ..
-            } => callback,
         };
         mem::replace(callback, Box::new(|_| {}))
     }
@@ -141,7 +131,6 @@ impl GCTask {
         match self {
             GCTask::GC { .. } => "gc",
             GCTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
-            GCTask::ChangeIoLimit { .. } => "ChangeIoLimit",
         }
     }
 }
@@ -166,10 +155,6 @@ impl Display for GCTask {
                 .field("start_key", &format!("{}", start_key))
                 .field("end_key", &format!("{}", end_key))
                 .finish(),
-            GCTask::ChangeIoLimit { limit, .. } => f
-                .debug_struct("ChangeIoLimit")
-                .field("limit", limit)
-                .finish(),
         }
     }
 }
@@ -181,7 +166,7 @@ struct GCRunner<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     /// Used to limit the write flow of GC.
-    limiter: Option<IOLimiter>,
+    limiter: Arc<Mutex<Option<IOLimiter>>>,
 
     cfg: GCConfig,
 
@@ -193,13 +178,9 @@ impl<E: Engine> GCRunner<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
+        limiter: Arc<Mutex<Option<IOLimiter>>>,
         cfg: GCConfig,
     ) -> Self {
-        let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
-            Some(IOLimiter::new(cfg.max_write_bytes_per_sec.0))
-        } else {
-            None
-        };
         Self {
             engine,
             local_storage,
@@ -309,7 +290,7 @@ impl<E: Engine> GCRunner<E> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
-            if let Some(limiter) = &self.limiter {
+            if let Some(limiter) = &*self.limiter.lock().unwrap() {
                 limiter.request(write_size as i64);
             }
             self.engine.write(ctx, modifies)?;
@@ -437,19 +418,6 @@ impl<E: Engine> GCRunner<E> {
         Ok(())
     }
 
-    fn change_io_limit(&mut self, limit: u64) -> Result<()> {
-        if limit == 0 {
-            self.limiter.take();
-        } else {
-            self.limiter
-                .get_or_insert(IOLimiter::new(limit))
-                .set_bytes_per_second(limit as i64);
-            self.cfg.max_write_bytes_per_sec = ReadableSize(limit);
-        }
-        info!("GC io limiter changed"; "max_write_bytes_per_sec" => limit);
-        Ok(())
-    }
-
     fn handle_gc_worker_task(&mut self, mut task: GCTask) {
         let label = task.get_label();
         GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
@@ -466,7 +434,6 @@ impl<E: Engine> GCRunner<E> {
                 end_key,
                 ..
             } => self.unsafe_destroy_range(ctx, start_key, end_key),
-            GCTask::ChangeIoLimit { limit, .. } => self.change_io_limit(*limit),
         };
 
         GC_TASK_DURATION_HISTOGRAM_VEC
@@ -1131,6 +1098,7 @@ pub struct GCWorker<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     cfg: Option<GCConfig>,
+    limiter: Arc<Mutex<Option<IOLimiter>>>,
 
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
@@ -1151,6 +1119,7 @@ impl<E: Engine> Clone for GCWorker<E> {
             local_storage: self.local_storage.clone(),
             raft_store_router: self.raft_store_router.clone(),
             cfg: self.cfg.clone(),
+            limiter: self.limiter.clone(),
             refs: self.refs.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
@@ -1188,11 +1157,17 @@ impl<E: Engine> GCWorker<E> {
                 .create(),
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
+        let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
+            Some(IOLimiter::new(cfg.max_write_bytes_per_sec.0))
+        } else {
+            None
+        };
         GCWorker {
             engine,
             local_storage,
             raft_store_router,
             cfg: Some(cfg),
+            limiter: Arc::new(Mutex::new(limiter)),
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             worker,
             worker_scheduler,
@@ -1216,6 +1191,7 @@ impl<E: Engine> GCWorker<E> {
             self.engine.clone(),
             self.local_storage.take(),
             self.raft_store_router.take(),
+            self.limiter.clone(),
             self.cfg.take().unwrap(),
         );
         self.worker
@@ -1273,32 +1249,17 @@ impl<E: Engine> GCWorker<E> {
             .or_else(handle_gc_task_schedule_error)
     }
 
-    fn check_change_config(
-        &self,
-        name: &str,
-        value: &str,
-        callback: Callback<()>,
-    ) -> Result<GCTask> {
-        if name == GC_IO_LIMITER_CONFIG_NAME {
-            if let Ok(bytes_per_sec) = ReadableSize::from_str(value) {
-                return Ok(GCTask::ChangeIoLimit {
-                    limit: bytes_per_sec.0,
-                    callback,
-                });
-            }
+    pub fn change_io_limit(&self, limit: u64) -> Result<()> {
+        let mut limiter = self.limiter.lock().unwrap();
+        if limit == 0 {
+            limiter.take();
+        } else {
+            limiter
+                .get_or_insert_with(|| IOLimiter::new(limit))
+                .set_bytes_per_second(limit as i64);
         }
-        Err(box_err!("bad arguments: {} {}", name, value))
-    }
-
-    pub fn async_change_config(
-        &self,
-        name: &str,
-        value: &str,
-        callback: Callback<()>,
-    ) -> Result<()> {
-        self.worker_scheduler
-            .schedule(self.check_change_config(name, value, callback)?)
-            .or_else(handle_gc_task_schedule_error)
+        info!("GC io limit changed"; "max_write_bytes_per_sec" => limit);
+        Ok(())
     }
 }
 
@@ -1833,56 +1794,37 @@ mod tests {
     fn test_change_io_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut gc_worker = GCWorker::new(engine, None, None, GCConfig::default());
-        let mut gc_runner = GCRunner::new(
-            gc_worker.engine.clone(),
-            None,
-            None,
-            gc_worker.cfg.take().unwrap(),
-        );
+        gc_worker.start().unwrap();
+        assert!(gc_worker.limiter.lock().unwrap().is_none());
 
-        let (tx, rx) = mpsc::channel();
-        let cb = Box::new(move |res| {
-            let _ = tx.send(res);
-        });
-
-        // Test bad arguments
-        assert!(gc_worker
-            .check_change_config("foo", "bar", cb.clone())
-            .is_err());
-        assert!(gc_worker
-            .check_change_config("foo", "1MB", cb.clone())
-            .is_err());
-        assert!(gc_worker
-            .check_change_config(GC_IO_LIMITER_CONFIG_NAME, "bar", cb.clone())
-            .is_err());
-
-        // Enable io limiter
-        let task = gc_worker
-            .check_change_config(GC_IO_LIMITER_CONFIG_NAME, "10MB", cb.clone())
-            .unwrap();
-        gc_runner.handle_gc_worker_task(task);
-        assert!(rx.recv().unwrap().is_ok());
+        // Enable io iolimit
+        gc_worker.change_io_limit(1024).unwrap();
         assert_eq!(
-            gc_runner.limiter.as_ref().unwrap().get_bytes_per_second() as u64,
-            ReadableSize::from_str("10MB").unwrap().0
+            gc_worker
+                .limiter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .get_bytes_per_second(),
+            1024
         );
 
-        let task = gc_worker
-            .check_change_config(GC_IO_LIMITER_CONFIG_NAME, "1MB", cb.clone())
-            .unwrap();
-        gc_runner.handle_gc_worker_task(task);
-        assert!(rx.recv().unwrap().is_ok());
+        // Change io limit
+        gc_worker.change_io_limit(2048).unwrap();
         assert_eq!(
-            gc_runner.limiter.as_ref().unwrap().get_bytes_per_second() as u64,
-            ReadableSize::from_str("1MB").unwrap().0
+            gc_worker
+                .limiter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .get_bytes_per_second(),
+            2048,
         );
 
-        // Disable io limiter
-        let task = gc_worker
-            .check_change_config(GC_IO_LIMITER_CONFIG_NAME, "0", cb.clone())
-            .unwrap();
-        gc_runner.handle_gc_worker_task(task);
-        assert!(rx.recv().unwrap().is_ok());
-        assert!(gc_runner.limiter.is_none());
+        // Disable io limit
+        gc_worker.change_io_limit(0).unwrap();
+        assert!(gc_worker.limiter.lock().unwrap().is_none());
     }
 }
