@@ -656,7 +656,7 @@ impl ApplyDelegate {
             merged: false,
             ready_source_region_id: 0,
             wait_merge_state: None,
-            is_merging: false,
+            is_merging: reg.is_merging,
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
@@ -2144,6 +2144,7 @@ pub struct Registration {
     pub applied_index_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
+    pub is_merging: bool,
 }
 
 impl Registration {
@@ -2155,6 +2156,7 @@ impl Registration {
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
+            is_merging: peer.pending_merge_state.is_some(),
         }
     }
 }
@@ -2399,6 +2401,8 @@ impl ApplyFsm {
             self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
             |_| {}
         );
+        fail_point!("on_handle_apply", |_| {});
+
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
