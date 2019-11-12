@@ -74,35 +74,21 @@ impl Worker {
         while retry {
             retry = false;
             // Local is empty, steal from injector
-            let i = self.proportions.get_level(rng.next_u32());
-            // TODO: refine code
-            for j in 0..3 {
-                let idx = (i + j) % 3;
-                if idx < 2 {
-                    match self
-                        .scheduler
-                        .injector(idx)
-                        .steal_batch_and_pop(&self.local)
-                    {
-                        Steal::Success(task) => {
-                            level_stolen[idx].inc();
-                            return Some(task);
-                        }
-                        Steal::Retry => retry = true,
-                        _ => {}
-                    }
-                } else {
-                    match self.scheduler.injector(idx).steal() {
-                        Steal::Success(task) => {
-                            level_stolen[idx].inc();
-                            return Some(task);
-                        }
-                        Steal::Retry => retry = true,
-                        _ => {}
-                    }
+            let level = self.proportions.get_level(rng.next_u32());
+            match self
+                .scheduler
+                .injector(level)
+                .steal_batch_and_pop(&self.local)
+            {
+                Steal::Success(task) => {
+                    level_stolen[level].inc();
+                    return Some(task);
                 }
+                Steal::Retry => retry = true,
+                _ => {}
             }
-            // Fail to steal from injectors, steal from others
+
+            // Fail to steal from expected injector, steal from other workers
             if !self.stealers.is_empty() {
                 let i = rng.gen::<usize>() % self.stealers.len();
                 for j in 0..self.stealers.len() {
@@ -117,7 +103,22 @@ impl Worker {
                     }
                 }
             }
+
+            // steal from other injectors
+            for j in 0..3 {
+                let idx = (level + j) % 3;
+                match self.scheduler.injector(idx).steal() {
+                    Steal::Success(task) => {
+                        level_stolen[idx].inc();
+                        return Some(task);
+                    }
+                    Steal::Retry => retry = true,
+                    _ => {}
+                }
+            }
         }
+
+        // Fail to find a task
         level_stolen[4].inc();
         None
     }
