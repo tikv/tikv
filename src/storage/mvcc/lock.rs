@@ -3,8 +3,8 @@
 use super::super::types::Value;
 use super::{Error, Result};
 use crate::storage::{
-    Mutation, FOR_UPDATE_TS_PREFIX, MIN_COMMIT_TS_PREFIX, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX,
-    TXN_SIZE_PREFIX,
+    Key, Mutation, FOR_UPDATE_TS_PREFIX, MIN_COMMIT_TS_PREFIX, SHORT_VALUE_MAX_LEN,
+    SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
 };
 use byteorder::ReadBytesExt;
 use kvproto::kvrpcpb::{LockInfo, Op};
@@ -186,6 +186,28 @@ impl Lock {
         info.set_lock_type(lock_type);
         info
     }
+
+    /// Checks whether the lock conflicts with the given `ts`. If `ts == MaxU64`, the primary lock will be ignored.
+    pub fn check_ts_conflict(self, key: &Key, ts: u64) -> Result<()> {
+        if self.ts > ts
+            || self.lock_type == LockType::Lock
+            || self.lock_type == LockType::Pessimistic
+        {
+            // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
+            return Ok(());
+        }
+
+        let raw_key = key.to_raw()?;
+
+        if ts == std::u64::MAX && raw_key == self.primary {
+            // When `ts == u64::MAX` (which means to get latest committed version for
+            // primary key), and current key is the primary key, we ignore this lock.
+            return Ok(());
+        }
+
+        // There is a pending lock. Client should wait or clean it.
+        Err(Error::KeyIsLocked(self.into_lock_info(raw_key)))
+    }
 }
 
 #[cfg(test)]
@@ -315,5 +337,32 @@ mod tests {
         );
         let v = lock.to_bytes();
         assert!(Lock::parse(&v[..4]).is_err());
+    }
+
+    #[test]
+    fn test_check_ts_conflict() {
+        let key = Key::from_raw(b"foo");
+        let mut lock = Lock::new(LockType::Put, vec![], 100, 3, None, 0, 1, 0);
+
+        // Ignore the lock if read ts is less than the lock version
+        assert!(lock.clone().check_ts_conflict(&key, 50,).is_ok());
+
+        // Returns the lock if read ts >= lock version
+        assert!(lock.clone().check_ts_conflict(&key, 110).is_err());
+
+        // Ignore the lock if it is Lock or Pessimistic.
+        lock.lock_type = LockType::Lock;
+        assert!(lock.clone().check_ts_conflict(&key, 110).is_ok());
+        lock.lock_type = LockType::Pessimistic;
+        assert!(lock.clone().check_ts_conflict(&key, 110).is_ok());
+
+        // Ignore the primary lock when reading the latest committed version by setting u64::MAX as ts
+        lock.lock_type = LockType::Put;
+        lock.primary = b"foo".to_vec();
+        assert!(lock.clone().check_ts_conflict(&key, std::u64::MAX).is_ok());
+
+        // Should not ignore the secondary lock even though reading the latest version
+        lock.primary = b"bar".to_vec();
+        assert!(lock.clone().check_ts_conflict(&key, std::u64::MAX).is_err());
     }
 }
