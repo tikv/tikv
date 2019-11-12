@@ -644,7 +644,7 @@ fn test_node_request_snapshot_reject_merge() {
     drop(cluster);
 }
 
-// Test if compact log is rejected after premerge was applied and restart
+// Test if compact log is ignored after premerge was applied and restart
 // I.e. is_merging flag should be set after restart
 #[test]
 fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
