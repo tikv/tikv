@@ -30,14 +30,14 @@ impl Worker {
         self,
         thread_builder: thread::Builder,
         level_run: [IntCounter; 3],
-        level_stolen: [IntCounter; 5],
+        level_stolen: [IntCounter; 7],
     ) {
         thread_builder
             .spawn(move || self.start_impl(level_run, level_stolen))
             .expect("start worker thread error");
     }
 
-    fn start_impl(mut self, level_run: [IntCounter; 3], level_stolen: [IntCounter; 5]) {
+    fn start_impl(mut self, level_run: [IntCounter; 3], level_stolen: [IntCounter; 7]) {
         (self.after_start)();
         let mut rng = thread_rng();
         let mut step = 0;
@@ -66,8 +66,9 @@ impl Worker {
         }
     }
 
-    fn find_task(&self, rng: &mut ThreadRng, level_stolen: &[IntCounter; 5]) -> Option<ArcTask> {
+    fn find_task(&self, rng: &mut ThreadRng, level_stolen: &[IntCounter; 7]) -> Option<ArcTask> {
         if let Some(task) = self.local.pop() {
+            level_stolen[5].inc();
             return Some(task);
         }
         let mut retry = true;
@@ -84,7 +85,10 @@ impl Worker {
                     level_stolen[level].inc();
                     return Some(task);
                 }
-                Steal::Retry => retry = true,
+                Steal::Retry => {
+                    level_stolen[6].inc();
+                    retry = true;
+                }
                 _ => {}
             }
 
@@ -98,7 +102,6 @@ impl Worker {
                             level_stolen[3].inc();
                             return Some(task);
                         }
-                        Steal::Retry => retry = true,
                         _ => {}
                     }
                 }
@@ -112,7 +115,6 @@ impl Worker {
                         level_stolen[idx].inc();
                         return Some(task);
                     }
-                    Steal::Retry => retry = true,
                     _ => {}
                 }
             }

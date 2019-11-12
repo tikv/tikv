@@ -136,6 +136,8 @@ impl Builder {
             MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "2"]),
             MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "other"]),
             MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "fail"]),
+            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "local"]),
+            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "retry"]),
         ];
 
         // Create workers
