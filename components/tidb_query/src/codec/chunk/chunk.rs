@@ -21,10 +21,10 @@ pub struct Chunk {
 
 impl Chunk {
     /// Create a new chunk with field types and capacity.
-    pub fn new(tps: &[FieldType], cap: usize) -> Chunk {
+    pub fn new(tps: &[FieldType], cap: usize, is_little_endian: bool) -> Chunk {
         let mut columns = Vec::with_capacity(tps.len());
         for tp in tps {
-            columns.push(Column::new(tp, cap));
+            columns.push(Column::new(tp, cap, is_little_endian));
         }
         Chunk { columns }
     }
@@ -67,7 +67,6 @@ impl Chunk {
         field_type: &FieldType,
         vec: &VectorValue,
         column_index: usize,
-        is_little_endian: bool,
     ) -> Result<()> {
         let col = &mut self.columns[column_index];
         match vec {
@@ -323,7 +322,7 @@ mod tests {
             Datum::Bytes(b"xxx".to_vec()),
         ];
 
-        let mut chunk = Chunk::new(&fields, 10);
+        let mut chunk = Chunk::new(&fields, 10, true);
         for (col_id, val) in data.iter().enumerate() {
             chunk.append_datum(col_id, val).unwrap();
         }
@@ -349,7 +348,7 @@ mod tests {
             field_type(FieldTypeTp::NewDecimal),
             field_type(FieldTypeTp::JSON),
         ];
-        let mut chunk = Chunk::new(&fields, rows);
+        let mut chunk = Chunk::new(&fields, rows, true);
         let mut ctx = EvalContext::default();
 
         for row_id in 0..rows {

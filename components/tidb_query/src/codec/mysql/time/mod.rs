@@ -1486,7 +1486,7 @@ impl<T: BufferWriter> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
-    fn write_time(&mut self, v: Time) -> Result<()> {
+    fn write_time_le(&mut self, v: Time) -> Result<()> {
         if !v.is_zero() {
             self.write_u32_le(v.hour() as u32)?;
             self.write_u32_le(v.micro())?;
@@ -1509,11 +1509,35 @@ pub trait TimeEncoder: NumberEncoder {
         // Encode an useless u16 to make byte alignment 20 bytes.
         self.write_u16_le(0 as u16).map_err(From::from)
     }
+
+    fn write_time_be(&mut self, v: Time) -> Result<()> {
+        if !v.is_zero() {
+            self.write_u32_be(v.hour() as u32)?;
+            self.write_u32_be(v.micro())?;
+            self.write_u16_be(v.year() as u16)?;
+            self.write_u8(v.month() as u8)?;
+            self.write_u8(v.day() as u8)?;
+            self.write_u8(v.minute() as u8)?;
+            self.write_u8(v.second() as u8)?;
+        } else {
+            let len = mem::size_of::<u16>() + 2 * mem::size_of::<u32>() + 4;
+            let buf = vec![0; len];
+            self.write_bytes(&buf)?;
+        }
+        // Encode an useless u16 to make byte alignment 16 bytes.
+        self.write_u16_be(0 as u16)?;
+
+        let tp = FieldTypeTp::from(v.get_time_type());
+        self.write_u8(tp.to_u8().unwrap())?;
+        self.write_u8(v.fsp())?;
+        // Encode an useless u16 to make byte alignment 20 bytes.
+        self.write_u16_be(0 as u16).map_err(From::from)
+    }
 }
 
 pub trait TimeDecoder: NumberDecoder {
     /// Decodes time encoded by `write_time` for Chunk format.
-    fn read_time(&mut self, ctx: &mut EvalContext) -> Result<Time> {
+    fn read_time_le(&mut self, ctx: &mut EvalContext) -> Result<Time> {
         let hour = self.read_u32_le()?;
         let micro = self.read_u32_le()?;
         let year = i32::from(self.read_u16_le()?);
@@ -1524,7 +1548,7 @@ pub trait TimeDecoder: NumberDecoder {
             u32::from(buf[2]),
             u32::from(buf[3]),
         );
-        let _ = self.read_u16();
+        let _ = self.read_u16_le();
         let buf = self.read_bytes(2)?;
         let (time_type, fsp): (TimeType, _) = (
             FieldTypeTp::from_u8(buf[0])
@@ -1532,7 +1556,50 @@ pub trait TimeDecoder: NumberDecoder {
                 .try_into()?,
             buf[1],
         );
-        let _ = self.read_u16();
+        let _ = self.read_u16_le();
+
+        if time_type == TimeType::Timestamp {
+            let utc = chrono_datetime(&Utc, year as u32, month, day, hour, minute, second, micro)?;
+            let timestamp = ctx.cfg.tz.from_utc_datetime(&utc.naive_utc());
+            Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp as i8)
+        } else {
+            Time::new(
+                ctx,
+                TimeArgs {
+                    year: year as u32,
+                    month,
+                    day,
+                    hour,
+                    minute,
+                    second,
+                    micro,
+                    fsp: fsp as i8,
+                    time_type,
+                },
+            )
+        }
+    }
+
+    fn read_time_be(&mut self, ctx: &mut EvalContext) -> Result<Time> {
+        let hour = self.read_u32_be()?;
+        let micro = self.read_u32_be()?;
+        let year = i32::from(self.read_u16_be()?);
+        let buf = self.read_bytes(4)?;
+        let (month, day, minute, second) = (
+            u32::from(buf[0]),
+            u32::from(buf[1]),
+            u32::from(buf[2]),
+            u32::from(buf[3]),
+        );
+        let _ = self.read_u16_be();
+        let buf = self.read_bytes(2)?;
+        let (time_type, fsp): (TimeType, _) = (
+            FieldTypeTp::from_u8(buf[0])
+                .unwrap_or(FieldTypeTp::Unspecified)
+                .try_into()?,
+            buf[1],
+        );
+        let _ = self.read_u16_be();
 
         if time_type == TimeType::Timestamp {
             let utc = chrono_datetime(&Utc, year as u32, month, day, hour, minute, second, micro)?;

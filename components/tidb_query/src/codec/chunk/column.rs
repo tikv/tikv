@@ -26,11 +26,17 @@ pub struct Column {
     data: Vec<u8>,
     // if the data's length is fixed, fixed_len should be bigger than 0
     fixed_len: usize,
+
+    is_little_endian: bool,
 }
 
 impl Column {
     /// Create the column with a specified type and capacity.
-    pub fn new(field_type: &dyn FieldTypeAccessor, init_cap: usize) -> Column {
+    pub fn new(
+        field_type: &dyn FieldTypeAccessor,
+        init_cap: usize,
+        is_little_endian: bool,
+    ) -> Column {
         match field_type.tp() {
             FieldTypeTp::Tiny
             | FieldTypeTp::Short
@@ -39,15 +45,17 @@ impl Column {
             | FieldTypeTp::LongLong
             | FieldTypeTp::Year
             | FieldTypeTp::Double
-            | FieldTypeTp::Duration => Column::new_fixed_len(8, init_cap),
+            | FieldTypeTp::Duration => Column::new_fixed_len(8, init_cap, is_little_endian),
 
-            FieldTypeTp::Float => Column::new_fixed_len(4, init_cap),
+            FieldTypeTp::Float => Column::new_fixed_len(4, init_cap, is_little_endian),
 
             FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
-                Column::new_fixed_len(20, init_cap)
+                Column::new_fixed_len(20, init_cap, is_little_endian)
             }
-            FieldTypeTp::NewDecimal => Column::new_fixed_len(DECIMAL_STRUCT_SIZE, init_cap),
-            _ => Column::new_var_len_column(init_cap),
+            FieldTypeTp::NewDecimal => {
+                Column::new_fixed_len(DECIMAL_STRUCT_SIZE, init_cap, is_little_endian)
+            }
+            _ => Column::new_var_len_column(init_cap, is_little_endian),
         }
     }
 
@@ -123,23 +131,25 @@ impl Column {
     }
 
     /// Create a column with a fixed element length.
-    pub fn new_fixed_len(element_len: usize, init_cap: usize) -> Column {
+    pub fn new_fixed_len(element_len: usize, init_cap: usize, is_little_endian: bool) -> Column {
         Column {
             fixed_len: element_len,
             data: Vec::with_capacity(element_len * init_cap),
             null_bitmap: Vec::with_capacity(init_cap / 8),
+            is_little_endian,
             ..Default::default()
         }
     }
 
     /// Create a column with variant element length.
-    pub fn new_var_len_column(init_cap: usize) -> Column {
+    pub fn new_var_len_column(init_cap: usize, is_little_endian: bool) -> Column {
         let mut offsets = Vec::with_capacity(init_cap + 1);
         offsets.push(0);
         Column {
             var_offsets: offsets,
             data: Vec::with_capacity(4 * init_cap),
             null_bitmap: Vec::with_capacity(init_cap / 8),
+            is_little_endian,
             ..Default::default()
         }
     }
@@ -220,7 +230,11 @@ impl Column {
 
     /// Append i64 datum to the column.
     pub fn append_i64(&mut self, v: i64) -> Result<()> {
-        self.data.write_i64_le(v)?;
+        if self.is_little_endian {
+            self.data.write_i64_le(v)?;
+        } else {
+            self.data.write_i64_be(v)?;
+        }
         self.finish_append_fixed()
     }
 
@@ -229,12 +243,20 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.read_i64_le().map_err(Error::from)
+        if self.is_little_endian {
+            data.read_i64_le().map_err(Error::from)
+        } else {
+            data.read_i64_be().map_err(Error::from)
+        }
     }
 
     /// Append u64 datum to the column.
     pub fn append_u64(&mut self, v: u64) -> Result<()> {
-        self.data.write_u64_le(v)?;
+        if self.is_little_endian {
+            self.data.write_u64_le(v)?;
+        } else {
+            self.data.write_u64_be(v)?;
+        }
         self.finish_append_fixed()
     }
 
@@ -243,18 +265,30 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.read_u64_le().map_err(Error::from)
+        if self.is_little_endian {
+            data.read_u64_le().map_err(Error::from)
+        } else {
+            data.read_u64_be().map_err(Error::from)
+        }
     }
 
     /// Append a f64 datum to the column.
     pub fn append_f64(&mut self, v: f64) -> Result<()> {
-        self.data.write_f64_le(v)?;
+        if self.is_little_endian {
+            self.data.write_f64_le(v)?;
+        } else {
+            self.data.write_f64_be(v)?;
+        }
         self.finish_append_fixed()
     }
 
     /// Append a f32 datum to the column.
     pub fn append_f32(&mut self, v: f32) -> Result<()> {
-        self.data.write_f32_le(v)?;
+        if self.is_little_endian {
+            self.data.write_f32_le(v)?;
+        } else {
+            self.data.write_f32_be(v)?;
+        }
         self.finish_append_fixed()
     }
 
@@ -263,7 +297,11 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.read_f64_le().map_err(Error::from)
+        if self.is_little_endian {
+            data.read_f64_le().map_err(Error::from)
+        } else {
+            data.read_f64_be().map_err(Error::from)
+        }
     }
 
     /// Get the f32 datum of the row in the column.
@@ -271,7 +309,11 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.read_f32_le().map_err(Error::from)
+        if self.is_little_endian {
+            data.read_f32_le().map_err(Error::from)
+        } else {
+            data.read_f32_be().map_err(Error::from)
+        }
     }
 
     /// Called when the variant datum has been appended.
@@ -298,7 +340,11 @@ impl Column {
 
     /// Append a time datum to the column.
     pub fn append_time(&mut self, t: Time) -> Result<()> {
-        self.data.write_time(t)?;
+        if self.is_little_endian {
+            self.data.write_time_le(t)?;
+        } else {
+            self.data.write_time_be(t)?;
+        }
         self.finish_append_fixed()
     }
 
@@ -307,12 +353,20 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.read_time(ctx)
+        if self.is_little_endian {
+            data.read_time_le(ctx)
+        } else {
+            data.read_time_be(ctx)
+        }
     }
 
     /// Append a duration datum to the column.
     pub fn append_duration(&mut self, d: Duration) -> Result<()> {
-        self.data.write_duration_to_chunk(d)?;
+        if self.is_little_endian {
+            self.data.write_duration_to_chunk_le(d)?;
+        } else {
+            self.data.write_duration_to_chunk_be(d)?;
+        }
         self.finish_append_fixed()
     }
 
@@ -321,12 +375,20 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.read_duration_from_chunk(fsp)
+        if self.is_little_endian {
+            data.read_duration_from_chunk_le(fsp)
+        } else {
+            data.read_duration_from_chunk_be(fsp)
+        }
     }
 
     /// Append a decimal datum to the column.
     pub fn append_decimal(&mut self, d: &Decimal) -> Result<()> {
-        self.data.write_decimal_to_chunk(d)?;
+        if self.is_little_endian {
+            self.data.write_decimal_to_chunk_le(d)?;
+        } else {
+            self.data.write_decimal_to_chunk_be(d)?;
+        }
         self.finish_append_fixed()
     }
 
@@ -335,7 +397,11 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.read_decimal_from_chunk()
+        if self.is_little_endian {
+            data.read_decimal_from_chunk_le()
+        } else {
+            data.read_decimal_from_chunk_be()
+        }
     }
 
     /// Append a json datum to the column.
@@ -360,7 +426,7 @@ impl Column {
     #[cfg(test)]
     pub fn decode(buf: &mut BytesSlice<'_>, tp: &dyn FieldTypeAccessor) -> Result<Column> {
         let length = buf.read_u32_le()? as usize;
-        let mut col = Column::new(tp, length);
+        let mut col = Column::new(tp, length, true);
         col.length = length;
         col.null_cnt = buf.read_u32_le()? as usize;
         let null_length = (col.length + 7) / 8 as usize;
@@ -438,7 +504,7 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for field in &fields {
-            let mut column = Column::new(field, data.len());
+            let mut column = Column::new(field, data.len(), true);
             for v in &data {
                 column.append_datum(v).unwrap();
             }
@@ -475,7 +541,7 @@ mod tests {
     fn test_colum_datum(fields: Vec<FieldType>, data: Vec<Datum>) {
         let mut ctx = EvalContext::default();
         for field in &fields {
-            let mut column = Column::new(field, data.len());
+            let mut column = Column::new(field, data.len(), true);
             for v in &data {
                 column.append_datum(v).unwrap();
             }

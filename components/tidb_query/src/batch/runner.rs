@@ -406,10 +406,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                                 &result.logical_rows,
                                 &self.output_offsets,
                             )?);
-                            let mut is_little_endian: bool = true;
-                            if self.encode_endian == Endian::BigEndian {
-                                is_little_endian = false;
-                            }
+                            let is_little_endian = self.encode_endian == Endian::LittleEndian;
                             result.physical_columns.encode_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,

@@ -400,6 +400,182 @@ impl NumberCodec {
         LittleEndian::read_f64(buf)
     }
 
+    /// Encodes an unsigned 16 bit integer `v` to `buf` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 2`.
+    #[inline]
+    pub fn encode_u16_be(buf: &mut [u8], v: u16) {
+        BigEndian::write_u16(buf, v)
+    }
+
+    /// Decodes an unsigned 16 bit integer from `buf` in big endian,
+    /// which is previously encoded via `encode_u16_le`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 2`.
+    #[inline]
+    pub fn decode_u16_be(buf: &[u8]) -> u16 {
+        BigEndian::read_u16(buf)
+    }
+
+    /// Encodes a signed 16 bit integer `v` to `buf` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 2`.
+    #[inline]
+    pub fn encode_i16_be(buf: &mut [u8], v: i16) {
+        BigEndian::write_i16(buf, v)
+    }
+
+    /// Decodes a signed 16 bit integer from `buf` in big endian,
+    /// which is previously encoded via `encode_i16_le`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 2`.
+    #[inline]
+    pub fn decode_i16_be(buf: &[u8]) -> i16 {
+        BigEndian::read_i16(buf)
+    }
+
+    /// Encodes a 32 bit float number `v` to `buf` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 4`.
+    #[inline]
+    pub fn encode_f32_be(buf: &mut [u8], v: f32) {
+        BigEndian::write_f32(buf, v)
+    }
+
+    /// Decodes a 32 bit float number `v` to `buf` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 4`.
+    #[inline]
+    pub fn decode_f32_be(buf: &[u8]) -> f32 {
+        BigEndian::read_f32(buf)
+    }
+
+    /// Encodes an unsigned 32 bit integer `v` to `buf` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 4`.
+    #[inline]
+    pub fn encode_u32_be(buf: &mut [u8], v: u32) {
+        BigEndian::write_u32(buf, v)
+    }
+
+    /// Decodes an unsigned 32 bit integer from `buf` in big endian,
+    /// which is previously encoded via `encode_u32_le`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 4`.
+    #[inline]
+    pub fn decode_u32_be(buf: &[u8]) -> u32 {
+        BigEndian::read_u32(buf)
+    }
+
+    /// Encodes a signed 32 bit integer `v` to `buf` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 4`.
+    #[inline]
+    pub fn encode_i32_be(buf: &mut [u8], v: i32) {
+        BigEndian::write_i32(buf, v)
+    }
+
+    /// Decodes a signed 32 bit integer from `buf` in big endian,
+    /// which is previously encoded via `encode_i32_le`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 4`.
+    #[inline]
+    pub fn decode_i32_be(buf: &[u8]) -> i32 {
+        BigEndian::read_i32(buf)
+    }
+
+    /// Encodes an unsigned 64 bit integer `v` to `buf` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 8`.
+    #[inline]
+    pub fn encode_u64_be(buf: &mut [u8], v: u64) {
+        BigEndian::write_u64(buf, v)
+    }
+
+    /// Decodes an unsigned 64 bit integer from `buf` in big endian,
+    /// which is previously encoded via `encode_u64_le`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 8`.
+    #[inline]
+    pub fn decode_u64_be(buf: &[u8]) -> u64 {
+        BigEndian::read_u64(buf)
+    }
+
+    /// Encodes a signed 64 bit integer `v` to `buf` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 8`.
+    #[inline]
+    pub fn encode_i64_be(buf: &mut [u8], v: i64) {
+        BigEndian::write_i64(buf, v)
+    }
+
+    /// Decodes a signed 64 bit integer from `buf` in big endian,
+    /// which is previously encoded via `encode_i64_le`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 8`.
+    #[inline]
+    pub fn decode_i64_be(buf: &[u8]) -> i64 {
+        BigEndian::read_i64(buf)
+    }
+
+    /// Encodes a 64 bit float number `v` to `buf` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 8`.
+    #[inline]
+    pub fn encode_f64_be(buf: &mut [u8], v: f64) {
+        BigEndian::write_f64(buf, v)
+    }
+
+    /// Decodes a 64 bit float number from `buf` in big endian,
+    /// which is previously encoded via `encode_f64_le`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 8`.
+    #[inline]
+    pub fn decode_f64_be(buf: &[u8]) -> f64 {
+        BigEndian::read_f64(buf)
+    }
+
     /// Encodes an unsigned 64 bit integer `v` to `buf` in VarInt encoding,
     /// which is not memory-comparable. Returns the number of bytes that encoded.
     ///
@@ -754,6 +930,94 @@ pub trait NumberDecoder: BufferReader {
         read!(self, 8, decode_f64_le)
     }
 
+    /// Reads an unsigned 16 bit integer in big endian,
+    /// which is previously wrote via `write_u16_be`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 2.
+    #[inline]
+    fn read_u16_be(&mut self) -> Result<u16> {
+        read!(self, 2, decode_u16_be)
+    }
+
+    /// Reads a signed 16 bit integer in big endian,
+    /// which is previously wrote via `write_i16_be`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 2.
+    #[inline]
+    fn read_i16_be(&mut self) -> Result<i16> {
+        read!(self, 2, decode_i16_be)
+    }
+
+    /// Reads an unsigned 32 bit integer in big endian,
+    /// which is previously wrote via `write_u32_be`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 4.
+    #[inline]
+    fn read_u32_be(&mut self) -> Result<u32> {
+        read!(self, 4, decode_u32_be)
+    }
+
+    /// Reads a signed 32 bit integer in big endian,
+    /// which is previously wrote via `write_i32_be`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 4.
+    #[inline]
+    fn read_i32_be(&mut self) -> Result<i32> {
+        read!(self, 4, decode_i32_be)
+    }
+
+    /// Reads a 32 bit float  in big endian,
+    /// which is previously wrote via `write_f32_be`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 4.
+    #[inline]
+    fn read_f32_be(&mut self) -> Result<f32> {
+        read!(self, 4, decode_f32_be)
+    }
+
+    /// Reads an unsigned 64 bit integer in big endian,
+    /// which is previously wrote via `write_u64_be`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 8.
+    #[inline]
+    fn read_u64_be(&mut self) -> Result<u64> {
+        read!(self, 8, decode_u64_be)
+    }
+
+    /// Reads a signed 64 bit integer in big endian,
+    /// which is previously wrote via `write_i64_be`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 8.
+    #[inline]
+    fn read_i64_be(&mut self) -> Result<i64> {
+        read!(self, 8, decode_i64_be)
+    }
+
+    /// Reads a 64 bit float number in big endian,
+    /// which is previously wrote via `write_f64_be`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 8.
+    #[inline]
+    fn read_f64_be(&mut self) -> Result<f64> {
+        read!(self, 8, decode_f64_be)
+    }
+
     /// Decodes an unsigned 64 bit integer in VarInt encoding,
     /// which is previously wrote via `write_var_u64`.
     ///
@@ -994,6 +1258,94 @@ pub trait NumberEncoder: BufferWriter {
     #[inline]
     fn write_f64_le(&mut self, v: f64) -> Result<()> {
         write!(self, v, 8, encode_f64_le)
+    }
+
+    /// Writes an unsigned 16 bit integer `v` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 2.
+    #[inline]
+    fn write_u16_be(&mut self, v: u16) -> Result<()> {
+        write!(self, v, 2, encode_u16_be)
+    }
+
+    /// Writes a signed 16 bit integer `v` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 2.
+    #[inline]
+    fn write_i16_be(&mut self, v: i16) -> Result<()> {
+        write!(self, v, 2, encode_i16_be)
+    }
+
+    /// Writes an unsigned 32 bit integer `v` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 4.
+    #[inline]
+    fn write_u32_be(&mut self, v: u32) -> Result<()> {
+        write!(self, v, 4, encode_u32_be)
+    }
+
+    /// Writes a signed 32 bit integer `v` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 4.
+    #[inline]
+    fn write_i32_be(&mut self, v: i32) -> Result<()> {
+        write!(self, v, 4, encode_i32_be)
+    }
+
+    /// Writes a 32 bit float number `v` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 4.
+    #[inline]
+    fn write_f32_be(&mut self, v: f32) -> Result<()> {
+        write!(self, v, 4, encode_f32_be)
+    }
+
+    /// Writes an unsigned 64 bit integer `v` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 8.
+    #[inline]
+    fn write_u64_be(&mut self, v: u64) -> Result<()> {
+        write!(self, v, 8, encode_u64_be)
+    }
+
+    /// Writes a signed 64 bit integer `v` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 8.
+    #[inline]
+    fn write_i64_be(&mut self, v: i64) -> Result<()> {
+        write!(self, v, 8, encode_i64_be)
+    }
+
+    /// Writes a 64 bit float number `v` in big endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 8.
+    #[inline]
+    fn write_f64_be(&mut self, v: f64) -> Result<()> {
+        write!(self, v, 8, encode_f64_be)
     }
 
     /// Writes an unsigned 64 bit integer `v` in VarInt encoding,

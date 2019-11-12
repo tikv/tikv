@@ -175,7 +175,7 @@ impl LazyBatchColumnVec {
             let field_type = &schema[offset];
             fields.push(field_type.clone());
         }
-        let mut chunk = Chunk::new(&fields, logical_rows.as_ref().len());
+        let mut chunk = Chunk::new(&fields, logical_rows.as_ref().len(), is_little_endian);
 
         for column_idx in 0..output_offsets.len() {
             let offset = output_offsets[column_idx] as usize;
@@ -185,7 +185,6 @@ impl LazyBatchColumnVec {
                 &schema[offset],
                 col.decoded(),
                 column_idx,
-                is_little_endian,
             )?;
         }
 

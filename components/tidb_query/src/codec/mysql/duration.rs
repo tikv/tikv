@@ -775,8 +775,12 @@ pub trait DurationEncoder: NumberEncoder {
         self.write_i64(i64::from(v.get_fsp())).map_err(From::from)
     }
 
-    fn write_duration_to_chunk(&mut self, v: Duration) -> Result<()> {
+    fn write_duration_to_chunk_le(&mut self, v: Duration) -> Result<()> {
         self.write_i64_le(v.to_nanos())?;
+        Ok(())
+    }
+    fn write_duration_to_chunk_be(&mut self, v: Duration) -> Result<()> {
+        self.write_i64_be(v.to_nanos())?;
         Ok(())
     }
 }
@@ -789,8 +793,13 @@ pub trait DurationDecoder: NumberDecoder {
         Duration::from_nanos(nanos, fsp as i8)
     }
 
-    fn read_duration_from_chunk(&mut self, fsp: isize) -> Result<Duration> {
+    fn read_duration_from_chunk_le(&mut self, fsp: isize) -> Result<Duration> {
         let nanos = self.read_i64_le()?;
+        Duration::from_nanos(nanos, fsp as i8)
+    }
+
+    fn read_duration_from_chunk_be(&mut self, fsp: isize) -> Result<Duration> {
+        let nanos = self.read_i64_be()?;
         Duration::from_nanos(nanos, fsp as i8)
     }
 }
@@ -1097,10 +1106,10 @@ mod tests {
         for (input, fsp) in cases {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
-            buf.write_duration_to_chunk(t).unwrap();
+            buf.write_duration_to_chunk_le(t).unwrap();
             let got = buf
                 .as_slice()
-                .read_duration_from_chunk(fsp as isize)
+                .read_duration_from_chunk_le(fsp as isize)
                 .unwrap();
             assert_eq!(t, got);
         }
@@ -1493,10 +1502,10 @@ mod benches {
             for &duration in cases {
                 let t = test::black_box(duration);
                 let mut buf = vec![];
-                buf.write_duration_to_chunk(t).unwrap();
+                buf.write_duration_to_chunk_le(t).unwrap();
                 let got = test::black_box(
                     buf.as_slice()
-                        .read_duration_from_chunk(t.fsp() as isize)
+                        .read_duration_from_chunk_le(t.fsp() as isize)
                         .unwrap(),
                 );
                 assert_eq!(t, got);

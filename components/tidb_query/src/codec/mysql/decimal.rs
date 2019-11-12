@@ -2098,7 +2098,7 @@ pub trait DecimalEncoder: NumberEncoder {
         Ok(res)
     }
 
-    fn write_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
+    fn write_decimal_to_chunk_le(&mut self, v: &Decimal) -> Result<()> {
         self.write_u8(v.int_cnt)?;
         self.write_u8(v.frac_cnt)?;
         self.write_u8(v.result_frac_cnt)?;
@@ -2106,6 +2106,18 @@ pub trait DecimalEncoder: NumberEncoder {
         let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
         for id in 0..len as usize {
             self.write_i32_le(v.word_buf[id] as i32)?;
+        }
+        Ok(())
+    }
+
+    fn write_decimal_to_chunk_be(&mut self, v: &Decimal) -> Result<()> {
+        self.write_u8(v.int_cnt)?;
+        self.write_u8(v.frac_cnt)?;
+        self.write_u8(v.result_frac_cnt)?;
+        self.write_u8(v.negative as u8)?;
+        let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
+        for id in 0..len as usize {
+            self.write_i32_be(v.word_buf[id] as i32)?;
         }
         Ok(())
     }
@@ -2245,8 +2257,8 @@ pub trait DecimalDecoder: NumberDecoder {
         Ok(d)
     }
 
-    /// `read_decimal_from_chunk` decode Decimal encoded by `write_decimal_to_chunk`.
-    fn read_decimal_from_chunk(&mut self) -> Result<Decimal> {
+    /// `read_decimal_from_chunk_le` decode Decimal encoded by `write_decimal_to_chunk_le`.
+    fn read_decimal_from_chunk_le(&mut self) -> Result<Decimal> {
         let buf = self.bytes();
         if buf.len() <= 4 {
             return Err(Error::unexpected_eof());
@@ -2262,6 +2274,27 @@ pub trait DecimalDecoder: NumberDecoder {
 
         for id in 0..WORD_BUF_LEN {
             d.word_buf[id as usize] = self.read_i32_le()? as u32;
+        }
+        Ok(d)
+    }
+
+    /// `read_decimal_from_chunk_be` decode Decimal encoded by `write_decimal_to_chunk_be`.
+    fn read_decimal_from_chunk_be(&mut self) -> Result<Decimal> {
+        let buf = self.bytes();
+        if buf.len() <= 4 {
+            return Err(Error::unexpected_eof());
+        }
+        let int_cnt = buf[0];
+        let frac_cnt = buf[1];
+        let result_frac_cnt = buf[2];
+        let negative = buf[3] == 1;
+        self.advance(4);
+
+        let mut d = Decimal::new(int_cnt, frac_cnt, negative);
+        d.result_frac_cnt = result_frac_cnt;
+
+        for id in 0..WORD_BUF_LEN {
+            d.word_buf[id as usize] = self.read_i32_be()? as u32;
         }
         Ok(d)
     }
@@ -3105,9 +3138,9 @@ mod tests {
         for dec_str in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
             let mut buf = vec![];
-            buf.write_decimal_to_chunk(&dec).unwrap();
+            buf.write_decimal_to_chunk_le(&dec).unwrap();
             buf.resize(DECIMAL_STRUCT_SIZE, 0);
-            let decoded = buf.as_slice().read_decimal_from_chunk().unwrap();
+            let decoded = buf.as_slice().read_decimal_from_chunk_le().unwrap();
             assert_eq!(decoded, dec);
         }
     }
