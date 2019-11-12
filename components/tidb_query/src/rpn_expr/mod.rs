@@ -233,6 +233,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RoundWithFracInt => round_with_frac_int_fn_meta(),
         ScalarFuncSig::RoundWithFracReal => round_with_frac_real_fn_meta(),
         ScalarFuncSig::RoundWithFracDec => round_with_frac_dec_fn_meta(),
+        ScalarFuncSig::Pi => pi_fn_meta(),
         ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
         ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),
         ScalarFuncSig::CoalesceString => coalesce_fn_meta::<Bytes>(),

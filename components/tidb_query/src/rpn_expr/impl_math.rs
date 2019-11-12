@@ -6,6 +6,12 @@ use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::Result;
 
+#[rpn_fn]
+#[inline]
+pub fn pi() -> Result<Option<Real>> {
+    Ok(Some(Real::from(std::f64::consts::PI)))
+}
+
 #[inline]
 #[rpn_fn]
 pub fn abs<A: Abs>(arg: &Option<A::Type>) -> Result<Option<A::Type>> {
@@ -320,6 +326,14 @@ mod tests {
 
     use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+
+    #[test]
+    fn test_pi() {
+        let output = RpnFnScalarEvaluator::new()
+            .evaluate(ScalarFuncSig::Pi)
+            .unwrap();
+        assert_eq!(output, Some(Real::from(std::f64::consts::PI)));
+    }
 
     #[test]
     fn test_abs_int() {
