@@ -2152,7 +2152,7 @@ impl Registration {
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
-            is_merging: peer.pending_merge_state.is_some()
+            is_merging: peer.pending_merge_state.is_some(),
         }
     }
 }
@@ -2397,8 +2397,8 @@ impl ApplyFsm {
             self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
             |_| {}
         );
-        fail_point!("on_handle_apply", |_|{});
-        
+        fail_point!("on_handle_apply", |_| {});
+
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
             return;
         }

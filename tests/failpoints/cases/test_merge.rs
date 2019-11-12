@@ -665,7 +665,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
 
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
-    
+
     cluster.must_split(&region, b"k2");
 
     let left = pd_client.get_region(b"k1").unwrap();
@@ -673,7 +673,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     let left_peer_1 = find_peer(&left, 1).cloned().unwrap();
     cluster.must_transfer_leader(left.get_id(), left_peer_1);
 
-    // make log gap between store 1 and store 3, for 
+    // make log gap between store 1 and store 3, for min_index in preMerge
     cluster.add_send_filter(IsolationFilterFactory::new(3));
     for i in 0..6 {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
