@@ -6,10 +6,7 @@ use crate::error::Result;
 #[rpn_fn]
 #[inline]
 pub fn length(arg: &Option<Bytes>) -> Result<Option<i64>> {
-    Ok(match arg {
-        Some(s) => Some(s.len() as i64),
-        _ => None,
-    })
+    Ok(arg.as_ref().map(|bytes| bytes.len() as i64))
 }
 
 #[cfg(test)]
