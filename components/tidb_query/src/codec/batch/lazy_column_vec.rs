@@ -157,6 +157,7 @@ impl LazyBatchColumnVec {
         schema: impl AsRef<[FieldType]>,
         output: &mut Vec<u8>,
         ctx: &mut EvalContext,
+        is_little_endian: bool,
     ) -> Result<()> {
         // Step 1 : Decode all data.
         let schema = schema.as_ref();
@@ -184,6 +185,7 @@ impl LazyBatchColumnVec {
                 &schema[offset],
                 col.decoded(),
                 column_idx,
+                is_little_endian,
             )?;
         }
 

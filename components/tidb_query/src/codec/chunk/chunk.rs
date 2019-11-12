@@ -67,6 +67,7 @@ impl Chunk {
         field_type: &FieldType,
         vec: &VectorValue,
         column_index: usize,
+        is_little_endian: bool,
     ) -> Result<()> {
         let col = &mut self.columns[column_index];
         match vec {

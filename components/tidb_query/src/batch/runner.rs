@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::{self, ExecType, ExecutorExecutionSummary};
-use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
+use tipb::{Chunk, DagRequest, EncodeType, Endian, SelectResponse};
 
 use tikv_util::deadline::Deadline;
 
@@ -52,6 +52,10 @@ pub struct BatchExecutorsRunner<SS> {
     /// 1. default: result is encoded row by row using datum format.
     /// 2. chunk: result is encoded column by column using chunk format.
     encode_type: EncodeType,
+
+    /// The encodinng endian for the response.
+    /// Only use for chunk encode type.
+    encode_endian: Endian,
 }
 
 // We assign a dummy type `()` so that we can omit the type when calling `check_supported`.
@@ -311,6 +315,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
         let encode_type = req.get_encode_type();
+        let encode_endian = req.get_tidb_system_endian();
 
         let out_most_executor = if collect_exec_summary {
             build_executors::<_, ExecSummaryCollectorEnabled>(
@@ -355,6 +360,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             collect_exec_summary,
             exec_stats,
             encode_type,
+            encode_endian,
         })
     }
 
@@ -400,12 +406,17 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                                 &result.logical_rows,
                                 &self.output_offsets,
                             )?);
+                            let mut is_little_endian: bool = true;
+                            if self.encode_endian == Endian::BigEndian {
+                                is_little_endian = false;
+                            }
                             result.physical_columns.encode_chunk(
                                 &result.logical_rows,
                                 &self.output_offsets,
                                 self.out_most_executor.schema(),
                                 data,
                                 &mut ctx,
+                                is_little_endian,
                             )?;
                         }
                         _ => {
