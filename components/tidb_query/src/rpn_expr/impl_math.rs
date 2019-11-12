@@ -6,42 +6,67 @@ use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::Result;
 
-#[rpn_fn]
 #[inline]
-fn abs_int(arg: &Option<Int>) -> Result<Option<Int>> {
-    match arg {
-        None => Ok(None),
-        Some(arg) => match (*arg).checked_abs() {
+#[rpn_fn]
+pub fn abs<A: Abs>(arg: &Option<A::Type>) -> Result<Option<A::Type>> {
+    if let Some(arg) = arg {
+        A::abs(arg)
+    } else {
+        Ok(None)
+    }
+}
+
+pub trait Abs {
+    type Type: Evaluable;
+
+    fn abs(arg: &Self::Type) -> Result<Option<Self::Type>>;
+}
+
+pub struct AbsInt;
+
+impl Abs for AbsInt {
+    type Type = Int;
+
+    #[inline]
+    fn abs(arg: &Self::Type) -> Result<Option<Self::Type>> {
+        match (*arg).checked_abs() {
             None => Err(Error::overflow("BIGINT", &format!("abs({})", *arg)).into()),
             Some(arg_abs) => Ok(Some(arg_abs)),
-        },
-    }
-}
-
-#[rpn_fn]
-#[inline]
-fn abs_uint(arg: &Option<Int>) -> Result<Option<Int>> {
-    Ok(*arg)
-}
-
-#[rpn_fn]
-#[inline]
-fn abs_real(arg: &Option<Real>) -> Result<Option<Real>> {
-    match arg {
-        Some(arg) => Ok(Some(num_traits::Signed::abs(arg))),
-        None => Ok(None),
-    }
-}
-
-#[rpn_fn]
-#[inline]
-fn abs_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
-    match arg {
-        Some(arg) => {
-            let res: codec::Result<Decimal> = arg.to_owned().abs().into();
-            Ok(Some(res?))
         }
-        None => Ok(None),
+    }
+}
+
+pub struct AbsUint;
+
+impl Abs for AbsUint {
+    type Type = Int;
+
+    #[inline]
+    fn abs(arg: &Self::Type) -> Result<Option<Self::Type>> {
+        Ok(Some(*arg))
+    }
+}
+
+pub struct AbsReal;
+
+impl Abs for AbsReal {
+    type Type = Real;
+
+    #[inline]
+    fn abs(arg: &Self::Type) -> Result<Option<Self::Type>> {
+        Ok(Some(num_traits::Signed::abs(arg)))
+    }
+}
+
+pub struct AbsDecimal;
+
+impl Abs for AbsDecimal {
+    type Type = Decimal;
+
+    #[inline]
+    fn abs(arg: &Self::Type) -> Result<Option<Self::Type>> {
+        let res: codec::Result<Decimal> = arg.to_owned().abs().into();
+        Ok(Some(res?))
     }
 }
 
@@ -114,12 +139,7 @@ impl Ceil for CeilIntToInt {
     }
 }
 
-pub trait Floor {
-    type Input: Evaluable;
-    type Output: Evaluable;
-    fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
-}
-
+#[inline]
 #[rpn_fn(capture = [ctx])]
 pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: &Option<T::Input>) -> Result<Option<T::Output>> {
     if let Some(arg) = arg {
@@ -127,6 +147,13 @@ pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: &Option<T::Input>) -> Result<
     } else {
         Ok(None)
     }
+}
+
+pub trait Floor {
+    type Input: Evaluable;
+    type Output: Evaluable;
+
+    fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
 }
 
 pub struct FloorReal;
