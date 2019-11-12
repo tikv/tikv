@@ -75,19 +75,31 @@ impl Worker {
             retry = false;
             // Local is empty, steal from injector
             let i = self.proportions.get_level(rng.next_u32());
+            // TODO: refine code
             for j in 0..3 {
                 let idx = (i + j) % 3;
-                match self
-                    .scheduler
-                    .injector(idx)
-                    .steal_batch_and_pop(&self.local)
-                {
-                    Steal::Success(task) => {
-                        level_stolen[idx].inc();
-                        return Some(task);
+                if idx < 2 {
+                    match self
+                        .scheduler
+                        .injector(idx)
+                        .steal_batch_and_pop(&self.local)
+                    {
+                        Steal::Success(task) => {
+                            level_stolen[idx].inc();
+                            return Some(task);
+                        }
+                        Steal::Retry => retry = true,
+                        _ => {}
                     }
-                    Steal::Retry => retry = true,
-                    _ => {}
+                } else {
+                    match self.scheduler.injector(idx).steal() {
+                        Steal::Success(task) => {
+                            level_stolen[idx].inc();
+                            return Some(task);
+                        }
+                        Steal::Retry => retry = true,
+                        _ => {}
+                    }
                 }
             }
             // Fail to steal from injectors, steal from others
