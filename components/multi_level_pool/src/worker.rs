@@ -8,6 +8,7 @@ use prometheus::*;
 use rand::prelude::*;
 use tokio_timer::timer::Handle;
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -25,13 +26,13 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn start(self, thread_builder: thread::Builder) {
+    pub fn start(self, thread_builder: thread::Builder, level_run: [IntCounter; 3]) {
         thread_builder
-            .spawn(move || self.start_impl())
+            .spawn(move || self.start_impl(level_run))
             .expect("start worker thread error");
     }
 
-    fn start_impl(mut self) {
+    fn start_impl(mut self, level_run: [IntCounter; 3]) {
         (self.after_start)();
         let mut rng = thread_rng();
         let mut step = 0;
@@ -40,6 +41,8 @@ impl Worker {
         loop {
             if let Some(task) = self.find_task(&mut rng) {
                 step = 0;
+                let level = task.0.level.load(Ordering::SeqCst);
+                level_run[level].inc();
                 unsafe {
                     task.poll();
                 }
@@ -104,7 +107,7 @@ impl Worker {
 const MAX_LEVEL0_PROPORTION: u32 = (1 << 25) * ((1 << 7) - 1);
 
 // 1/2
-const MIN_LEVEL0_PROPORTION: u32 = 1 << 16;
+const MIN_LEVEL0_PROPORTION: u32 = 1 << 31;
 
 // 31/32
 const DEFAULT_LEVEL0_PROPORTION: u32 = (1 << 27) * ((1 << 5) - 1);
@@ -115,7 +118,7 @@ pub struct Proportions([IntGauge; 2], [IntCounter; 3]);
 impl Proportions {
     pub fn init(level_proportions: [IntGauge; 2], level_stolen: [IntCounter; 3]) -> Proportions {
         level_proportions[0].set(DEFAULT_LEVEL0_PROPORTION as i64);
-        level_proportions[1].set((DEFAULT_LEVEL0_PROPORTION / 8 + (1 << 24) * 7) as i64);
+        level_proportions[1].set((DEFAULT_LEVEL0_PROPORTION / 8 + (1 << 29) * 7) as i64);
         Proportions(level_proportions, level_stolen)
     }
 
@@ -159,7 +162,7 @@ pub async fn update_proportions(scheduler: Scheduler, proportions: Proportions) 
                 MAX_LEVEL0_PROPORTION,
             );
             // level 1 : level 2 = 7 : 1
-            new_proportions[1] = new_proportions[0] / 8 + (1 << 24) * 7;
+            new_proportions[1] = new_proportions[0] / 8 + (1 << 29) * 7;
             proportions.0[1].set(new_proportions[1] as i64);
             proportions.0[0].set(new_proportions[0] as i64);
         } else if level0_percentage > 0.85 {
@@ -168,7 +171,7 @@ pub async fn update_proportions(scheduler: Scheduler, proportions: Proportions) 
                 MIN_LEVEL0_PROPORTION,
             );
             // level 1 : level 2 = 7 : 1
-            new_proportions[1] = new_proportions[0] / 8 + (1 << 24) * 7;
+            new_proportions[1] = new_proportions[0] / 8 + (1 << 29) * 7;
             proportions.0[0].set(new_proportions[0] as i64);
             proportions.0[1].set(new_proportions[1] as i64);
         }

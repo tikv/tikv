@@ -132,6 +132,11 @@ impl Builder {
                 MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "2"]),
             ],
         );
+        let level_run = [
+            MULTI_LEVEL_POOL_LEVEL_RUN.with_label_values(&[name, "0"]),
+            MULTI_LEVEL_POOL_LEVEL_RUN.with_label_values(&[name, "1"]),
+            MULTI_LEVEL_POOL_LEVEL_RUN.with_label_values(&[name, "2"]),
+        ];
 
         // Create workers
         let mut workers: Vec<Worker> = Vec::with_capacity(self.pool_size);
@@ -163,7 +168,7 @@ impl Builder {
             let thread_builder = thread::Builder::new()
                 .name(format!("{}-{}", name, i + 1))
                 .stack_size(self.stack_size);
-            worker.start(thread_builder);
+            worker.start(thread_builder, level_run.clone());
         }
 
         let async_update_proportions = worker::update_proportions(scheduler.clone(), proportions);
