@@ -279,7 +279,7 @@ fn cot(ctx: &mut EvalContext, arg: &Option<Real>) -> Result<Option<Real>> {
             let tan = arg.tan();
             if tan != 0.0 {
                 let cot = 1.0 / tan;
-                if !cot.is_infinite() && !cot.is_nan() {
+                if !cot.is_infinite() {
                     return Ok(Real::new(cot).ok());
                 }
             }
