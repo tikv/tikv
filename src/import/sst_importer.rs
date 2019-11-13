@@ -92,16 +92,16 @@ impl SSTImporter {
         url: &str,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limit: u64,
+        speed_limiter: Option<Arc<IOLimiter>>,
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
             "url" => url,
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
-            "speed_limit" => speed_limit,
+            "speed_limit" => speed_limiter.as_ref().map_or(0, |l| l.get_bytes_per_second()),
         );
-        match self.do_download(meta, url, name, rewrite_rule, speed_limit) {
+        match self.do_download(meta, url, name, rewrite_rule, speed_limiter) {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "range" => ?r);
                 Ok(r)
@@ -119,23 +119,16 @@ impl SSTImporter {
         url: &str,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limit: u64,
+        speed_limiter: Option<Arc<IOLimiter>>,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
-
-        // open the external storage and limit the read speed.
-        let limiter = if speed_limit > 0 {
-            Some(Arc::new(IOLimiter::new(speed_limit)))
-        } else {
-            None
-        };
 
         // prepare to download the file from the external_storage
         let ext_storage = create_storage(url)?;
         let mut ext_reader = ext_storage
             .read(name)
             .map_err(|e| Error::CannotReadExternalStorage(url.to_owned(), name.to_owned(), e))?;
-        let mut ext_reader = LimitReader::new(limiter, &mut ext_reader);
+        let mut ext_reader = LimitReader::new(speed_limiter, &mut ext_reader);
 
         // do the I/O copy from external_storage to the local file.
         {
@@ -734,7 +727,7 @@ mod tests {
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
                 &RewriteRule::default(),
-                0,
+                None,
             )
             .unwrap()
             .unwrap();
@@ -781,7 +774,7 @@ mod tests {
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t567"),
-                0,
+                None,
             )
             .unwrap()
             .unwrap();
@@ -825,7 +818,7 @@ mod tests {
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t9102"),
-                0,
+                None,
             )
             .unwrap()
             .unwrap();
@@ -877,7 +870,7 @@ mod tests {
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
                 &RewriteRule::default(),
-                0,
+                None,
             )
             .unwrap()
             .unwrap();
@@ -919,7 +912,7 @@ mod tests {
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t5"),
-                0,
+                None,
             )
             .unwrap()
             .unwrap();
@@ -961,7 +954,7 @@ mod tests {
             &format!("local://{}", ext_sst_dir.path().display()),
             "sample.sst",
             &RewriteRule::default(),
-            0,
+            None,
         );
         match &result {
             Err(Error::RocksDB(msg)) if msg.starts_with("Corruption:") => {}
@@ -983,7 +976,7 @@ mod tests {
             &format!("local://{}", ext_sst_dir.path().display()),
             "sample.sst",
             &RewriteRule::default(),
-            0,
+            None,
         );
 
         match result {
@@ -1003,7 +996,7 @@ mod tests {
             &format!("local://{}", ext_sst_dir.path().display()),
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy"),
-            0,
+            None,
         );
 
         match &result {
