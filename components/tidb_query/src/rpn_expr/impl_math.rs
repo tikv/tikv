@@ -256,19 +256,19 @@ fn sqrt(arg: &Option<Real>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn sin(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(arg.map(|arg| Real::from(arg.sin())))
+    Ok(arg.map_or(None, |arg| Real::new(arg.sin()).ok()))
 }
 
 #[inline]
 #[rpn_fn]
 fn cos(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(arg.map(|arg| Real::from(arg.cos())))
+    Ok(arg.map_or(None, |arg| Real::new(arg.cos()).ok()))
 }
 
 #[inline]
 #[rpn_fn]
 fn tan(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(arg.map(|arg| Real::from(arg.tan())))
+    Ok(arg.map_or(None, |arg| Real::new(arg.tan()).ok()))
 }
 
 #[inline]
@@ -280,7 +280,7 @@ fn cot(ctx: &mut EvalContext, arg: &Option<Real>) -> Result<Option<Real>> {
             if tan != 0.0 {
                 let cot = 1.0 / tan;
                 if !cot.is_infinite() && !cot.is_nan() {
-                    return Ok(Some(Real::from(cot)));
+                    return Ok(Real::new(cot).ok());
                 }
             }
             Ok(ctx
