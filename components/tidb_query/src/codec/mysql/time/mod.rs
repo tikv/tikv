@@ -469,15 +469,21 @@ mod parser {
         }
     }
 
-    /// Try to parse a `u64` into a `Time` with given type and fsp
+    /// Try to parse a `u64` into a `Time` with the given type and fsp
     pub fn parse_from_u64(
         ctx: &mut EvalContext,
         input: u64,
         time_type: TimeType,
         fsp: u8,
     ) -> Option<Time> {
+        if input == 0 {
+            return Time::zero(ctx, fsp as i8, time_type).ok();
+        }
+        // NOTE: These numbers can be consider as strings
+        // The parser eats two digits each time from the end of string,
+        // and fill it into `Time` with reversed order.
+        // Port from: https://github.com/pingcap/tidb/blob/b1aad071489619998e4caefd235ed01f179c2db2/types/time.go#L1263
         let aligned = match input {
-            0 => 0,
             101..=691_231 => (input + 20_000_000) * 1_000_000,
             700_101..=991_231 => (input + 19_000_000) * 1_000_000,
             10_000_101..=99_991_231 => input * 1_000_000,
