@@ -17,13 +17,13 @@ pub trait Iterator {
     fn prev(&mut self) -> bool;
     fn next(&mut self) -> bool;
 
-    fn key(&self) -> Result<&[u8]>;
-    fn value(&self) -> Result<&[u8]>;
+    fn key(&self) -> &[u8];
+    fn value(&self) -> &[u8];
 
     fn kv(&self) -> Option<(Vec<u8>, Vec<u8>)> {
         if self.valid() {
-            let k = self.key().ok()?;
-            let v = self.value().ok()?;
+            let k = self.key();
+            let v = self.value();
             Some((k.to_vec(), v.to_vec()))
         } else {
             None
@@ -88,7 +88,7 @@ pub trait Iterable {
         let mut iter = self.iterator()?;
         iter.seek(SeekKey::Key(key));
         if iter.valid() {
-            Ok(Some((iter.key()?.to_vec(), iter.value()?.to_vec())))
+            Ok(Some((iter.key().to_vec(), iter.value().to_vec())))
         } else {
             Ok(None)
         }
@@ -99,7 +99,7 @@ pub trait Iterable {
         let mut iter = self.iterator_cf(cf)?;
         iter.seek(SeekKey::Key(key));
         if iter.valid() {
-            Ok(Some((iter.key()?.to_vec(), iter.value()?.to_vec())))
+            Ok(Some((iter.key().to_vec(), iter.value().to_vec())))
         } else {
             Ok(None)
         }
@@ -113,7 +113,7 @@ where
 {
     it.seek(SeekKey::Key(start_key));
     while it.valid() {
-        let r = f(it.key()?, it.value()?)?;
+        let r = f(it.key(), it.value())?;
         if !r || !it.next() {
             break;
         }

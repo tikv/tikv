@@ -90,12 +90,12 @@ impl Iterator for RocksSstIterator {
         self.0.next()
     }
 
-    fn key(&self) -> Result<&[u8]> {
-        Ok(self.0.key())
+    fn key(&self) -> &[u8] {
+        self.0.key()
     }
 
-    fn value(&self) -> Result<&[u8]> {
-        Ok(self.0.value())
+    fn value(&self) -> &[u8] {
+        self.0.value()
     }
 
     fn valid(&self) -> bool {
