@@ -46,14 +46,6 @@ impl Snapshot {
         Arc::clone(&self.db)
     }
 
-    pub fn db_iterator(&self, iter_opt: IterOption) -> DBIterator<Arc<DB>> {
-        let mut opt = iter_opt.build_read_opts();
-        unsafe {
-            opt.set_snapshot(&self.snap);
-        }
-        DBIterator::new(Arc::clone(&self.db), opt)
-    }
-
     pub fn db_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<Arc<DB>>> {
         let handle = super::util::get_cf_handle(&self.db, cf)?;
         let mut opt = iter_opt.build_read_opts();

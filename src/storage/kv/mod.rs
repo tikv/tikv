@@ -12,6 +12,7 @@ use kvproto::kvrpcpb::Context;
 
 use crate::raftstore::coprocessor::SeekRegionCallback;
 use crate::storage::{Key, Value};
+use self::into_protoerror::IntoProtoError;
 
 mod btree_engine;
 mod compact_listener;
@@ -19,6 +20,7 @@ mod cursor;
 mod perf_context;
 mod rocksdb_engine;
 mod stats;
+mod into_protoerror;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::compact_listener::{CompactedEvent, CompactionListener};
@@ -182,6 +184,12 @@ quick_error! {
 impl From<engine::Error> for Error {
     fn from(err: engine::Error) -> Error {
         Error::Request(err.into())
+    }
+}
+
+impl From<engine_traits::Error> for Error {
+    fn from(err: engine_traits::Error) -> Error {
+        Error::Request(err.into_protoerror())
     }
 }
 
