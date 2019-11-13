@@ -1,14 +1,22 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+// Various conversions between types that can't have their own
+// interdependencies. These are used to convert between error_traits::Error and
+// other Error's that error_traits can't depend on.
+
 use kvproto::errorpb::Error as ProtoError;
 use engine_traits::Error as EngineTraitsError;
 
-pub trait IntoProtoError {
-    fn into_protoerror(self) -> ProtoError;
+pub trait IntoOther {
+    type Other;
+
+    fn into_other(self) -> Self::Other;
 }
 
-impl IntoProtoError for EngineTraitsError {
-    fn into_protoerror(self) -> ProtoError {
+impl IntoOther for EngineTraitsError {
+    type Other = ProtoError;
+
+    fn into_other(self) -> ProtoError {
         let mut errorpb = ProtoError::default();
         errorpb.set_message(format!("{}", self));
 
