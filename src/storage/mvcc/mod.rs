@@ -752,6 +752,24 @@ pub mod tests {
         assert_eq!(ret, None);
     }
 
+    pub fn must_get_rollback_protected<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: u64,
+        protected: bool,
+    ) {
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
+
+        let (ts, write) = reader
+            .seek_write(&Key::from_raw(key), start_ts)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ts, start_ts);
+        assert_eq!(write.write_type, WriteType::Rollback);
+        assert_eq!(write.is_protected(), protected);
+    }
+
     pub fn must_scan_keys<E: Engine>(
         engine: &E,
         start: Option<&[u8]>,
