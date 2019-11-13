@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 use crate::codec::{Error, Result};
 use codec::prelude::*;
-use tikv_util::codec::read_slice;
+use num_traits::PrimInt;
 
 enum RowSlice<'a> {
     Small {
@@ -129,12 +129,17 @@ impl RowSlice<'_> {
 /// This method is only implemented on little endianness currently, since x86 use little endianness.
 #[cfg(target_endian = "little")]
 #[inline]
-fn read_ints_le<'a, T>(buf: &mut &'a [u8], len: usize) -> Result<&'a [T]> {
-    use std::{mem, slice};
-    let bytes_len = mem::size_of::<T>() * len;
-    let bytes = read_slice(buf, bytes_len)?.as_ptr() as *const T;
-    let buf = unsafe { slice::from_raw_parts(bytes, len) };
-    Ok(buf)
+fn read_ints_le<'a, T>(buf: &mut &'a [u8], len: usize) -> Result<&'a [T]>
+where
+    T: PrimInt,
+{
+    let bytes_len = std::mem::size_of::<T>() * len;
+    if buf.len() < bytes_len {
+        return Err(Error::unexpected_eof());
+    }
+    let slice = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, len) };
+    buf.advance(bytes_len);
+    Ok(slice)
 }
 
 #[cfg(test)]

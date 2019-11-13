@@ -3,16 +3,21 @@
 //! This `encoder` module is only used for test, so the implementation is very straightforward.
 //!
 //! According to https://github.com/pingcap/tidb/blob/master/docs/design/2018-07-19-row-format.md
+//!
 //! The row format is:
-//!     | version | flag | number_of_non_null_values | number_of_null_values | non_null_value_ids
-//!         | null_value_ids | value_offsets | values
-//! short spec of each field
-//! version: 1 byte
-//! flag: 1 byte, when there's id greater than 255 or the total size of the values is greater than 65535 , value is 1, otherwise 0
-//! number of non-null values: 2 bytes
-//! number of null values: 2 bytes
-//! column ids: ids of non-null values + ids of null values, when flag == 1 (big), id is 4 bytes, otherwise 1 byte
-//! non-null values offset: when big, offset is 4 bytes, otherwise 2 bytes
+//!
+//! | version | flag | number_of_non_null_columns | number_of_null_columns | non_null_column_ids | null_column_ids | value_offsets | values |
+//! |---------| ---- | -------------------------- | ---------------------- | ------------------- | --------------- | ------------- | ------ |
+//!
+//! length about each field:
+//!
+//! * version: 1 byte
+//! * flag: 1 byte, when there's id greater than 255 or the total size of the values is greater than 65535 , value is 1, otherwise 0
+//! * number of non-null values: 2 bytes
+//! * number of null values: 2 bytes
+//! * non-null column ids: when flag == 1 (big), id is 4 bytes, otherwise 1 byte
+//! * null column ids: when flag == 1 (big), id is 4 bytes, otherwise 1 byte
+//! * non-null values offset: when big, offset is 4 bytes, otherwise 2 bytes
 
 use crate::codec::{
     data_type::ScalarValue,
