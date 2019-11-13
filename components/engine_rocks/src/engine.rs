@@ -12,6 +12,7 @@ use rocksdb::{DBIterator, Writable, DB};
 use crate::options::{RocksReadOptions, RocksWriteOptions};
 use crate::util::get_cf_handle;
 use crate::{RocksEngineIterator, RocksSnapshot};
+use crate::db_vector::RocksDBVector;
 
 #[derive(Clone, Debug)]
 #[repr(transparent)]
@@ -105,17 +106,19 @@ impl Iterable for RocksEngine {
 }
 
 impl Peekable for RocksEngine {
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    type DBVector = RocksDBVector;
+
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
         let v = self.0.get_opt(key, &opt.into_raw())?;
-        Ok(v.map(|v| v.to_vec()))
+        Ok(v.map(RocksDBVector::from_raw))
     }
 
-    fn get_value_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get_value_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
         let handle = get_cf_handle(&self.0, cf)?;
         let v = self.0.get_cf_opt(handle, key, &opt.into_raw())?;
-        Ok(v.map(|v| v.to_vec()))
+        Ok(v.map(RocksDBVector::from_raw))
     }
 }
 

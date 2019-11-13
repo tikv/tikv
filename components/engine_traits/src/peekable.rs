@@ -3,14 +3,16 @@
 use crate::*;
 
 pub trait Peekable {
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>>;
-    fn get_value_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<Vec<u8>>>;
+    type DBVector: DBVector;
 
-    fn get_value(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DBVector>>;
+    fn get_value_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<Self::DBVector>>;
+
+    fn get_value(&self, key: &[u8]) -> Result<Option<Self::DBVector>> {
         self.get_value_opt(&ReadOptions::default(), key)
     }
 
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<Self::DBVector>> {
         self.get_value_cf_opt(&ReadOptions::default(), cf, key)
     }
 

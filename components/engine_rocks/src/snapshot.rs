@@ -13,6 +13,7 @@ use engine::rocks::SyncSnapshot as RawSyncSnapshot;
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
 use crate::RocksEngineIterator;
+use crate::db_vector::RocksDBVector;
 
 #[repr(C)] // Guarantee same representation as in engine/rocks
 pub struct RocksSnapshot {
@@ -101,17 +102,19 @@ impl Iterable for RocksSnapshot {
 }
 
 impl Peekable for RocksSnapshot {
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    type DBVector = RocksDBVector;
+
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
         let v = self.db.get_opt(key, &opt)?;
-        Ok(v.map(|v| v.to_vec()))
+        Ok(v.map(RocksDBVector::from_raw))
     }
 
-    fn get_value_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get_value_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
@@ -119,7 +122,7 @@ impl Peekable for RocksSnapshot {
         }
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         let v = self.db.get_cf_opt(handle, key, &opt)?;
-        Ok(v.map(|v| v.to_vec()))
+        Ok(v.map(RocksDBVector::from_raw))
     }
 }
 
