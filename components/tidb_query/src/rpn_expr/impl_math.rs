@@ -42,7 +42,7 @@ pub fn log10(arg: &Option<Real>) -> Result<Option<Real>> {
 // If the given f64 is finite, returns `Some(Real)`. Otherwise returns None.
 fn f64_to_real(n: f64) -> Option<Real> {
     if n.is_finite() {
-        Some(Real::from(n))
+        Real::new(n).ok()
     } else {
         None
     }
@@ -138,7 +138,7 @@ impl Ceil for CeilReal {
 
     #[inline]
     fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
-        Ok(Some(Real::from(arg.ceil())))
+        Ok(Real::new(arg.ceil()).ok())
     }
 }
 
@@ -207,7 +207,7 @@ impl Floor for FloorReal {
 
     #[inline]
     fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
-        Ok(Some(Real::from(arg.floor())))
+        Ok(Real::new(arg.floor()).ok())
     }
 }
 
@@ -307,7 +307,7 @@ impl Round for RoundReal {
 
     #[inline]
     fn round(_ctx: &mut EvalContext, arg: &Self::Type) -> Result<Option<Self::Type>> {
-        Ok(Some(Real::from(arg.round())))
+        Ok(Real::new(arg.round()).ok())
     }
 }
 
@@ -360,7 +360,7 @@ impl Round for RoundWithFracReal {
     ) -> Result<Option<Self::Type>> {
         let power = 10.0_f64.powi(-digits as i32);
         let frac = number.into_inner() / power;
-        Ok(Some(Real::from(frac.round() * power)))
+        Ok(Real::new(frac.round() * power).ok())
     }
 }
 
@@ -405,11 +405,7 @@ fn sqrt(arg: &Option<Real>) -> Result<Option<Real>> {
             None
         } else {
             let res = n.sqrt();
-            if res.is_nan() {
-                None
-            } else {
-                Some(Real::from(res))
-            }
+            Real::new(res).ok()
         }
     }))
 }
