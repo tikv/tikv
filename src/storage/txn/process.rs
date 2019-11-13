@@ -309,7 +309,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
         let lock_mgr = self.take_lock_mgr();
         match task.cmd {
             cmd @ Command::Batch { .. } => {
-                match process_batch_write_impl(cid, cmd, snapshot, lock_mgr, &mut statistics) {
+                match process_batch_write_impl(cid, cmd, snapshot, &lock_mgr, &mut statistics) {
                     Ok(BatchWriteResults {
                         ctx,
                         mut ids,
@@ -425,7 +425,7 @@ impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
                 statistics
             }
             cmd => {
-                let msg = match process_write_impl(cmd, snapshot, lock_mgr, &mut statistics) {
+                let msg = match process_write_impl(cmd, snapshot, &lock_mgr, &mut statistics) {
                     // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
                     // message when it finishes.
                     Ok(WriteResult {
@@ -682,7 +682,7 @@ struct BatchWriteResults {
 fn process_write_impl<S: Snapshot, L: LockMgr>(
     cmd: Command,
     snapshot: S,
-    lock_mgr: Option<L>,
+    lock_mgr: &Option<L>,
     statistics: &mut Statistics,
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd {
@@ -788,7 +788,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 });
             }
             // Pessimistic txn needs key_hashes to wake up waiters
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
+            let key_hashes = gen_key_hashes_if_needed(lock_mgr, &keys);
 
             let mut txn = MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache())?;
             let mut is_pessimistic_txn = false;
@@ -797,13 +797,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 is_pessimistic_txn = txn.commit(k, commit_ts)?;
             }
 
-            wake_up_waiters_if_needed(
-                &lock_mgr,
-                lock_ts,
-                key_hashes,
-                commit_ts,
-                is_pessimistic_txn,
-            );
+            wake_up_waiters_if_needed(lock_mgr, lock_ts, key_hashes, commit_ts, is_pessimistic_txn);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
@@ -815,12 +809,12 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             ..
         } => {
             let mut keys = vec![key];
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
+            let key_hashes = gen_key_hashes_if_needed(lock_mgr, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts)?;
 
-            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
+            wake_up_waiters_if_needed(lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), 1, ctx, None)
         }
@@ -830,7 +824,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             start_ts,
             ..
         } => {
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
+            let key_hashes = gen_key_hashes_if_needed(lock_mgr, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut is_pessimistic_txn = false;
@@ -839,7 +833,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 is_pessimistic_txn = txn.rollback(k)?;
             }
 
-            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
+            wake_up_waiters_if_needed(lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
@@ -850,7 +844,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             for_update_ts,
         } => {
             assert!(lock_mgr.is_some());
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
+            let key_hashes = gen_key_hashes_if_needed(lock_mgr, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let rows = keys.len();
@@ -858,7 +852,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 txn.pessimistic_rollback(k, for_update_ts)?;
             }
 
-            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, true);
+            wake_up_waiters_if_needed(lock_mgr, start_ts, key_hashes, 0, true);
             statistics.add(&txn.take_statistics());
             (
                 ProcessResult::MultiRes { results: vec![] },
@@ -935,7 +929,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 txn_to_keys
                     .into_iter()
                     .for_each(|((ts, is_pessimistic_txn), key_hashes)| {
-                        wake_up_waiters_if_needed(&lock_mgr, ts, key_hashes, 0, is_pessimistic_txn);
+                        wake_up_waiters_if_needed(lock_mgr, ts, key_hashes, 0, is_pessimistic_txn);
                     });
             }
 
@@ -960,7 +954,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             commit_ts,
             resolve_keys,
         } => {
-            let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &resolve_keys);
+            let key_hashes = gen_key_hashes_if_needed(lock_mgr, &resolve_keys);
 
             let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
             let rows = resolve_keys.len();
@@ -976,7 +970,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             }
 
             wake_up_waiters_if_needed(
-                &lock_mgr,
+                lock_mgr,
                 start_ts,
                 key_hashes,
                 commit_ts,
@@ -1021,14 +1015,8 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             // lock, and this may happen only when it returns `Rollbacked`.
             match txn_status {
                 TxnStatus::Rollbacked => {
-                    let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &[&primary_key]);
-                    wake_up_waiters_if_needed(
-                        &lock_mgr,
-                        lock_ts,
-                        key_hashes,
-                        0,
-                        is_pessimistic_txn,
-                    );
+                    let key_hashes = gen_key_hashes_if_needed(lock_mgr, &[&primary_key]);
+                    wake_up_waiters_if_needed(lock_mgr, lock_ts, key_hashes, 0, is_pessimistic_txn);
                 }
                 TxnStatus::RollbackedBefore
                 | TxnStatus::Committed { .. }
@@ -1059,15 +1047,11 @@ fn process_batch_write_impl<S: Snapshot, L: LockMgr>(
     cid: u64,
     cmd: Command,
     snapshot: S,
-    lock_mgr: Option<L>,
+    lock_mgr: &Option<L>,
     statistics: &mut Statistics,
 ) -> Result<BatchWriteResults> {
     let tag = cmd.tag();
-    if let Command::Batch {
-        mut ids,
-        mut commands,
-    } = cmd
-    {
+    if let Command::Batch { mut ids, commands } = cmd {
         let mut results: Vec<(u64, Msg)> = Vec::new();
         if tag == CommandKind::batch_commit {
             results.extend(
@@ -1098,150 +1082,61 @@ fn process_batch_write_impl<S: Snapshot, L: LockMgr>(
             _ => unreachable!(),
         };
         let multi_res = tag == CommandKind::batch_prewrite;
-        let mut to_be_write = Vec::new();
-        // check conflict
-        match tag {
-            CommandKind::batch_prewrite => {
-                let len = commands.len();
-                for i in 0..len {
-                    if ids[i].is_none() {
-                        continue;
-                    }
-                    if let Command::Prewrite {
-                        ctx,
-                        mutations,
-                        primary,
-                        start_ts,
-                        options,
-                        ..
-                    } = &mut commands[i]
-                    {
-                        if options.for_update_ts != 0 {
-                            panic!("batch command does not accept pessimistic prewrite request");
-                        }
-                        let mut txn =
-                            MvccTxn::new(snapshot.clone(), *start_ts, !ctx.get_not_fill_cache())?;
-                        let mut locks = Vec::new();
-                        let mut failed = false;
-                        let mutations = std::mem::replace(mutations, vec![]);
-                        for m in mutations {
-                            match txn.prewrite(m, &primary, &options) {
-                                e @ Err(MvccError::KeyIsLocked { .. }) => {
-                                    locks.push(e.map_err(Error::from).map_err(StorageError::from));
-                                }
-                                Err(e) => {
-                                    results.push((
-                                        ids[i].take().unwrap(),
-                                        Msg::FinishedWithErr {
-                                            cid,
-                                            err: Error::from(e),
-                                            tag,
-                                        },
-                                    ));
-                                    failed = true;
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                        if !failed && !locks.is_empty() {
-                            results.push((
-                                ids[i].take().unwrap(),
-                                Msg::WriteFinished {
-                                    cid,
-                                    pr: ProcessResult::MultiRes { results: locks },
-                                    result: Ok(()),
-                                    tag,
-                                },
-                            ));
-                            failed = true;
-                        }
-                        statistics.add(&txn.take_statistics());
-                        if !failed {
-                            to_be_write.append(&mut txn.into_modifies());
-                        }
+        let mut modifies = Vec::new();
+        for (id, cmd) in ids.iter_mut().zip(commands.into_iter()) {
+            if id.is_none() {
+                continue;
+            }
+            let start_ts = match &cmd {
+                Command::Prewrite { ref start_ts, .. } => *start_ts,
+                Command::Commit { ref lock_ts, .. } => *lock_ts,
+                _ => unreachable!(),
+            };
+            match process_write_impl(cmd, snapshot.clone(), lock_mgr, statistics) {
+                Ok(WriteResult {
+                    mut to_be_write,
+                    pr,
+                    lock_info,
+                    ..
+                }) => {
+                    if let Some(lock_info) = lock_info {
+                        let (lock, is_first_lock, wait_timeout) = lock_info;
+                        results.push((
+                            id.take().unwrap(),
+                            Msg::WaitForLock {
+                                cid,
+                                start_ts,
+                                pr,
+                                lock,
+                                is_first_lock,
+                                wait_timeout,
+                            },
+                        ));
+                    } else if to_be_write.is_empty() {
+                        results.push((
+                            id.take().unwrap(),
+                            Msg::WriteFinished {
+                                cid,
+                                pr,
+                                result: Ok(()),
+                                tag,
+                            },
+                        ));
                     } else {
-                        unreachable!();
+                        modifies.append(&mut to_be_write);
                     }
                 }
-            }
-            CommandKind::batch_commit => {
-                let len = commands.len();
-                for i in 0..len {
-                    if ids[i].is_none() {
-                        continue;
-                    }
-                    if let Command::Commit {
-                        ctx,
-                        keys,
-                        commit_ts,
-                        lock_ts,
-                        ..
-                    } = &commands[i]
-                    {
-                        if *commit_ts <= *lock_ts {
-                            results.push((
-                                ids[i].take().unwrap(),
-                                Msg::FinishedWithErr {
-                                    cid,
-                                    err: Error::InvalidTxnTso {
-                                        start_ts: *lock_ts,
-                                        commit_ts: *commit_ts,
-                                    },
-                                    tag,
-                                },
-                            ));
-                            continue;
-                        }
-                        let mut txn =
-                            MvccTxn::new(snapshot.clone(), *lock_ts, !ctx.get_not_fill_cache())?;
-                        let mut failed = false;
-                        // Pessimistic txn needs key_hashes to wake up waiters
-                        let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
-                        let mut is_pessimistic_txn = false;
-                        for k in keys {
-                            match txn.commit(k.clone(), *commit_ts) {
-                                Ok(pessimistic) => {
-                                    is_pessimistic_txn = pessimistic;
-                                }
-                                Err(e) => {
-                                    results.push((
-                                        ids[i].take().unwrap(),
-                                        Msg::FinishedWithErr {
-                                            cid,
-                                            err: Error::from(e),
-                                            tag,
-                                        },
-                                    ));
-                                    failed = true;
-                                    break;
-                                }
-                            }
-                        }
-                        wake_up_waiters_if_needed(
-                            &lock_mgr,
-                            *lock_ts,
-                            key_hashes,
-                            *commit_ts,
-                            is_pessimistic_txn,
-                        );
-                        statistics.add(&txn.take_statistics());
-                        if !failed {
-                            to_be_write.append(&mut txn.into_modifies());
-                        }
-                    } else {
-                        unreachable!();
-                    }
+                Err(err) => {
+                    results.push((id.take().unwrap(), Msg::FinishedWithErr { cid, err, tag }));
                 }
             }
-            _ => unreachable!(),
-        };
+        }
         Ok(BatchWriteResults {
             ctx,
             ids,
             multi_res,
             results,
-            to_be_write,
+            to_be_write: modifies,
         })
     } else {
         unreachable!();
