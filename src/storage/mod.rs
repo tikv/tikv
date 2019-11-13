@@ -32,7 +32,7 @@ use tikv_util::future_pool::FuturePool;
 use self::commands::get_priority_tag;
 use self::kv::with_tls_engine;
 use self::metrics::*;
-use self::mvcc::Lock;
+use self::mvcc::{Lock, TsSet};
 use self::txn::scheduler::Scheduler as TxnScheduler;
 
 pub use self::commands::{is_normal_priority, Command, Options, PointGetCommand};
@@ -249,7 +249,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Only writes that are committed before `start_ts` are visible.
     pub fn async_get(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         key: Key,
         start_ts: u64,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
@@ -260,6 +260,9 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
+            // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
+            // here.
+            let bypass_locks = TsSet::vec(ctx.take_resolved_locks());
             Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
@@ -270,6 +273,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 start_ts,
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
+                                bypass_locks,
                             );
                             let result = snap_store
                                 .get(&key, &mut statistics)
@@ -323,12 +327,17 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 0,
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
+                                Default::default(),
                             );
                             let mut results = vec![];
                             // TODO: optimize using seek.
-                            for get in gets {
+                            for mut get in gets {
                                 snap_store.set_start_ts(get.ts.unwrap());
                                 snap_store.set_isolation_level(get.ctx.get_isolation_level());
+                                // The bypass_locks set will be checked at most once. `TsSet::vec`
+                                // is more efficient here.
+                                snap_store
+                                    .set_bypass_locks(TsSet::vec(get.ctx.take_resolved_locks()));
                                 results.push(
                                     snap_store
                                         .get(&get.key, &mut statistics)
@@ -354,7 +363,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Only writes that are committed before `start_ts` are visible.
     pub fn async_batch_get(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         keys: Vec<Key>,
         start_ts: u64,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
@@ -365,6 +374,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
+            let bypass_locks = TsSet::new(ctx.take_resolved_locks());
             Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
@@ -375,6 +385,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 start_ts,
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
+                                bypass_locks,
                             );
                             let result = snap_store
                                 .batch_get(&keys, &mut statistics)
@@ -421,7 +432,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Only writes committed before `start_ts` are visible.
     pub fn async_scan(
         &self,
-        ctx: Context,
+        mut ctx: Context,
         start_key: Key,
         end_key: Option<Key>,
         limit: usize,
@@ -435,6 +446,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
+            let bypass_locks = TsSet::new(ctx.take_resolved_locks());
             Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
@@ -444,6 +456,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 start_ts,
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
+                                bypass_locks,
                             );
 
                             let mut scanner;
