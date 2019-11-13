@@ -27,16 +27,13 @@ use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use tikv::raftstore::store::{fsm, LocalReader};
 use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
+use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve;
 use tikv::server::service::DebugService;
 use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv::server::{create_raft_storage, Node, Server};
-use tikv::storage::lock_manager::register_detector_role_change_observer;
-use tikv::storage::lock_manager::{
-    Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
-};
 use tikv::storage::RaftKv;
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
@@ -187,22 +184,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         engine.clone(),
     );
 
-    // Create waiter manager worker and deadlock detector worker if pessimistic-txn is enabled
-    // Make clippy happy
-    let (mut waiter_mgr_worker, mut detector_worker) = if cfg.pessimistic_txn.enabled {
-        (
-            Some(FutureWorker::new("waiter-manager")),
-            Some(FutureWorker::new("deadlock-detector")),
-        )
-    } else {
-        (None, None)
-    };
-    // Make clippy happy
-    let deadlock_service = if cfg.pessimistic_txn.enabled {
-        Some(DeadlockService::new(
-            WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
-            DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
-        ))
+    let mut lock_mgr = if cfg.pessimistic_txn.enabled {
+        Some(LockManager::new())
     } else {
         None
     };
@@ -214,12 +197,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         storage_read_pool,
         Some(engines.kv.clone()),
         Some(raft_router.clone()),
-        waiter_mgr_worker
-            .as_ref()
-            .map(|worker| WaiterMgrScheduler::new(worker.scheduler())),
-        detector_worker
-            .as_ref()
-            .map(|worker| DetectorScheduler::new(worker.scheduler())),
+        lock_mgr.clone(),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -257,6 +235,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let mut backup_worker = tikv_util::worker::Worker::new("backup-endpoint");
     let backup_scheduler = backup_worker.scheduler();
     let backup_service = backup::Service::new(backup_scheduler);
+
+    // Create Deadlock service.
+    let deadlock_service = lock_mgr.as_ref().map(|lm| lm.deadlock_service());
 
     // Create server
     let mut server = Server::new(
@@ -310,12 +291,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
     region_info_accessor.start();
 
-    // Register the role change observer of the deadlock detector.
-    if cfg.pessimistic_txn.enabled {
-        register_detector_role_change_observer(
-            &mut coprocessor_host,
-            detector_worker.as_ref().unwrap(),
-        );
+    // Register the role change observer of the lock manager.
+    if let Some(lm) = lock_mgr.as_ref() {
+        lm.register_detector_role_change_observer(&mut coprocessor_host);
     }
 
     node.start(
@@ -365,30 +343,16 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         );
     }
 
-    // Start waiter manager and deadlock detector
-    if cfg.pessimistic_txn.enabled {
-        let waiter_mgr_runner = WaiterManager::new(
-            DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
-            &cfg.pessimistic_txn,
-        );
-        let detector_runner = Detector::new(
-            node.id(),
-            pd_client,
-            resolver,
-            Arc::clone(&security_mgr),
-            WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
-            &cfg.pessimistic_txn,
-        );
-        waiter_mgr_worker
-            .as_mut()
-            .unwrap()
-            .start(waiter_mgr_runner)
-            .unwrap_or_else(|e| fatal!("failed to start waiter manager: {}", e));
-        detector_worker
-            .as_mut()
-            .unwrap()
-            .start(detector_runner)
-            .unwrap_or_else(|e| fatal!("failed to start deadlock detector: {}", e));
+    if let Some(lock_mgr) = lock_mgr.as_mut() {
+        lock_mgr
+            .start(
+                node.id(),
+                pd_client,
+                resolver,
+                Arc::clone(&security_mgr),
+                &cfg.pessimistic_txn,
+            )
+            .unwrap_or_else(|e| fatal!("failed to start lock manager: {}", e));
     }
 
     // Run server.
@@ -439,26 +403,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     region_info_accessor.stop();
 
+    if let Some(lm) = lock_mgr.as_mut() {
+        lm.stop();
+    }
+
     if let Some(Err(e)) = worker.stop().map(JoinHandle::join) {
         info!(
             "ignore failure when stopping resolver";
             "err" => ?e
         );
-    }
-
-    if cfg.pessimistic_txn.enabled {
-        if let Some(Err(e)) = waiter_mgr_worker.unwrap().stop().map(JoinHandle::join) {
-            info!(
-                "ignore failure when stopping waiter manager worker";
-                "err" => ?e
-            );
-        }
-        if let Some(Err(e)) = detector_worker.unwrap().stop().map(JoinHandle::join) {
-            info!(
-                "ignore failure when stopping deadlock detector worker";
-                "err" => ?e
-            );
-        }
     }
 }
 
