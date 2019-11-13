@@ -51,9 +51,3 @@ impl From<engine_traits::IterOptions> for RocksReadOptions {
         RocksReadOptions(r)
     }
 }
-
-impl From<&engine_traits::IterOptions> for RocksReadOptions {
-    fn from(opts: &engine_traits::IterOptions) -> Self {
-        opts.clone().into()
-    }
-}

@@ -72,7 +72,7 @@ impl Drop for RocksSnapshot {
 impl Iterable for RocksSnapshot {
     type Iterator = RocksEngineIterator;
 
-    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
@@ -84,7 +84,7 @@ impl Iterable for RocksSnapshot {
         )))
     }
 
-    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iterator> {
+    fn iterator_cf_opt(&self, opts: IterOptions, cf: &str) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {

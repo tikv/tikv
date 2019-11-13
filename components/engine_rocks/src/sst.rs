@@ -54,7 +54,7 @@ impl SstReader for RocksSstReader {
 impl Iterable for RocksSstReader {
     type Iterator = RocksSstIterator;
 
-    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         let opt = opt.into_raw();
         Ok(RocksSstIterator(SstFileReader::iter_opt_rc(
@@ -63,7 +63,7 @@ impl Iterable for RocksSstReader {
         )))
     }
 
-    fn iterator_cf_opt(&self, _opts: &IterOptions, _cf: &str) -> Result<Self::Iterator> {
+    fn iterator_cf_opt(&self, _opts: IterOptions, _cf: &str) -> Result<Self::Iterator> {
         unimplemented!() // FIXME: What should happen here?
     }
 }
