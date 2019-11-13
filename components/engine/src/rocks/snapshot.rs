@@ -45,15 +45,6 @@ impl Snapshot {
     pub fn get_db(&self) -> Arc<DB> {
         Arc::clone(&self.db)
     }
-
-    pub fn db_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<Arc<DB>>> {
-        let handle = super::util::get_cf_handle(&self.db, cf)?;
-        let mut opt = iter_opt.build_read_opts();
-        unsafe {
-            opt.set_snapshot(&self.snap);
-        }
-        Ok(DBIterator::new_cf(Arc::clone(&self.db), handle, opt))
-    }
 }
 
 impl Debug for Snapshot {
