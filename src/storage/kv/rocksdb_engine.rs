@@ -320,7 +320,7 @@ impl Snapshot for RocksSnapshot {
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
-        let iter = self.c().iterator_cf_opt(iter_opt, cf)?;
+        let iter = self.c().iterator_cf_opt(cf, iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 }

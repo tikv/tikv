@@ -262,7 +262,7 @@ impl RegionIterator {
         update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
-        let iter = snap.c().iterator_cf_opt(iter_opt, cf)
+        let iter = snap.c().iterator_cf_opt(cf, iter_opt)
             .expect("creating snapshot iterator"); // FIXME error handling
         RegionIterator {
             iter,

@@ -45,14 +45,14 @@ pub trait Iterable {
     type Iterator: Iterator;
 
     fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator>;
-    fn iterator_cf_opt(&self, opts: IterOptions, cf: &str) -> Result<Self::Iterator>;
+    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator>;
 
     fn iterator(&self) -> Result<Self::Iterator> {
         self.iterator_opt(IterOptions::default())
     }
 
     fn iterator_cf(&self, cf: &str) -> Result<Self::Iterator> {
-        self.iterator_cf_opt(IterOptions::default(), cf)
+        self.iterator_cf_opt(cf, IterOptions::default())
     }
 
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
@@ -80,7 +80,7 @@ pub trait Iterable {
         let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
         let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
         let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
-        scan_impl(self.iterator_cf_opt(iter_opt, cf)?, start_key, f)
+        scan_impl(self.iterator_cf_opt(cf, iter_opt)?, start_key, f)
     }
 
     // Seek the first key >= given key, if not found, return None.

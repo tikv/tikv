@@ -93,7 +93,7 @@ impl Iterable for RocksEngine {
         )))
     }
 
-    fn iterator_cf_opt(&self, opts: IterOptions, cf: &str) -> Result<Self::Iterator> {
+    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         let handle = get_cf_handle(&self.0, cf)?;
         let opt: RocksReadOptions = opts.into();
         Ok(RocksEngineIterator::from_raw(DBIterator::new_cf(

@@ -63,7 +63,7 @@ impl Iterable for RocksSstReader {
         )))
     }
 
-    fn iterator_cf_opt(&self, _opts: IterOptions, _cf: &str) -> Result<Self::Iterator> {
+    fn iterator_cf_opt(&self, _cf: &str, _opts: IterOptions) -> Result<Self::Iterator> {
         unimplemented!() // FIXME: What should happen here?
     }
 }
