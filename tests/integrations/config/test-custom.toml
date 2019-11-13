@@ -4,18 +4,22 @@ log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 
 [readpool.storage]
+spark-concurrency = 1
 high-concurrency = 1
 normal-concurrency = 3
 low-concurrency = 7
+max-tasks-per-worker-spark = 1000
 max-tasks-per-worker-high = 1000
 max-tasks-per-worker-normal = 1500
 max-tasks-per-worker-low = 2500
 stack-size = "20MB"
 
 [readpool.coprocessor]
+spark-concurrency = 1
 high-concurrency = 2
 normal-concurrency = 4
 low-concurrency = 6
+max-tasks-per-worker-spark = 2000
 max-tasks-per-worker-high = 2000
 max-tasks-per-worker-normal = 1000
 max-tasks-per-worker-low = 3000

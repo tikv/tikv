@@ -155,12 +155,14 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
         storage: StorageReadPoolConfig {
+            spark_concurrency: 1,
             high_concurrency: 1,
             normal_concurrency: 1,
             low_concurrency: 1,
             ..StorageReadPoolConfig::default()
         },
         coprocessor: CoprReadPoolConfig {
+            spark_concurrency: 1,
             high_concurrency: 1,
             normal_concurrency: 1,
             low_concurrency: 1,

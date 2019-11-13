@@ -84,18 +84,22 @@ fn test_serde_custom_tikv_config() {
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {
+            spark_concurrency: 1,
             high_concurrency: 1,
             normal_concurrency: 3,
             low_concurrency: 7,
+            max_tasks_per_worker_spark: 1000,
             max_tasks_per_worker_high: 1000,
             max_tasks_per_worker_normal: 1500,
             max_tasks_per_worker_low: 2500,
             stack_size: ReadableSize::mb(20),
         },
         coprocessor: CoprReadPoolConfig {
+            spark_concurrency: 1,
             high_concurrency: 2,
             normal_concurrency: 4,
             low_concurrency: 6,
+            max_tasks_per_worker_spark: 2000,
             max_tasks_per_worker_high: 2000,
             max_tasks_per_worker_normal: 1000,
             max_tasks_per_worker_low: 3000,
