@@ -13,10 +13,10 @@
 use crate::expr::Result;
 
 pub fn like(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
-    let mut px = 0;
-    let mut tx = 0;
-    let mut next_px = 0;
-    let mut next_tx = 0;
+    // current search positions in pattern and target.
+    let mut (px, tx) = (0, 0);
+    // positions for backtrace.
+    let mut (next_px, next_tx) = (0, 0);
     while px < pattern.len() || tx < target.len() {
         if px < pattern.len() {
             let c = pattern[px];
@@ -29,6 +29,7 @@ pub fn like(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
                     }
                 }
                 b'%' => {
+                    // update the backtrace point.
                     next_px = px;
                     next_tx = tx + 1;
                     px += 1;
@@ -47,7 +48,7 @@ pub fn like(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
                 }
             }
         }
-        // Mismatch and backtrace.
+        // mismatch and backtrace to last %.
         if 0 < next_tx && next_tx <= target.len() {
             px = next_px;
             tx = next_tx;
