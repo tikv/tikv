@@ -52,7 +52,7 @@ const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 30;
 const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
 const REQUEST_BATCH_LIMITER_HIGH_LATENCY: f64 = 2.2;
 
-const READ_BATCH_SIZE_LIMIT: usize = 15;
+const READ_BATCH_SIZE_LIMIT: usize = 8;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {

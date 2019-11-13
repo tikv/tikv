@@ -292,7 +292,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// Only writes that are committed before their respective `start_ts` are visible.
     pub fn async_batch_get_command(
         &self,
-        gets: Vec<PointGetCommand>,
+        mut gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
         use std::mem::{self, MaybeUninit};
         type Element = Result<Option<Vec<u8>>>;
@@ -318,7 +318,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 Default::default(),
                             );
 
-                            let mut order_and_keys: Vec<_> = gets.iter().enumerate().collect();
+                            let len = gets.len();
+                            let mut order_and_keys: Vec<_> = gets.iter_mut().enumerate().collect();
                             order_and_keys.sort_unstable_by(|(_, a), (_, b)| {
                                 match a.key.cmp(&b.key) {
                                     cmp::Ordering::Equal => b.ts.cmp(&a.ts),
@@ -326,9 +327,8 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                                 }
                             });
 
-                            let mut results: Vec<MaybeUninit<Element>> =
-                                Vec::with_capacity(gets.len());
-                            for _ in 0..gets.len() {
+                            let mut results: Vec<MaybeUninit<Element>> = Vec::with_capacity(len);
+                            for _ in 0..len {
                                 results.push(MaybeUninit::uninit());
                             }
                             for (original_order, get) in order_and_keys {
