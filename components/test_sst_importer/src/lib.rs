@@ -47,7 +47,7 @@ where
 {
     for i in range.0..range.1 {
         let k = keys::data_key(&[i]);
-        assert_eq!(db.get(&k).unwrap().unwrap(), &[i]);
+        assert_eq!(db.get_value(&k).unwrap().unwrap(), &[i]);
     }
 }
 

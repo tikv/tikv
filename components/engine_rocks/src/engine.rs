@@ -105,13 +105,13 @@ impl Iterable for RocksEngine {
 }
 
 impl Peekable for RocksEngine {
-    fn get_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let opt: RocksReadOptions = opts.into();
         let v = self.0.get_opt(key, &opt.into_raw())?;
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn get_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get_value_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let opt: RocksReadOptions = opts.into();
         let handle = get_cf_handle(&self.0, cf)?;
         let v = self.0.get_cf_opt(handle, key, &opt.into_raw())?;
@@ -197,9 +197,9 @@ mod tests {
         engine.put(b"k1", b"v1").unwrap();
         engine.put_cf(cf, b"k1", b"v2").unwrap();
 
-        assert_eq!(&*engine.get(b"k1").unwrap().unwrap(), b"v1");
-        assert!(engine.get_cf("foo", b"k1").is_err());
-        assert_eq!(&*engine.get_cf(cf, b"k1").unwrap().unwrap(), b"v2");
+        assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
+        assert!(engine.get_value_cf("foo", b"k1").is_err());
+        assert_eq!(&*engine.get_value_cf(cf, b"k1").unwrap().unwrap(), b"v2");
     }
 
     #[test]
