@@ -567,7 +567,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     self.put_write(primary_key, ts, write.to_bytes());
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
 
-                    Ok(TxnStatus::Rollbacked)
+                    Ok(TxnStatus::LockNotExist)
                 } else {
                     Err(Error::TxnNotFound {
                         start_ts: self.start_ts,
@@ -611,7 +611,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
                     Ok(false)
                 }
-                TxnStatus::Rollbacked => Ok(false),
+                TxnStatus::LockNotExist => Ok(false),
                 _ => unreachable!(),
             },
         }
@@ -704,7 +704,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     // If the lock is expired, clean it up.
                     self.rollback_lock(primary_key, lock, is_pessimistic_txn)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
-                    return Ok((TxnStatus::Rollbacked, is_pessimistic_txn));
+                    return Ok((TxnStatus::TtlExpire, is_pessimistic_txn));
                 }
 
                 let lock_ttl = lock.ttl;
@@ -1947,7 +1947,7 @@ mod tests {
 
         // Try to check a not exist thing.
         if r {
-            must_check_txn_status(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, Rollbacked);
+            must_check_txn_status(&engine, k, ts(3, 0), ts(3, 1), ts(3, 2), r, LockNotExist);
             // A rollback record will be written.
             must_seek_write(
                 &engine,
@@ -2071,7 +2071,7 @@ mod tests {
         // Check a not existing transaction, the result depends on whether `rollback_if_not_exist`
         // is set.
         if r {
-            must_check_txn_status(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, Rollbacked);
+            must_check_txn_status(&engine, k, ts(6, 0), ts(12, 0), ts(12, 0), r, LockNotExist);
             // And a rollback record will be written.
             must_seek_write(
                 &engine,
@@ -2099,7 +2099,7 @@ mod tests {
         must_large_txn_locked(&engine, k, ts(20, 0), 100, ts(21, 106), false);
 
         // If physical time's difference exceeds TTL, lock will be resolved.
-        must_check_txn_status(&engine, k, ts(20, 0), ts(121, 0), ts(121, 0), r, Rollbacked);
+        must_check_txn_status(&engine, k, ts(20, 0), ts(121, 0), ts(121, 0), r, TtlExpire);
         must_unlocked(&engine, k);
         must_seek_write(
             &engine,
@@ -2175,15 +2175,7 @@ mod tests {
             uncommitted(100),
         );
         must_large_txn_locked(&engine, k, ts(150, 0), 100, 0, true);
-        must_check_txn_status(
-            &engine,
-            k,
-            ts(150, 0),
-            ts(160, 0),
-            ts(260, 0),
-            r,
-            Rollbacked,
-        );
+        must_check_txn_status(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), r, TtlExpire);
         must_unlocked(&engine, k);
         // Rolling back a pessimistic lock should leave Rollback mark.
         must_seek_write(
@@ -2205,7 +2197,7 @@ mod tests {
             ts(271, 0),
             u64::max_value(),
             r,
-            Rollbacked,
+            TtlExpire,
         );
         must_unlocked(&engine, k);
         must_seek_write(
@@ -2226,7 +2218,7 @@ mod tests {
             ts(281, 0),
             u64::max_value(),
             r,
-            Rollbacked,
+            TtlExpire,
         );
         must_unlocked(&engine, k);
         must_seek_write(

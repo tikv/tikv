@@ -69,10 +69,12 @@ impl Mutation {
 /// Represents the status of a transaction.
 #[derive(PartialEq, Debug)]
 pub enum TxnStatus {
-    /// The txn is just rolled back by the current command.
-    Rollbacked,
     /// The txn was already rolled back before.
     RollbackedBefore,
+    /// The txn is just rolled back due to expiration.
+    TtlExpire,
+    /// The txn is just rolled back due to lock not exist.
+    LockNotExist,
     /// The txn haven't yet been committed.
     Uncommitted { lock_ttl: u64 },
     /// The txn was committed.
