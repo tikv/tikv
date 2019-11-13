@@ -7,7 +7,9 @@
 //! There are multiple [`Engine`](storage::kv::Engine) implementations, [`RaftKv`](server::raftkv::RaftKv)
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
+pub mod commands;
 pub mod config;
+pub mod errors;
 pub mod kv;
 pub mod lock_manager;
 pub mod metrics;
@@ -16,23 +18,26 @@ pub mod readpool_impl;
 pub mod txn;
 pub mod types;
 
-use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Error as IoError;
+use std::cmp;
 use std::sync::{atomic, Arc};
-use std::{cmp, error, u64};
 
-use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine::{
+    CfName, IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_KEY_PREFIX_LEN,
+};
 use futures::{future, Future};
-use kvproto::errorpb;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
-
+use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
 use tikv_util::collections::HashMap;
+use tikv_util::future_pool::FuturePool;
 
+use self::commands::{get_priority_tag, Command};
+use self::kv::with_tls_engine;
 use self::metrics::*;
 use self::mvcc::Lock;
+use self::txn::scheduler::Scheduler as TxnScheduler;
 
+pub use self::commands::{is_normal_priority, Options, PointGetCommand};
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-use self::kv::with_tls_engine;
+pub use self::errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind};
 pub use self::kv::{
     CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics,
     FlowStatsReporter, Iterator, Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot,
@@ -41,11 +46,11 @@ pub use self::kv::{
 pub use self::lock_manager::{DummyLockMgr, LockMgr};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
-use self::txn::scheduler::Scheduler as TxnScheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
-pub use self::types::{Key, KvPair, MvccInfo, Value};
+pub use self::types::{Key, KvPair, Mutation, MvccInfo, StorageCb, TxnStatus, Value};
 
+pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 // Short value max len must <= 255.
@@ -55,739 +60,8 @@ pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
 pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
-use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
-use tikv_util::future_pool::FuturePool;
-
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
-}
-
-/// A row mutation.
-#[derive(Debug, Clone)]
-pub enum Mutation {
-    /// Put `Value` into `Key`, overwriting any existing value.
-    Put((Key, Value)),
-    /// Delete `Key`.
-    Delete(Key),
-    /// Set a lock on `Key`.
-    Lock(Key),
-    /// Put `Value` into `Key` if `Key` does not yet exist.
-    ///
-    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
-    Insert((Key, Value)),
-}
-
-impl Mutation {
-    pub fn key(&self) -> &Key {
-        match self {
-            Mutation::Put((ref key, _)) => key,
-            Mutation::Delete(ref key) => key,
-            Mutation::Lock(ref key) => key,
-            Mutation::Insert((ref key, _)) => key,
-        }
-    }
-
-    pub fn into_key_value(self) -> (Key, Option<Value>) {
-        match self {
-            Mutation::Put((key, value)) => (key, Some(value)),
-            Mutation::Delete(key) => (key, None),
-            Mutation::Lock(key) => (key, None),
-            Mutation::Insert((key, value)) => (key, Some(value)),
-        }
-    }
-
-    pub fn is_insert(&self) -> bool {
-        match self {
-            Mutation::Insert(_) => true,
-            _ => false,
-        }
-    }
-}
-
-/// Represents the status of a transaction.
-#[derive(PartialEq, Debug)]
-pub enum TxnStatus {
-    /// The txn is just rolled back by the current command.
-    Rollbacked,
-    /// The txn was already rolled back before.
-    RollbackedBefore,
-    /// The txn haven't yet been committed.
-    Uncommitted { lock_ttl: u64 },
-    /// The txn was committed.
-    Committed { commit_ts: u64 },
-}
-
-impl TxnStatus {
-    pub fn uncommitted(lock_ttl: u64) -> Self {
-        Self::Uncommitted { lock_ttl }
-    }
-
-    pub fn committed(commit_ts: u64) -> Self {
-        Self::Committed { commit_ts }
-    }
-}
-
-pub enum StorageCb {
-    Boolean(Callback<()>),
-    Booleans(Callback<Vec<Result<()>>>),
-    MvccInfoByKey(Callback<MvccInfo>),
-    MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
-    Locks(Callback<Vec<LockInfo>>),
-    TxnStatus(Callback<TxnStatus>),
-}
-
-pub struct PointGetCommand {
-    ctx: Context,
-    key: Key,
-    ts: Option<u64>,
-}
-
-impl PointGetCommand {
-    pub fn from_get(request: &mut GetRequest) -> Self {
-        PointGetCommand {
-            ctx: request.take_context(),
-            key: Key::from_raw(request.get_key()),
-            ts: Some(request.get_version()),
-        }
-    }
-
-    pub fn from_raw_get(request: &mut RawGetRequest) -> Self {
-        PointGetCommand {
-            ctx: request.take_context(),
-            key: Key::from_raw(request.get_key()),
-            ts: None,
-        }
-    }
-
-    /// Only used in tests.
-    #[cfg(test)]
-    pub fn from_key_ts(key: Key, ts: Option<u64>) -> Self {
-        PointGetCommand {
-            ctx: Context::default(),
-            key,
-            ts,
-        }
-    }
-}
-
-/// Store Transaction scheduler commands.
-///
-/// Learn more about our transaction system at
-/// [Deep Dive TiKV: Distributed Transactions](https://tikv.org/deep-dive/distributed-transaction/)
-///
-/// These are typically scheduled and used through the [`Storage`](Storage) with functions like
-/// [`Storage::async_prewrite`](Storage::async_prewrite) trait and are executed asyncronously.
-// Logic related to these can be found in the `src/storage/txn/procecss.rs::process_write_impl` function.
-pub enum Command {
-    /// The prewrite phase of a transaction. The first phase of 2PC.
-    ///
-    /// This prepares the system to commit the transaction. Later a [`Commit`](Command::Commit)
-    /// or a [`Rollback`](Command::Rollback) should follow.
-    ///
-    /// If `options.for_update_ts` is `0`, the transaction is optimistic. Else it is pessimistic.
-    Prewrite {
-        ctx: Context,
-        /// The set of mutations to apply.
-        mutations: Vec<Mutation>,
-        /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
-        primary: Vec<u8>,
-        /// The transaction timestamp.
-        start_ts: u64,
-        options: Options,
-    },
-    /// Acquire a Pessimistic lock on the keys.
-    ///
-    /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
-    AcquirePessimisticLock {
-        ctx: Context,
-        /// The set of keys to lock.
-        keys: Vec<(Key, bool)>,
-        /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
-        primary: Vec<u8>,
-        /// The transaction timestamp.
-        start_ts: u64,
-        options: Options,
-    },
-    /// Commit the transaction that started at `lock_ts`.
-    ///
-    /// This should be following a [`Prewrite`](Command::Prewrite).
-    Commit {
-        ctx: Context,
-        /// The keys affected.
-        keys: Vec<Key>,
-        /// The lock timestamp.
-        lock_ts: u64,
-        /// The commit timestamp.
-        commit_ts: u64,
-    },
-    /// Rollback mutations on a single key.
-    ///
-    /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
-    Cleanup {
-        ctx: Context,
-        key: Key,
-        /// The transaction timestamp.
-        start_ts: u64,
-        /// The approximate current ts when cleanup request is invoked, which is used to check the
-        /// lock's TTL. 0 means do not check TTL.
-        current_ts: u64,
-    },
-    /// Rollback from the transaction that was started at `start_ts`.
-    ///
-    /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
-    Rollback {
-        ctx: Context,
-        keys: Vec<Key>,
-        /// The transaction timestamp.
-        start_ts: u64,
-    },
-    /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
-    ///
-    /// This can roll back an [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) command.
-    PessimisticRollback {
-        ctx: Context,
-        /// The keys to be rolled back.
-        keys: Vec<Key>,
-        /// The transaction timestamp.
-        start_ts: u64,
-        for_update_ts: u64,
-    },
-    /// Heart beat of a transaction. It enlarges the primary lock's TTL.
-    ///
-    /// This is invoked on a transaction's primary lock. The lock may be generated by either
-    /// [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) or
-    /// [`Prewrite`](Command::Prewrite).
-    TxnHeartBeat {
-        ctx: Context,
-        /// The primary key of the transaction.
-        primary_key: Key,
-        /// The transaction's start_ts.
-        start_ts: u64,
-        /// The new TTL that will be used to update the lock's TTL. If the lock's TTL is already
-        /// greater than `advise_ttl`, nothing will happen.
-        advise_ttl: u64,
-    },
-    /// Check the status of a transaction. This is usually invoked by a transaction that meets
-    /// another transaction's lock. If the primary lock is expired, it will rollback the primary
-    /// lock. If the primary lock exists but is not expired, it may update the transaction's
-    /// `min_commit_ts`. Returns a [`TxnStatus`](TxnStatus) to represent the status.
-    ///
-    /// This is invoked on a transaction's primary lock. The lock may be generated by either
-    /// [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) or
-    /// [`Prewrite`](Command::Prewrite).
-    CheckTxnStatus {
-        ctx: Context,
-        /// The primary key of the transaction.
-        primary_key: Key,
-        /// The lock's ts, namely the transaction's start_ts.
-        lock_ts: u64,
-        /// The start_ts of the transaction that invokes this command.
-        caller_start_ts: u64,
-        /// The approximate current_ts when the command is invoked.
-        current_ts: u64,
-        /// Specifies the behavior when neither commit/rollback record nor lock is found. If true,
-        /// rollbacks that transaction; otherwise returns an error.
-        rollback_if_not_exist: bool,
-    },
-    /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
-    ScanLock {
-        ctx: Context,
-        /// The maximum transaction timestamp to scan.
-        max_ts: u64,
-        /// The key to start from. (`None` means start from the very beginning.)
-        start_key: Option<Key>,
-        /// The result limit.
-        limit: usize,
-    },
-    /// Resolve locks according to `txn_status`.
-    ///
-    /// During the GC operation, this should be called to clean up stale locks whose timestamp is
-    /// before safe point.
-    ResolveLock {
-        ctx: Context,
-        /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
-        ///
-        /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
-        /// whose start_ts is 100 was committed with commit_ts `101`, and the transaction whose
-        /// start_ts is 102 was rolled back. If there are these keys in the db:
-        ///
-        /// * "k1", lock_ts = 100
-        /// * "k2", lock_ts = 102
-        /// * "k3", lock_ts = 104
-        /// * "k4", no lock
-        ///
-        /// Here `"k1"`, `"k2"` and `"k3"` each has a not-yet-committed version, because they have
-        /// locks. After calling resolve_lock, `"k1"` will be committed with commit_ts = 101 and `"k2"`
-        /// will be rolled back.  `"k3"` will not be affected, because its lock_ts is not contained in
-        /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a non-committed
-        /// version.
-        txn_status: HashMap<u64, u64>,
-        scan_key: Option<Key>,
-        key_locks: Vec<(Key, Lock)>,
-    },
-    /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
-    ResolveLockLite {
-        ctx: Context,
-        /// The transaction timestamp.
-        start_ts: u64,
-        /// The transaction commit timestamp.
-        commit_ts: u64,
-        /// The keys to resolve.
-        resolve_keys: Vec<Key>,
-    },
-    /// Delete all keys in the range [`start_key`, `end_key`).
-    ///
-    /// **This is an unsafe action.**
-    ///
-    /// All keys in the range will be deleted permanently regardless of their timestamps.
-    /// This means that deleted keys will not be retrievable by specifying an older timestamp.
-    DeleteRange {
-        ctx: Context,
-        /// The inclusive start key.
-        start_key: Key,
-        /// The exclusive end key.
-        end_key: Key,
-    },
-    /// **Testing functionality:** Latch the given keys for given duration.
-    ///
-    /// This means other write operations that involve these keys will be blocked.
-    Pause {
-        ctx: Context,
-        /// The keys to hold latches on.
-        keys: Vec<Key>,
-        /// The amount of time in milliseconds to latch for.
-        duration: u64,
-    },
-    /// Retrieve MVCC information for the given key.
-    MvccByKey { ctx: Context, key: Key },
-    /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
-    MvccByStartTs { ctx: Context, start_ts: u64 },
-}
-
-impl Display for Command {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
-            Command::Prewrite {
-                ref ctx,
-                ref mutations,
-                start_ts,
-                ..
-            } => write!(
-                f,
-                "kv::command::prewrite mutations({}) @ {} | {:?}",
-                mutations.len(),
-                start_ts,
-                ctx
-            ),
-            Command::AcquirePessimisticLock {
-                ref ctx,
-                ref keys,
-                start_ts,
-                ref options,
-                ..
-            } => write!(
-                f,
-                "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}",
-                keys.len(),
-                start_ts,
-                options.for_update_ts,
-                ctx
-            ),
-            Command::Commit {
-                ref ctx,
-                ref keys,
-                lock_ts,
-                commit_ts,
-                ..
-            } => write!(
-                f,
-                "kv::command::commit {} {} -> {} | {:?}",
-                keys.len(),
-                lock_ts,
-                commit_ts,
-                ctx
-            ),
-            Command::Cleanup {
-                ref ctx,
-                ref key,
-                start_ts,
-                ..
-            } => write!(f, "kv::command::cleanup {} @ {} | {:?}", key, start_ts, ctx),
-            Command::Rollback {
-                ref ctx,
-                ref keys,
-                start_ts,
-                ..
-            } => write!(
-                f,
-                "kv::command::rollback keys({}) @ {} | {:?}",
-                keys.len(),
-                start_ts,
-                ctx
-            ),
-            Command::PessimisticRollback {
-                ref ctx,
-                ref keys,
-                start_ts,
-                for_update_ts,
-            } => write!(
-                f,
-                "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}",
-                keys.len(),
-                start_ts,
-                for_update_ts,
-                ctx
-            ),
-            Command::TxnHeartBeat {
-                ref ctx,
-                ref primary_key,
-                start_ts,
-                advise_ttl,
-            } => write!(
-                f,
-                "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}",
-                primary_key, start_ts, advise_ttl, ctx
-            ),
-            Command::CheckTxnStatus {
-                ref ctx,
-                ref primary_key,
-                lock_ts,
-                caller_start_ts,
-                current_ts,
-                ..
-            } => write!(
-                f,
-                "kv::command::check_txn_status {} @ {} curr({}, {}) | {:?}",
-                primary_key, lock_ts, caller_start_ts, current_ts, ctx
-            ),
-            Command::ScanLock {
-                ref ctx,
-                max_ts,
-                ref start_key,
-                limit,
-                ..
-            } => write!(
-                f,
-                "kv::scan_lock {:?} {} @ {} | {:?}",
-                start_key, limit, max_ts, ctx
-            ),
-            Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
-            Command::ResolveLockLite { .. } => write!(f, "kv::resolve_lock_lite"),
-            Command::DeleteRange {
-                ref ctx,
-                ref start_key,
-                ref end_key,
-            } => write!(
-                f,
-                "kv::command::delete range [{:?}, {:?}) | {:?}",
-                start_key, end_key, ctx
-            ),
-            Command::Pause {
-                ref ctx,
-                ref keys,
-                duration,
-            } => write!(
-                f,
-                "kv::command::pause keys:({}) {} ms | {:?}",
-                keys.len(),
-                duration,
-                ctx
-            ),
-            Command::MvccByKey { ref ctx, ref key } => {
-                write!(f, "kv::command::mvccbykey {:?} | {:?}", key, ctx)
-            }
-            Command::MvccByStartTs {
-                ref ctx,
-                ref start_ts,
-            } => write!(f, "kv::command::mvccbystartts {:?} | {:?}", start_ts, ctx),
-        }
-    }
-}
-
-impl Debug for Command {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
-    }
-}
-
-pub const CMD_TAG_GC: &str = "gc";
-pub const CMD_TAG_UNSAFE_DESTROY_RANGE: &str = "unsafe_destroy_range";
-
-pub fn get_priority_tag(priority: CommandPri) -> CommandPriority {
-    match priority {
-        CommandPri::Low => CommandPriority::low,
-        CommandPri::Normal => CommandPriority::normal,
-        CommandPri::High => CommandPriority::high,
-    }
-}
-
-pub fn get_priority_code(priority: CommandPri) -> u8 {
-    match priority {
-        CommandPri::Low => 1,
-        CommandPri::Normal => 2,
-        CommandPri::High => 3,
-    }
-}
-
-pub fn is_normal_priority(priority: CommandPri) -> bool {
-    match priority {
-        CommandPri::Normal => true,
-        _ => false,
-    }
-}
-
-impl Command {
-    pub fn readonly(&self) -> bool {
-        match *self {
-            Command::ScanLock { .. } |
-            // DeleteRange only called by DDL bg thread after table is dropped and
-            // must guarantee that there is no other read or write on these keys, so
-            // we can treat DeleteRange as readonly Command.
-            Command::DeleteRange { .. } |
-            Command::MvccByKey { .. } |
-            Command::MvccByStartTs { .. } => true,
-            Command::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
-            _ => false,
-        }
-    }
-
-    pub fn priority(&self) -> CommandPri {
-        self.get_context().get_priority()
-    }
-
-    pub fn is_sys_cmd(&self) -> bool {
-        match *self {
-            Command::ScanLock { .. }
-            | Command::ResolveLock { .. }
-            | Command::ResolveLockLite { .. } => true,
-            _ => false,
-        }
-    }
-
-    pub fn priority_tag(&self) -> CommandPriority {
-        get_priority_tag(self.get_context().get_priority())
-    }
-
-    pub fn need_flow_control(&self) -> bool {
-        !self.readonly() && self.priority() != CommandPri::High
-    }
-
-    pub fn tag(&self) -> CommandKind {
-        match *self {
-            Command::Prewrite { .. } => CommandKind::prewrite,
-            Command::AcquirePessimisticLock { .. } => CommandKind::acquire_pessimistic_lock,
-            Command::Commit { .. } => CommandKind::commit,
-            Command::Cleanup { .. } => CommandKind::cleanup,
-            Command::Rollback { .. } => CommandKind::rollback,
-            Command::PessimisticRollback { .. } => CommandKind::pessimistic_rollback,
-            Command::TxnHeartBeat { .. } => CommandKind::txn_heart_beat,
-            Command::CheckTxnStatus { .. } => CommandKind::check_txn_status,
-            Command::ScanLock { .. } => CommandKind::scan_lock,
-            Command::ResolveLock { .. } => CommandKind::resolve_lock,
-            Command::ResolveLockLite { .. } => CommandKind::resolve_lock_lite,
-            Command::DeleteRange { .. } => CommandKind::delete_range,
-            Command::Pause { .. } => CommandKind::pause,
-            Command::MvccByKey { .. } => CommandKind::key_mvcc,
-            Command::MvccByStartTs { .. } => CommandKind::start_ts_mvcc,
-        }
-    }
-
-    pub fn ts(&self) -> u64 {
-        match *self {
-            Command::Prewrite { start_ts, .. }
-            | Command::AcquirePessimisticLock { start_ts, .. }
-            | Command::Cleanup { start_ts, .. }
-            | Command::Rollback { start_ts, .. }
-            | Command::PessimisticRollback { start_ts, .. }
-            | Command::MvccByStartTs { start_ts, .. }
-            | Command::TxnHeartBeat { start_ts, .. } => start_ts,
-            Command::Commit { lock_ts, .. } | Command::CheckTxnStatus { lock_ts, .. } => lock_ts,
-            Command::ScanLock { max_ts, .. } => max_ts,
-            Command::ResolveLockLite { start_ts, .. } => start_ts,
-            Command::ResolveLock { .. }
-            | Command::DeleteRange { .. }
-            | Command::Pause { .. }
-            | Command::MvccByKey { .. } => 0,
-        }
-    }
-
-    pub fn get_context(&self) -> &Context {
-        match *self {
-            Command::Prewrite { ref ctx, .. }
-            | Command::AcquirePessimisticLock { ref ctx, .. }
-            | Command::Commit { ref ctx, .. }
-            | Command::Cleanup { ref ctx, .. }
-            | Command::Rollback { ref ctx, .. }
-            | Command::PessimisticRollback { ref ctx, .. }
-            | Command::TxnHeartBeat { ref ctx, .. }
-            | Command::CheckTxnStatus { ref ctx, .. }
-            | Command::ScanLock { ref ctx, .. }
-            | Command::ResolveLock { ref ctx, .. }
-            | Command::ResolveLockLite { ref ctx, .. }
-            | Command::DeleteRange { ref ctx, .. }
-            | Command::Pause { ref ctx, .. }
-            | Command::MvccByKey { ref ctx, .. }
-            | Command::MvccByStartTs { ref ctx, .. } => ctx,
-        }
-    }
-
-    pub fn mut_context(&mut self) -> &mut Context {
-        match *self {
-            Command::Prewrite { ref mut ctx, .. }
-            | Command::AcquirePessimisticLock { ref mut ctx, .. }
-            | Command::Commit { ref mut ctx, .. }
-            | Command::Cleanup { ref mut ctx, .. }
-            | Command::Rollback { ref mut ctx, .. }
-            | Command::PessimisticRollback { ref mut ctx, .. }
-            | Command::TxnHeartBeat { ref mut ctx, .. }
-            | Command::CheckTxnStatus { ref mut ctx, .. }
-            | Command::ScanLock { ref mut ctx, .. }
-            | Command::ResolveLock { ref mut ctx, .. }
-            | Command::ResolveLockLite { ref mut ctx, .. }
-            | Command::DeleteRange { ref mut ctx, .. }
-            | Command::Pause { ref mut ctx, .. }
-            | Command::MvccByKey { ref mut ctx, .. }
-            | Command::MvccByStartTs { ref mut ctx, .. } => ctx,
-        }
-    }
-
-    pub fn write_bytes(&self) -> usize {
-        let mut bytes = 0;
-        match *self {
-            Command::Prewrite { ref mutations, .. } => {
-                for m in mutations {
-                    match *m {
-                        Mutation::Put((ref key, ref value))
-                        | Mutation::Insert((ref key, ref value)) => {
-                            bytes += key.as_encoded().len();
-                            bytes += value.len();
-                        }
-                        Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
-                            bytes += key.as_encoded().len();
-                        }
-                    }
-                }
-            }
-            Command::AcquirePessimisticLock { ref keys, .. } => {
-                for (key, _) in keys {
-                    bytes += key.as_encoded().len();
-                }
-            }
-            Command::Commit { ref keys, .. }
-            | Command::Rollback { ref keys, .. }
-            | Command::PessimisticRollback { ref keys, .. }
-            | Command::Pause { ref keys, .. } => {
-                for key in keys {
-                    bytes += key.as_encoded().len();
-                }
-            }
-            Command::ResolveLock { ref key_locks, .. } => {
-                for lock in key_locks {
-                    bytes += lock.0.as_encoded().len();
-                }
-            }
-            Command::ResolveLockLite {
-                ref resolve_keys, ..
-            } => {
-                for k in resolve_keys {
-                    bytes += k.as_encoded().len();
-                }
-            }
-            Command::Cleanup { ref key, .. } => {
-                bytes += key.as_encoded().len();
-            }
-            Command::TxnHeartBeat {
-                ref primary_key, ..
-            } => {
-                bytes += primary_key.as_encoded().len();
-            }
-            Command::CheckTxnStatus {
-                ref primary_key, ..
-            } => {
-                bytes += primary_key.as_encoded().len();
-            }
-            _ => {}
-        }
-        bytes
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct Options {
-    pub lock_ttl: u64,
-    pub skip_constraint_check: bool,
-    pub key_only: bool,
-    pub reverse_scan: bool,
-    pub is_first_lock: bool,
-    pub for_update_ts: u64,
-    pub is_pessimistic_lock: Vec<bool>,
-    // How many keys this transaction involved.
-    pub txn_size: u64,
-    pub min_commit_ts: u64,
-    // Time to wait for lock released in milliseconds when encountering locks.
-    // 0 means using default timeout. Negative means no wait.
-    pub wait_timeout: i64,
-}
-
-impl Options {
-    pub fn new(lock_ttl: u64, skip_constraint_check: bool, key_only: bool) -> Options {
-        Options {
-            lock_ttl,
-            skip_constraint_check,
-            key_only,
-            ..Default::default()
-        }
-    }
-
-    pub fn reverse_scan(mut self) -> Options {
-        self.reverse_scan = true;
-        self
-    }
-}
-
-/// A builder to build a temporary `Storage<E>`.
-///
-/// Only used for test purpose.
-#[must_use]
-pub struct TestStorageBuilder<E: Engine> {
-    engine: E,
-    config: Config,
-}
-
-impl TestStorageBuilder<RocksEngine> {
-    /// Build `Storage<RocksEngine>`.
-    pub fn new() -> Self {
-        Self {
-            engine: TestEngineBuilder::new().build().unwrap(),
-            config: Config::default(),
-        }
-    }
-}
-
-impl<E: Engine> TestStorageBuilder<E> {
-    pub fn from_engine(engine: E) -> Self {
-        Self {
-            engine,
-            config: Config::default(),
-        }
-    }
-
-    /// Customize the config of the `Storage`.
-    ///
-    /// By default, `Config::default()` will be used.
-    pub fn config(mut self, config: Config) -> Self {
-        self.config = config;
-        self
-    }
-
-    /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, DummyLockMgr>> {
-        let read_pool = self::readpool_impl::build_read_pool_for_test(
-            &crate::config::StorageReadPoolConfig::default_for_test(),
-            self.engine.clone(),
-        );
-        Storage::from_engine(self.engine, &self.config, read_pool, None)
-    }
 }
 
 /// [`Storage`] implements transactional KV APIs and raw KV APIs on a given [`Engine`]. An [`Engine`]
@@ -2143,128 +1417,61 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     }
 }
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Engine(err: EngineError) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        Txn(err: txn::Error) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        Mvcc(err: mvcc::Error) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        Closed {
-            description("storage is closed.")
-        }
-        Other(err: Box<dyn error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-        }
-        Io(err: IoError) {
-            from()
-            cause(err)
-            description(err.description())
-        }
-        SchedTooBusy {
-            description("scheduler is too busy")
-        }
-        GCWorkerTooBusy {
-            description("gc worker is too busy")
-        }
-        KeyTooLarge(size: usize, limit: usize) {
-            description("max key size exceeded")
-            display("max key size exceeded, size: {}, limit: {}", size, limit)
-        }
-        InvalidCf (cf_name: String) {
-            description("invalid cf name")
-            display("invalid cf name: {}", cf_name)
-        }
-        PessimisticTxnNotEnabled {
-            description("pessimistic transaction is not enabled")
+/// A builder to build a temporary `Storage<E>`.
+///
+/// Only used for test purpose.
+#[must_use]
+pub struct TestStorageBuilder<E: Engine> {
+    engine: E,
+    config: Config,
+}
+
+impl TestStorageBuilder<RocksEngine> {
+    /// Build `Storage<RocksEngine>`.
+    pub fn new() -> Self {
+        Self {
+            engine: TestEngineBuilder::new().build().unwrap(),
+            config: Config::default(),
         }
     }
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
-
-pub enum ErrorHeaderKind {
-    NotLeader,
-    RegionNotFound,
-    KeyNotInRegion,
-    EpochNotMatch,
-    ServerIsBusy,
-    StaleCommand,
-    StoreNotMatch,
-    RaftEntryTooLarge,
-    Other,
-}
-
-impl ErrorHeaderKind {
-    /// TODO: This function is only used for bridging existing & legacy metric tags.
-    /// It should be removed once Coprocessor starts using new static metrics.
-    pub fn get_str(&self) -> &'static str {
-        match *self {
-            ErrorHeaderKind::NotLeader => "not_leader",
-            ErrorHeaderKind::RegionNotFound => "region_not_found",
-            ErrorHeaderKind::KeyNotInRegion => "key_not_in_region",
-            ErrorHeaderKind::EpochNotMatch => "epoch_not_match",
-            ErrorHeaderKind::ServerIsBusy => "server_is_busy",
-            ErrorHeaderKind::StaleCommand => "stale_command",
-            ErrorHeaderKind::StoreNotMatch => "store_not_match",
-            ErrorHeaderKind::RaftEntryTooLarge => "raft_entry_too_large",
-            ErrorHeaderKind::Other => "other",
+impl<E: Engine> TestStorageBuilder<E> {
+    pub fn from_engine(engine: E) -> Self {
+        Self {
+            engine,
+            config: Config::default(),
         }
     }
-}
 
-impl Display for ErrorHeaderKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.get_str())
+    /// Customize the config of the `Storage`.
+    ///
+    /// By default, `Config::default()` will be used.
+    pub fn config(mut self, config: Config) -> Self {
+        self.config = config;
+        self
     }
-}
 
-pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
-    if header.has_not_leader() {
-        ErrorHeaderKind::NotLeader
-    } else if header.has_region_not_found() {
-        ErrorHeaderKind::RegionNotFound
-    } else if header.has_key_not_in_region() {
-        ErrorHeaderKind::KeyNotInRegion
-    } else if header.has_epoch_not_match() {
-        ErrorHeaderKind::EpochNotMatch
-    } else if header.has_server_is_busy() {
-        ErrorHeaderKind::ServerIsBusy
-    } else if header.has_stale_command() {
-        ErrorHeaderKind::StaleCommand
-    } else if header.has_store_not_match() {
-        ErrorHeaderKind::StoreNotMatch
-    } else if header.has_raft_entry_too_large() {
-        ErrorHeaderKind::RaftEntryTooLarge
-    } else {
-        ErrorHeaderKind::Other
+    /// Build a `Storage<E>`.
+    pub fn build(self) -> Result<Storage<E, DummyLockMgr>> {
+        let read_pool = self::readpool_impl::build_read_pool_for_test(
+            &crate::config::StorageReadPoolConfig::default_for_test(),
+            self.engine.clone(),
+        );
+        Storage::from_engine(self.engine, &self.config, read_pool, None)
     }
-}
-
-pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
-    get_error_kind_from_header(header).get_str()
 }
 
 #[cfg(test)]
 mod tests {
     use super::lock_manager::DummyLockMgr;
     use super::*;
-    use kvproto::kvrpcpb::{Context, LockInfo};
-    use std::sync::mpsc::{channel, Sender};
+
+    use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
     use tikv_util::config::ReadableSize;
+
+    use std::fmt::Debug;
+    use std::sync::mpsc::{channel, Sender};
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);
