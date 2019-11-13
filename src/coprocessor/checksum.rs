@@ -32,6 +32,7 @@ impl<S: Snapshot> ChecksumContext<S> {
             req.get_start_ts(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
+            req_ctx.bypass_locks.clone(),
         );
         let scanner = RangesScanner::new(RangesScannerOptions {
             storage: store.into(),

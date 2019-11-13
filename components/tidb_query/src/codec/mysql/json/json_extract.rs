@@ -45,7 +45,7 @@ pub fn extract_json(j: &Json, path_legs: &[PathLeg]) -> Vec<Json> {
                 }
             }
             _ => {
-                if (i == PATH_EXPR_ARRAY_INDEX_ASTERISK) || (i as usize == 0) {
+                if i as usize == 0 {
                     ret.append(&mut extract_json(j, sub_path_legs))
                 }
             }
@@ -127,6 +127,78 @@ mod tests {
                     flags: PathExpressionFlag::default(),
                 }],
                 Some("6.18"),
+            ),
+            (
+                "6.18",
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    flags: PathExpressionFlag::default(),
+                }],
+                None,
+            ),
+            (
+                "true",
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(0)],
+                    flags: PathExpressionFlag::default(),
+                }],
+                Some("true"),
+            ),
+            (
+                "true",
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    flags: PathExpressionFlag::default(),
+                }],
+                None,
+            ),
+            (
+                "6",
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(0)],
+                    flags: PathExpressionFlag::default(),
+                }],
+                Some("6"),
+            ),
+            (
+                "6",
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    flags: PathExpressionFlag::default(),
+                }],
+                None,
+            ),
+            (
+                "-6",
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(0)],
+                    flags: PathExpressionFlag::default(),
+                }],
+                Some("-6"),
+            ),
+            (
+                "-6",
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    flags: PathExpressionFlag::default(),
+                }],
+                None,
+            ),
+            (
+                r#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(PATH_EXPR_ARRAY_INDEX_ASTERISK)],
+                    flags: PathExpressionFlag::default(),
+                }],
+                None,
+            ),
+            (
+                r#"{"a": [1, 2, {"aa": "xx"}]}"#,
+                vec![PathExpression {
+                    legs: vec![PathLeg::Index(0)],
+                    flags: PathExpressionFlag::default(),
+                }],
+                Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
             ),
             // Key
             (
