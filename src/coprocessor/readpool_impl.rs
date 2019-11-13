@@ -49,9 +49,9 @@ pub fn build_read_pool<E: Engine, R: FlowStatsReporter>(
     reporter: R,
     engine: E,
 ) -> Vec<FuturePool> {
-    let names = vec!["cop-low", "cop-normal", "cop-high"];
+    let names = vec!["cop-low", "cop-normal", "cop-high", "cop-spark"];
     let configs: Vec<Config> = config.to_future_pool_configs();
-    assert_eq!(configs.len(), 3);
+    assert_eq!(configs.len(), 4);
 
     configs
         .into_iter()
@@ -81,7 +81,7 @@ pub fn build_read_pool_for_test<E: Engine>(
     engine: E,
 ) -> Vec<FuturePool> {
     let configs: Vec<Config> = config.to_future_pool_configs();
-    assert_eq!(configs.len(), 3);
+    assert_eq!(configs.len(), 4);
 
     configs
         .into_iter()

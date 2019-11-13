@@ -390,6 +390,7 @@ pub fn get_priority_tag(priority: CommandPri) -> CommandPriority {
         CommandPri::Low => CommandPriority::low,
         CommandPri::Normal => CommandPriority::normal,
         CommandPri::High => CommandPriority::high,
+        CommandPri::Spark => CommandPriority::spark,
     }
 }
 
@@ -398,6 +399,7 @@ pub fn get_priority_code(priority: CommandPri) -> u8 {
         CommandPri::Low => 1,
         CommandPri::Normal => 2,
         CommandPri::High => 3,
+        CommandPri::Spark => 4,
     }
 }
 

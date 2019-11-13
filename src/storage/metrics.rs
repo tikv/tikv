@@ -54,6 +54,7 @@ make_static_metric! {
         low,
         normal,
         high,
+        spark,
     }
 
     pub struct SchedDurationVec: Histogram {

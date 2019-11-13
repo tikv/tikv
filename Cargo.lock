@@ -1333,7 +1333,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#138c055bc8e490a9727568ad8c990bd09fc93f45"
+source = "git+https://github.com/pingcap/kvproto.git?branch=spark-priority#1810274d3d5a70bfd2101a24f1fb64f41b7f4639"
 dependencies = [
  "futures",
  "grpcio",

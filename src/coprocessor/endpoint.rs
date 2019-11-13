@@ -25,6 +25,7 @@ use crate::coprocessor::*;
 /// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
+    read_pool_spark: FuturePool,
     read_pool_high: FuturePool,
     read_pool_normal: FuturePool,
     read_pool_low: FuturePool,
@@ -46,6 +47,7 @@ pub struct Endpoint<E: Engine> {
 impl<E: Engine> Clone for Endpoint<E> {
     fn clone(&self) -> Self {
         Self {
+            read_pool_spark: self.read_pool_spark.clone(),
             read_pool_high: self.read_pool_high.clone(),
             read_pool_normal: self.read_pool_normal.clone(),
             read_pool_low: self.read_pool_low.clone(),
@@ -58,11 +60,13 @@ impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
     pub fn new(cfg: &Config, mut read_pool: Vec<FuturePool>) -> Self {
+        let read_pool_spark = read_pool.remove(3);
         let read_pool_high = read_pool.remove(2);
         let read_pool_normal = read_pool.remove(1);
         let read_pool_low = read_pool.remove(0);
 
         Self {
+            read_pool_spark,
             read_pool_high,
             read_pool_normal,
             read_pool_low,
@@ -78,6 +82,7 @@ impl<E: Engine> Endpoint<E> {
 
     fn get_read_pool(&self, priority: kvrpcpb::CommandPri) -> &FuturePool {
         match priority {
+            kvrpcpb::CommandPri::Spark => &self.read_pool_spark,
             kvrpcpb::CommandPri::High => &self.read_pool_high,
             kvrpcpb::CommandPri::Normal => &self.read_pool_normal,
             kvrpcpb::CommandPri::Low => &self.read_pool_low,

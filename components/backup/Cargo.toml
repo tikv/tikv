@@ -10,7 +10,7 @@ path = "tests/integrations/mod.rs"
 
 [dependencies]
 tikv = { path = "../../", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "spark-priority" }
 protobuf = "2.8"
 raft = "0.6.0-alpha"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
