@@ -1982,7 +1982,7 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: Some(renew_lease_time),
                 };
-                self.post_propose(meta, false, Callback::None);
+                self.post_propose(poll_ctx, meta, false, Callback::None);
             }
         }
 
