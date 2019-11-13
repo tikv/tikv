@@ -14,9 +14,9 @@ use crate::expr::Result;
 
 pub fn like(target: &[u8], pattern: &[u8], escape: u32) -> Result<bool> {
     // current search positions in pattern and target.
-    let mut (px, tx) = (0, 0);
+    let (mut px, mut tx) = (0, 0);
     // positions for backtrace.
-    let mut (next_px, next_tx) = (0, 0);
+    let (mut next_px, mut next_tx) = (0, 0);
     while px < pattern.len() || tx < target.len() {
         if px < pattern.len() {
             let c = pattern[px];
