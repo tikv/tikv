@@ -4,7 +4,9 @@ use crate::engine::RocksEngine;
 use engine::DB;
 use std::sync::Arc;
 use engine::Snapshot as RawSnapshot;
+use engine::SyncSnapshot as RawSyncSnapshot;
 use crate::snapshot::RocksSnapshot;
+use crate::snapshot::RocksSyncSnapshot;
 
 /// A trait to enter the world of engine traits from a raw `Arc<DB>`
 /// with as little syntax as possible.
@@ -32,5 +34,14 @@ impl Compat for RawSnapshot {
     #[inline]
     fn c(&self) -> &RocksSnapshot {
         RocksSnapshot::from_ref(self)
+    }
+}
+
+impl Compat for RawSyncSnapshot {
+    type Other = RocksSyncSnapshot;
+
+    #[inline]
+    fn c(&self) -> &RocksSyncSnapshot {
+        RocksSyncSnapshot::from_ref(self)
     }
 }

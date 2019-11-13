@@ -8,6 +8,7 @@ use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, 
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
 use engine::rocks::Snapshot as RawSnapshot;
+use engine::rocks::SyncSnapshot as RawSyncSnapshot;
 
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
@@ -123,6 +124,7 @@ impl Peekable for RocksSnapshot {
 }
 
 #[derive(Clone, Debug)]
+#[repr(C)] // Guarantee same representation as in engine/rocks
 pub struct RocksSyncSnapshot(Arc<RocksSnapshot>);
 
 impl Deref for RocksSyncSnapshot {
@@ -136,5 +138,9 @@ impl Deref for RocksSyncSnapshot {
 impl RocksSyncSnapshot {
     pub fn new(db: Arc<DB>) -> RocksSyncSnapshot {
         RocksSyncSnapshot(Arc::new(RocksSnapshot::new(db)))
+    }
+
+    pub fn from_ref(raw: &RawSyncSnapshot) -> &RocksSyncSnapshot {
+        unsafe { &*(raw as *const _ as *const _) }
     }
 }
