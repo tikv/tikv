@@ -2100,6 +2100,7 @@ impl Runner {
     }
 
     fn handle_applies(&mut self, applys: Vec<Apply>) {
+        fail_point!("on_handle_apply", |_| {});
         let t = SlowTimer::new();
 
         let mut core = ApplyContextCore::new(self.host.as_ref(), self.importer.as_ref())

@@ -160,6 +160,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     pub fn poll_apply(&mut self) {
+        fail_point!("on_poll_apply", |_| {});
         loop {
             match self.apply_res_receiver.as_ref().unwrap().try_recv() {
                 Ok(ApplyTaskRes::Applys(multi_res)) => for res in multi_res {
@@ -1707,6 +1708,9 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
     #[cfg_attr(feature = "cargo-clippy", allow(if_same_then_else))]
     pub fn on_raft_gc_log_tick(&mut self, event_loop: &mut EventLoop<Self>) {
+        self.register_raft_gc_log_tick(event_loop);
+        fail_point!("on_raft_gc_log_tick", |_| {});
+
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
         // do not clean up the cache, it may keep growing.
@@ -1805,7 +1809,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
-        self.register_raft_gc_log_tick(event_loop);
     }
 
     pub fn register_split_region_check_tick(&self, event_loop: &mut EventLoop<Self>) {
