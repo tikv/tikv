@@ -22,7 +22,6 @@ out/
 .vscode/**
 
 target
-dist
 tmp
 /bin
 /dist
