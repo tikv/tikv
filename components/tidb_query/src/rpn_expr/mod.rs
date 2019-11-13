@@ -185,6 +185,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::UnaryNotReal => unary_not_real_fn_meta(),
         ScalarFuncSig::UnaryNotDecimal => unary_not_decimal_fn_meta(),
         ScalarFuncSig::BitAndSig => bit_and_fn_meta(),
+        ScalarFuncSig::BitOrSig => bit_or_fn_meta(),
         ScalarFuncSig::BitNegSig => bit_neg_fn_meta(),
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
         ScalarFuncSig::PlusReal => arithmetic_fn_meta::<RealPlus>(),
