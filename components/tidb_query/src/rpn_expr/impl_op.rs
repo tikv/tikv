@@ -72,6 +72,15 @@ pub fn bit_and(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
 
 #[rpn_fn]
 #[inline]
+pub fn bit_or(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
+    Ok(match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => Some(lhs | rhs),
+        _ => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
 pub fn bit_neg(arg: &Option<Int>) -> Result<Option<Int>> {
     Ok(arg.map(|arg| !arg))
 }
@@ -308,6 +317,25 @@ mod tests {
                 .push_param(lhs)
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::BitAndSig)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_bit_or() {
+        let cases = vec![
+            (Some(123), Some(321), Some(379)),
+            (Some(-123), Some(321), Some(-59)),
+            (None, Some(1), None),
+            (Some(1), None, None),
+            (None, None, None),
+        ];
+        for (lhs, rhs, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::BitOrSig)
                 .unwrap();
             assert_eq!(output, expected);
         }
