@@ -97,6 +97,15 @@ fn decimal_is_false(arg: &Option<Decimal>) -> Result<Option<i64>> {
     Ok(Some(arg.as_ref().map_or(0, |v| v.is_zero() as i64)))
 }
 
+#[rpn_fn]
+#[inline]
+fn left_shift(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>> {
+    Ok(match (arg0, arg1) {
+        (Some(arg0), Some(arg1)) => Some((*arg0 as i64).checked_shl(*arg1 as u32).unwrap_or(0)),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,6 +350,28 @@ mod tests {
                 .evaluate(sig)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}, {:?}", arg, sig);
+        }
+    }
+
+    #[test]
+    fn test_left_shift() {
+        let test_cases = vec![
+            (Some(1), Some(1), Some(2)),
+            (Some(123), Some(0), Some(123)),
+            (Some(123), Some(-1), Some(0)),
+            (Some(-123), Some(2), Some(-492)),
+            (None, Some(10), None),
+            (Some(123), None, None),
+            (Some(-123), Some(60), Some(5764607523034234880)),
+            (Some(123), Some(123123), Some(0)),
+        ];
+        for (arg0, arg1, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::LeftShift)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?} {:?}", arg0, arg1);
         }
     }
 }

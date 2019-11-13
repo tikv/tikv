@@ -176,6 +176,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::IntIsFalse => int_is_false_fn_meta(),
         ScalarFuncSig::RealIsFalse => real_is_false_fn_meta(),
         ScalarFuncSig::DecimalIsFalse => decimal_is_false_fn_meta(),
+        ScalarFuncSig::LeftShift => left_shift_fn_meta(),
         ScalarFuncSig::LogicalAnd => logical_and_fn_meta(),
         ScalarFuncSig::LogicalOr => logical_or_fn_meta(),
         ScalarFuncSig::LogicalXor => logical_xor_fn_meta(),
