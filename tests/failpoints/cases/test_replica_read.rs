@@ -1,11 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
 use fail;
 use std::mem;
 use std::sync::atomic::AtomicBool;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
@@ -138,4 +136,114 @@ fn test_duplicate_read_index_ctx() {
     // read index response must not be dropped
     assert!(rx2.recv_timeout(Duration::from_millis(500)).is_ok());
     assert!(rx3.recv_timeout(Duration::from_millis(500)).is_ok());
+}
+
+#[test]
+fn test_read_before_init() {
+    let _guard = crate::setup();
+    // Initialize cluster
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // Set region and peers
+    let r1 = cluster.run_conf_change();
+    let p1 = new_peer(1, 1);
+    cluster.must_put(b"k0", b"v0");
+    let p2 = new_peer(2, 2);
+    cluster.pd_client.must_add_peer(r1, p2.clone());
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
+
+    fail::cfg("before_apply_snap_update_region", "return").unwrap();
+    // Add peer 3
+    let p3 = new_peer(3, 3);
+    cluster.pd_client.must_add_peer(r1, p3.clone());
+    thread::sleep(Duration::from_millis(500));
+    let region = cluster.get_region(b"k0");
+    assert_eq!(cluster.leader_of_region(r1).unwrap(), p1);
+
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cf_cmd("default", b"k0")],
+        false,
+    );
+    request.mut_header().set_peer(p3.clone());
+    request.mut_header().set_replica_read(true);
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(3, request, cb)
+        .unwrap();
+    let resp = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains("not initialized yet"),
+        "{:?}",
+        resp.get_header().get_error()
+    );
+}
+
+#[test]
+fn test_read_applying_snapshot() {
+    let _guard = crate::setup();
+    // Initialize cluster
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // Set region and peers
+    let r1 = cluster.run_conf_change();
+    let p1 = new_peer(1, 1);
+    cluster.must_put(b"k0", b"v0");
+    let p2 = new_peer(2, 2);
+    cluster.pd_client.must_add_peer(r1, p2.clone());
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
+
+    // Don't apply snapshot to init peer 3
+    fail::cfg("region_apply_snap", "pause").unwrap();
+    let p3 = new_peer(3, 3);
+    cluster.pd_client.must_add_peer(r1, p3.clone());
+    thread::sleep(Duration::from_millis(500));
+
+    // Check if peer 3 is applying snapshot
+    let region_key = keys::region_state_key(r1);
+    let region_state: RegionLocalState = cluster
+        .get_engine(3)
+        .get_msg_cf(CF_RAFT, &region_key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state.get_state(), PeerState::Applying);
+    let region = cluster.get_region(b"k0");
+    assert_eq!(cluster.leader_of_region(r1).unwrap(), p1);
+
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cf_cmd("default", b"k0")],
+        false,
+    );
+    request.mut_header().set_peer(p3.clone());
+    request.mut_header().set_replica_read(true);
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(3, request, cb)
+        .unwrap();
+    fail::cfg("region_apply_snap", "off").unwrap();
+    let resp = rx.recv_timeout(Duration::from_millis(500)).unwrap();
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains("applying snapshot"),
+        "{:?}",
+        resp.get_header().get_error()
+    );
 }
