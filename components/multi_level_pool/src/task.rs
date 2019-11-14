@@ -18,13 +18,13 @@ pub struct Task {
     scheduler: Scheduler,
     status: AtomicU8,
     // this token's total elapsed time
-    pub task_stats: Arc<TaskStats>,
-    pub level: AtomicUsize,
-    pub fixed_level: Option<usize>,
+    task_stats: Arc<TaskStats>,
+    level: AtomicUsize,
+    fixed_level: Option<usize>,
 }
 
 #[derive(Clone)]
-pub struct ArcTask(pub Arc<Task>);
+pub struct ArcTask(Arc<Task>);
 
 const WAITING: u8 = 0; // --> POLLING
 const POLLING: u8 = 1; // --> WAITING, REPOLL, or COMPLETE
@@ -54,6 +54,18 @@ impl ArcTask {
         });
         let future: *const Task = Arc::into_raw(future) as *const Task;
         unsafe { task(future) }
+    }
+
+    pub fn fixed_level(&self) -> Option<usize> {
+        self.0.fixed_level
+    }
+
+    pub fn elapsed_micros(&self) -> u64 {
+        self.0.task_stats.elapsed.load(Ordering::SeqCst)
+    }
+
+    pub fn set_level(&self, level: usize) {
+        self.0.level.store(level, Ordering::SeqCst);
     }
 
     pub unsafe fn poll(self) {

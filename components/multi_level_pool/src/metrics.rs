@@ -67,6 +67,12 @@ lazy_static! {
         &["name", "level"]
     )
     .unwrap();
+    pub static ref MULTI_LEVEL_POOL_PROPORTION_TARGET: GaugeVec = register_gauge_vec!(
+        "tikv_multi_level_pool_proportion_target",
+        "Level 0 target proportion",
+        &["name"]
+    )
+    .unwrap();
     pub static ref MULTI_LEVEL_POOL_TASK_SOURCE: IntCounterVec = register_int_counter_vec!(
         "tikv_multi_level_pool_task_source",
         "Count of task source of each polling",

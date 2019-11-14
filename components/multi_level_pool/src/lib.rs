@@ -14,7 +14,7 @@ use stats::StatsMap;
 use task::ArcTask;
 
 use futures::FutureExt;
-use prometheus::{IntCounter, IntGauge};
+use prometheus::{Gauge, IntCounter, IntGauge};
 use rand::prelude::*;
 use tikv_util::time::Instant;
 
@@ -37,6 +37,7 @@ struct Env {
     on_tick: Option<Box<dyn Fn() + Send + Sync>>,
     metrics_running_task_count: IntGauge,
     metrics_handled_task_count: IntCounter,
+    level0_proportion_target: Gauge,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -95,6 +96,10 @@ impl MultiLevelPool {
 
     pub fn get_pool_size(&self) -> usize {
         self.pool_size
+    }
+
+    pub fn set_level0_proportion_target(&self, target: f64) {
+        self.env.level0_proportion_target.set(target);
     }
 
     fn gate_spawn(&self) -> Result<(), Full> {

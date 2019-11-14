@@ -40,6 +40,7 @@ pub struct Builder {
     stack_size: usize,
     max_tasks: usize,
     pool_size: usize,
+    level0_proportion_target: f64,
 }
 
 impl Builder {
@@ -51,6 +52,7 @@ impl Builder {
             max_tasks: std::usize::MAX,
             stack_size: 2_000_000,
             pool_size: num_cpus::get(),
+            level0_proportion_target: 0.8,
         }
     }
 
@@ -100,6 +102,11 @@ impl Builder {
         self
     }
 
+    pub fn level0_proportion_target(&mut self, target: f64) -> &mut Self {
+        self.level0_proportion_target = target;
+        self
+    }
+
     pub fn build(&mut self) -> MultiLevelPool {
         let name = if let Some(name) = &self.name_prefix {
             name.as_str()
@@ -107,12 +114,16 @@ impl Builder {
             "multi_level_pool"
         };
 
+        let level0_proportion_target =
+            MULTI_LEVEL_POOL_PROPORTION_TARGET.with_label_values(&[name]);
+        level0_proportion_target.set(self.level0_proportion_target);
         let env = Arc::new(Env {
             on_tick: self.on_tick.take(),
             metrics_running_task_count: MULTI_LEVEL_POOL_RUNNING_TASK_VEC
                 .with_label_values(&[name]),
             metrics_handled_task_count: MULTI_LEVEL_POOL_HANDLED_TASK_VEC
                 .with_label_values(&[name]),
+            level0_proportion_target,
         });
         let task_source_count = TaskSourceCount::new(name);
         let scheduler = Scheduler::new(name, self.pool_size);
@@ -134,17 +145,17 @@ impl Builder {
                     stealers.push(all_stealers[j].clone());
                 }
             }
-            let worker = Worker {
+            let worker = Worker::new(
                 local,
                 stealers,
-                scheduler: scheduler.clone(),
-                timer_handle: timer.handle(),
-                timer_wg: Some(timer_wg.clone()),
-                parker: Parker::new(),
-                proportions: proportions.clone(),
-                task_source_count: task_source_count.clone(),
-                after_start: self.after_start_func.clone(),
-            };
+                scheduler.clone(),
+                timer.handle(),
+                Some(timer_wg.clone()),
+                Parker::new(),
+                proportions.clone(),
+                task_source_count.clone(),
+                self.after_start_func.clone(),
+            );
             workers.push(worker);
         }
         for (i, worker) in workers.into_iter().enumerate() {
@@ -155,7 +166,11 @@ impl Builder {
         }
 
         // Create background jobs
-        let async_update_proportions = worker::update_proportions(scheduler.clone(), proportions);
+        let async_update_proportions = worker::update_proportions(
+            scheduler.clone(),
+            proportions,
+            env.level0_proportion_target.clone(),
+        );
         let stats_map = StatsMap::new();
         let async_cleanup_stats = stats_map.async_cleanup();
 

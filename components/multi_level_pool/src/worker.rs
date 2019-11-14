@@ -10,22 +10,24 @@ use init_with::InitWith;
 use prometheus::*;
 use rand::prelude::*;
 use tokio_timer::timer::Handle;
+use derive_new::new;
 
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 /// A worker thread for running `Future`s.
+#[derive(new)]
 pub struct Worker {
-    pub local: LocalQueue<ArcTask>,
-    pub stealers: Vec<Stealer<ArcTask>>,
-    pub scheduler: Scheduler,
-    pub timer_handle: Handle,
-    pub timer_wg: Option<WaitGroup>,
-    pub parker: Parker,
-    pub proportions: Proportions,
-    pub task_source_count: TaskSourceCount,
-    pub after_start: Arc<dyn Fn() + Send + Sync + 'static>,
+    local: LocalQueue<ArcTask>,
+    stealers: Vec<Stealer<ArcTask>>,
+    scheduler: Scheduler,
+    timer_handle: Handle,
+    timer_wg: Option<WaitGroup>,
+    parker: Parker,
+    proportions: Proportions,
+    task_source_count: TaskSourceCount,
+    after_start: Arc<dyn Fn() + Send + Sync + 'static>,
 }
 
 impl Worker {
@@ -161,7 +163,7 @@ impl Proportions {
 // Update proportions interval
 const UPDATE_PROPORTIONS_INTERVAL: Duration = Duration::from_secs(1);
 
-pub async fn update_proportions(scheduler: Scheduler, proportions: Proportions) {
+pub async fn update_proportions(scheduler: Scheduler, proportions: Proportions, target: Gauge) {
     let mut last_level_elapsed = [0i64; LEVEL_COUNT];
     loop {
         tokio_timer::delay_for(UPDATE_PROPORTIONS_INTERVAL).await;
@@ -179,14 +181,14 @@ pub async fn update_proportions(scheduler: Scheduler, proportions: Proportions) 
 
         // TODO: support other level settings
 
-        // TODO: Support setting level0 percentage. Currently 80% by default.
-        if level0_percentage < 0.75 {
+        let target = target.get();
+        if level0_percentage < target - 0.05 {
             new_proportions[0] = (old_proportions[0] + MAX_LEVEL0_PROPORTION) / 2;
             // level 1 : level 2 = 7 : 1
             new_proportions[1] = new_proportions[0] / 8 + (1 << 29) * 7;
             proportions.0[1].set(new_proportions[1]);
             proportions.0[0].set(new_proportions[0]);
-        } else if level0_percentage > 0.85 {
+        } else if level0_percentage > target + 0.05 {
             new_proportions[0] = (old_proportions[0] + MIN_LEVEL0_PROPORTION) / 2;
             // level 1 : level 2 = 7 : 1
             new_proportions[1] = new_proportions[0] / 8 + (1 << 29) * 7;

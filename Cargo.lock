@@ -1863,6 +1863,7 @@ version = "0.1.0"
 dependencies = [
  "crossbeam",
  "dashmap",
+ "derive-new",
  "futures 0.1.29",
  "futures 0.3.1",
  "init_with",

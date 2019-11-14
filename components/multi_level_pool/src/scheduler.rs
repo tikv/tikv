@@ -10,7 +10,6 @@ use crossbeam::queue::ArrayQueue;
 use init_with::InitWith;
 use prometheus::*;
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// `Scheduler` is responsible for adding new tasks into the thread pool injectors.
@@ -40,17 +39,16 @@ impl Scheduler {
     }
 
     pub fn add_task(&self, task: ArcTask) {
-        let level = task.0.fixed_level.unwrap_or_else(|| {
-            let stats = &task.0.task_stats;
-            let elapsed = stats.elapsed.load(Ordering::SeqCst);
+        let level = task.fixed_level().unwrap_or_else(|| {
+            let elapsed_micros = task.elapsed_micros();
             // TODO: support other level settings
-            match elapsed {
+            match elapsed_micros {
                 0..=999 => 0,
                 1_000..=99_999 => 1,
                 _ => 2,
             }
         });
-        task.0.level.store(level, Ordering::SeqCst);
+        task.set_level(level);
         self.0.injectors[level].push(task);
         if let Ok(parker) = self.0.sleepers.pop() {
             parker.unpark();
