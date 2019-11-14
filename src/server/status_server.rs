@@ -153,7 +153,7 @@ impl StatusServer {
         let query = match req.uri().query() {
             Some(query) => query,
             None => {
-                return Box::new(ok(Self::err_response(StatusCode::BAD_REQUEST, "")));
+                return Box::new(ok(StatusServer::err_response(StatusCode::BAD_REQUEST, "")));
             }
         };
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
@@ -161,7 +161,7 @@ impl StatusServer {
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(_) => {
-                    return Box::new(ok(Self::err_response(StatusCode::BAD_REQUEST, "")));
+                    return Box::new(ok(StatusServer::err_response(StatusCode::BAD_REQUEST, "")));
                 }
             },
             None => 10,
@@ -180,7 +180,7 @@ impl StatusServer {
                     ok(response)
                 })
                 .or_else(|err| {
-                    ok(Self::err_response(
+                    ok(StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         err.to_string(),
                     ))
@@ -207,7 +207,7 @@ impl StatusServer {
                 .body(Body::from(json))
                 .unwrap(),
             Err(_) => {
-                Self::err_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+                StatusServer::err_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
             }
         };
         Box::new(ok(res))
@@ -284,7 +284,7 @@ impl StatusServer {
         let query = match req.uri().query() {
             Some(query) => query,
             None => {
-                return Box::new(ok(Self::err_response(StatusCode::BAD_REQUEST, "")));
+                return Box::new(ok(StatusServer::err_response(StatusCode::BAD_REQUEST, "")));
             }
         };
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
@@ -292,7 +292,7 @@ impl StatusServer {
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(err) => {
-                    return Box::new(ok(Self::err_response(
+                    return Box::new(ok(StatusServer::err_response(
                         StatusCode::BAD_REQUEST,
                         err.to_string(),
                     )));
@@ -305,7 +305,7 @@ impl StatusServer {
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(err) => {
-                    return Box::new(ok(Self::err_response(
+                    return Box::new(ok(StatusServer::err_response(
                         StatusCode::BAD_REQUEST,
                         err.to_string(),
                     )));
@@ -325,14 +325,14 @@ impl StatusServer {
                             Ok(profile) => match profile.encode(&mut body) {
                                 Ok(()) => {
                                     info!("write report successfully");
-                                    Box::new(ok(Self::err_response(StatusCode::OK, body)))
+                                    Box::new(ok(StatusServer::err_response(StatusCode::OK, body)))
                                 }
-                                Err(err) => Box::new(ok(Self::err_response(
+                                Err(err) => Box::new(ok(StatusServer::err_response(
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     err.to_string(),
                                 ))),
                             },
-                            Err(err) => Box::new(ok(Self::err_response(
+                            Err(err) => Box::new(ok(StatusServer::err_response(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 err.to_string(),
                             ))),
@@ -341,9 +341,9 @@ impl StatusServer {
                         match report.flamegraph(&mut body) {
                             Ok(_) => {
                                 info!("write report successfully");
-                                Box::new(ok(Self::err_response(StatusCode::OK, body)))
+                                Box::new(ok(StatusServer::err_response(StatusCode::OK, body)))
                             }
-                            Err(err) => Box::new(ok(Self::err_response(
+                            Err(err) => Box::new(ok(StatusServer::err_response(
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 err.to_string(),
                             ))),
@@ -351,7 +351,7 @@ impl StatusServer {
                     }
                 })
                 .or_else(|err| {
-                    ok(Self::err_response(
+                    ok(StatusServer::err_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         err.to_string(),
                     ))
@@ -390,7 +390,7 @@ impl StatusServer {
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
                             (Method::GET, "/config") => Self::config_handler(config.clone()),
                             (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
-                            _ => Box::new(ok(Self::err_response(StatusCode::NOT_FOUND, ""))),
+                            _ => Box::new(ok(StatusServer::err_response(StatusCode::NOT_FOUND, ""))),
                         }
                     },
                 )
@@ -433,7 +433,7 @@ fn handle_fail_points_request(
         (Method::PUT, true) => Box::new(req.into_body().concat2().map(move |chunk| {
             let (_, name) = path.split_at(fail_path.len());
             if name.is_empty() {
-                return Box::new(ok(Self::err_response(
+                return Box::new(ok(StatusServer::err_response(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     &MISSING_NAME.into(),
                 )));
@@ -442,14 +442,14 @@ fn handle_fail_points_request(
             let actions = chunk.into_iter().collect::<Vec<u8>>();
             let actions = String::from_utf8(actions).unwrap();
             if actions.is_empty() {
-                return Box::new(ok(Self::err_response(
+                return Box::new(ok(StatusServer::err_response(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     &MISSING_ACTIONS.into(),
                 )));
             };
 
             if let Err(e) = fail::cfg(name.to_owned(), &actions) {
-                return Box::new(ok(Self::err_response(
+                return Box::new(ok(StatusServer::err_response(
                     StatusCode::BAD_REQUEST,
                     &e.to_string(),
                 )));
@@ -460,7 +460,7 @@ fn handle_fail_points_request(
         (Method::DELETE, true) => {
             let (_, name) = path.split_at(fail_path.len());
             if name.is_empty() {
-                return Box::new(ok(Self::err_response(
+                return Box::new(ok(StatusServer::err_response(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     &MISSING_NAME.into(),
                 )));
@@ -474,7 +474,7 @@ fn handle_fail_points_request(
             // In this scope the path must be like /fail...(/...), which starts with FAIL_POINTS_REQUEST_PATH and may or may not have a sub path
             // Now we return 404 when path is neither /fail nor /fail/
             if path != FAIL_POINTS_REQUEST_PATH && path != fail_path {
-                return Box::new(ok(Self::err_response(StatusCode::NOT_FOUND, "")));
+                return Box::new(ok(StatusServer::err_response(StatusCode::NOT_FOUND, "")));
             }
 
             // From here path is either /fail or /fail/, return lists of fail points
@@ -485,7 +485,7 @@ fn handle_fail_points_request(
             let list = list.join("\n");
             Box::new(ok(Response::new(list.into())))
         }
-        _ => Box::new(ok(Self::err_response(StatusCode::METHOD_NOT_ALLOWED, ""))),
+        _ => Box::new(ok(StatusServer::err_response(StatusCode::METHOD_NOT_ALLOWED, ""))),
     }
 }
 
