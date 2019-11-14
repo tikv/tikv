@@ -1,6 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine::{Peekable, CF_RAFT};
 use fail;
+use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use std::mem;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
