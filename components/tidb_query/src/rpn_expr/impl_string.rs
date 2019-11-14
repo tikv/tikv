@@ -11,6 +11,12 @@ pub fn length(arg: &Option<Bytes>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|bytes| bytes.len() as i64))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn bit_length(arg: &Option<Bytes>) -> Result<Option<i64>> {
+    Ok(arg.as_ref().map(|bytes| bytes.len() as i64 * 8))
+}
+
 #[cfg(test)]
 mod tests {
     use tipb::ScalarFuncSig;
@@ -35,6 +41,29 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate(ScalarFuncSig::Length)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_bit_length() {
+        let cases = vec![
+            (None, None),
+            (Some(""), Some(0i64)),
+            (Some("你好"), Some(48i64)),
+            (Some("TiKV"), Some(32i64)),
+            (Some("あなたのことが好きです"), Some(264i64)),
+            (Some("분산 데이터베이스"), Some(200i64)),
+            (Some("россия в мире  кубок"), Some(304i64)),
+            (Some("قاعدة البيانات"), Some(216i64)),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let arg = arg.map(|s| s.as_bytes().to_vec());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::BitLength)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
