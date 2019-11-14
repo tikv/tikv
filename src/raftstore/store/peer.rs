@@ -1290,7 +1290,7 @@ impl Peer {
         } else {
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
-            let mut lease_to_be_updated = self.is_leader();
+            let lease_to_be_updated = self.is_leader();
             let mut split_to_be_updated = self.is_leader();
             let mut merge_to_be_update = self.is_leader();
             if !lease_to_be_updated {
@@ -1299,20 +1299,28 @@ impl Peer {
                 // have no effect.
                 self.proposals.clear();
             }
+            if lease_to_be_updated {
+                let first_propose_time = committed_entries
+                    .iter()
+                    .find_map(|entry| self.find_propose_time(entry.get_index(), entry.get_term()));
+                let last_propose_time = committed_entries
+                    .iter()
+                    .rev()
+                    .find_map(|entry| self.find_propose_time(entry.get_index(), entry.get_term()))
+                    .or(first_propose_time);
+                if let Some(propose_time) = first_propose_time {
+                    ctx.raft_metrics.commit_log.observe(duration_to_sec(
+                        (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
+                    ));
+                }
+                if let Some(propose_time) = last_propose_time {
+                    self.maybe_renew_leader_lease(propose_time, ctx, None);
+                }
+            }
+
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
-                if lease_to_be_updated {
-                    let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
-                    if let Some(propose_time) = propose_time {
-                        ctx.raft_metrics.commit_log.observe(duration_to_sec(
-                            (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
-                        ));
-                        self.maybe_renew_leader_lease(propose_time, ctx, None);
-                        lease_to_be_updated = false;
-                    }
-                }
-
                 // We care about split/merge commands that are committed in the current term.
                 if entry.term == self.term() && (split_to_be_updated || merge_to_be_update) {
                     let ctx = ProposalContext::from_bytes(&entry.context);
