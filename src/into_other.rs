@@ -4,18 +4,15 @@
 // interdependencies. These are used to convert between error_traits::Error and
 // other Error's that error_traits can't depend on.
 
+use raft::Error as RaftError;
 use kvproto::errorpb::Error as ProtoError;
 use engine_traits::Error as EngineTraitsError;
 
-pub trait IntoOther {
-    type Other;
-
-    fn into_other(self) -> Self::Other;
+pub trait IntoOther<O> {
+    fn into_other(self) -> O;
 }
 
-impl IntoOther for EngineTraitsError {
-    type Other = ProtoError;
-
+impl IntoOther<ProtoError> for EngineTraitsError {
     fn into_other(self) -> ProtoError {
         let mut errorpb = ProtoError::default();
         errorpb.set_message(format!("{}", self));
@@ -29,4 +26,10 @@ impl IntoOther for EngineTraitsError {
 
         errorpb
     }    
+}
+
+impl IntoOther<RaftError> for EngineTraitsError {
+    fn into_other(self) -> RaftError {
+        RaftError::Store(raft::StorageError::Other(self.into()))
+    }
 }
