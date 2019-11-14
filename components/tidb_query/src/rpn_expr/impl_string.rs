@@ -19,6 +19,8 @@ pub fn length(arg: &Option<Bytes>) -> Result<Option<i64>> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
