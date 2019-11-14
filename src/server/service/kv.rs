@@ -54,7 +54,7 @@ const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f64 = 0.3;
 const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 70;
 const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.0;
 const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_PENDING_COMMANDS: usize = 300;
-const REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO: f64 = 0.2; // against jittering
+const REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO: f64 = 0.1; // against jittering
 
 const WRITE_BATCH_WRITE_BYTES_LIMIT: usize = 2097152; // 2MB
 
@@ -190,7 +190,7 @@ impl RequestLoadEstimator {
             };
             if let Some(reader) = &mut self.latency_reader {
                 let latency = reader.consume_latest_avg() * 1000.0;
-                self.latency_estimation = (self.latency_estimation + latency) / 2.0;
+                self.latency_estimation = self.latency_estimation * 0.7 + latency * 0.3;
                 // when latency is the major metrics, sample thread load for busy hours.
                 if sample_secondary && thread_load > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR {
                     // thread load is less sensitive to workload,
@@ -202,7 +202,7 @@ impl RequestLoadEstimator {
                 }
             } else if let Some(reader) = &mut self.atomic_load_reader {
                 let atomic_load = reader.load(Ordering::Relaxed);
-                self.atomic_load_estimation = (self.atomic_load_estimation + atomic_load) / 2;
+                self.atomic_load_estimation = (self.atomic_load_estimation * 7 + atomic_load * 3) / 10;
                 // when latency is the major metrics, sample thread load for busy hours.
                 if sample_secondary && thread_load > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR {
                     // thread load is less sensitive to workload,
