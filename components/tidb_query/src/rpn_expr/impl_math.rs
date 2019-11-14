@@ -272,20 +272,17 @@ fn tan(arg: &Option<Real>) -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn(capture = [ctx])]
-fn cot(ctx: &mut EvalContext, arg: &Option<Real>) -> Result<Option<Real>> {
+#[rpn_fn]
+fn cot(arg: &Option<Real>) -> Result<Option<Real>> {
     match arg {
         Some(arg) => {
             let tan = arg.tan();
-            if tan != 0.0 {
-                let cot = 1.0 / tan;
-                if !cot.is_infinite() {
-                    return Ok(Real::new(cot).ok());
-                }
+            let cot = tan.recip();
+            if cot.is_infinite() {
+                Err(Error::overflow("DOUBLE", format!("cot({})", arg)).into())
+            } else {
+                Ok(Real::new(cot).ok())
             }
-            Ok(ctx
-                .handle_overflow_err(Error::overflow("DOUBLE", format!("cot({})", arg)))
-                .map(|_| None)?)
         }
         None => Ok(None),
     }
@@ -748,9 +745,9 @@ mod tests {
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
         }
-        let result: Result<Option<Real>> = RpnFnScalarEvaluator::new()
+        assert!(RpnFnScalarEvaluator::new()
             .push_param(Some(Real::from(0.0_f64)))
-            .evaluate(ScalarFuncSig::Cot);
-        assert!(result.is_err())
+            .evaluate::<Real>(ScalarFuncSig::Cot)
+            .is_err());
     }
 }
