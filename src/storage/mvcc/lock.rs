@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::super::types::Value;
-use super::{Error, Result};
+use super::{Error, Result, TsSet};
 use crate::storage::{
     Key, Mutation, FOR_UPDATE_TS_PREFIX, MIN_COMMIT_TS_PREFIX, SHORT_VALUE_MAX_LEN,
     SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
@@ -188,12 +188,16 @@ impl Lock {
     }
 
     /// Checks whether the lock conflicts with the given `ts`. If `ts == MaxU64`, the primary lock will be ignored.
-    pub fn check_ts_conflict(self, key: &Key, ts: u64) -> Result<()> {
+    pub fn check_ts_conflict(self, key: &Key, ts: u64, bypass_locks: &TsSet) -> Result<()> {
         if self.ts > ts
             || self.lock_type == LockType::Lock
             || self.lock_type == LockType::Pessimistic
         {
             // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
+            return Ok(());
+        }
+
+        if bypass_locks.contains(self.ts) {
             return Ok(());
         }
 
@@ -344,25 +348,47 @@ mod tests {
         let key = Key::from_raw(b"foo");
         let mut lock = Lock::new(LockType::Put, vec![], 100, 3, None, 0, 1, 0);
 
+        let empty = Default::default();
+
         // Ignore the lock if read ts is less than the lock version
-        assert!(lock.clone().check_ts_conflict(&key, 50,).is_ok());
+        lock.clone().check_ts_conflict(&key, 50, &empty).unwrap();
 
         // Returns the lock if read ts >= lock version
-        assert!(lock.clone().check_ts_conflict(&key, 110).is_err());
+        lock.clone()
+            .check_ts_conflict(&key, 110, &empty)
+            .unwrap_err();
+
+        // Ignore locks that occurs in the `bypass_locks` set.
+        lock.clone()
+            .check_ts_conflict(&key, 110, &TsSet::new(vec![109]))
+            .unwrap_err();
+        lock.clone()
+            .check_ts_conflict(&key, 110, &TsSet::new(vec![110]))
+            .unwrap_err();
+        lock.clone()
+            .check_ts_conflict(&key, 110, &TsSet::new(vec![100]))
+            .unwrap();
+        lock.clone()
+            .check_ts_conflict(&key, 110, &TsSet::new(vec![99, 101, 102, 100, 80]))
+            .unwrap();
 
         // Ignore the lock if it is Lock or Pessimistic.
         lock.lock_type = LockType::Lock;
-        assert!(lock.clone().check_ts_conflict(&key, 110).is_ok());
+        lock.clone().check_ts_conflict(&key, 110, &empty).unwrap();
         lock.lock_type = LockType::Pessimistic;
-        assert!(lock.clone().check_ts_conflict(&key, 110).is_ok());
+        lock.clone().check_ts_conflict(&key, 110, &empty).unwrap();
 
         // Ignore the primary lock when reading the latest committed version by setting u64::MAX as ts
         lock.lock_type = LockType::Put;
         lock.primary = b"foo".to_vec();
-        assert!(lock.clone().check_ts_conflict(&key, std::u64::MAX).is_ok());
+        lock.clone()
+            .check_ts_conflict(&key, std::u64::MAX, &empty)
+            .unwrap();
 
         // Should not ignore the secondary lock even though reading the latest version
         lock.primary = b"bar".to_vec();
-        assert!(lock.clone().check_ts_conflict(&key, std::u64::MAX).is_err());
+        lock.clone()
+            .check_ts_conflict(&key, std::u64::MAX, &empty)
+            .unwrap_err();
     }
 }
