@@ -154,7 +154,7 @@ impl Proportions {
                 return level;
             }
         }
-        return LEVEL_COUNT - 1;
+        LEVEL_COUNT - 1
     }
 }
 
