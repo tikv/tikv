@@ -1,5 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[macro_use(fail_point)]
+extern crate fail;
+
 mod builder;
 mod metrics;
 mod park;
@@ -114,6 +117,11 @@ impl MultiLevelPool {
     }
 
     fn gate_spawn(&self) -> Result<(), Full> {
+        fail_point!("future_pool_spawn_full", |_| Err(Full {
+            current_tasks: 100,
+            max_tasks: 100,
+        }));
+
         let current_tasks = self.get_running_task_count();
         if current_tasks >= self.max_tasks {
             Err(Full {
