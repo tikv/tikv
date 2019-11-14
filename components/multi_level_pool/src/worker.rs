@@ -6,11 +6,11 @@ use crate::LEVEL_COUNT;
 
 use crossbeam::deque::{Steal, Stealer, Worker as LocalQueue};
 use crossbeam::sync::WaitGroup;
+use derive_new::new;
 use init_with::InitWith;
 use prometheus::*;
 use rand::prelude::*;
 use tokio_timer::timer::Handle;
-use derive_new::new;
 
 use std::sync::Arc;
 use std::thread;
