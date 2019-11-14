@@ -58,6 +58,7 @@ fn test_serde_custom_tikv_config() {
         grpc_compression_type: GrpcCompressionType::Gzip,
         grpc_concurrency: 123,
         grpc_concurrent_stream: 1_234,
+        grpc_memory_pool_quota: ReadableSize(123_456),
         grpc_raft_conn_num: 123,
         grpc_stream_initial_window_size: ReadableSize(12_345),
         grpc_keepalive_time: ReadableDuration::secs(3),
