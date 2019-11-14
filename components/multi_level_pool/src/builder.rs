@@ -6,6 +6,7 @@ use crate::scheduler::Scheduler;
 use crate::stats::StatsMap;
 use crate::tokio_park::DefaultPark;
 use crate::worker::{self, Proportions, Worker};
+use crate::Env;
 use crate::{MultiLevelPool, SpawnOption};
 
 use crossbeam::deque::Worker as LocalQueue;
@@ -105,40 +106,19 @@ impl Builder {
         } else {
             "multi_level_pool"
         };
-        let mut timer = Timer::new(DefaultPark::new());
-        let timer_wg = WaitGroup::new();
-        let env = Arc::new(super::Env {
+
+        let env = Arc::new(Env {
             on_tick: self.on_tick.take(),
             metrics_running_task_count: MULTI_LEVEL_POOL_RUNNING_TASK_VEC
                 .with_label_values(&[name]),
             metrics_handled_task_count: MULTI_LEVEL_POOL_HANDLED_TASK_VEC
                 .with_label_values(&[name]),
-            level_elapsed: [
-                MULTI_LEVEL_POOL_LEVEL_ELAPSED.with_label_values(&[name, "0"]),
-                MULTI_LEVEL_POOL_LEVEL_ELAPSED.with_label_values(&[name, "1"]),
-                MULTI_LEVEL_POOL_LEVEL_ELAPSED.with_label_values(&[name, "2"]),
-            ],
-            level_proportions: [
-                MULTI_LEVEL_POOL_PROPORTIONS.with_label_values(&[name, "0"]),
-                MULTI_LEVEL_POOL_PROPORTIONS.with_label_values(&[name, "1"]),
-            ],
         });
-        let scheduler = Scheduler::new(self.pool_size, env.level_elapsed.clone());
-        let proportions = Proportions::init(env.level_proportions.clone());
-        let level_run = [
-            MULTI_LEVEL_POOL_LEVEL_RUN.with_label_values(&[name, "0"]),
-            MULTI_LEVEL_POOL_LEVEL_RUN.with_label_values(&[name, "1"]),
-            MULTI_LEVEL_POOL_LEVEL_RUN.with_label_values(&[name, "2"]),
-        ];
-        let level_stoken = [
-            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "0"]),
-            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "1"]),
-            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "2"]),
-            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "other"]),
-            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "fail"]),
-            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "local"]),
-            MULTI_LEVEL_POOL_LEVEL_STOLEN.with_label_values(&[name, "retry"]),
-        ];
+        let task_source_count = TaskSourceCount::new(name);
+        let scheduler = Scheduler::new(name, self.pool_size);
+        let proportions = Proportions::new(name);
+        let mut timer = Timer::new(DefaultPark::new());
+        let timer_wg = WaitGroup::new();
 
         // Create workers
         let mut workers: Vec<Worker> = Vec::with_capacity(self.pool_size);
@@ -162,6 +142,7 @@ impl Builder {
                 timer_wg: Some(timer_wg.clone()),
                 parker: Parker::new(),
                 proportions: proportions.clone(),
+                task_source_count: task_source_count.clone(),
                 after_start: self.after_start_func.clone(),
             };
             workers.push(worker);
@@ -170,13 +151,15 @@ impl Builder {
             let thread_builder = thread::Builder::new()
                 .name(format!("{}-{}", name, i + 1))
                 .stack_size(self.stack_size);
-            worker.start(thread_builder, level_run.clone(), level_stoken.clone());
+            worker.start(thread_builder);
         }
 
+        // Create background jobs
         let async_update_proportions = worker::update_proportions(scheduler.clone(), proportions);
         let stats_map = StatsMap::new();
         let async_cleanup_stats = stats_map.async_cleanup();
 
+        // Init tokio-timer
         thread::Builder::new()
             .name("multi_level_pool_timer".to_string())
             .spawn(move || loop {
@@ -192,6 +175,8 @@ impl Builder {
             max_tasks: self.max_tasks,
         };
         timer_wg.wait();
+
+        // Spawn background jobs
         pool.spawn(
             async_update_proportions,
             SpawnOption {

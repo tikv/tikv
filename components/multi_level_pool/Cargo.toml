@@ -17,6 +17,7 @@ tokio01-sync = { package = "tokio-sync", version = "0.1.7" }
 futures01 = { package = "futures", version = "0.1.29" }
 tokio-executor = "0.2.0-alpha.6"
 tokio-timer = "0.3.0-alpha.6"
+init_with = "1.1.0"
 
 tikv_util = { path = "../tikv_util" }
 

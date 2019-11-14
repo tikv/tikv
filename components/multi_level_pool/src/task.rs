@@ -60,12 +60,14 @@ impl ArcTask {
         self.0.status.store(POLLING, Ordering::SeqCst);
         let waker = ManuallyDrop::new(waker(&*self.0));
         let mut cx = Context::from_waker(&waker);
+
         let begin = Instant::now();
         let poll_res = (&mut *self.0.task.get()).poll_unpin(&mut cx);
         let elapsed = begin.elapsed().as_micros() as u64;
-        self.0
-            .scheduler
-            .add_level_elapsed(self.0.level.load(Ordering::SeqCst), elapsed);
+
+        let level = self.0.level.load(Ordering::SeqCst);
+        self.0.scheduler.add_level_elapsed(level, elapsed as i64);
+
         if let Poll::Ready(_) = poll_res {
             self.0.status.store(COMPLETE, Ordering::SeqCst);
             return;

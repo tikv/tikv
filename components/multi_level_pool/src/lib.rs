@@ -25,6 +25,8 @@ use std::time::Duration;
 
 pub use builder::Builder;
 
+const LEVEL_COUNT: usize = 3;
+
 const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
 thread_local! {
@@ -35,8 +37,6 @@ struct Env {
     on_tick: Option<Box<dyn Fn() + Send + Sync>>,
     metrics_running_task_count: IntGauge,
     metrics_handled_task_count: IntCounter,
-    level_elapsed: [IntCounter; 3],
-    level_proportions: [IntGauge; 2],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

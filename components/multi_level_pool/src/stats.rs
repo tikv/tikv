@@ -8,8 +8,7 @@ use std::time::Duration;
 use crossbeam::epoch::{self, Atomic};
 use dashmap::DashMap;
 
-// Swap interval
-const SWAP_INTERVAL: Duration = Duration::from_secs(20);
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Default)]
 pub struct TaskStats {
@@ -48,12 +47,15 @@ impl StatsMap {
         }
     }
 
+    /// Creates a future which continuously cleans stale statistics.
+    ///
+    /// It needs tokio-timer to have been initialized.
     pub fn async_cleanup(&self) -> impl Future<Output = ()> {
         let new = self.new.clone();
         let old = self.old.clone();
         async move {
             loop {
-                tokio_timer::delay_for(SWAP_INTERVAL).await;
+                tokio_timer::delay_for(CLEANUP_INTERVAL).await;
                 let guard = &epoch::pin();
                 let new_ptr = new.load(Ordering::SeqCst, guard);
                 let old_ptr = old.swap(new_ptr, Ordering::SeqCst, guard);

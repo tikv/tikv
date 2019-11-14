@@ -3,6 +3,39 @@
 use lazy_static::lazy_static;
 use prometheus::*;
 
+#[derive(Clone)]
+pub struct TaskSourceCount {
+    injectors: [IntCounter; 3],
+    local: IntCounter,
+    steal: IntCounter,
+}
+
+impl TaskSourceCount {
+    pub fn new(name: &str) -> Self {
+        TaskSourceCount {
+            injectors: [
+                MULTI_LEVEL_POOL_TASK_SOURCE.with_label_values(&[name, "L0"]),
+                MULTI_LEVEL_POOL_TASK_SOURCE.with_label_values(&[name, "L1"]),
+                MULTI_LEVEL_POOL_TASK_SOURCE.with_label_values(&[name, "L2"]),
+            ],
+            local: MULTI_LEVEL_POOL_TASK_SOURCE.with_label_values(&[name, "local"]),
+            steal: MULTI_LEVEL_POOL_TASK_SOURCE.with_label_values(&[name, "steal"]),
+        }
+    }
+
+    pub fn inc_injector(&self, level: usize) {
+        self.injectors[level].inc();
+    }
+
+    pub fn inc_local(&self) {
+        self.local.inc();
+    }
+
+    pub fn inc_steal(&self) {
+        self.steal.inc();
+    }
+}
+
 lazy_static! {
     pub static ref MULTI_LEVEL_POOL_RUNNING_TASK_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_multi_level_pool_pending_task_total",
@@ -16,6 +49,12 @@ lazy_static! {
         &["name"]
     )
     .unwrap();
+    pub static ref MULTI_LEVEL_POOL_LEVEL_POLL_TIMES: IntCounterVec = register_int_counter_vec!(
+        "tikv_multi_level_pool_level_poll_times",
+        "Poll times of tasks in each level",
+        &["name", "level"]
+    )
+    .unwrap();
     pub static ref MULTI_LEVEL_POOL_LEVEL_ELAPSED: IntCounterVec = register_int_counter_vec!(
         "tikv_multi_level_pool_level_elapsed",
         "Running time of each level",
@@ -24,26 +63,14 @@ lazy_static! {
     .unwrap();
     pub static ref MULTI_LEVEL_POOL_PROPORTIONS: IntGaugeVec = register_int_gauge_vec!(
         "tikv_multi_level_pool_proportions",
-        "Proportions of each level",
+        "Sum proportions above the specific level (with 2^32 as denominator)",
         &["name", "level"]
     )
     .unwrap();
-    pub static ref MULTI_LEVEL_POOL_LEVEL_RUN: IntCounterVec = register_int_counter_vec!(
-        "tikv_multi_level_pool_level_run",
-        "Run count of each level",
-        &["name", "level"]
-    )
-    .unwrap();
-    pub static ref MULTI_LEVEL_POOL_LEVEL_STOLEN: IntCounterVec = register_int_counter_vec!(
-        "tikv_multi_level_pool_level_stolen",
-        "Stolen count of each level",
-        &["name", "level"]
-    )
-    .unwrap();
-    pub static ref MULTI_LEVEL_POOL_LEVEL_POLL_TIME: HistogramVec = register_histogram_vec!(
-        "tikv_multi_level_pool_level_poll_time",
-        "Poll time of each level",
-        &["name", "level"]
+    pub static ref MULTI_LEVEL_POOL_TASK_SOURCE: IntCounterVec = register_int_counter_vec!(
+        "tikv_multi_level_pool_task_source",
+        "Count of task source of each polling",
+        &["name", "source"]
     )
     .unwrap();
 }
