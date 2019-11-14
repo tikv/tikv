@@ -41,6 +41,7 @@ struct Env {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// An error indicating max running tasks in the pool exceed the limit.
 pub struct Full {
     pub current_tasks: usize,
     pub max_tasks: usize,
@@ -58,8 +59,14 @@ impl std::error::Error for Full {
     }
 }
 
+/// Options for spawning a task.
 pub struct SpawnOption {
+    /// A unique ID of the job.
+    ///
+    /// Multiple `Future`s with the same token share the same statistics.
     pub task_id: u64,
+
+    /// Tasks which has `fixed_level` set are always in the given level.
     pub fixed_level: Option<usize>,
 }
 
@@ -75,6 +82,10 @@ impl Default for SpawnOption {
 const BACKGROUND_TASK_NUM: usize = 2;
 
 #[derive(Clone)]
+/// A thread pool with multiple levels.
+///
+/// Different levels have different priorities. Long-running tasks are moved to
+/// levels with lower priority.
 pub struct MultiLevelPool {
     scheduler: Scheduler,
     stats_map: StatsMap,
@@ -87,10 +98,10 @@ impl MultiLevelPool {
     /// Gets current running task count, excluding the background tasks.
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
-        // As long as different future pool has different name prefix, we can safely use the value
-        // in metrics.
-        // The background tasks may be not running when this method is called, so we saturates
-        // the subtraction.
+        // As long as different future pool has different name prefix, we can safely
+        // use the value in metrics.
+        // The background tasks may be not running when this method is called, so we
+        // saturates the subtraction.
         (self.env.metrics_running_task_count.get() as usize).saturating_sub(BACKGROUND_TASK_NUM)
     }
 
@@ -114,8 +125,7 @@ impl MultiLevelPool {
         }
     }
 
-    /// Spawns a new `Future` to the thread pool. `token` is a unique ID of a job.
-    /// Multiple `Future`s with the same token share the same statistics.
+    /// Spawns a new `Future` to the thread pool.
     pub fn spawn<F>(&self, task: F, opt: SpawnOption) -> Result<(), Full>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -139,11 +149,9 @@ impl MultiLevelPool {
         Ok(())
     }
 
-    /// Spawns a new `Future` to the thread pool, returning a `Future` (0.1) representing the
-    /// produced value. Returns `Err(Full)` when running tasks exceed the limit.
-    ///
-    /// `token` is a unique ID of a job. Multiple `Future`s with the same token share the same
-    /// statistics.
+    /// Spawns a new `Future` to the thread pool, returning a `Future` (0.1)
+    /// representing the produced value. Returns `Err(Full)` when running tasks
+    /// exceed the limit.
     pub fn spawn_handle<F, R>(
         &self,
         task: F,
@@ -181,9 +189,6 @@ impl MultiLevelPool {
 
     /// Spawns a new `Future` to the thread pool, returning a `Future` (std) representing the
     /// produced value. Returns `Err(Full)` when running tasks exceed the limit.
-    ///
-    /// `token` is a unique ID of a job. Multiple `Future`s with the same token share the same
-    /// statistics.
     pub fn spawn_handle_legacy<F, T, E>(
         &self,
         task: F,

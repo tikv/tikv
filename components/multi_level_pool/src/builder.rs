@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::thread;
 
 #[derive(Debug, Clone, Copy)]
+/// Configurations for a `MultiLevelPool`
 pub struct Config {
     pub workers: usize,
     pub max_tasks_per_worker: usize,
@@ -35,6 +36,7 @@ impl Config {
     }
 }
 
+/// A builder to create a `MultiLevelPool`
 pub struct Builder {
     name_prefix: Option<String>,
     on_tick: Option<Box<dyn Fn() + Send + Sync>>,
