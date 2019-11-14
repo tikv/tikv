@@ -5,8 +5,8 @@ pub use crate::rocks::{DBIterator, ReadOptions, DB};
 use crate::Result;
 use tikv_util::keybuilder::KeyBuilder;
 
-pub use engine_traits::SeekMode;
 pub use engine_traits::IterOptions as IterOption;
+pub use engine_traits::SeekMode;
 
 pub trait IterOptionsExt {
     fn build_read_opts(self) -> ReadOptions;

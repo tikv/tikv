@@ -204,7 +204,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         storage_read_pool,
         lock_mgr.clone(),
     )
-        .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
+    .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
     let bps = i64::try_from(cfg.server.snap_max_write_bytes_per_sec.0)
         .unwrap_or_else(|_| fatal!("snap_max_write_bytes_per_sec > i64::max_value"));

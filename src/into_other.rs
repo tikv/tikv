@@ -4,9 +4,9 @@
 // interdependencies. These are used to convert between error_traits::Error and
 // other Error's that error_traits can't depend on.
 
-use raft::Error as RaftError;
-use kvproto::errorpb::Error as ProtoError;
 use engine_traits::Error as EngineTraitsError;
+use kvproto::errorpb::Error as ProtoError;
+use raft::Error as RaftError;
 
 pub trait IntoOther<O> {
     fn into_other(self) -> O;
@@ -25,7 +25,7 @@ impl IntoOther<ProtoError> for EngineTraitsError {
         }
 
         errorpb
-    }    
+    }
 }
 
 impl IntoOther<RaftError> for EngineTraitsError {

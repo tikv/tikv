@@ -4,16 +4,16 @@ use std::fmt::{self, Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 
+use engine::rocks::Snapshot as RawSnapshot;
+use engine::rocks::SyncSnapshot as RawSyncSnapshot;
 use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
-use engine::rocks::Snapshot as RawSnapshot;
-use engine::rocks::SyncSnapshot as RawSyncSnapshot;
 
+use crate::db_vector::RocksDBVector;
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
 use crate::RocksEngineIterator;
-use crate::db_vector::RocksDBVector;
 
 #[repr(C)] // Guarantee same representation as in engine/rocks
 pub struct RocksSnapshot {
@@ -114,7 +114,12 @@ impl Peekable for RocksSnapshot {
         Ok(v.map(RocksDBVector::from_raw))
     }
 
-    fn get_value_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<RocksDBVector>> {
+    fn get_value_cf_opt(
+        &self,
+        opts: &ReadOptions,
+        cf: &str,
+        key: &[u8],
+    ) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {

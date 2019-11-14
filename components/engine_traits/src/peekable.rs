@@ -6,7 +6,12 @@ pub trait Peekable {
     type DBVector: DBVector;
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DBVector>>;
-    fn get_value_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<Self::DBVector>>;
+    fn get_value_cf_opt(
+        &self,
+        opts: &ReadOptions,
+        cf: &str,
+        key: &[u8],
+    ) -> Result<Option<Self::DBVector>>;
 
     fn get_value(&self, key: &[u8]) -> Result<Option<Self::DBVector>> {
         self.get_value_opt(&ReadOptions::default(), key)

@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
 use std::convert::TryFrom;
+use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
@@ -15,8 +15,8 @@ use kvproto::raft_cmdpb::*;
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_traits::IOLimiter;
 use engine_rocks::{RocksEngine, RocksIOLimiter};
+use engine_traits::IOLimiter;
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
@@ -299,7 +299,10 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let s = if let Ok(s) = s {
             s
         } else {
-            warn!("SetDownloadSpeedLimitRequest out of range: {}. Using i64::max_value", req.get_speed_limit());
+            warn!(
+                "SetDownloadSpeedLimitRequest out of range: {}. Using i64::max_value",
+                req.get_speed_limit()
+            );
             i64::max_value()
         };
 

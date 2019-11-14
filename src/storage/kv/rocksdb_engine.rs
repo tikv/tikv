@@ -9,13 +9,15 @@ use std::time::Duration;
 
 use engine::rocks;
 use engine::rocks::util::CFOptions;
-use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, DB};
+use engine::rocks::{
+    ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, DB,
+};
 use engine::Engines;
 use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::{IterOption, Peekable};
-use engine_traits::{Iterable, Iterator, SeekKey};
 use engine_rocks::{Compat, RocksEngineIterator};
+use engine_traits::{Iterable, Iterator, SeekKey};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 
@@ -358,8 +360,7 @@ impl EngineIterator for RocksEngineIterator {
     }
 
     fn status(&self) -> Result<()> {
-        Iterator::status(self)
-            .map_err(From::from)
+        Iterator::status(self).map_err(From::from)
     }
 
     fn key(&self) -> &[u8] {
@@ -417,7 +418,6 @@ impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
         DBIterator::value(self)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

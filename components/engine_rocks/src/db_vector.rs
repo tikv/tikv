@@ -1,9 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Formatter};
-use std::ops::Deref;
 use engine_traits::DBVector;
 use rocksdb::DBVector as RawDBVector;
+use std::fmt::{self, Debug, Formatter};
+use std::ops::Deref;
 
 pub struct RocksDBVector(RawDBVector);
 
@@ -13,8 +13,7 @@ impl RocksDBVector {
     }
 }
 
-impl DBVector for RocksDBVector {
-}
+impl DBVector for RocksDBVector {}
 
 impl Deref for RocksDBVector {
     type Target = [u8];
@@ -29,7 +28,6 @@ impl Debug for RocksDBVector {
         write!(formatter, "{:?}", &**self)
     }
 }
-
 
 impl<'a> PartialEq<&'a [u8]> for RocksDBVector {
     fn eq(&self, rhs: &&[u8]) -> bool {

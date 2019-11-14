@@ -5,16 +5,16 @@ use engine::{
     self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
     SyncSnapshot,
 };
-use engine_traits::SeekKey;
 use engine_rocks::{Compat, RocksEngineIterator};
+use engine_traits::SeekKey;
 use kvproto::metapb::Region;
 use std::sync::Arc;
 
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
-use engine_traits::{Iterable, Iterator};
 use engine_traits::util::check_key_in_range;
+use engine_traits::{Iterable, Iterator};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -241,7 +241,9 @@ impl RegionIterator {
         update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
-        let iter = snap.c().iterator_opt(iter_opt)
+        let iter = snap
+            .c()
+            .iterator_opt(iter_opt)
             .expect("creating snapshot iterator"); // FIXME error handling
         RegionIterator {
             iter,
@@ -262,7 +264,9 @@ impl RegionIterator {
         update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
-        let iter = snap.c().iterator_cf_opt(cf, iter_opt)
+        let iter = snap
+            .c()
+            .iterator_cf_opt(cf, iter_opt)
             .expect("creating snapshot iterator"); // FIXME error handling
         RegionIterator {
             iter,
@@ -367,9 +371,7 @@ impl RegionIterator {
 
     #[inline]
     pub fn status(&self) -> Result<()> {
-        self.iter
-            .status()
-            .map_err(From::from)
+        self.iter.status().map_err(From::from)
     }
 
     #[inline]

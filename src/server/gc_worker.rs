@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::mpsc;
