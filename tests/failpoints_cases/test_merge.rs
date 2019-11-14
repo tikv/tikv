@@ -505,7 +505,6 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     }
     // can schedule merge now
     fail::remove(schedule_merge_fp);
-    //sleep_ms(100);
     // propose to left region and wait for merge to succeed conveniently
     cluster.must_put(b"k123", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k123", b"v2");
