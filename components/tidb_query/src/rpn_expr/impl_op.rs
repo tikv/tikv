@@ -441,6 +441,7 @@ mod tests {
             (None, Some(1), None),
             (Some(123), None, None),
             (Some(-123), Some(2), Some(4611686018427387873)),
+            (None, None, None),
         ];
         for (lhs, rhs, expected) in cases {
             let output = RpnFnScalarEvaluator::new()
