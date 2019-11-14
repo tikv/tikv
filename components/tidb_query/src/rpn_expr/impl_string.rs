@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn test_bit_length() {
-        let cases = vec![
+        let test_cases = vec![
             (None, None),
             (Some(""), Some(0i64)),
             (Some("你好"), Some(48i64)),
