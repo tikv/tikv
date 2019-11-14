@@ -2628,7 +2628,7 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
         Err(Error::Engine(EngineError::Request(ref e)))
         | Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e))))
         | Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
-            Some(e.to_owned())
+            Some((**e).to_owned())
         }
         Err(Error::SchedTooBusy) => {
             let mut err = RegionError::default();

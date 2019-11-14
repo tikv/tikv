@@ -62,7 +62,7 @@ impl From<tidb_query::Error> for Error {
 impl From<storage::kv::Error> for Error {
     fn from(err: storage::kv::Error) -> Self {
         match err {
-            storage::kv::Error::Request(e) => Error::Region(e),
+            storage::kv::Error::Request(e) => Error::Region(*e),
             e => Error::Other(e.to_string()),
         }
     }

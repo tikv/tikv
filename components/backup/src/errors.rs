@@ -58,7 +58,7 @@ impl Into<ErrorPb> for Error {
                         .inc();
                 }
 
-                err.set_region_error(e);
+                err.set_region_error(*e);
             }
             Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info))) => {
                 BACKUP_RANGE_ERROR_VEC

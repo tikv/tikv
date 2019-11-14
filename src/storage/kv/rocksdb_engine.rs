@@ -283,7 +283,7 @@ impl Engine for RocksEngine {
             Err(Error::Request(not_leader))
         });
         if self.not_leader.load(Ordering::SeqCst) {
-            return Err(Error::Request(_not_leader));
+            return Err(Error::Request(Box::new(_not_leader)));
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())

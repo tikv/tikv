@@ -157,7 +157,7 @@ pub enum ScanMode {
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Request(err: ErrorHeader) {
+        Request(err: Box<ErrorHeader>) {
             from()
             description("request to underhook engine failed")
             display("{:?}", err)
@@ -181,7 +181,7 @@ quick_error! {
 
 impl From<engine::Error> for Error {
     fn from(err: engine::Error) -> Error {
-        Error::Request(err.into())
+        Error::Request(Box::new(err.into()))
     }
 }
 

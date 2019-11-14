@@ -88,7 +88,7 @@ pub type Result<T> = result::Result<T, Error>;
 impl From<Error> for kv::Error {
     fn from(e: Error) -> kv::Error {
         match e {
-            Error::RequestFailed(e) => kv::Error::Request(e),
+            Error::RequestFailed(e) => kv::Error::Request(Box::new(e)),
             Error::Server(e) => e.into(),
             e => box_err!(e),
         }
@@ -97,7 +97,7 @@ impl From<Error> for kv::Error {
 
 impl From<RaftServerError> for kv::Error {
     fn from(e: RaftServerError) -> kv::Error {
-        kv::Error::Request(e.into())
+        kv::Error::Request(Box::new(e.into()))
     }
 }
 
