@@ -250,7 +250,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     primary: lock.primary,
                     ts: lock.ts,
                     ttl: lock.ttl,
-                    txn_size: options.txn_size,
+                    txn_size: lock.txn_size,
                 });
             }
             if lock.lock_type != LockType::Pessimistic {
@@ -714,7 +714,7 @@ mod tests {
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::WriteType;
-    use crate::storage::mvcc::{MvccReader, MvccTxn};
+    use crate::storage::mvcc::{Error, MvccReader, MvccTxn};
     use crate::storage::{
         Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN,
     };
@@ -1776,5 +1776,61 @@ mod tests {
 
         must_get(&engine, k, 19, v);
         assert!(try_prewrite_insert(&engine, k, v, k, 20).is_err());
+    }
+
+    #[test]
+    fn test_key_is_locked_validation() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k";
+        let v = b"v";
+
+        let mut options = Options::default();
+        options.lock_ttl = 3;
+        options.txn_size = 10;
+
+        let mut expected_lock_info = kvproto::kvrpcpb::LockInfo::default();
+        expected_lock_info.set_primary_lock(k.to_vec());
+        expected_lock_info.set_lock_version(10);
+        expected_lock_info.set_key(k.to_vec());
+        expected_lock_info.set_lock_ttl(options.lock_ttl);
+        expected_lock_info.set_txn_size(options.txn_size);
+
+        let assert_key_is_locked_eq = |e, expected_lock_info: &kvproto::kvrpcpb::LockInfo| match e {
+            Error::KeyIsLocked {
+                key,
+                primary,
+                ts,
+                ttl,
+                txn_size,
+            } => {
+                assert_eq!(key, expected_lock_info.get_key());
+                assert_eq!(primary, expected_lock_info.get_primary_lock());
+                assert_eq!(ts, expected_lock_info.get_lock_version());
+                assert_eq!(ttl, expected_lock_info.get_lock_ttl());
+                assert_eq!(txn_size, expected_lock_info.get_txn_size());
+            }
+            _ => panic!("unexpected error"),
+        };
+
+        must_prewrite_put_impl(&engine, k, v, k, 10, false, options);
+
+        assert_key_is_locked_eq(
+            must_prewrite_put_err(&engine, k, v, k, 20),
+            &expected_lock_info,
+        );
+
+        assert_key_is_locked_eq(
+            must_acquire_pessimistic_lock_err(&engine, k, k, 30, 30),
+            &expected_lock_info,
+        );
+
+        assert_key_is_locked_eq(must_cleanup_err(&engine, k, 10, 1), &expected_lock_info);
+
+        expected_lock_info.set_lock_ttl(0);
+        assert_key_is_locked_eq(
+            must_pessimistic_prewrite_put_err(&engine, k, v, k, 40, 40, false),
+            &expected_lock_info,
+        );
     }
 }
