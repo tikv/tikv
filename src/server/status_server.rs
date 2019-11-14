@@ -180,13 +180,22 @@ impl StatusServer {
                     ok(response)
                 })
                 .or_else(|err| {
-                    ok(Self::err_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
+                    ok(Self::err_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        err.to_string(),
+                    ))
                 }),
         )
     }
 
-    fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body> where T: Into<Body> {
-        return Response::builder().status(status_code).body(message.into()).unwrap()
+    fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
+    where
+        T: Into<Body>,
+    {
+        Response::builder()
+            .status(status_code)
+            .body(message.into())
+            .unwrap()
     }
 
     fn config_handler(
@@ -197,7 +206,9 @@ impl StatusServer {
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json))
                 .unwrap(),
-            Err(_) => Self::err_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
+            Err(_) => {
+                Self::err_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+            }
         };
         Box::new(ok(res))
     }
@@ -281,9 +292,10 @@ impl StatusServer {
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(err) => {
-                    return Box::new(ok(
-                        Self::err_response(StatusCode::BAD_REQUEST, err.to_string())
-                    ));
+                    return Box::new(ok(Self::err_response(
+                        StatusCode::BAD_REQUEST,
+                        err.to_string(),
+                    )));
                 }
             },
             None => 10,
@@ -293,9 +305,10 @@ impl StatusServer {
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(err) => {
-                    return Box::new(ok(
-                        Self::err_response(StatusCode::BAD_REQUEST, err.to_string())
-                    ));
+                    return Box::new(ok(Self::err_response(
+                        StatusCode::BAD_REQUEST,
+                        err.to_string(),
+                    )));
                 }
             },
             None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
@@ -314,9 +327,15 @@ impl StatusServer {
                                     info!("write report successfully");
                                     Box::new(ok(Self::err_response(StatusCode::OK, body)))
                                 }
-                                Err(err) => Box::new(ok(Self::err_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))),
+                                Err(err) => Box::new(ok(Self::err_response(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    err.to_string(),
+                                ))),
                             },
-                            Err(err) => Box::new(ok(Self::err_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))),
+                            Err(err) => Box::new(ok(Self::err_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                err.to_string(),
+                            ))),
                         }
                     } else {
                         match report.flamegraph(&mut body) {
@@ -324,12 +343,18 @@ impl StatusServer {
                                 info!("write report successfully");
                                 Box::new(ok(Self::err_response(StatusCode::OK, body)))
                             }
-                            Err(err) => Box::new(ok(Self::err_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))),
+                            Err(err) => Box::new(ok(Self::err_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                err.to_string(),
+                            ))),
                         }
                     }
                 })
                 .or_else(|err| {
-                    ok(Self::err_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
+                    ok(Self::err_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        err.to_string(),
+                    ))
                 }),
         )
     }
@@ -408,17 +433,26 @@ fn handle_fail_points_request(
         (Method::PUT, true) => Box::new(req.into_body().concat2().map(move |chunk| {
             let (_, name) = path.split_at(fail_path.len());
             if name.is_empty() {
-                return Box::new(ok(Self::err_response(StatusCode::UNPROCESSABLE_ENTITY, &MISSING_NAME.into())));
+                return Box::new(ok(Self::err_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &MISSING_NAME.into(),
+                )));
             };
 
             let actions = chunk.into_iter().collect::<Vec<u8>>();
             let actions = String::from_utf8(actions).unwrap();
             if actions.is_empty() {
-                return Box::new(ok(Self::err_response(StatusCode::UNPROCESSABLE_ENTITY, &MISSING_ACTIONS.into())));
+                return Box::new(ok(Self::err_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &MISSING_ACTIONS.into(),
+                )));
             };
 
             if let Err(e) = fail::cfg(name.to_owned(), &actions) {
-                return Box::new(ok(Self::err_response(StatusCode::BAD_REQUEST, &e.to_string())));
+                return Box::new(ok(Self::err_response(
+                    StatusCode::BAD_REQUEST,
+                    &e.to_string(),
+                )));
             }
             let body = format!("Added fail point with name: {}, actions: {}", name, actions);
             Response::new(body.into())
@@ -426,7 +460,10 @@ fn handle_fail_points_request(
         (Method::DELETE, true) => {
             let (_, name) = path.split_at(fail_path.len());
             if name.is_empty() {
-                return Box::new(ok(Self::err_response(StatusCode::UNPROCESSABLE_ENTITY, &MISSING_NAME.into())));
+                return Box::new(ok(Self::err_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    &MISSING_NAME.into(),
+                )));
             };
 
             fail::remove(name);

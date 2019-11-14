@@ -2025,9 +2025,9 @@ checksum = "72d5370d90f49f70bd033c3d75e87fc529fbfff9d6f7cccef07d6170079d91ea"
 
 [[package]]
 name = "pprof"
-version = "0.3.9"
+version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3cd37ce310a51c32a6b49022d373d7083e4be1a7d7e04494e643806bda8dda4"
+checksum = "5300a3fb059941ab7d0c4e31d6e7a70d17e92e49fd85b737675fc2edaa0db49d"
 dependencies = [
  "backtrace",
  "bytes",
