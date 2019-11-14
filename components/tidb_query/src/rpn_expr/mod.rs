@@ -184,6 +184,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::UnaryNotInt => unary_not_int_fn_meta(),
         ScalarFuncSig::UnaryNotReal => unary_not_real_fn_meta(),
         ScalarFuncSig::UnaryNotDecimal => unary_not_decimal_fn_meta(),
+        ScalarFuncSig::BitAndSig => bit_and_fn_meta(),
+        ScalarFuncSig::BitOrSig => bit_or_fn_meta(),
+        ScalarFuncSig::BitNegSig => bit_neg_fn_meta(),
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
         ScalarFuncSig::PlusReal => arithmetic_fn_meta::<RealPlus>(),
         ScalarFuncSig::PlusDecimal => arithmetic_fn_meta::<DecimalPlus>(),
@@ -229,6 +232,11 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::FloorDecToInt => floor_fn_meta::<FloorDecToInt>(),
         ScalarFuncSig::FloorDecToDec => floor_fn_meta::<FloorDecToDec>(),
         ScalarFuncSig::FloorIntToInt => floor_fn_meta::<FloorIntToInt>(),
+        ScalarFuncSig::Pi => pi_fn_meta(),
+        ScalarFuncSig::Log1Arg => log_1_arg_fn_meta(),
+        ScalarFuncSig::Log2Args => log_2_arg_fn_meta(),
+        ScalarFuncSig::Log2 => log2_fn_meta(),
+        ScalarFuncSig::Log10 => log10_fn_meta(),
         ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
         ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),
         ScalarFuncSig::CoalesceString => coalesce_fn_meta::<Bytes>(),
@@ -312,6 +320,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CastJsonAsTime |
         ScalarFuncSig::CastJsonAsDuration |
         ScalarFuncSig::CastJsonAsJson => map_cast_func(expr)?,
+        ScalarFuncSig::Length => length_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

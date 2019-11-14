@@ -1388,9 +1388,9 @@ dependencies = [
 
 [[package]]
 name = "libpapi_sys"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c3f846784b520347048f40a690435de31ae27b64fd413a096834124e9de356c"
+checksum = "9c687368f5a574f3aaf97cad438fb572a87aa224051e1cd01ad926b1d592886b"
 dependencies = [
  "bindgen",
  "num_cpus",
@@ -1399,7 +1399,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#51073a7579966d8ab75d4b88046ebe42fa3bde2d"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#23a604459899f4f7a4c8967f16b6fa623474f27b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1416,7 +1416,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#51073a7579966d8ab75d4b88046ebe42fa3bde2d"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#23a604459899f4f7a4c8967f16b6fa623474f27b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2402,7 +2402,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#51073a7579966d8ab75d4b88046ebe42fa3bde2d"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#23a604459899f4f7a4c8967f16b6fa623474f27b"
 dependencies = [
  "crc",
  "libc",
@@ -3777,8 +3777,8 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.14+zstd.1.4.3"
-source = "git+https://github.com/gyscos/zstd-rs.git#c30683df11255ca219422957e0ab59501634e70d"
+version = "1.4.15+zstd.1.4.4"
+source = "git+https://github.com/gyscos/zstd-rs.git#9bdc44501ec3279e83d9bfe1ebc953bb7cf000b9"
 dependencies = [
  "cc",
  "glob",
