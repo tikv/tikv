@@ -39,6 +39,7 @@ mod test {
             (Some(0), Some(Bytes::from("0.0.0.0"))),
             (Some(545460846593), None),
             (Some(-1), None),
+            (None, None),
             (
                 Some(i64::from(u32::max_value())),
                 Some(Bytes::from("255.255.255.255")),
@@ -46,7 +47,7 @@ mod test {
         ];
         for (arg, expected) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_params(arg)
+                .push_param(arg)
                 .evaluate(ScalarFuncSig::InetNtoa)
                 .unwrap();
             assert_eq!(output, expected);
