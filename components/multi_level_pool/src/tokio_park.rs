@@ -1,5 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-// Derived from https://github.com/tokio-rs/tokio/blob/v0.1.x/tokio-threadpool/src/park/default_park.rs
+// Derived from https://github.com/tokio-rs/tokio/blob/tokio-threadpool-0.1.16/tokio-threadpool/src/park/default_park.rs
 
 use tokio_executor::park::{Park, Unpark};
 

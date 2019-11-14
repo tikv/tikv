@@ -1,4 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Derived from https://github.com/withoutboats/juliex/blob/0.3.0-alpha.6/src/lib.rs
 
 use crate::scheduler::Scheduler;
 use crate::stats::TaskStats;

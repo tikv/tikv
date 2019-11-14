@@ -145,8 +145,8 @@ impl Proportions {
             MULTI_LEVEL_POOL_PROPORTIONS.with_label_values(&[name, &format!("{}", idx)])
         });
         // TODO: support other level settings
-        proportions[0].set(i64::from(DEFAULT_LEVEL0_PROPORTION));
-        proportions[1].set(i64::from(DEFAULT_LEVEL0_PROPORTION / 8 + (1 << 29) * 7));
+        proportions[0].set(DEFAULT_LEVEL0_PROPORTION);
+        proportions[1].set(DEFAULT_LEVEL0_PROPORTION / 8 + (1 << 29) * 7);
         Proportions(proportions)
     }
 

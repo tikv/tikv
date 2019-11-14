@@ -21,6 +21,7 @@ pub struct Config {
     pub workers: usize,
     pub max_tasks_per_worker: usize,
     pub stack_size: usize,
+    pub level0_proportion_target: f64,
 }
 
 impl Config {
@@ -29,6 +30,7 @@ impl Config {
             workers: 2,
             max_tasks_per_worker: std::usize::MAX,
             stack_size: 2_000_000,
+            level0_proportion_target: 0.8,
         }
     }
 }
@@ -61,7 +63,8 @@ impl Builder {
         builder
             .pool_size(config.workers)
             .stack_size(config.stack_size)
-            .max_tasks(config.workers.saturating_mul(config.max_tasks_per_worker));
+            .max_tasks(config.workers.saturating_mul(config.max_tasks_per_worker))
+            .level0_proportion_target(config.level0_proportion_target);
         builder
     }
 
