@@ -366,7 +366,7 @@ mod tests {
     }
 
     impl ApplyObserver for TestCoprocessor {
-        fn on_applied_index_change(&self, _: &Region, _: u64) {
+        fn on_applied_index_change(&self, ctx: &mut ObserverContext<'_>, _: u64) {
             self.called.fetch_add(9, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -400,6 +400,8 @@ mod tests {
             .register_role_observer(1, Box::new(ob.clone()));
         host.registry
             .register_region_change_observer(1, Box::new(ob.clone()));
+        host.registry
+            .register_apply_observer(1, Box::new(ob.clone()));
         let region = Region::default();
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
@@ -426,6 +428,9 @@ mod tests {
 
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!(&[&ob.called], &[36]);
+
+        host.post_applied_index_changed(&region, 0);
+        assert_all!(&[&ob.called], &[45]);
     }
 
     #[test]
