@@ -723,7 +723,6 @@ mod tests {
                 Some(Real::from(-90.0_f64)),
             ),
         ];
-
         for (input, expect) in tests_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
@@ -732,7 +731,7 @@ mod tests {
             assert_eq!(expect, output, "{:?}", input);
         }
     }
-  
+
     #[test]
     fn test_sin() {
         let valid_test_cases = vec![
