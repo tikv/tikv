@@ -292,6 +292,8 @@ impl ScalarFunc {
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays => (1, 1),
 
+            ScalarFuncSig::JsonLengthSig => (1, 2),
+
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
             | ScalarFuncSig::IfString
@@ -506,7 +508,6 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonStorageSizeSig
             | ScalarFuncSig::JsonDepthSig
             | ScalarFuncSig::JsonKeysSig
-            | ScalarFuncSig::JsonLengthSig
             | ScalarFuncSig::JsonValidJsonSig
             | ScalarFuncSig::JsonContainsSig
             | ScalarFuncSig::JsonKeys2ArgsSig
@@ -844,6 +845,7 @@ dispatch_call! {
         Strcmp => strcmp,
         InstrBinary => instr_binary,
         Instr => instr,
+        JsonLengthSig => json_length,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1478,6 +1480,7 @@ mod tests {
                 0,
                 0,
             ),
+            (vec![ScalarFuncSig::JsonLengthSig], 1, 2),
         ];
         for (sigs, min, max) in cases {
             for sig in sigs {
