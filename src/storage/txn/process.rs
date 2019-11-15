@@ -851,7 +851,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                         is_pessimistic_txn,
                     );
                 }
-                TxnStatus::RollbackedBefore
+                TxnStatus::Rollbacked
                 | TxnStatus::Committed { .. }
                 | TxnStatus::Uncommitted { .. } => {}
             };

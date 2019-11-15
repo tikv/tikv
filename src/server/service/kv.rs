@@ -2228,9 +2228,7 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
         } else {
             match v {
                 Ok(txn_status) => match txn_status {
-                    TxnStatus::RollbackedBefore => {
-                        resp.set_rollback_reason(RollbackReason::NoReason)
-                    }
+                    TxnStatus::Rollbacked => resp.set_rollback_reason(RollbackReason::NoReason),
                     TxnStatus::TtlExpire => resp.set_rollback_reason(RollbackReason::TtlExpire),
                     TxnStatus::LockNotExist => {
                         resp.set_rollback_reason(RollbackReason::LockNotExist)

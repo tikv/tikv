@@ -70,7 +70,7 @@ impl Mutation {
 #[derive(PartialEq, Debug)]
 pub enum TxnStatus {
     /// The txn was already rolled back before.
-    RollbackedBefore,
+    Rollbacked,
     /// The txn is just rolled back due to expiration.
     TtlExpire,
     /// The txn is just rolled back due to lock not exist.

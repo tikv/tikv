@@ -542,7 +542,7 @@ impl<S: Snapshot> MvccTxn<S> {
         {
             Some((ts, write_type)) => {
                 if write_type == WriteType::Rollback {
-                    Ok(TxnStatus::RollbackedBefore)
+                    Ok(TxnStatus::Rollbacked)
                 } else {
                     Ok(TxnStatus::committed(ts))
                 }
@@ -606,7 +606,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                     Err(Error::Committed { commit_ts })
                 }
-                TxnStatus::RollbackedBefore => {
+                TxnStatus::Rollbacked => {
                     // Return Ok on Rollback already exist.
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
                     Ok(false)
@@ -2153,15 +2153,7 @@ mod tests {
             r,
             committed(ts(15, 0)),
         );
-        must_check_txn_status(
-            &engine,
-            k,
-            ts(20, 0),
-            ts(10, 0),
-            ts(10, 0),
-            r,
-            RollbackedBefore,
-        );
+        must_check_txn_status(&engine, k, ts(20, 0), ts(10, 0), ts(10, 0), r, Rollbacked);
 
         // Rollback expired pessimistic lock.
         must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(150, 0), ts(150, 0), 100);
