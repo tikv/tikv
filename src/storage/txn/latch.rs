@@ -6,9 +6,8 @@ use std::hash::{Hash, Hasher};
 use std::usize;
 
 use spin::{Mutex, MutexGuard};
-use tikv_util::collections::HashMap;
 
-const WAITING_LIST_SHRINK_SIZE: usize = 64;
+const WAITING_LIST_SHRINK_SIZE: usize = 16;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
@@ -20,53 +19,66 @@ const WAITING_LIST_SHRINK_SIZE: usize = 64;
 #[derive(Clone)]
 struct Latch {
     // store waiting commands
-    pub waiting: HashMap<usize, VecDeque<u64>>,
+    // pub waiting: HashMap<usize, VecDeque<u64>>,
+    pub waiting: VecDeque<Option<(usize, u64)>>,
 }
 
 impl Latch {
     /// Creates a latch with an empty waiting queue.
     pub fn new() -> Latch {
         Latch {
-            waiting: HashMap::default(),
+            waiting: VecDeque::default(),
         }
     }
 
-    pub fn front(&self, s: usize) -> Option<&u64> {
-        if let Some(que) = self.waiting.get(&s) {
-            return que.front();
+    pub fn front(&self, s: usize) -> Option<u64> {
+        for item in self.waiting.iter() {
+            if let Some((x, y)) = item {
+                if *x == s {
+                    return Some(*y);
+                }
+            }
         }
         None
     }
 
     pub fn pop_front(&mut self, s: usize) -> Option<u64> {
-        if let Some(que) = self.waiting.get_mut(&s) {
-            return que.pop_front();
+        for item in self.waiting.iter_mut() {
+            if let Some((v, cid)) = item {
+                if *v == s {
+                    let id = Some(*cid);
+                    *item = None;
+                    return id;
+                }
+            }
         }
         None
     }
 
     pub fn wait_for_wake(&mut self, s: usize, cid: u64) {
-        match self.waiting.get_mut(&s) {
-            Some(que) => {
-                que.push_back(cid);
-            }
-            None => {
-                let mut que = VecDeque::default();
-                que.push_back(cid);
-                self.waiting.insert(s, que);
+        if let Some(item) = self.waiting.back_mut() {
+            if item.is_none() {
+                *item = Some((s, cid));
+                return;
             }
         }
+        self.waiting.push_back(Some((s, cid)));
     }
 
-    pub fn maybe_shrink(&mut self, pos: usize, limit: usize) {
-        if self.waiting.len() > limit {
-            if let Some(que) = self.waiting.get_mut(&pos) {
-                if que.is_empty() {
-                    self.waiting.remove(&pos).unwrap();
-                } else if que.capacity() > limit && que.len() < limit {
-                    que.shrink_to_fit();
-                }
+    pub fn maybe_shrink(&mut self, limit: usize) {
+        if self.waiting.len() < limit {
+            return;
+        }
+        while !self.waiting.is_empty() {
+            let item = self.waiting.front().unwrap();
+            if item.is_none() {
+                self.waiting.pop_front();
+            } else {
+                break;
             }
+        }
+        if self.waiting.capacity() > limit * 2 && self.waiting.len() < limit {
+            self.waiting.shrink_to_fit();
         }
     }
 }
@@ -143,7 +155,7 @@ impl Latches {
             let mut latch = self.lock_latch(i);
             match latch.front(i) {
                 Some(cid) => {
-                    if *cid == who {
+                    if cid == who {
                         acquired_count += 1;
                     } else {
                         latch.wait_for_wake(i, who);
@@ -170,11 +182,11 @@ impl Latches {
             let front = latch.pop_front(i).unwrap();
             assert_eq!(front, who);
             if let Some(wakeup) = latch.front(i) {
-                wakeup_list.push(*wakeup);
+                wakeup_list.push(wakeup);
             }
             // For some hot keys, the waiting list maybe very long, so we should shrink the waiting
             // VecDeque after pop.
-            latch.maybe_shrink(i, WAITING_LIST_SHRINK_SIZE);
+            latch.maybe_shrink(WAITING_LIST_SHRINK_SIZE);
         }
         wakeup_list
     }
