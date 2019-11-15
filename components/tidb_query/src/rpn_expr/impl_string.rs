@@ -11,6 +11,18 @@ pub fn length(arg: &Option<Bytes>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|bytes| bytes.len() as i64))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
+    Ok(arg.as_ref().map(|bytes| {
+        if bytes.len() == 0 {
+            0
+        } else {
+            i64::from(bytes[0])
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use tipb::ScalarFuncSig;
@@ -35,6 +47,31 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate(ScalarFuncSig::Length)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_ascii() {
+        let test_cases = vec![
+            (None, None),
+            (Some(b"1010".to_vec()), Some(49i64)),
+            (Some(b"-1".to_vec()), Some(45i64)),
+            (Some(b"".to_vec()), Some(0i64)),
+            (Some(b"999".to_vec()), Some(57i64)),
+            (Some(b"hello".to_vec()), Some(104i64)),
+            (Some("Grüße".as_bytes().to_vec()), Some(71i64)),
+            (Some("München".as_bytes().to_vec()), Some(77i64)),
+            (Some("数据库".as_bytes().to_vec()), Some(230i64)),
+            (Some("忠犬ハチ公".as_bytes().to_vec()), Some(229i64)),
+            (Some("Αθήνα".as_bytes().to_vec()), Some(206i64)),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::Ascii)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
