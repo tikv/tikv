@@ -153,7 +153,10 @@ impl StatusServer {
         let query = match req.uri().query() {
             Some(query) => query,
             None => {
-                return Box::new(ok(StatusServer::err_response(StatusCode::BAD_REQUEST, "")));
+                return Box::new(ok(StatusServer::err_response(
+                    StatusCode::BAD_REQUEST,
+                    "request should have the query part",
+                )));
             }
         };
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
@@ -161,7 +164,10 @@ impl StatusServer {
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(_) => {
-                    return Box::new(ok(StatusServer::err_response(StatusCode::BAD_REQUEST, "")));
+                    return Box::new(ok(StatusServer::err_response(
+                        StatusCode::BAD_REQUEST,
+                        "request should have seconds argument",
+                    )));
                 }
             },
             None => 10,
@@ -221,17 +227,16 @@ impl StatusServer {
             static ref THREAD_NAME_REPLACE_SEPERATOR_RE: Regex = Regex::new(r"[_ ]").unwrap();
         }
 
-        if let Some(cap) = THREAD_NAME_RE.captures(thread_name) {
-            if let Some(thread_name) = cap.name("thread_name") {
-                THREAD_NAME_REPLACE_SEPERATOR_RE
-                    .replace_all(thread_name.as_str(), "-")
-                    .into_owned()
-            } else {
-                thread_name.to_owned()
-            }
-        } else {
-            thread_name.to_owned()
-        }
+        THREAD_NAME_RE
+            .captures(thread_name)
+            .and_then(|cap| {
+                cap.name("thread_name").map(|thread_name| {
+                    THREAD_NAME_REPLACE_SEPERATOR_RE
+                        .replace_all(thread_name.as_str(), "-")
+                        .into_owned()
+                })
+            })
+            .unwrap_or_else(|| thread_name.to_owned())
     }
 
     fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
@@ -391,9 +396,10 @@ impl StatusServer {
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
                             (Method::GET, "/config") => Self::config_handler(config.clone()),
                             (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
-                            _ => {
-                                Box::new(ok(StatusServer::err_response(StatusCode::NOT_FOUND, "")))
-                            }
+                            _ => Box::new(ok(StatusServer::err_response(
+                                StatusCode::NOT_FOUND,
+                                "path not found",
+                            ))),
                         }
                     },
                 )
