@@ -1426,9 +1426,9 @@ dependencies = [
 
 [[package]]
 name = "libpapi_sys"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c3f846784b520347048f40a690435de31ae27b64fd413a096834124e9de356c"
+checksum = "9c687368f5a574f3aaf97cad438fb572a87aa224051e1cd01ad926b1d592886b"
 dependencies = [
  "bindgen",
  "num_cpus",
