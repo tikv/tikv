@@ -98,6 +98,23 @@ pub fn hex_str_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|b| hex::encode_upper(b).into_bytes()))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn locate_binary_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result<Option<i64>> {
+    let substr = match substr {
+        Some(v) => v,
+        _ => return Ok(None),
+    };
+    let s = match s {
+        Some(v) => v,
+        _ => return Ok(None),
+    };
+
+    Ok(twoway::find_bytes(s.as_slice(), substr.as_slice())
+        .map(|i| 1 + i as i64)
+        .or(Some(0)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,6 +410,36 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate(ScalarFuncSig::HexStrArg)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_locate_binary_2_args() {
+        let test_cases = vec![
+            (None, None, None),
+            (None, Some("abc"), None),
+            (Some("abc"), None, None),
+            (Some(""), Some("foobArbar"), Some(1)),
+            (Some(""), Some(""), Some(1)),
+            (Some("xxx"), Some(""), Some(0)),
+            (Some("BaR"), Some("foobArbar"), Some(0)),
+            (Some("bar"), Some("foobArbar"), Some(7)),
+            (
+                Some("好世"),
+                Some("你好世界"),
+                Some(1 + "你好世界".find("好世").unwrap() as i64),
+            ),
+        ];
+
+        for (substr, s, expect_output) in test_cases {
+            let substr = substr.map(|v| v.as_bytes().to_vec());
+            let s = s.map(|v| v.as_bytes().to_vec());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(substr)
+                .push_param(s)
+                .evaluate(ScalarFuncSig::LocateBinary2Args)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
