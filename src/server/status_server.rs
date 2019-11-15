@@ -206,9 +206,10 @@ impl StatusServer {
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json))
                 .unwrap(),
-            Err(_) => {
-                StatusServer::err_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
-            }
+            Err(_) => StatusServer::err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal Server Error",
+            ),
         };
         Box::new(ok(res))
     }
@@ -367,10 +368,11 @@ impl StatusServer {
         let config = self.config.clone();
 
         // Start to serve.
-        let server = builder.serve(move || {
-            let config = config.clone();
-            // Create a status service.
-            service_fn(
+        let server =
+            builder.serve(move || {
+                let config = config.clone();
+                // Create a status service.
+                service_fn(
                     move |req: Request<Body>| -> Box<
                         dyn Future<Item = Response<Body>, Error = hyper::Error> + Send,
                     > {
@@ -390,11 +392,13 @@ impl StatusServer {
                             (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
                             (Method::GET, "/config") => Self::config_handler(config.clone()),
                             (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
-                            _ => Box::new(ok(StatusServer::err_response(StatusCode::NOT_FOUND, ""))),
+                            _ => {
+                                Box::new(ok(StatusServer::err_response(StatusCode::NOT_FOUND, "")))
+                            }
                         }
                     },
                 )
-        });
+            });
         self.addr = Some(server.local_addr());
         let graceful = server
             .with_graceful_shutdown(self.rx.take().unwrap())
@@ -485,7 +489,10 @@ fn handle_fail_points_request(
             let list = list.join("\n");
             Box::new(ok(Response::new(list.into())))
         }
-        _ => Box::new(ok(StatusServer::err_response(StatusCode::METHOD_NOT_ALLOWED, ""))),
+        _ => Box::new(ok(StatusServer::err_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "",
+        ))),
     }
 }
 
