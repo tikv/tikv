@@ -7,13 +7,16 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use futures::{Future, Stream};
-use grpcio::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
+use grpcio::{
+    ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
+};
 use kvproto::tikvpb_grpc::*;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
 use crate::raftstore::store::SnapManager;
+use crate::storage::lock_manager::LockMgr;
 use crate::storage::{Engine, Storage};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -60,10 +63,10 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<E: Engine>(
+    pub fn new<E: Engine, L: LockMgr>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
-        storage: Storage<E>,
+        storage: Storage<E, L>,
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
@@ -94,10 +97,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
         let addr = SocketAddr::from_str(&cfg.addr)?;
         let ip = format!("{}", addr.ip());
+        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
+            .resize_memory(cfg.grpc_memory_pool_quota.0 as usize);
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
+            .resource_quota(mem_quota)
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .build_args();

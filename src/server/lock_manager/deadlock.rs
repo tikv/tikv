@@ -4,10 +4,11 @@ use super::client::{self, Client};
 use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use super::{Error, Lock, Result};
+use super::{Error, Result};
 use crate::pd::{RpcClient, INVALID_ID};
-use crate::raftstore::coprocessor::{Coprocessor, CoprocessorHost, ObserverContext, RoleObserver};
+use crate::raftstore::coprocessor::{Coprocessor, ObserverContext, RoleObserver};
 use crate::server::resolve::StoreAddrResolver;
+use crate::storage::lock_manager::Lock;
 use futures::{Future, Sink, Stream};
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
@@ -26,7 +27,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::future::paired_future_callback;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::{Duration, Instant};
-use tikv_util::worker::{FutureRunnable, FutureScheduler, FutureWorker, Stopped};
+use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
 
 /// `Locks` is a set of locks belonging to one transaction.
@@ -348,16 +349,6 @@ impl RoleObserver for Scheduler {
             self.change_role(role.into());
         }
     }
-}
-
-/// Creates a `Scheduler` of the worker and registers it to the `CoprocessorHost` to observe
-/// the role change events of the leader region.
-pub fn register_detector_role_change_observer(
-    host: &mut CoprocessorHost,
-    worker: &FutureWorker<Task>,
-) {
-    let scheduler = Scheduler::new(worker.scheduler());
-    host.registry.register_role_observer(1, Box::new(scheduler));
 }
 
 struct Inner {
