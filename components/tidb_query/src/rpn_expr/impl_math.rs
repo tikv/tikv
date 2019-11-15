@@ -255,6 +255,12 @@ fn sqrt(arg: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
+fn radians(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| Real::new(*n * std::f64::consts::PI / 180_f64).ok()))
+}
+
+#[inline]
+#[rpn_fn]
 pub fn exp(arg: &Option<Real>) -> Result<Option<Real>> {
     match arg {
         Some(x) => {
@@ -673,6 +679,31 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
                 .evaluate(ScalarFuncSig::Sqrt)
+                .unwrap();
+            assert_eq!(expect, output, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_radians() {
+        let test_cases = vec![
+            (None, None),
+            (Some(0_f64), Some(Real::from(0_f64))),
+            (Some(180_f64), Some(Real::from(std::f64::consts::PI))),
+            (
+                Some(-360_f64),
+                Some(Real::from(-2_f64 * std::f64::consts::PI)),
+            ),
+            (Some(std::f64::NAN), None),
+            (
+                Some(std::f64::INFINITY),
+                Some(Real::from(std::f64::INFINITY)),
+            ),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Radians)
                 .unwrap();
             assert_eq!(expect, output, "{:?}", input);
         }
