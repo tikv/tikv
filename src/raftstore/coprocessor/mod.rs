@@ -139,5 +139,5 @@ pub trait RegionChangeObserver: Coprocessor {
 }
 
 pub trait ApplyObserver: Coprocessor {
-    fn on_applied_index_change(&self, _: &Region, _: u64) {}
+    fn on_applied_index_change(&self, _: &mut ObserverContext<'_>, _: u64) {}
 }

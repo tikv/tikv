@@ -222,9 +222,12 @@ impl CoprocessorHost {
     }
 
     pub fn post_applied_index_changed(&self, region: &Region, applied_index: u64) {
-        for e in &self.registry.apply_observers {
-            e.observer.on_applied_index_change(region, applied_index);
-        }
+        loop_ob!(
+            region,
+            &self.registry.apply_observers,
+            on_applied_index_change,
+            applied_index
+        );
     }
 
     pub fn new_split_checker_host(
@@ -358,6 +361,13 @@ mod tests {
             _: StateRole,
         ) {
             self.called.fetch_add(8, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+    }
+
+    impl ApplyObserver for TestCoprocessor {
+        fn on_applied_index_change(&self, _: &Region, _: u64) {
+            self.called.fetch_add(9, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
