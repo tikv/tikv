@@ -4,6 +4,8 @@ use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
+use sys_info;
+
 use crate::raftstore::{coprocessor, Result};
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
@@ -133,6 +135,8 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
+        let cpu_num = sys_info::cpu_num().unwrap();
+        let (apply_pool_size, store_pool_size) = if cpu_num <= 8 { (1, 1) } else { (2, 2) };
         let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         Config {
             sync_log: true,
@@ -188,9 +192,9 @@ impl Default for Config {
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
             apply_max_batch_size: 1024,
-            apply_pool_size: 2,
+            apply_pool_size,
             store_max_batch_size: 1024,
-            store_pool_size: 2,
+            store_pool_size,
             future_poll_size: 1,
             hibernate_regions: true,
 
