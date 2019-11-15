@@ -71,6 +71,20 @@ impl ScalarFunc {
         Ok(j.extract(&path_exprs).map(Cow::Owned))
     }
 
+    pub fn json_length<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let j = try_opt!(self.children[0].eval_json(ctx, row));
+        let parser = JsonFuncArgsParser::new(row);
+        let path_exprs: Vec<_> = match parser.get_path_exprs(ctx, &self.children[1..])? {
+            Some(list) => list,
+            None => Vec::new(),
+        };
+        Ok(j.json_length(&path_exprs))
+    }
+
     #[inline]
     pub fn json_set<'a, 'b: 'a>(
         &'b self,
@@ -193,6 +207,114 @@ mod tests {
     use crate::expr::tests::{datum_expr, make_null_datums, scalar_func_expr};
     use crate::expr::{EvalContext, Expression};
     use tipb::ScalarFuncSig;
+
+    #[test]
+    fn test_json_length() {
+        let cases = vec![
+            (Some("null"), None, None),
+            (Some(r#"{"a":{"a":1},"b":2}"#), Some(b"$".to_vec()), Some(2)),
+            (Some("1"), None, Some(1)),
+            (
+                Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
+                Some(b"$.*".to_vec()),
+                None,
+            ),
+            (Some(r#"{"a":{"a":1},"b":2}"#), Some(b"$".to_vec()), Some(2)),
+            // Tests with path expression
+            (
+                Some(r#"[1,2,[1,[5,[3]]]]"#),
+                Some(b"$[2]".to_vec()),
+                Some(2),
+            ),
+            (Some(r#"[{"a":1}]"#), Some(b"$".to_vec()), Some(1)),
+            (
+                Some(r#"[{"a":1,"b":2}]"#),
+                Some(b"$[0].a".to_vec()),
+                Some(1),
+            ),
+            (Some(r#"{"a":{"a":1},"b":2}"#), Some(b"$".to_vec()), Some(2)),
+            (
+                Some(r#"{"a":{"a":1},"b":2}"#),
+                Some(b"$.a".to_vec()),
+                Some(1),
+            ),
+            (
+                Some(r#"{"a":{"a":1},"b":2}"#),
+                Some(b"$.a.a".to_vec()),
+                Some(1),
+            ),
+            (
+                Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
+                Some(b"$.a[2].aa".to_vec()),
+                Some(1),
+            ),
+            // Tests without path expression
+            (Some(r#"{}"#), None, Some(0)),
+            (Some(r#"{"a":1}"#), None, Some(1)),
+            (Some(r#"{"a":[1]}"#), None, Some(1)),
+            (Some(r#"{"b":2, "c":3}"#), None, Some(2)),
+            (Some(r#"[1]"#), None, Some(1)),
+            (Some(r#"[1,2]"#), None, Some(2)),
+            (Some(r#"[1,2,[1,3]]"#), None, Some(3)),
+            (Some(r#"[1,2,[1,[5,[3]]]]"#), None, Some(3)),
+            (Some(r#"[1,2,[1,[5,{"a":[2,3]}]]]"#), None, Some(3)),
+            (Some(r#"[{"a":1}]"#), None, Some(1)),
+            (Some(r#"[{"a":1,"b":2}]"#), None, Some(1)),
+            (Some(r#"[{"a":{"a":1},"b":2}]"#), None, Some(1)),
+            // Tests path expression contains any asterisk
+            (
+                Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
+                Some(b"$.*".to_vec()),
+                None,
+            ),
+            (
+                Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
+                Some(b"$[*]".to_vec()),
+                None,
+            ),
+            (
+                Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
+                Some(b"$**.a".to_vec()),
+                None,
+            ),
+            // Tests path expression does not identify a section of the target document
+            (
+                Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
+                Some(b"$.c".to_vec()),
+                None,
+            ),
+            (
+                Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
+                Some(b"$.a[3]".to_vec()),
+                None,
+            ),
+            (
+                Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
+                Some(b"$.a[2].b".to_vec()),
+                None,
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (input, param, exp) in cases {
+            let json = datum_expr(match input {
+                None => Datum::Null,
+                Some(s) => Datum::Json(s.parse().unwrap()),
+            });
+            let param = datum_expr(match param {
+                None => Datum::Null,
+                Some(b) => Datum::Bytes(b),
+            });
+
+            let op = scalar_func_expr(ScalarFuncSig::JsonLengthSig, &[json, param]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            let exp = match exp {
+                None => Datum::Null,
+                Some(e) => Datum::I64(e),
+            };
+            assert_eq!(got, exp);
+        }
+    }
 
     #[test]
     fn test_json_type() {
