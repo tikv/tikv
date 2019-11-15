@@ -247,6 +247,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CoalesceJson => coalesce_fn_meta::<Json>(),
         ScalarFuncSig::Sign => sign_fn_meta(),
         ScalarFuncSig::Sqrt => sqrt_fn_meta(),
+        ScalarFuncSig::Exp => exp_fn_meta(),
         ScalarFuncSig::InInt => compare_in_fn_meta::<Int>(),
         ScalarFuncSig::InReal => compare_in_fn_meta::<Real>(),
         ScalarFuncSig::InString => compare_in_fn_meta::<Bytes>(),

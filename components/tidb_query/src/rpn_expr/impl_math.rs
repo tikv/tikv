@@ -253,6 +253,22 @@ fn sqrt(arg: &Option<Real>) -> Result<Option<Real>> {
     }))
 }
 
+#[inline]
+#[rpn_fn]
+pub fn exp(arg: &Option<Real>) -> Result<Option<Real>> {
+    match arg {
+        Some(x) => {
+            let ret = x.exp();
+            if ret.is_infinite() || ret.is_nan() {
+                Err(Error::overflow("DOUBLE", &format!("exp({})", x)).into())
+            } else {
+                Ok(Some(Real::from(ret)))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,6 +642,32 @@ mod tests {
                 .evaluate(ScalarFuncSig::Sqrt)
                 .unwrap();
             assert_eq!(expect, output, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_exp() {
+        let tests = vec![
+            (1_f64, std::f64::consts::E),
+            (1.23_f64, 3.4212295362896734),
+            (-1.23_f64, 0.2922925776808594),
+            (0_f64, 1_f64),
+        ];
+        for (x, expected) in tests {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(x)))
+                .evaluate(ScalarFuncSig::Exp)
+                .unwrap();
+            assert_eq!(output, Some(Real::from(expected)));
+        }
+        test_unary_func_ok_none::<Real, Real>(ScalarFuncSig::Exp);
+
+        let overflow_tests = vec![100000_f64];
+        for x in overflow_tests {
+            let output: Result<Option<Real>> = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(x)))
+                .evaluate(ScalarFuncSig::Exp);
+            assert!(output.is_err());
         }
     }
 }
