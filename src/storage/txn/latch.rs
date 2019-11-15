@@ -5,9 +5,10 @@ use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::usize;
 
-use spin::Mutex;
+use spin::{Mutex, MutexGuard};
+use tikv_util::collections::HashMap;
 
-const WAITING_LIST_SHRINK_SIZE: usize = 32;
+const WAITING_LIST_SHRINK_SIZE: usize = 64;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
@@ -19,14 +20,53 @@ const WAITING_LIST_SHRINK_SIZE: usize = 32;
 #[derive(Clone)]
 struct Latch {
     // store waiting commands
-    pub waiting: VecDeque<u64>,
+    pub waiting: HashMap<usize, VecDeque<u64>>,
 }
 
 impl Latch {
     /// Creates a latch with an empty waiting queue.
     pub fn new() -> Latch {
         Latch {
-            waiting: VecDeque::new(),
+            waiting: HashMap::default(),
+        }
+    }
+
+    pub fn front(&self, s: usize) -> Option<&u64> {
+        if let Some(que) = self.waiting.get(&s) {
+            return que.front();
+        }
+        None
+    }
+
+    pub fn pop_front(&mut self, s: usize) -> Option<u64> {
+        if let Some(que) = self.waiting.get_mut(&s) {
+            return que.pop_front();
+        }
+        None
+    }
+
+    pub fn wait_for_wake(&mut self, s: usize, cid: u64) {
+        match self.waiting.get_mut(&s) {
+            Some(que) => {
+                que.push_back(cid);
+            }
+            None => {
+                let mut que = VecDeque::default();
+                que.push_back(cid);
+                self.waiting.insert(s, que);
+            }
+        }
+    }
+
+    pub fn maybe_shrink(&mut self, pos: usize, limit: usize) {
+        if self.waiting.len() > limit {
+            if let Some(que) = self.waiting.get_mut(&pos) {
+                if que.is_empty() {
+                    self.waiting.remove(&pos).unwrap();
+                } else if que.capacity() > limit && que.len() < limit {
+                    que.shrink_to_fit();
+                }
+            }
         }
     }
 }
@@ -99,20 +139,19 @@ impl Latches {
     /// Latches are acquired, false otherwise.
     pub fn acquire(&self, lock: &mut Lock, who: u64) -> bool {
         let mut acquired_count: usize = 0;
-        for i in &lock.required_slots[lock.owned_count..] {
-            let mut latch = self.slots[*i].lock();
-            let front = latch.waiting.front().cloned();
-            match front {
+        for &i in &lock.required_slots[lock.owned_count..] {
+            let mut latch = self.lock_latch(i);
+            match latch.front(i) {
                 Some(cid) => {
-                    if cid == who {
+                    if *cid == who {
                         acquired_count += 1;
                     } else {
-                        latch.waiting.push_back(who);
+                        latch.wait_for_wake(i, who);
                         break;
                     }
                 }
                 None => {
-                    latch.waiting.push_back(who);
+                    latch.wait_for_wake(i, who);
                     acquired_count += 1;
                 }
             }
@@ -126,20 +165,16 @@ impl Latches {
     /// Preconditions: the caller must ensure the command is at the front of the latches.
     pub fn release(&self, lock: &Lock, who: u64) -> Vec<u64> {
         let mut wakeup_list: Vec<u64> = vec![];
-        for i in &lock.required_slots[..lock.owned_count] {
-            let mut latch = self.slots[*i].lock();
-            let front = latch.waiting.pop_front().unwrap();
+        for &i in &lock.required_slots[..lock.owned_count] {
+            let mut latch = self.lock_latch(i);
+            let front = latch.pop_front(i).unwrap();
             assert_eq!(front, who);
-            if let Some(wakeup) = latch.waiting.front() {
+            if let Some(wakeup) = latch.front(i) {
                 wakeup_list.push(*wakeup);
             }
             // For some hot keys, the waiting list maybe very long, so we should shrink the waiting
             // VecDeque after pop.
-            if latch.waiting.capacity() > WAITING_LIST_SHRINK_SIZE
-                && latch.waiting.len() < WAITING_LIST_SHRINK_SIZE
-            {
-                latch.waiting.shrink_to_fit();
-            }
+            latch.maybe_shrink(i, WAITING_LIST_SHRINK_SIZE);
         }
         wakeup_list
     }
@@ -151,7 +186,13 @@ impl Latches {
     {
         let mut s = DefaultHasher::new();
         key.hash(&mut s);
-        (s.finish() as usize) & (self.size - 1)
+        // (s.finish() as usize) & (self.size - 1)
+        s.finish() as usize
+    }
+
+    #[inline]
+    fn lock_latch(&self, s: usize) -> MutexGuard<Latch> {
+        self.slots[s & (self.size - 1)].lock()
     }
 }
 
