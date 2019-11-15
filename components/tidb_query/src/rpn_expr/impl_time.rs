@@ -35,6 +35,22 @@ pub fn date_format(
     Ok(Some(t.unwrap().into_bytes()))
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    if t.is_none() {
+        return Ok(None);
+    }
+    let t = t.as_ref().unwrap();
+    if t.is_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .map(|_| Ok(None))?;
+    }
+    let day = t.weekday().num_days_from_monday();
+    Ok(Some(i64::from(day)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +178,32 @@ mod tests {
                 .unwrap();
             assert_eq!(output, None, "{:?} {:?}", date, format);
         }
+    }
+
+    #[test]
+    fn test_week_day() {
+        let cases = vec![
+            ("2018-12-03", 0i64),
+            ("2018-12-04", 1i64),
+            ("2018-12-05", 2i64),
+            ("2018-12-06", 3i64),
+            ("2018-12-07", 4i64),
+            ("2018-12-08", 5i64),
+            ("2018-12-09", 6i64),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(datetime.clone())
+                .evaluate(ScalarFuncSig::WeekDay)
+                .unwrap();
+            assert_eq!(output, Some(exp));
+        }
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<DateTime>)
+            .evaluate::<Int>(ScalarFuncSig::WeekDay)
+            .unwrap();
+        assert_eq!(output, None);
     }
 }
