@@ -137,3 +137,7 @@ pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
 }
+
+pub trait ApplyObserver: Coprocessor {
+    fn on_applied_index_change(&self, _: &Region, _: u64) {}
+}

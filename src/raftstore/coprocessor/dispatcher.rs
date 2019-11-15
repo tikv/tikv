@@ -21,6 +21,7 @@ pub type BoxQueryObserver = Box<dyn QueryObserver + Send + Sync>;
 pub type BoxSplitCheckObserver = Box<dyn SplitCheckObserver + Send + Sync>;
 pub type BoxRoleObserver = Box<dyn RoleObserver + Send + Sync>;
 pub type BoxRegionChangeObserver = Box<dyn RegionChangeObserver + Send + Sync>;
+pub type BoxApplyObserver = Box<dyn ApplyObserver + Send + Sync>;
 
 /// Registry contains all registered coprocessors.
 #[derive(Default)]
@@ -30,6 +31,7 @@ pub struct Registry {
     split_check_observers: Vec<Entry<BoxSplitCheckObserver>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
+    apply_observers: Vec<Entry<BoxApplyObserver>>,
     // TODO: add endpoint
 }
 
@@ -65,6 +67,10 @@ impl Registry {
 
     pub fn register_region_change_observer(&mut self, priority: u32, rlo: BoxRegionChangeObserver) {
         push!(priority, rlo, self.region_change_observers);
+    }
+
+    pub fn register_apply_observer(&mut self, priority: u32, o: BoxApplyObserver) {
+        push!(priority, o, self.apply_observers);
     }
 }
 
@@ -212,6 +218,12 @@ impl CoprocessorHost {
                 post_apply_admin,
                 admin
             );
+        }
+    }
+
+    pub fn post_applied_index_changed(&self, region: &Region, applied_index: u64) {
+        for e in &self.registry.apply_observers {
+            e.observer.on_applied_index_change(region, applied_index);
         }
     }
 

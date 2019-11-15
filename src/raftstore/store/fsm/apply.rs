@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::{cmp, usize};
+use std::{cmp, mem, usize};
 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
@@ -41,6 +41,7 @@ use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::{cmd_resp, keys, util, Config};
 use crate::raftstore::{Error, Result};
+use tikv_util::collections::HashMap;
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
@@ -240,13 +241,14 @@ impl ApplyCallback {
         ApplyCallback { region, cbs }
     }
 
-    fn invoke_all(self, host: &CoprocessorHost) {
+    fn invoke_all(self, host: &CoprocessorHost, applied_index: u64) {
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
             if let Some(cb) = cb {
                 cb.invoke_with_response(resp)
             };
         }
+        host.post_applied_index_changed(&self.region, applied_index);
     }
 
     fn push(&mut self, cb: Option<Callback>, resp: RaftCmdResponse) {
@@ -290,7 +292,8 @@ struct ApplyContext {
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
-    last_applied_index: u64,
+    cur_region_id: u64,
+    last_applied_index: HashMap<u64, u64>,
     committed_count: usize,
 
     // Indicates that WAL can be synchronized when data is written to KV engine.
@@ -326,7 +329,8 @@ impl ApplyContext {
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
-            last_applied_index: 0,
+            cur_region_id: 0,
+            last_applied_index: HashMap::default(),
             committed_count: 0,
             enable_sync_log: cfg.sync_log,
             sync_log_hint: false,
@@ -347,7 +351,9 @@ impl ApplyContext {
             self.kv_wb_last_keys = 0;
         }
         self.cbs.push(ApplyCallback::new(delegate.region.clone()));
-        self.last_applied_index = delegate.apply_state.get_applied_index();
+        self.cur_region_id = delegate.region_id();
+        self.last_applied_index
+            .insert(self.cur_region_id, delegate.apply_state.get_applied_index());
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates whether
@@ -355,7 +361,11 @@ impl ApplyContext {
     ///
     /// This call is valid only when it's between a `prepare_for` and `finish_for`.
     pub fn commit(&mut self, delegate: &mut ApplyDelegate) {
-        if self.last_applied_index < delegate.apply_state.get_applied_index() {
+        let rid = delegate.region_id();
+        let old_applied = self.last_applied_index.get_mut(&rid).unwrap();
+        let new_applied = delegate.apply_state.get_applied_index();
+        if *old_applied < new_applied {
+            *old_applied = new_applied;
             delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
         }
         // last_applied_index doesn't need to be updated, set persistent to true will
@@ -398,8 +408,11 @@ impl ApplyContext {
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
+        let last_applied_index = mem::replace(&mut self.last_applied_index, Default::default());
         for cbs in self.cbs.drain(..) {
-            cbs.invoke_all(&self.host);
+            let region_id = cbs.region.get_id();
+            let applied_index = last_applied_index.get(&region_id).cloned().unwrap_or(0);
+            cbs.invoke_all(&self.host, applied_index);
         }
         need_sync
     }
@@ -407,7 +420,13 @@ impl ApplyContext {
     /// Finishes `Apply`s for the delegate.
     pub fn finish_for(&mut self, delegate: &mut ApplyDelegate, results: VecDeque<ExecResult>) {
         if !delegate.pending_remove {
-            delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
+            let rid = delegate.region_id();
+            let old_applied = self.last_applied_index.get_mut(&rid).unwrap();
+            let new_applied = delegate.apply_state.get_applied_index();
+            if *old_applied < new_applied {
+                *old_applied = new_applied;
+                delegate.write_apply_state(&self.engines, self.kv_wb.as_mut().unwrap());
+            }
         }
         self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
