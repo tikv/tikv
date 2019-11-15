@@ -9,8 +9,9 @@ use tipb::{Expr, ExprType, FieldType};
 use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
 use crate::codec::data_type::*;
-use crate::codec::mysql::{JsonDecoder, Tz, MAX_FSP};
+use crate::codec::mysql::{JsonDecoder, MAX_FSP};
 use crate::codec::{datum, Datum};
+use crate::expr::EvalContext;
 use crate::Result;
 
 /// Helper to build an `RpnExpression`.
@@ -72,14 +73,14 @@ impl RpnExpressionBuilder {
     /// Builds the RPN expression node list from an expression definition tree.
     pub fn build_from_expr_tree(
         tree_node: Expr,
-        time_zone: &Tz,
+        ctx: &mut EvalContext,
         max_columns: usize,
     ) -> Result<RpnExpression> {
         let mut expr_nodes = Vec::new();
         append_rpn_nodes_recursively(
             tree_node,
             &mut expr_nodes,
-            time_zone,
+            ctx,
             super::super::map_expr_node_to_rpn_func,
             max_columns,
         )?;
@@ -100,7 +101,7 @@ impl RpnExpressionBuilder {
         append_rpn_nodes_recursively(
             tree_node,
             &mut expr_nodes,
-            &Tz::utc(),
+            &mut EvalContext::default(),
             fn_mapper,
             max_columns,
         )?;
@@ -128,6 +129,7 @@ impl RpnExpressionBuilder {
             args_len,
             field_type: return_field_type.into(),
             implicit_args: vec![],
+            metadata: Box::new(()),
         };
         self.0.push(node);
         self
@@ -146,6 +148,7 @@ impl RpnExpressionBuilder {
             args_len,
             field_type: return_field_type.into(),
             implicit_args,
+            metadata: Box::new(()),
         };
         self.0.push(node);
         self
@@ -240,7 +243,7 @@ impl AsRef<[RpnExpressionNode]> for RpnExpressionBuilder {
 fn append_rpn_nodes_recursively<F>(
     tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
-    time_zone: &Tz,
+    ctx: &mut EvalContext,
     fn_mapper: F,
     max_columns: usize,
     // TODO: Passing `max_columns` is only a workaround solution that works when we only check
@@ -252,10 +255,10 @@ where
 {
     match tree_node.get_tp() {
         ExprType::ScalarFunc => {
-            handle_node_fn_call(tree_node, rpn_nodes, time_zone, fn_mapper, max_columns)
+            handle_node_fn_call(tree_node, rpn_nodes, ctx, fn_mapper, max_columns)
         }
         ExprType::ColumnRef => handle_node_column_ref(tree_node, rpn_nodes, max_columns),
-        _ => handle_node_constant(tree_node, rpn_nodes, time_zone),
+        _ => handle_node_constant(tree_node, rpn_nodes, ctx),
     }
 }
 
@@ -285,7 +288,7 @@ fn handle_node_column_ref(
 fn handle_node_fn_call<F>(
     mut tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
-    time_zone: &Tz,
+    ctx: &mut EvalContext,
     fn_mapper: F,
     max_columns: usize,
 ) -> Result<()>
@@ -305,6 +308,7 @@ where
         )
     })?;
 
+    let metadata = (func_meta.metadata_ctor_ptr)(&mut tree_node);
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
 
@@ -327,13 +331,14 @@ where
 
     // Visit children first, then push current node, so that it is a post-order traversal.
     for arg in args {
-        append_rpn_nodes_recursively(arg, rpn_nodes, time_zone, fn_mapper, max_columns)?;
+        append_rpn_nodes_recursively(arg, rpn_nodes, ctx, fn_mapper, max_columns)?;
     }
     rpn_nodes.push(RpnExpressionNode::FnCall {
         func_meta,
         args_len,
         field_type: tree_node.take_field_type(),
         implicit_args,
+        metadata,
     });
     Ok(())
 }
@@ -342,7 +347,7 @@ where
 fn handle_node_constant(
     mut tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
-    time_zone: &Tz,
+    ctx: &mut EvalContext,
 ) -> Result<()> {
     let eval_type = box_try!(EvalType::try_from(
         tree_node.get_field_type().as_accessor().tp()
@@ -362,11 +367,9 @@ fn handle_node_constant(
         ExprType::Float32 | ExprType::Float64 if eval_type == EvalType::Real => {
             extract_scalar_value_float(tree_node.take_val())?
         }
-        ExprType::MysqlTime if eval_type == EvalType::DateTime => extract_scalar_value_date_time(
-            tree_node.take_val(),
-            tree_node.get_field_type(),
-            time_zone,
-        )?,
+        ExprType::MysqlTime if eval_type == EvalType::DateTime => {
+            extract_scalar_value_date_time(tree_node.take_val(), tree_node.get_field_type(), ctx)?
+        }
         ExprType::MysqlDuration if eval_type == EvalType::Duration => {
             extract_scalar_value_duration(tree_node.take_val())?
         }
@@ -436,16 +439,15 @@ fn extract_scalar_value_float(val: Vec<u8>) -> Result<ScalarValue> {
 fn extract_scalar_value_date_time(
     val: Vec<u8>,
     field_type: &FieldType,
-    time_zone: &Tz,
+    ctx: &mut EvalContext,
 ) -> Result<ScalarValue> {
     let v = val
         .as_slice()
         .read_u64()
         .map_err(|_| other_err!("Unable to decode date time from the request"))?;
     let fsp = field_type.decimal() as i8;
-    let value =
-        DateTime::from_packed_u64(v, field_type.as_accessor().tp().try_into()?, fsp, time_zone)
-            .map_err(|_| other_err!("Unable to decode date time from the request"))?;
+    let value = DateTime::from_packed_u64(ctx, v, field_type.as_accessor().tp().try_into()?, fsp)
+        .map_err(|_| other_err!("Unable to decode date time from the request"))?;
     Ok(ScalarValue::DateTime(Some(value)))
 }
 
@@ -933,7 +935,8 @@ mod tests {
 
         // bytes generated from TiKV
         // datum(0)
-        let bytes = datum::encode_value(&[Datum::I64(0)]).unwrap();
+        let mut ctx = EvalContext::default();
+        let bytes = datum::encode_value(&mut ctx, &[Datum::I64(0)]).unwrap();
         let mut expr = build_expr();
         expr.set_val(bytes);
         let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
@@ -947,7 +950,7 @@ mod tests {
         }
 
         // datum(1)
-        let bytes = datum::encode_value(&[Datum::I64(1)]).unwrap();
+        let bytes = datum::encode_value(&mut ctx, &[Datum::I64(1)]).unwrap();
         let mut expr = build_expr();
         expr.set_val(bytes);
         let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
@@ -995,7 +998,7 @@ mod tests {
             Datum::Json(Json::Boolean(false)),
             Datum::Dur(Duration::from_nanos(10000, 3).unwrap()),
         ];
-        let bytes = datum::encode_value(&datums).unwrap();
+        let bytes = datum::encode_value(&mut ctx, &datums).unwrap();
         let mut expr = build_expr();
         expr.set_val(bytes);
         let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)

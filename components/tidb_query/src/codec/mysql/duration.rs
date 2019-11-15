@@ -650,15 +650,11 @@ impl Duration {
 
     /// If the error is overflow, the result will be returned, too.
     /// Otherwise, only one of result or err will be returned
-    pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> (Option<Duration>, Option<Error>) {
-        let fsp = match check_fsp(fsp) {
-            Err(e) => return (None, Some(e)),
-            Ok(fsp) => fsp,
-        };
+    pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> Result<Duration> {
+        let fsp = check_fsp(fsp)?;
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
-            let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp);
-            return (Some(max), Some(Error::overflow("Duration", n)));
+            return Err(Error::overflow("Duration", n));
         }
 
         let negative = n < 0;
@@ -666,13 +662,10 @@ impl Duration {
             n = -n;
         }
         if n / 10000 > i64::from(MAX_HOURS) || n % 100 >= 60 || (n / 100) % 100 >= 60 {
-            return (
-                None,
-                Some(Error::Eval(
-                    format!("invalid time format: '{}'", n),
-                    ERR_TRUNCATE_WRONG_VALUE,
-                )),
-            );
+            return Err(Error::Eval(
+                format!("invalid time format: '{}'", n),
+                ERR_TRUNCATE_WRONG_VALUE,
+            ));
         }
         let dur = Duration::new(
             negative,
@@ -682,26 +675,26 @@ impl Duration {
             0,
             fsp,
         );
-        (Some(dur), None)
+        Ok(dur)
     }
 
     pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
-        let (dur, err) = Duration::from_i64_without_ctx(n, fsp);
-        err.map_or_else(
-            || {
-                debug_assert!(dur.is_some());
-                dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
-            },
-            |e| {
-                if e.is_overflow() {
-                    ctx.handle_overflow_err(e)?;
-                    debug_assert!(dur.is_some());
-                    dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
-                } else {
-                    Err(e)
-                }
-            },
-        )
+        Duration::from_i64_without_ctx(n, fsp).or_else(|e| {
+            if e.is_overflow() {
+                ctx.handle_overflow_err(e)?;
+                // Returns max duration if overflow occurred
+                Ok(Duration::new(
+                    n < 0,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    fsp as u8,
+                ))
+            } else {
+                Err(e)
+            }
+        })
     }
 }
 
@@ -1030,7 +1023,7 @@ mod tests {
             ("0000-00-00 00:00:00", 6, "000000"),
         ];
         for (s, fsp, expect) in cases {
-            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
+            let t = DateTime::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let du: Duration = t.convert(&mut ctx).unwrap();
             let get: Decimal = du.convert(&mut ctx).unwrap();
             assert_eq!(
@@ -1055,7 +1048,7 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (s, fsp, expect) in cases {
-            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
+            let t = DateTime::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let du: Duration = t.convert(&mut ctx).unwrap();
             let get: f64 = du.convert(&mut ctx).unwrap();
             assert!(

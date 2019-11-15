@@ -163,7 +163,8 @@ impl<S: Snapshot> Scanner<S> {
                         };
                         // TODO: We need to scan locks into batch
                         //       in the future.
-                        result = super::super::util::check_lock(&current_user_key, ts, &lock)
+                        result = lock
+                            .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
                             .map(|_| None);
                     }
                     IsolationLevel::Rc => {}
@@ -301,7 +302,7 @@ impl<S: Snapshot> Scanner<S> {
         } else {
             // Value is in the default CF.
             let default_cursor = &mut self.default_cursor;
-            let value = super::super::util::near_load_data_by_write(
+            let value = super::near_load_data_by_write(
                 default_cursor,
                 user_key,
                 write,

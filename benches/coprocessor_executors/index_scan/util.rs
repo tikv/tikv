@@ -13,7 +13,7 @@ use test_coprocessor::*;
 use tidb_query::batch::executors::BatchIndexScanExecutor;
 use tidb_query::batch::interface::*;
 use tidb_query::executor::{Executor, IndexScanExecutor};
-use tidb_query::expr::EvalConfig;
+use tidb_query::expr::{EvalConfig, EvalContext};
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Statistics, Store as TxnStore};
@@ -45,6 +45,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
 
         let mut executor = IndexScanExecutor::index_scan(
             black_box(req),
+            black_box(EvalContext::default()),
             black_box(ranges.to_vec()),
             // TODO: Change to use `FixtureStorage` directly instead of
             // `TiKVStorage<FixtureStore<..>>`

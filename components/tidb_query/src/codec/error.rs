@@ -158,7 +158,7 @@ impl From<Error> for tipb::Error {
     fn from(error: Error) -> tipb::Error {
         let mut err = tipb::Error::default();
         err.set_code(error.code());
-        err.set_msg(format!("{:?}", error));
+        err.set_msg(error.to_string());
         err
     }
 }

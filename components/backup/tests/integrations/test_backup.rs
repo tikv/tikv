@@ -47,7 +47,7 @@ macro_rules! retry_req {
         let start = Instant::now();
         let timeout = Duration::from_millis($timeout);
         let mut tried_times = 0;
-        while tried_times < $retry && start.elapsed() < timeout {
+        while tried_times < $retry || start.elapsed() < timeout {
             if $check_resp {
                 break;
             } else {
@@ -64,6 +64,8 @@ impl TestSuite {
     fn new(count: usize) -> TestSuite {
         super::init();
         let mut cluster = new_server_cluster(1, count);
+        // Increase the Raft tick interval to make this test case running reliably.
+        configure_for_lease_read(&mut cluster, Some(100), None);
         cluster.run();
 
         let mut endpoints = HashMap::default();
@@ -81,6 +83,8 @@ impl TestSuite {
             endpoints.insert(*id, worker);
         }
 
+        // Make sure there is a leader.
+        cluster.must_put(b"foo", b"foo");
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
         let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
@@ -130,7 +134,7 @@ impl TestSuite {
             !prewrite_resp.has_region_error() && prewrite_resp.errors.is_empty(),
             prewrite_resp,
             5,    // retry 5 times
-            5000  // 100ms timeout
+            5000  // 5s timeout
         );
         assert!(
             !prewrite_resp.has_region_error(),
@@ -156,7 +160,7 @@ impl TestSuite {
             !commit_resp.has_region_error() && !commit_resp.has_error(),
             commit_resp,
             5,    // retry 5 times
-            5000  // 100ms timeout
+            5000  // 5s timeout
         );
         assert!(
             !commit_resp.has_region_error(),
@@ -194,7 +198,13 @@ impl TestSuite {
         let sim = self.cluster.sim.rl();
         let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
         let snapshot = engine.snapshot(&self.context.clone()).unwrap();
-        let snap_store = SnapshotStore::new(snapshot, backup_ts, IsolationLevel::Si, false);
+        let snap_store = SnapshotStore::new(
+            snapshot,
+            backup_ts,
+            IsolationLevel::Si,
+            false,
+            Default::default(),
+        );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
             storage: TiKVStorage::from(snap_store),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
@@ -399,4 +409,6 @@ fn test_backup_meta() {
     assert_eq!(total_kvs, admin_total_kvs);
     assert_eq!(total_bytes, admin_total_bytes);
     assert_eq!(checksum, admin_checksum);
+
+    suite.stop();
 }

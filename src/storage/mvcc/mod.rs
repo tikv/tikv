@@ -15,10 +15,14 @@ pub use self::write::{Write, WriteType};
 
 use std::error;
 use std::io;
+use std::sync::Arc;
+use tikv_util::collections::HashSet;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 pub const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
+
+const TS_SET_USE_VEC_LIMIT: usize = 8;
 
 // Extracts physical part of a timestamp, in milliseconds.
 pub fn extract_physical(ts: u64) -> u64 {
@@ -27,6 +31,64 @@ pub fn extract_physical(ts: u64) -> u64 {
 
 pub fn compose_ts(physical: u64, logical: u64) -> u64 {
     (physical << TSO_PHYSICAL_SHIFT_BITS) + logical
+}
+
+/// A hybrid immutable set for timestamps.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TsSet {
+    /// When the set is empty, avoid the useless cloning of Arc.
+    Empty,
+    /// `Vec` is suitable when the set is small or the set is barely used, and it doesn't worth
+    /// converting a `Vec` into a `HashSet`.
+    Vec(Arc<Vec<u64>>),
+    /// `Set` is suitable when there are many timestamps **and** it will be queried multiple times.
+    Set(Arc<HashSet<u64>>),
+}
+
+impl Default for TsSet {
+    #[inline]
+    fn default() -> TsSet {
+        TsSet::Empty
+    }
+}
+
+impl TsSet {
+    /// Create a `TsSet` from the given vec of timestamps. It will select the proper internal
+    /// collection type according to the size.
+    #[inline]
+    pub fn new(ts: Vec<u64>) -> Self {
+        if ts.is_empty() {
+            TsSet::Empty
+        } else if ts.len() <= TS_SET_USE_VEC_LIMIT {
+            // If there are too few elements in `ts`, use Vec directly instead of making a Set.
+            TsSet::Vec(Arc::new(ts))
+        } else {
+            TsSet::Set(Arc::new(ts.into_iter().collect()))
+        }
+    }
+
+    /// Create a `TsSet` from the given vec of timestamps, but it will be forced to use `Vec` as the
+    /// internal collection type. When it's sure that the set will be queried at most once, use this
+    /// is better than `TsSet::new`, since both the querying on `Vec` and the conversion from `Vec`
+    /// to `HashSet` is O(N).
+    #[inline]
+    pub fn vec(ts: Vec<u64>) -> Self {
+        if ts.is_empty() {
+            TsSet::Empty
+        } else {
+            TsSet::Vec(Arc::new(ts))
+        }
+    }
+
+    /// Query whether the given timestamp is contained in the set.
+    #[inline]
+    pub fn contains(&self, ts: u64) -> bool {
+        match self {
+            TsSet::Empty => false,
+            TsSet::Vec(vec) => vec.contains(&ts),
+            TsSet::Set(set) => set.contains(&ts),
+        }
+    }
 }
 
 quick_error! {
@@ -64,6 +126,10 @@ quick_error! {
         TxnLockNotFound { start_ts: u64, commit_ts: u64, key: Vec<u8> } {
             description("txn lock not found")
             display("txn lock not found {}-{} key:{}", start_ts, commit_ts, hex::encode_upper(key))
+        }
+        TxnNotFound { start_ts:  u64, key: Vec<u8> } {
+            description("txn not found")
+            display("txn not found {} key: {}", start_ts, hex::encode_upper(key))
         }
         LockTypeNotMatch { start_ts: u64, key: Vec<u8>, pessimistic: bool } {
             description("lock type not match")
@@ -120,6 +186,10 @@ impl Error {
             } => Some(Error::TxnLockNotFound {
                 start_ts: *start_ts,
                 commit_ts: *commit_ts,
+                key: key.to_owned(),
+            }),
+            Error::TxnNotFound { start_ts, key } => Some(Error::TxnNotFound {
+                start_ts: *start_ts,
                 key: key.to_owned(),
             }),
             Error::LockTypeNotMatch {
@@ -221,7 +291,7 @@ pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error 
 pub mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot};
+    use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
     use engine::CF_WRITE;
 
     use super::*;
@@ -497,7 +567,7 @@ pub mod tests {
         must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
     }
 
-    fn must_acquire_pessimistic_lock_impl<E: Engine>(
+    pub fn must_acquire_pessimistic_lock_impl<E: Engine>(
         engine: &E,
         key: &[u8],
         pk: &[u8],
@@ -675,18 +745,42 @@ pub mod tests {
         lock_ts: u64,
         caller_start_ts: u64,
         current_ts: u64,
-        expect_lock_ttl: u64,
-        expect_commit_ts: u64,
+        rollback_if_not_exist: bool,
+        expect_status: TxnStatus,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, lock_ts, true).unwrap();
-        let (lock_ttl, commit_ts, _) = txn
-            .check_txn_status(Key::from_raw(primary_key), caller_start_ts, current_ts)
+        let (txn_status, _) = txn
+            .check_txn_status(
+                Key::from_raw(primary_key),
+                caller_start_ts,
+                current_ts,
+                rollback_if_not_exist,
+            )
             .unwrap();
-        assert_eq!(lock_ttl, expect_lock_ttl);
-        assert_eq!(commit_ts, expect_commit_ts);
+        assert_eq!(txn_status, expect_status);
         write(engine, &ctx, txn.into_modifies());
+    }
+
+    pub fn must_check_txn_status_err<E: Engine>(
+        engine: &E,
+        primary_key: &[u8],
+        lock_ts: u64,
+        caller_start_ts: u64,
+        current_ts: u64,
+        rollback_if_not_exist: bool,
+    ) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, lock_ts, true).unwrap();
+        txn.check_txn_status(
+            Key::from_raw(primary_key),
+            caller_start_ts,
+            current_ts,
+            rollback_if_not_exist,
+        )
+        .unwrap_err();
     }
 
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: u64) {
@@ -881,7 +975,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_ts() {
+    fn test_ts_calculation() {
         let physical = 1568700549751;
         let logical = 108;
         let ts = compose_ts(physical, logical);
@@ -889,5 +983,37 @@ pub mod tests {
 
         let extracted_physical = extract_physical(ts);
         assert_eq!(extracted_physical, physical);
+    }
+
+    #[test]
+    fn test_ts_set() {
+        let s = TsSet::new(vec![]);
+        assert_eq!(s, TsSet::Empty);
+        assert!(!s.contains(1));
+
+        let s = TsSet::vec(vec![]);
+        assert_eq!(s, TsSet::Empty);
+
+        let s = TsSet::new(vec![1, 2]);
+        assert_eq!(s, TsSet::Vec(Arc::new(vec![1, 2])));
+        assert!(s.contains(1));
+        assert!(s.contains(2));
+        assert!(!s.contains(3));
+
+        let s2 = TsSet::vec(vec![1, 2]);
+        assert_eq!(s2, s);
+
+        let big_ts_list: Vec<_> = (0..=TS_SET_USE_VEC_LIMIT as u64).collect();
+        let s = TsSet::new(big_ts_list.clone());
+        assert_eq!(
+            s,
+            TsSet::Set(Arc::new(big_ts_list.clone().into_iter().collect()))
+        );
+        assert!(s.contains(1));
+        assert!(s.contains(TS_SET_USE_VEC_LIMIT as u64));
+        assert!(!s.contains(TS_SET_USE_VEC_LIMIT as u64 + 1));
+
+        let s = TsSet::vec(big_ts_list.clone());
+        assert_eq!(s, TsSet::Vec(Arc::new(big_ts_list)));
     }
 }

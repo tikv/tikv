@@ -15,7 +15,8 @@ use self::waiter_manager::{Scheduler as WaiterMgrScheduler, WaiterManager};
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
-use crate::storage::{lock_manager::Lock, txn::ProcessResult, LockMgr, StorageCb};
+use crate::storage::txn::{execute_callback, ProcessResult};
+use crate::storage::{lock_manager::Lock, LockMgr, StorageCb};
 use pd_client::RpcClient;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -170,11 +171,18 @@ impl LockMgr for LockManager {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
+        timeout: i64,
     ) {
+        // Negative timeout means no wait.
+        if timeout < 0 {
+            execute_callback(cb, pr);
+            return;
+        }
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
-        self.waiter_mgr_scheduler.wait_for(start_ts, cb, pr, lock);
+        self.waiter_mgr_scheduler
+            .wait_for(start_ts, cb, pr, lock, timeout as u64);
 
         // If it is the first lock the transaction waits for, it won't cause deadlock.
         if !is_first_lock {
@@ -212,6 +220,7 @@ impl LockMgr for LockManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::channel;
     use std::thread;
     use std::time::Duration;
 
@@ -229,6 +238,7 @@ mod tests {
             ProcessResult::Res,
             Lock { ts: lock_ts, hash },
             true,
+            0,
         );
         // new waiters should be sensed immediately
         assert!(lock_mgr.has_waiter());
@@ -244,5 +254,22 @@ mod tests {
         b.iter(|| {
             test::black_box(lock_mgr.clone());
         })
+    }
+
+    #[test]
+    fn test_no_wait() {
+        let lock_mgr = LockManager::new();
+        let (tx, rx) = channel();
+        lock_mgr.wait_for(
+            10,
+            StorageCb::Boolean(Box::new(move |x| {
+                tx.send(x).unwrap();
+            })),
+            ProcessResult::Res,
+            Lock::default(),
+            false,
+            -1,
+        );
+        assert!(rx.try_recv().unwrap().is_ok());
     }
 }

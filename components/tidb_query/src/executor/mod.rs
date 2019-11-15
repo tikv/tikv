@@ -96,10 +96,10 @@ pub struct AggCols {
 }
 
 impl AggCols {
-    pub fn get_binary(&self) -> Result<Vec<u8>> {
+    pub fn get_binary(&self, ctx: &mut EvalContext) -> Result<Vec<u8>> {
         let mut value =
             Vec::with_capacity(self.suffix.len() + datum::approximate_size(&self.value, false));
-        box_try!(value.write_datum(&self.value, false));
+        box_try!(value.write_datum(ctx, &self.value, false));
         if !self.suffix.is_empty() {
             value.extend_from_slice(&self.suffix);
         }
@@ -131,10 +131,10 @@ impl Row {
         }
     }
 
-    pub fn get_binary(&self, output_offsets: &[u32]) -> Result<Vec<u8>> {
+    pub fn get_binary(&self, ctx: &mut EvalContext, output_offsets: &[u32]) -> Result<Vec<u8>> {
         match self {
-            Row::Origin(row) => row.get_binary(output_offsets),
-            Row::Agg(row) => row.get_binary(), // ignore output offsets for aggregation.
+            Row::Origin(row) => row.get_binary(ctx, output_offsets),
+            Row::Agg(row) => row.get_binary(ctx), // ignore output offsets for aggregation.
         }
     }
 }
@@ -145,12 +145,12 @@ impl OriginCols {
     }
 
     // get binary of each column in order of columns
-    pub fn get_binary_cols(&self) -> Result<Vec<Vec<u8>>> {
+    pub fn get_binary_cols(&self, ctx: &mut EvalContext) -> Result<Vec<Vec<u8>>> {
         let mut res = Vec::with_capacity(self.cols.len());
         for col in self.cols.iter() {
             if col.get_pk_handle() {
                 let v = util::get_pk(col, self.handle);
-                let bt = box_try!(datum::encode_value(&[v]));
+                let bt = box_try!(datum::encode_value(ctx, &[v],));
                 res.push(bt);
                 continue;
             }
@@ -164,7 +164,7 @@ impl OriginCols {
                         self.handle
                     ));
                 }
-                None => box_try!(datum::encode_value(&[Datum::Null])),
+                None => box_try!(datum::encode_value(ctx, &[Datum::Null],)),
                 Some(bs) => bs.to_vec(),
             };
             res.push(value);
@@ -172,7 +172,7 @@ impl OriginCols {
         Ok(res)
     }
 
-    pub fn get_binary(&self, output_offsets: &[u32]) -> Result<Vec<u8>> {
+    pub fn get_binary(&self, ctx: &mut EvalContext, output_offsets: &[u32]) -> Result<Vec<u8>> {
         // TODO capacity is not enough
         let mut values = Vec::with_capacity(self.data.value.len());
         for offset in output_offsets {
@@ -182,7 +182,7 @@ impl OriginCols {
                 Some(value) => values.extend_from_slice(value),
                 None if col.get_pk_handle() => {
                     let pk = util::get_pk(col, self.handle);
-                    box_try!(values.write_datum(&[pk], false));
+                    box_try!(values.write_datum(ctx, &[pk], false));
                 }
                 None if col.has_default_val() => {
                     values.extend_from_slice(col.get_default_val());
@@ -195,7 +195,7 @@ impl OriginCols {
                     ));
                 }
                 None => {
-                    box_try!(values.write_datum(&[Datum::Null], false));
+                    box_try!(values.write_datum(ctx, &[Datum::Null], false));
                 }
             }
         }
@@ -208,7 +208,7 @@ impl OriginCols {
     // in expression.
     pub fn inflate_cols_with_offsets(
         &self,
-        ctx: &EvalContext,
+        ctx: &mut EvalContext,
         offsets: &[usize],
     ) -> Result<Vec<Datum>> {
         let mut res = vec![Datum::Null; self.cols.len()];
@@ -353,6 +353,7 @@ impl<T: Executor + ?Sized> Executor for Box<T> {
 pub mod tests {
     use super::{Executor, TableScanExecutor};
     use crate::codec::{datum, table, Datum};
+    use crate::expr::EvalContext;
     use crate::storage::fixture::FixtureStorage;
     use codec::prelude::NumberEncoder;
     use kvproto::coprocessor::KeyRange;
@@ -391,7 +392,8 @@ pub mod tests {
         let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
         for cols in rows.iter() {
             let col_values: Vec<_> = cols.to_vec();
-            let value = table::encode_row(col_values, &col_ids).unwrap();
+            let value =
+                table::encode_row(&mut EvalContext::default(), col_values, &col_ids).unwrap();
             let key = table::encode_row_key(tid, cols[0].i64());
             kv_data.push((key, value));
         }
@@ -414,6 +416,33 @@ pub mod tests {
         key_range.set_start(table::encode_row_key(table_id, start));
         key_range.set_end(table::encode_row_key(table_id, end));
         key_range
+    }
+
+    pub fn generate_index_data(
+        table_id: i64,
+        index_id: i64,
+        handle: i64,
+        col_val: &Datum,
+        unique: bool,
+    ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
+        let indice = vec![(2, (*col_val).clone()), (3, Datum::Dec(handle.into()))];
+        let mut expect_row = HashMap::default();
+        let mut v: Vec<_> = indice
+            .iter()
+            .map(|&(ref cid, ref value)| {
+                expect_row.insert(
+                    *cid,
+                    datum::encode_key(&mut EvalContext::default(), &[value.clone()]).unwrap(),
+                );
+                value.clone()
+            })
+            .collect();
+        if !unique {
+            v.push(Datum::I64(handle));
+        }
+        let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
+        let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
+        (expect_row, idx_key)
     }
 
     pub struct TableData {
@@ -440,19 +469,20 @@ pub mod tests {
                     2 => Datum::Bytes(b"abc".to_vec()),
                     3 => Datum::Dec(10.into())
                 ];
+                let mut ctx = EvalContext::default();
                 let mut expect_row = HashMap::default();
                 let col_ids: Vec<_> = row.iter().map(|(&id, _)| id).collect();
                 let col_values: Vec<_> = row
                     .iter()
                     .map(|(cid, v)| {
-                        let f = table::flatten(v.clone()).unwrap();
-                        let value = datum::encode_value(&[f]).unwrap();
+                        let f = table::flatten(&mut ctx, v.clone()).unwrap();
+                        let value = datum::encode_value(&mut ctx, &[f]).unwrap();
                         expect_row.insert(*cid, value);
                         v.clone()
                     })
                     .collect();
 
-                let value = table::encode_row(col_values, &col_ids).unwrap();
+                let value = table::encode_row(&mut ctx, col_values, &col_ids).unwrap();
                 let key = table::encode_row_key(table_id, handle as i64);
                 expect_rows.push(expect_row);
                 kv_data.push((key, value));
@@ -491,6 +521,15 @@ pub mod tests {
         table_scan.set_columns(cis.clone().into());
 
         let key_ranges = key_ranges.unwrap_or_else(|| vec![get_range(tid, 0, i64::max_value())]);
-        Box::new(TableScanExecutor::table_scan(table_scan, key_ranges, storage, false).unwrap())
+        Box::new(
+            TableScanExecutor::table_scan(
+                table_scan,
+                EvalContext::default(),
+                key_ranges,
+                storage,
+                false,
+            )
+            .unwrap(),
+        )
     }
 }
