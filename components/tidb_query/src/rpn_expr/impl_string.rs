@@ -15,7 +15,7 @@ pub fn length(arg: &Option<Bytes>) -> Result<Option<i64>> {
 #[inline]
 pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|bytes| {
-        if bytes.len() == 0 {
+        if bytes.is_empty() {
             0
         } else {
             i64::from(bytes[0])
