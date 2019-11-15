@@ -946,6 +946,10 @@ impl PeerStorage {
             "state" => ?ctx.apply_state,
         );
 
+        fail_point!("before_apply_snap_update_region", |_| {
+            return Ok(());
+        });
+
         ctx.snap_region = Some(region);
         Ok(())
     }
@@ -1198,7 +1202,7 @@ impl PeerStorage {
 
         self.schedule_applying_snapshot();
         let prev_region = self.region().clone();
-        self.region = snap_region;
+        self.set_region(snap_region);
 
         Some(ApplySnapResult {
             prev_region,
