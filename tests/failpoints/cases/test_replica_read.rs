@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
+use tikv::raftstore::store::keys;
 use tikv_util::HandyRwLock;
 
 #[test]
