@@ -1349,22 +1349,21 @@ impl Peer {
                 // have no effect.
                 self.proposals.clear();
             }
-            if lease_to_be_updated {
+            if lease_to_be_updated && !committed_entries.is_empty() {
                 let first_propose_time = committed_entries
                     .iter()
                     .find_map(|entry| self.find_propose_time(entry.get_index(), entry.get_term()));
-                let last_propose_time = committed_entries
-                    .iter()
-                    .rev()
-                    .find_map(|entry| self.find_propose_time(entry.get_index(), entry.get_term()))
+
+                let last_entry = &committed_entries[committed_entries.len() - 1];
+                let last_propose_time = self
+                    .find_propose_time(last_entry.get_index(), last_entry.get_term())
                     .or(first_propose_time);
+
                 if let Some(propose_time) = first_propose_time {
                     ctx.raft_metrics.commit_log.observe(duration_to_sec(
                         (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
                     ));
-                }
-                if let Some(propose_time) = last_propose_time {
-                    self.maybe_renew_leader_lease(propose_time, ctx, None);
+                    self.maybe_renew_leader_lease(last_propose_time.unwrap(), ctx, None);
                 }
             }
 
