@@ -113,9 +113,10 @@ impl RpnFnScalarEvaluator {
             return (Err(e), context);
         }
 
+        let metadata = (func.metadata_ctor_ptr)(&mut fun_sig_expr);
         let expr = self
             .rpn_expr_builder
-            .push_fn_call(func, children_ed.len(), ret_field_type)
+            .push_fn_call_with_metadata(func, children_ed.len(), ret_field_type, metadata)
             .build();
 
         let mut columns = LazyBatchColumnVec::empty();
