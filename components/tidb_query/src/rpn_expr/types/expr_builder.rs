@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::any::Any;
 use std::convert::{TryFrom, TryInto};
 
 use codec::prelude::NumberDecoder;
