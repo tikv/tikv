@@ -512,6 +512,11 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonKeys2ArgsSig
             | ScalarFuncSig::JsonValidStringSig
             | ScalarFuncSig::JsonValidOthersSig => return Err(Error::UnknownSignature(sig)),
+
+            // PbCode is unspecified
+            ScalarFuncSig::Unspecified => {
+                return Err(box_err!("TiDB internal error (unspecified PbCode)"))
+            }
         };
         if args < min_args || args > max_args {
             return Err(box_err!(

@@ -15,10 +15,14 @@ pub use self::write::{Write, WriteType};
 
 use std::error;
 use std::io;
+use std::sync::Arc;
+use tikv_util::collections::HashSet;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 pub const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
+
+const TS_SET_USE_VEC_LIMIT: usize = 8;
 
 // Extracts physical part of a timestamp, in milliseconds.
 pub fn extract_physical(ts: u64) -> u64 {
@@ -27,6 +31,64 @@ pub fn extract_physical(ts: u64) -> u64 {
 
 pub fn compose_ts(physical: u64, logical: u64) -> u64 {
     (physical << TSO_PHYSICAL_SHIFT_BITS) + logical
+}
+
+/// A hybrid immutable set for timestamps.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TsSet {
+    /// When the set is empty, avoid the useless cloning of Arc.
+    Empty,
+    /// `Vec` is suitable when the set is small or the set is barely used, and it doesn't worth
+    /// converting a `Vec` into a `HashSet`.
+    Vec(Arc<Vec<u64>>),
+    /// `Set` is suitable when there are many timestamps **and** it will be queried multiple times.
+    Set(Arc<HashSet<u64>>),
+}
+
+impl Default for TsSet {
+    #[inline]
+    fn default() -> TsSet {
+        TsSet::Empty
+    }
+}
+
+impl TsSet {
+    /// Create a `TsSet` from the given vec of timestamps. It will select the proper internal
+    /// collection type according to the size.
+    #[inline]
+    pub fn new(ts: Vec<u64>) -> Self {
+        if ts.is_empty() {
+            TsSet::Empty
+        } else if ts.len() <= TS_SET_USE_VEC_LIMIT {
+            // If there are too few elements in `ts`, use Vec directly instead of making a Set.
+            TsSet::Vec(Arc::new(ts))
+        } else {
+            TsSet::Set(Arc::new(ts.into_iter().collect()))
+        }
+    }
+
+    /// Create a `TsSet` from the given vec of timestamps, but it will be forced to use `Vec` as the
+    /// internal collection type. When it's sure that the set will be queried at most once, use this
+    /// is better than `TsSet::new`, since both the querying on `Vec` and the conversion from `Vec`
+    /// to `HashSet` is O(N).
+    #[inline]
+    pub fn vec(ts: Vec<u64>) -> Self {
+        if ts.is_empty() {
+            TsSet::Empty
+        } else {
+            TsSet::Vec(Arc::new(ts))
+        }
+    }
+
+    /// Query whether the given timestamp is contained in the set.
+    #[inline]
+    pub fn contains(&self, ts: u64) -> bool {
+        match self {
+            TsSet::Empty => false,
+            TsSet::Vec(vec) => vec.contains(&ts),
+            TsSet::Set(set) => set.contains(&ts),
+        }
+    }
 }
 
 quick_error! {
@@ -913,7 +975,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_ts() {
+    fn test_ts_calculation() {
         let physical = 1568700549751;
         let logical = 108;
         let ts = compose_ts(physical, logical);
@@ -921,5 +983,37 @@ pub mod tests {
 
         let extracted_physical = extract_physical(ts);
         assert_eq!(extracted_physical, physical);
+    }
+
+    #[test]
+    fn test_ts_set() {
+        let s = TsSet::new(vec![]);
+        assert_eq!(s, TsSet::Empty);
+        assert!(!s.contains(1));
+
+        let s = TsSet::vec(vec![]);
+        assert_eq!(s, TsSet::Empty);
+
+        let s = TsSet::new(vec![1, 2]);
+        assert_eq!(s, TsSet::Vec(Arc::new(vec![1, 2])));
+        assert!(s.contains(1));
+        assert!(s.contains(2));
+        assert!(!s.contains(3));
+
+        let s2 = TsSet::vec(vec![1, 2]);
+        assert_eq!(s2, s);
+
+        let big_ts_list: Vec<_> = (0..=TS_SET_USE_VEC_LIMIT as u64).collect();
+        let s = TsSet::new(big_ts_list.clone());
+        assert_eq!(
+            s,
+            TsSet::Set(Arc::new(big_ts_list.clone().into_iter().collect()))
+        );
+        assert!(s.contains(1));
+        assert!(s.contains(TS_SET_USE_VEC_LIMIT as u64));
+        assert!(!s.contains(TS_SET_USE_VEC_LIMIT as u64 + 1));
+
+        let s = TsSet::vec(big_ts_list.clone());
+        assert_eq!(s, TsSet::Vec(Arc::new(big_ts_list)));
     }
 }

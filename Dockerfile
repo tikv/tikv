@@ -1,4 +1,5 @@
 FROM pingcap/rust as builder
+RUN yum install -y dwz
 
 WORKDIR /tikv
 
