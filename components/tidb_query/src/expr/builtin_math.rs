@@ -453,87 +453,12 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
+        use crate::expr_util::conv::conv as conv_1;
         let n = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        let mut from_base = try_opt!(self.children[1].eval_int(ctx, row));
-        let mut to_base = try_opt!(self.children[2].eval_int(ctx, row));
-
-        let mut negative = false;
-        let mut signed = false;
-        let mut ignore_sign = false;
-
-        if from_base < 0 {
-            from_base = -from_base;
-            signed = true;
-        }
-        if to_base < 0 {
-            to_base = -to_base;
-            ignore_sign = true;
-        }
-        if from_base > 36 || from_base < 2 || to_base > 36 || to_base < 2 {
-            return Ok(None);
-        }
-
-        let n = n.trim_start();
-        let mut start = 0;
-        let mut end = n.len();
-        for (idx, c) in n.char_indices() {
-            if idx == 0 {
-                negative = c == '-';
-                if c == '+' || c == '-' {
-                    start = 1;
-                    continue;
-                }
-            }
-            if !c.is_digit(from_base as u32) {
-                end = idx;
-                break;
-            }
-        }
-        let n = n.get(start..end).unwrap();
-        if n.is_empty() {
-            return Ok(Some(Cow::Borrowed(b"0")));
-        }
-
-        let mut value = u64::from_str_radix(n, from_base as u32).unwrap();
-        if signed {
-            value = if negative {
-                value.min(-i64::min_value() as u64)
-            } else {
-                value.min(i64::max_value() as u64)
-            };
-        }
-        let mut value = value as i64;
-        if negative {
-            value = -value;
-        }
-        negative = value < 0;
-
-        if negative && ignore_sign {
-            value = -value;
-        }
-        let mut r = format_radix(value as u64, to_base as u32);
-        if negative && ignore_sign {
-            r.insert(0, '-');
-        }
-        Ok(Some(Cow::Owned(r.into_bytes())))
+        let from_base = try_opt!(self.children[1].eval_int(ctx, row));
+        let to_base = try_opt!(self.children[2].eval_int(ctx, row));
+        Ok(conv_1(n.as_ref(), from_base, to_base).map(Cow::Owned))
     }
-}
-
-fn format_radix(mut x: u64, radix: u32) -> String {
-    let mut r = vec![];
-    loop {
-        let m = x % u64::from(radix);
-        x /= u64::from(radix);
-        r.push(
-            std::char::from_digit(m as u32, radix)
-                .unwrap()
-                .to_ascii_uppercase(),
-        );
-        if x == 0 {
-            break;
-        }
-    }
-    r.iter().rev().collect::<String>()
 }
 
 fn get_rand(arg: Option<u64>) -> XorShiftRng {

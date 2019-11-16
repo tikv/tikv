@@ -351,6 +351,22 @@ pub fn atan_2_args(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Re
     })
 }
 
+#[inline]
+#[rpn_fn]
+pub fn conv(
+    n: &Option<Bytes>,
+    from_base: &Option<Int>,
+    to_base: &Option<Int>,
+) -> Result<Option<Bytes>> {
+    use crate::expr_util::conv::conv as conv_1;
+    if let (Some(n), Some(from_base), Some(to_base)) = (n, from_base, to_base) {
+        let s = String::from_utf8_lossy(n);
+        Ok(conv_1(s.as_ref(), *from_base, *to_base))
+    } else {
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tipb::ScalarFuncSig;
@@ -1051,6 +1067,56 @@ mod tests {
                 .evaluate(ScalarFuncSig::Atan2Args)
                 .unwrap();
             assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_conv() {
+        let tests = vec![
+            ("a", 16, 2, "1010"),
+            ("6E", 18, 8, "172"),
+            ("-17", 10, -18, "-H"),
+            ("  -17", 10, -18, "-H"),
+            ("-17", 10, 18, "2D3FGB0B9CG4BD1H"),
+            ("+18aZ", 7, 36, "1"),
+            ("  +18aZ", 7, 36, "1"),
+            ("18446744073709551615", -10, 16, "7FFFFFFFFFFFFFFF"),
+            ("12F", -10, 16, "C"),
+            ("  FF ", 16, 10, "255"),
+            ("TIDB", 10, 8, "0"),
+            ("aa", 10, 2, "0"),
+            (" A", -10, 16, "0"),
+            ("a6a", 10, 8, "0"),
+            ("16九a", 10, 8, "20"),
+            ("+", 10, 8, "0"),
+            ("-", 10, 8, "0"),
+        ];
+        for (n, f, t, e) in tests {
+            let n = Some(n.as_bytes().to_vec());
+            let f = Some(f);
+            let t = Some(t);
+            let e = Some(e.as_bytes().to_vec());
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(n)
+                .push_param(f)
+                .push_param(t)
+                .evaluate(ScalarFuncSig::Conv)
+                .unwrap();
+            assert_eq!(got, e);
+        }
+
+        let invalid_tests = vec![
+            (None, Some(10), Some(10), None),
+            (Some(b"a6a".to_vec()), Some(1), Some(8), None),
+        ];
+        for (n, f, t, e) in invalid_tests {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(n)
+                .push_param(f)
+                .push_param(t)
+                .evaluate::<Bytes>(ScalarFuncSig::Conv)
+                .unwrap();
+            assert_eq!(got, e);
         }
     }
 }
