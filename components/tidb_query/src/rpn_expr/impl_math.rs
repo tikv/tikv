@@ -304,6 +304,116 @@ fn cot(arg: &Option<Real>) -> Result<Option<Real>> {
     }
 }
 
+// Copy from builtin_math.rs, but convert String to Bytes
+fn format_radix(mut x: u64, radix: u32) -> Bytes {
+    let mut r = vec![];
+    loop {
+        let m = x % u64::from(radix);
+        x /= u64::from(radix);
+        r.push(
+            std::char::from_digit(m as u32, radix)
+                .unwrap()
+                .to_ascii_uppercase(),
+        );
+        if x == 0 {
+            break;
+        }
+    }
+    r.iter().rev().collect::<String>().as_bytes().to_vec()
+}
+
+#[inline]
+#[rpn_fn]
+pub fn conv(
+    n: &Option<Bytes>,
+    from_base: &Option<Int>,
+    to_base: &Option<Int>,
+) -> Result<Option<Bytes>> {
+    // Return true if convert BASE is valid.
+    fn is_valid_base(base: Int) -> bool {
+        if base > 0 {
+            base >= 2 && base <= 36
+        } else {
+            base <= -2 && base >= -36
+        }
+    }
+
+    // Extract a number string in FROM_BASE from S.
+    fn extract_num_str(s: &str, from_base: Int) -> Option<(String, bool)> {
+        let mut iter = s.chars().peekable();
+        let head = *iter.peek().unwrap();
+        let mut is_neg = false;
+        if head == '+' || head == '-' {
+            is_neg = head == '-';
+            iter.next();
+        }
+        let s = iter
+            .take_while(|x| x.is_digit(from_base as u32))
+            .collect::<String>();
+        if s.is_empty() {
+            None
+        } else {
+            Some((s, is_neg))
+        }
+    }
+
+    // Extract a integer from NUM_S in FROM_BASE.
+    fn extract_num(num_s: &str, is_neg: bool, mut from_base: Int) -> Int {
+        let signed = from_base < 0;
+        if signed {
+            from_base = -from_base;
+        }
+        let mut value = u64::from_str_radix(num_s, from_base as u32).unwrap();
+        if signed {
+            value = if is_neg {
+                value.min(-Int::min_value() as u64)
+            } else {
+                value.min(Int::max_value() as u64)
+            };
+        }
+        let value = value as Int;
+        if is_neg {
+            -value
+        } else {
+            value
+        }
+    }
+
+    // Format VALUE into a Bytes in TO_BASE.
+    fn remake_result_from_num(value: Int, mut to_base: Int) -> Bytes {
+        let should_ignore_sign = to_base < 0;
+        if should_ignore_sign {
+            to_base = -to_base;
+        }
+        let is_neg = value < 0;
+        let mut ret = format_radix(value as u64, to_base as u32);
+        if is_neg && should_ignore_sign {
+            ret.insert(0, b'-');
+        }
+        ret
+    }
+
+    if let (Some(n), Some(from_base), Some(to_base)) = (n, from_base, to_base) {
+        let from_base = *from_base;
+        let to_base = *to_base;
+        if is_valid_base(from_base) && is_valid_base(to_base) {
+            let s = &String::from_utf8_lossy(n);
+            if let Some((num_str, is_neg)) = extract_num_str(s, from_base) {
+                Ok(Some(remake_result_from_num(
+                    extract_num(num_str.as_str(), is_neg, from_base),
+                    to_base,
+                )))
+            } else {
+                Ok(Some(b"0".to_vec()))
+            }
+        } else {
+            Ok(None)
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tipb::ScalarFuncSig;
@@ -791,5 +901,55 @@ mod tests {
             .push_param(Some(Real::from(0.0_f64)))
             .evaluate::<Real>(ScalarFuncSig::Cot)
             .is_err());
+    }
+
+    #[test]
+    fn test_conv() {
+        let tests = vec![
+            ("a", 16, 2, "1010"),
+            ("6E", 18, 8, "172"),
+            ("-17", 10, -18, "-H"),
+            ("  -17", 10, -18, "-H"),
+            ("-17", 10, 18, "2D3FGB0B9CG4BD1H"),
+            ("+18aZ", 7, 36, "1"),
+            ("  +18aZ", 7, 36, "1"),
+            ("18446744073709551615", -10, 16, "7FFFFFFFFFFFFFFF"),
+            ("12F", -10, 16, "C"),
+            ("  FF ", 16, 10, "255"),
+            ("TIDB", 10, 8, "0"),
+            ("aa", 10, 2, "0"),
+            (" A", -10, 16, "0"),
+            ("a6a", 10, 8, "0"),
+            ("16九a", 10, 8, "20"),
+            ("+", 10, 8, "0"),
+            ("-", 10, 8, "0"),
+        ];
+        for (n, f, t, e) in tests {
+            let n = Some(n.as_bytes().to_vec());
+            let f = Some(f);
+            let t = Some(t);
+            let e = Some(e.as_bytes().to_vec());
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(n)
+                .push_param(f)
+                .push_param(t)
+                .evaluate(ScalarFuncSig::Conv)
+                .unwrap();
+            assert_eq!(got, e);
+        }
+
+        let invalid_tests = vec![
+            (None, Some(10), Some(10), None),
+            (Some(b"a6a".to_vec()), Some(1), Some(8), None),
+        ];
+        for (n, f, t, e) in invalid_tests {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(n)
+                .push_param(f)
+                .push_param(t)
+                .evaluate::<Bytes>(ScalarFuncSig::Conv)
+                .unwrap();
+            assert_eq!(got, e);
+        }
     }
 }
