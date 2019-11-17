@@ -6,7 +6,6 @@ use crate::codec::data_type::*;
 use crate::Result;
 
 const IPV6_LENGTH: usize = 16;
-const IPV4_LENGTH: usize = 4;
 const PREFIX_COMPAT: [u8; 12] = [0x00; 12];
 
 #[rpn_fn]
@@ -30,7 +29,6 @@ pub fn is_ipv4_compat(addr: &Option<Bytes>) -> Result<Option<i64>> {
 mod tests {
     use tipb::ScalarFuncSig;
 
-    use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
