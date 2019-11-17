@@ -49,16 +49,17 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
 
     pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
+        let mut ctx = EvalContext::new(config);
         for def in conditions_def {
             conditions.push(RpnExpressionBuilder::build_from_expr_tree(
                 def,
-                &config.tz,
+                &mut ctx,
                 src.schema().len(),
             )?);
         }
 
         Ok(Self {
-            context: EvalContext::new(config),
+            context: ctx,
             src,
             conditions,
         })

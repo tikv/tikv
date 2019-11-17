@@ -1,0 +1,1804 @@
+    Finished release [optimized] target(s) in 0.33s
+     Running target/release/deps/backup-a56633f93ceb385b
+
+running 9 tests
+test endpoint::tests::test_adjust_thread_pool_size ... ignored
+test endpoint::tests::test_busy ... ignored
+test endpoint::tests::test_cancel ... ignored
+test endpoint::tests::test_handle_backup_task ... ignored
+test endpoint::tests::test_scan_error ... ignored
+test endpoint::tests::test_seek_range ... ignored
+test endpoint::tests::test_thread_pool_shutdown_when_idle ... ignored
+test service::tests::test_client_stop ... ignored
+test writer::tests::test_writer ... ignored
+
+test result: ok. 0 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/cmd-2395d5851ad63cef
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/tikv_ctl-e062c284cf5aab02
+
+running 2 tests
+test tests::test_from_hex ... ignored
+test tests::test_gen_random_bytes ... ignored
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/tikv_server-65882e08201ef697
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/codec-d98a810a3e2b3616
+
+running 82 tests
+test buffer::tests::test_buffer_reader_cursor ... ignored
+test buffer::tests::test_buffer_reader_slice ... ignored
+test buffer::tests::test_buffer_writer_cursor ... ignored
+test buffer::tests::test_buffer_writer_slice ... ignored
+test buffer::tests::test_buffer_writer_vec ... ignored
+test buffer::tests::test_vec_reallocate ... ignored
+test byte::tests::test_compact_codec ... ignored
+test byte::tests::test_encode_compact_byte_len ... ignored
+test byte::tests::test_mem_cmp_encoded_len ... ignored
+test byte::tests::test_memcmp_compare ... ignored
+test byte::tests::test_memcmp_encode_all ... ignored
+test byte::tests::test_memcmp_encode_all_panic ... ignored
+test byte::tests::test_memcmp_encoded_len ... ignored
+test byte::tests::test_memcmp_flip_bytes ... ignored
+test byte::tests::test_memcmp_try_decode_first ... ignored
+test byte::tests::test_memcmp_try_decode_first_error ... ignored
+test byte::tests::test_memcmp_try_decode_first_panic ... ignored
+test byte::tests::test_read_bytes ... ignored
+test byte::tests::test_read_compact_bytes_for_file ... ignored
+test byte::tests::test_write_compact_bytes_for_file ... ignored
+test number::tests::test_f64 ... ignored
+test number::tests::test_f64_desc ... ignored
+test number::tests::test_f64_le ... ignored
+test number::tests::test_i16_le ... ignored
+test number::tests::test_i32_le ... ignored
+test number::tests::test_i64 ... ignored
+test number::tests::test_i64_desc ... ignored
+test number::tests::test_i64_le ... ignored
+test number::tests::test_u16 ... ignored
+test number::tests::test_u16_le ... ignored
+test number::tests::test_u32 ... ignored
+test number::tests::test_u32_le ... ignored
+test number::tests::test_u64 ... ignored
+test number::tests::test_u64_desc ... ignored
+test number::tests::test_u64_le ... ignored
+test number::tests::test_u8 ... ignored
+test number::tests::test_u8_codec ... ignored
+test number::tests::test_var_i64 ... ignored
+test number::tests::test_var_u64 ... ignored
+test byte::benches::bench_memcmp_decode_first_asc_large                               ... bench:         142 ns/iter (+/- 12)
+test byte::benches::bench_memcmp_decode_first_asc_large_original                      ... bench:         292 ns/iter (+/- 60)
+test byte::benches::bench_memcmp_decode_first_desc_large                              ... bench:         166 ns/iter (+/- 24)
+test byte::benches::bench_memcmp_decode_first_desc_large_original                     ... bench:         349 ns/iter (+/- 57)
+test byte::benches::bench_memcmp_decode_first_in_place_asc_large                      ... bench:         194 ns/iter (+/- 15)
+test byte::benches::bench_memcmp_decode_first_in_place_asc_large_original             ... bench:         263 ns/iter (+/- 21)
+test byte::benches::bench_memcmp_decode_first_in_place_desc_large                     ... bench:         230 ns/iter (+/- 23)
+test byte::benches::bench_memcmp_decode_first_in_place_desc_large_original            ... bench:         304 ns/iter (+/- 64)
+test byte::benches::bench_memcmp_encode_all_asc_large                                 ... bench:         136 ns/iter (+/- 12)
+test byte::benches::bench_memcmp_encode_all_asc_large_naive                           ... bench:         211 ns/iter (+/- 59)
+test byte::benches::bench_memcmp_encode_all_asc_large_original                        ... bench:         733 ns/iter (+/- 147)
+test byte::benches::bench_memcmp_encode_all_asc_small                                 ... bench:          17 ns/iter (+/- 0)
+test byte::benches::bench_memcmp_encode_all_asc_small_naive                           ... bench:          26 ns/iter (+/- 2)
+test byte::benches::bench_memcmp_encode_all_desc_large                                ... bench:         203 ns/iter (+/- 28)
+test byte::benches::bench_memcmp_encode_all_desc_large_original                       ... bench:       1,753 ns/iter (+/- 397)
+test byte::benches::bench_memcmp_encode_all_desc_small                                ... bench:          29 ns/iter (+/- 4)
+test number::benches::bench_decode_u64_le_buffer_decoder                              ... bench:           1 ns/iter (+/- 0)
+test number::benches::bench_decode_u64_le_byteorder                                   ... bench:           2 ns/iter (+/- 0)
+test number::benches::bench_decode_u64_le_bytes_buf                                   ... bench:           1 ns/iter (+/- 0)
+test number::benches::bench_decode_u64_le_number_codec                                ... bench:           1 ns/iter (+/- 0)
+test number::benches::bench_decode_u64_le_number_codec_over_slice                     ... bench:           3 ns/iter (+/- 1)
+test number::benches::bench_decode_u64_le_original                                    ... bench:           3 ns/iter (+/- 0)
+test number::benches::bench_decode_varint_normal_number_codec_large_buffer            ... bench:           9 ns/iter (+/- 0)
+test number::benches::bench_decode_varint_normal_number_codec_small_buffer            ... bench:          13 ns/iter (+/- 11)
+test number::benches::bench_decode_varint_normal_number_codec_small_buffer_with_extra ... bench:          13 ns/iter (+/- 0)
+test number::benches::bench_decode_varint_normal_original_large_buffer                ... bench:          18 ns/iter (+/- 2)
+test number::benches::bench_decode_varint_normal_original_small_buffer                ... bench:          19 ns/iter (+/- 1)
+test number::benches::bench_decode_varint_normal_original_small_buffer_with_extra     ... bench:          18 ns/iter (+/- 2)
+test number::benches::bench_decode_varint_small_number_codec_large_buffer             ... bench:           4 ns/iter (+/- 0)
+test number::benches::bench_decode_varint_small_number_codec_small_buffer             ... bench:           5 ns/iter (+/- 1)
+test number::benches::bench_decode_varint_small_original_small_buffer                 ... bench:           6 ns/iter (+/- 0)
+test number::benches::bench_encode_u64_le_buffer_encoder_slice                        ... bench:           2 ns/iter (+/- 0)
+test number::benches::bench_encode_u64_le_buffer_encoder_vec                          ... bench:           2 ns/iter (+/- 0)
+test number::benches::bench_encode_u64_le_byteorder                                   ... bench:           6 ns/iter (+/- 0)
+test number::benches::bench_encode_u64_le_number_codec                                ... bench:           3 ns/iter (+/- 0)
+test number::benches::bench_encode_varint_naive                                       ... bench:          14 ns/iter (+/- 2)
+test number::benches::bench_encode_varint_number_codec                                ... bench:           6 ns/iter (+/- 0)
+test number::benches::bench_encode_varint_original                                    ... bench:          13 ns/iter (+/- 2)
+test number::benches::bench_encode_varint_protobuf                                    ... bench:          62 ns/iter (+/- 5)
+test number::benches::bench_varint_len_normal_number_large_buffer                     ... bench:           5 ns/iter (+/- 0)
+test number::benches::bench_varint_len_normal_number_small_buffer                     ... bench:           7 ns/iter (+/- 1)
+test number::benches::bench_varint_len_small_number_large_buffer                      ... bench:           1 ns/iter (+/- 0)
+test number::benches::bench_varint_len_small_number_small_buffer                      ... bench:           2 ns/iter (+/- 0)
+
+test result: ok. 0 passed; 0 failed; 39 ignored; 43 measured; 0 filtered out
+
+     Running target/release/deps/engine-3d63939107b2b81f
+
+running 25 tests
+test rocks::sst::tests::test_smoke ... ignored
+test rocks::tests::test_base ... ignored
+test rocks::tests::test_peekable ... ignored
+test rocks::tests::test_scan ... ignored
+test rocks::util::config::compaction_pri_serde::tests::test_serde ... ignored
+test rocks::util::config::compaction_style_serde::tests::test_serde ... ignored
+test rocks::util::config::rate_limiter_mode_serde::tests::test_serde ... ignored
+test rocks::util::config::recovery_mode_serde::tests::test_serde ... ignored
+test rocks::util::config::tests::test_parse_compression_type ... ignored
+test rocks::util::engine_metrics::tests::test_flush ... ignored
+test rocks::util::io_limiter::tests::test_io_limiter ... ignored
+test rocks::util::io_limiter::tests::test_limit_reader ... ignored
+test rocks::util::io_limiter::tests::test_limit_writer ... ignored
+test rocks::util::metrics_flusher::tests::test_metrics_flusher ... ignored
+test rocks::util::security::tests::test_encrypted_env_from_cipher_file ... ignored
+test rocks::util::tests::test_cfs_diff ... ignored
+test rocks::util::tests::test_compact_files_in_range ... ignored
+test rocks::util::tests::test_compression_ratio ... ignored
+test rocks::util::tests::test_new_engine_opt ... ignored
+test rocks::util::tests::test_prepare_sst_for_ingestion ... ignored
+test rocks::util::tests::test_prepare_sst_for_ingestion_titan ... ignored
+test util::tests::test_delete_all_files_in_range ... ignored
+test util::tests::test_delete_all_in_range_not_use_delete_range ... ignored
+test util::tests::test_delete_all_in_range_use_delete_range ... ignored
+test util::tests::test_delete_range_prefix_bloom_case ... ignored
+
+test result: ok. 0 passed; 0 failed; 25 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/engine_rocks-6ec8b4b7ed54f095
+
+running 3 tests
+test engine::tests::test_base ... ignored
+test engine::tests::test_peekable ... ignored
+test engine::tests::test_scan ... ignored
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/engine_traits-f176eb4982b816c8
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/external_storage-6bc69082066abf0a
+
+running 3 tests
+test local::tests::test_local_storage ... ignored
+test noop::tests::test_noop_storage ... ignored
+test tests::test_create_storage ... ignored
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/fuzz-4084971e1963e543
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/fuzz_targets-d34edcc0f1a6f75f
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/fuzzer_afl-31c572722cabafd8
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/fuzzer_honggfuzz-4f537c647201a10e
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/fuzzer_libfuzzer-646a3c4e0834cc8d
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/keys-4bb8f726ec8aaac7
+
+running 10 tests
+test rewrite::tests::test_rewrite_prefix ... ignored
+test rewrite::tests::test_rewrite_prefix_of_end_key ... ignored
+test tests::test_data_key ... ignored
+test tests::test_raft_log_key ... ignored
+test tests::test_raft_log_sort ... ignored
+test tests::test_region_id_key ... ignored
+test tests::test_region_key ... ignored
+test types::tests::test_is_encoded_from ... ignored
+test types::tests::test_is_user_key_eq ... ignored
+test types::tests::test_split_ts ... ignored
+
+test result: ok. 0 passed; 0 failed; 10 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/log_wrappers-c6288e7f6c498adf
+
+running 2 tests
+test test_debug ... ignored
+test test_log_key ... ignored
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/match_template-f22b1ee4403e210f
+
+running 2 tests
+test tests::test_basic ... ignored
+test tests::test_wildcard ... ignored
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/panic_hook-fd7e3c4370f334ff
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/pd_client-c03e4f96c0db7121
+
+running 1 test
+test config::tests::test_pd_cfg ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/profiler-f7dbe1486372e1fd
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/sst_importer-1ad06018147e6c42
+
+running 12 tests
+test import_mode::tests::test_import_mode_switcher ... ignored
+test sst_importer::tests::test_download_sst_empty ... ignored
+test sst_importer::tests::test_download_sst_invalid ... ignored
+test sst_importer::tests::test_download_sst_no_key_rewrite ... ignored
+test sst_importer::tests::test_download_sst_partial_range ... ignored
+test sst_importer::tests::test_download_sst_partial_range_with_key_rewrite ... ignored
+test sst_importer::tests::test_download_sst_then_ingest ... ignored
+test sst_importer::tests::test_download_sst_with_key_rewrite ... ignored
+test sst_importer::tests::test_download_sst_wrong_key_prefix ... ignored
+test sst_importer::tests::test_import_dir ... ignored
+test sst_importer::tests::test_import_file ... ignored
+test sst_importer::tests::test_sst_meta_to_path ... ignored
+
+test result: ok. 0 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/test_coprocessor-8891023676536ae6
+
+running 1 test
+test store::tests::test_export ... ignored
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/test_raftstore-e96b8eb01112a613
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/test_sst_importer-62619fd04a37a4c8
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/test_storage-a71ade95b8048a11
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/test_util-6140bd9a86ff8e05
+
+running 1 test
+test kv_generator::tests::bench_kv_generator ... bench:       1,240 ns/iter (+/- 298)
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 1 measured; 0 filtered out
+
+     Running target/release/deps/tidb_query-9773ea81646a31af
+
+running 580 tests
+test aggr_fn::impl_avg::tests::test_illegal_request ... ignored
+test aggr_fn::impl_avg::tests::test_integration ... ignored
+test aggr_fn::impl_avg::tests::test_update ... ignored
+test aggr_fn::impl_bit_op::tests::test_bit_and ... ignored
+test aggr_fn::impl_bit_op::tests::test_bit_or ... ignored
+test aggr_fn::impl_bit_op::tests::test_bit_xor ... ignored
+test aggr_fn::impl_bit_op::tests::test_integration ... ignored
+test aggr_fn::impl_count::tests::test_update ... ignored
+test aggr_fn::impl_first::tests::test_illegal_request ... ignored
+test aggr_fn::impl_first::tests::test_update ... ignored
+test aggr_fn::impl_first::tests::test_update_repeat ... ignored
+test aggr_fn::impl_first::tests::test_update_vector ... ignored
+test aggr_fn::impl_max_min::tests::test_illegal_request ... ignored
+test aggr_fn::impl_max_min::tests::test_integration ... ignored
+test aggr_fn::impl_max_min::tests::test_max ... ignored
+test aggr_fn::impl_max_min::tests::test_min ... ignored
+test aggr_fn::impl_sum::tests::test_illegal_request ... ignored
+test aggr_fn::impl_sum::tests::test_integration ... ignored
+test aggr_fn::tests::test_type_match ... ignored
+test batch::executors::fast_hash_aggr_executor::tests::test_it_works_integration ... ignored
+test batch::executors::fast_hash_aggr_executor::tests::test_no_aggr_fn ... ignored
+test batch::executors::fast_hash_aggr_executor::tests::test_no_row ... ignored
+test batch::executors::index_scan_executor::tests::test_basic ... ignored
+test batch::executors::limit_executor::tests::test_drain_after_limit ... ignored
+test batch::executors::limit_executor::tests::test_drain_before_limit ... ignored
+test batch::executors::limit_executor::tests::test_error_before_limit ... ignored
+test batch::executors::limit_executor::tests::test_error_when_limit ... ignored
+test batch::executors::limit_executor::tests::test_limit_0 ... ignored
+test batch::executors::selection_executor::tests::test_empty_rows ... ignored
+test batch::executors::selection_executor::tests::test_multiple_predicate_1 ... ignored
+test batch::executors::selection_executor::tests::test_multiple_predicate_2 ... ignored
+test batch::executors::selection_executor::tests::test_no_predicate_or_predicate_always_true ... ignored
+test batch::executors::selection_executor::tests::test_predicate_1 ... ignored
+test batch::executors::selection_executor::tests::test_predicate_2 ... ignored
+test batch::executors::selection_executor::tests::test_predicate_always_false ... ignored
+test batch::executors::selection_executor::tests::test_predicate_error ... ignored
+test batch::executors::simple_aggr_executor::tests::test_it_works_integration ... ignored
+test batch::executors::simple_aggr_executor::tests::test_it_works_unit ... ignored
+test batch::executors::simple_aggr_executor::tests::test_no_row ... ignored
+test batch::executors::slow_hash_aggr_executor::tests::test_it_works_integration ... ignored
+test batch::executors::stream_aggr_executor::tests::test_it_works_integration ... ignored
+test batch::executors::stream_aggr_executor::tests::test_no_fn ... ignored
+test batch::executors::table_scan_executor::tests::test_basic ... ignored
+test batch::executors::table_scan_executor::tests::test_corrupted_data ... ignored
+test batch::executors::table_scan_executor::tests::test_execution_summary ... ignored
+test batch::executors::table_scan_executor::tests::test_locked_data ... ignored
+test batch::executors::table_scan_executor::tests::test_multi_handle_column ... ignored
+test codec::batch::buffer_vec::tests::test_basic ... ignored
+test codec::batch::buffer_vec::tests::test_extend ... ignored
+test codec::batch::buffer_vec::tests::test_iter ... ignored
+test codec::batch::buffer_vec::tests::test_retain ... ignored
+test codec::batch::lazy_column::tests::test_basic ... ignored
+test codec::chunk::chunk::tests::test_append_datum ... ignored
+test codec::chunk::chunk::tests::test_codec ... ignored
+test codec::chunk::column::tests::test_column_bytes ... ignored
+test codec::chunk::column::tests::test_column_decimal ... ignored
+test codec::chunk::column::tests::test_column_duration ... ignored
+test codec::chunk::column::tests::test_column_f32 ... ignored
+test codec::chunk::column::tests::test_column_f64 ... ignored
+test codec::chunk::column::tests::test_column_i64 ... ignored
+test codec::chunk::column::tests::test_column_json ... ignored
+test codec::chunk::column::tests::test_column_time ... ignored
+test codec::chunk::column::tests::test_column_u64 ... ignored
+test codec::convert::tests::test_bytes_to_f64 ... ignored
+test codec::convert::tests::test_bytes_to_int ... ignored
+test codec::convert::tests::test_bytes_to_int_truncated ... ignored
+test codec::convert::tests::test_bytes_to_int_without_context ... ignored
+test codec::convert::tests::test_bytes_to_uint ... ignored
+test codec::convert::tests::test_bytes_to_uint_truncated ... ignored
+test codec::convert::tests::test_bytes_to_uint_without_context ... ignored
+test codec::convert::tests::test_cast_to_int ... ignored
+test codec::convert::tests::test_cast_to_uint ... ignored
+test codec::convert::tests::test_datatype_to_int_overflow ... ignored
+test codec::convert::tests::test_datatype_to_uint_overflow ... ignored
+test codec::convert::tests::test_float_to_int ... ignored
+test codec::convert::tests::test_float_to_uint ... ignored
+test codec::convert::tests::test_get_valid_float_prefix ... ignored
+test codec::convert::tests::test_int_to_int ... ignored
+test codec::convert::tests::test_int_to_uint ... ignored
+test codec::convert::tests::test_invalid_get_valid_int_prefix ... ignored
+test codec::convert::tests::test_produce_dec_with_specified_tp ... ignored
+test codec::convert::tests::test_produce_dec_with_specified_tp_2 ... ignored
+test codec::convert::tests::test_produce_str_with_specified_tp ... ignored
+test codec::convert::tests::test_round_int_str ... ignored
+test codec::convert::tests::test_truncate_binary ... ignored
+test codec::convert::tests::test_truncate_f64 ... ignored
+test codec::convert::tests::test_uint_into_int ... ignored
+test codec::convert::tests::test_uint_into_uint ... ignored
+test codec::convert::tests::test_valid_get_valid_int_prefix ... ignored
+test codec::data_type::vector::tests::test_append ... ignored
+test codec::data_type::vector::tests::test_basic ... ignored
+test codec::data_type::vector::tests::test_from ... ignored
+test codec::datum::tests::test_cast_as_json ... ignored
+test codec::datum::tests::test_coerce_datum ... ignored
+test codec::datum::tests::test_datum_cmp ... ignored
+test codec::datum::tests::test_datum_codec ... ignored
+test codec::datum::tests::test_datum_into_json ... ignored
+test codec::datum::tests::test_datum_to_bool ... ignored
+test codec::datum::tests::test_into_f64 ... ignored
+test codec::datum::tests::test_into_i64 ... ignored
+test codec::datum::tests::test_split_datum ... ignored
+test codec::mysql::binary_literal::tests::test_binary_literal_cmp ... ignored
+test codec::mysql::binary_literal::tests::test_binary_literal_from_bit_str ... ignored
+test codec::mysql::binary_literal::tests::test_binary_literal_from_hex_str ... ignored
+test codec::mysql::binary_literal::tests::test_binary_literal_from_u64 ... ignored
+test codec::mysql::binary_literal::tests::test_binary_literal_to_bit_string ... ignored
+test codec::mysql::binary_literal::tests::test_binary_literal_to_string ... ignored
+test codec::mysql::binary_literal::tests::test_binary_literal_to_uint ... ignored
+test codec::mysql::binary_literal::tests::test_trim_leading_zero_bytes ... ignored
+test codec::mysql::decimal::tests::test_add ... ignored
+test codec::mysql::decimal::tests::test_bytes_to_decimal ... ignored
+test codec::mysql::decimal::tests::test_ceil ... ignored
+test codec::mysql::decimal::tests::test_chunk_codec ... ignored
+test codec::mysql::decimal::tests::test_cmp ... ignored
+test codec::mysql::decimal::tests::test_codec ... ignored
+test codec::mysql::decimal::tests::test_div_mod ... ignored
+test codec::mysql::decimal::tests::test_floor ... ignored
+test codec::mysql::decimal::tests::test_from_f64 ... ignored
+test codec::mysql::decimal::tests::test_from_i64 ... ignored
+test codec::mysql::decimal::tests::test_from_u64 ... ignored
+test codec::mysql::decimal::tests::test_into_result_impl ... ignored
+test codec::mysql::decimal::tests::test_max_decimal ... ignored
+test codec::mysql::decimal::tests::test_max_or_min_decimal ... ignored
+test codec::mysql::decimal::tests::test_mul ... ignored
+test codec::mysql::decimal::tests::test_neg ... ignored
+test codec::mysql::decimal::tests::test_reset_to_zero ... ignored
+test codec::mysql::decimal::tests::test_round ... ignored
+test codec::mysql::decimal::tests::test_shift ... ignored
+test codec::mysql::decimal::tests::test_string ... ignored
+test codec::mysql::decimal::tests::test_sub ... ignored
+test codec::mysql::decimal::tests::test_to_f64 ... ignored
+test codec::mysql::decimal::tests::test_to_i64 ... ignored
+test codec::mysql::decimal::tests::test_to_u64 ... ignored
+test codec::mysql::duration::tests::test_checked_add_and_sub_duration ... ignored
+test codec::mysql::duration::tests::test_codec ... ignored
+test codec::mysql::duration::tests::test_from_i64 ... ignored
+test codec::mysql::duration::tests::test_hours ... ignored
+test codec::mysql::duration::tests::test_micros ... ignored
+test codec::mysql::duration::tests::test_minutes ... ignored
+test codec::mysql::duration::tests::test_parse ... ignored
+test codec::mysql::duration::tests::test_round_frac ... ignored
+test codec::mysql::duration::tests::test_secs ... ignored
+test codec::mysql::duration::tests::test_to_decimal ... ignored
+test codec::mysql::duration::tests::test_to_f64 ... ignored
+test codec::mysql::duration::tests::test_to_numeric_string ... ignored
+test codec::mysql::json::binary::tests::test_json_binary ... ignored
+test codec::mysql::json::binary::tests::test_type_code ... ignored
+test codec::mysql::json::comparison::tests::test_cmp_json_between_diff_type ... ignored
+test codec::mysql::json::comparison::tests::test_cmp_json_between_same_type ... ignored
+test codec::mysql::json::json_extract::tests::test_json_extract ... ignored
+test codec::mysql::json::json_merge::tests::test_merge ... ignored
+test codec::mysql::json::json_modify::tests::test_json_modify ... ignored
+test codec::mysql::json::json_remove::tests::test_json_remove ... ignored
+test codec::mysql::json::json_type::tests::test_type ... ignored
+test codec::mysql::json::json_unquote::tests::test_decode_escaped_unicode ... ignored
+test codec::mysql::json::json_unquote::tests::test_json_unquote ... ignored
+test codec::mysql::json::path_expr::tests::test_parse_json_path_expr ... ignored
+test codec::mysql::json::path_expr::tests::test_parse_json_path_expr_contains_any_asterisk ... ignored
+test codec::mysql::json::path_expr::tests::test_path_expression_flag ... ignored
+test codec::mysql::json::serde::tests::test_from_str ... ignored
+test codec::mysql::json::serde::tests::test_from_str_for_object ... ignored
+test codec::mysql::json::tests::test_cast_to_real ... ignored
+test codec::mysql::json::tests::test_json_array ... ignored
+test codec::mysql::json::tests::test_json_object ... ignored
+test codec::mysql::tests::test_parse_frac ... ignored
+test codec::mysql::time::tests::test_checked_add_and_sub_duration ... ignored
+test codec::mysql::time::tests::test_chunk_codec ... ignored
+test codec::mysql::time::tests::test_codec ... ignored
+test codec::mysql::time::tests::test_compare ... ignored
+test codec::mysql::time::tests::test_convert_to_duration ... ignored
+test codec::mysql::time::tests::test_convert_to_f64 ... ignored
+test codec::mysql::time::tests::test_date_format ... ignored
+test codec::mysql::time::tests::test_from_duration ... ignored
+test codec::mysql::time::tests::test_parse_datetime ... ignored
+test codec::mysql::time::tests::test_parse_datetime_dst ... ignored
+test codec::mysql::time::tests::test_parse_datetime_format ... ignored
+test codec::mysql::time::tests::test_parse_datetime_system_timezone ... ignored
+test codec::mysql::time::tests::test_parse_fsp ... ignored
+test codec::mysql::time::tests::test_round_frac ... ignored
+test codec::mysql::time::tests::test_set_tp ... ignored
+test codec::mysql::time::tests::test_to_dec ... ignored
+test codec::mysql::time::tests::test_to_decimal ... ignored
+test codec::mysql::time::tests::test_to_numeric_string ... ignored
+test codec::overflow::tests::test_div ... ignored
+test codec::table::tests::test_check_table_range ... ignored
+test codec::table::tests::test_decode_table_id ... ignored
+test codec::table::tests::test_extract_table_prefix ... ignored
+test codec::table::tests::test_idx_codec ... ignored
+test codec::table::tests::test_index_key_codec ... ignored
+test codec::table::tests::test_row_codec ... ignored
+test codec::table::tests::test_row_key_codec ... ignored
+test executor::aggregate::tests::test_bit_and ... ignored
+test executor::aggregate::tests::test_bit_or ... ignored
+test executor::aggregate::tests::test_bit_xor ... ignored
+test executor::aggregate::tests::test_sum_as_f64 ... ignored
+test executor::aggregate::tests::test_sum_int ... ignored
+test executor::aggregate::tests::test_sum_uint ... ignored
+test executor::aggregation::tests::test_hash_agg ... ignored
+test executor::aggregation::tests::test_stream_agg ... ignored
+test executor::index_scan::tests::test_include_pk ... ignored
+test executor::index_scan::tests::test_multiple_ranges ... ignored
+test executor::index_scan::tests::test_reverse_scan ... ignored
+test executor::index_scan::tests::test_unique_index_scan ... ignored
+test executor::limit::tests::test_limit_executor ... ignored
+test executor::selection::tests::test_selection_executor_condition ... ignored
+test executor::selection::tests::test_selection_executor_simple ... ignored
+test executor::table_scan::tests::test_multiple_ranges ... ignored
+test executor::table_scan::tests::test_point_get ... ignored
+test executor::table_scan::tests::test_reverse_scan ... ignored
+test executor::topn::tests::test_limit ... ignored
+test executor::topn::tests::test_topn_executor ... ignored
+test executor::topn::tests::test_topn_heap ... ignored
+test executor::topn::tests::test_topn_heap_with_cmp_error ... ignored
+test executor::topn_heap::tests::test_topn_heap ... ignored
+test executor::topn_heap::tests::test_topn_heap_with_cmp_error ... ignored
+test executor::topn_heap::tests::test_topn_heap_with_few_data ... ignored
+test executor::topn_heap::tests::test_topn_limit_oom ... ignored
+test executor::topn_heap::tests::test_topn_with_empty_limit ... ignored
+test expr::builtin_arithmetic::tests::test_arithmetic_decimal ... ignored
+test expr::builtin_arithmetic::tests::test_arithmetic_int ... ignored
+test expr::builtin_arithmetic::tests::test_arithmetic_overflow_int ... ignored
+test expr::builtin_arithmetic::tests::test_arithmetic_overflow_real ... ignored
+test expr::builtin_arithmetic::tests::test_arithmetic_real ... ignored
+test expr::builtin_arithmetic::tests::test_divide_by_zero ... ignored
+test expr::builtin_arithmetic::tests::test_multiply_int_unsigned ... ignored
+test expr::builtin_cast::tests::test_cast_as_decimal ... ignored
+test expr::builtin_cast::tests::test_cast_as_duration ... ignored
+test expr::builtin_cast::tests::test_cast_as_int ... ignored
+test expr::builtin_cast::tests::test_cast_as_real ... ignored
+test expr::builtin_cast::tests::test_cast_as_str ... ignored
+test expr::builtin_cast::tests::test_cast_as_time ... ignored
+test expr::builtin_cast::tests::test_cast_decimal_as_json ... ignored
+test expr::builtin_cast::tests::test_cast_duration_as_json ... ignored
+test expr::builtin_cast::tests::test_cast_int_as_json ... ignored
+test expr::builtin_cast::tests::test_cast_json_as_json ... ignored
+test expr::builtin_cast::tests::test_cast_real_as_json ... ignored
+test expr::builtin_cast::tests::test_cast_str_as_json ... ignored
+test expr::builtin_cast::tests::test_cast_time_as_json ... ignored
+test expr::builtin_cast::tests::test_dec_as_int_with_overflow ... ignored
+test expr::builtin_cast::tests::test_in_union ... ignored
+test expr::builtin_cast::tests::test_str_as_int ... ignored
+test expr::builtin_compare::tests::test_cmp_i64_with_unsigned_flag ... ignored
+test expr::builtin_compare::tests::test_coalesce ... ignored
+test expr::builtin_compare::tests::test_greatest_and_least ... ignored
+test expr::builtin_compare::tests::test_in ... ignored
+test expr::builtin_control::tests::test_case_when ... ignored
+test expr::builtin_control::tests::test_if ... ignored
+test expr::builtin_control::tests::test_if_null ... ignored
+test expr::builtin_encryption::tests::test_compress ... ignored
+test expr::builtin_encryption::tests::test_md5 ... ignored
+test expr::builtin_encryption::tests::test_sha1 ... ignored
+test expr::builtin_encryption::tests::test_sha2 ... ignored
+test expr::builtin_encryption::tests::test_uncompress ... ignored
+test expr::builtin_encryption::tests::test_uncompressed_length ... ignored
+test expr::builtin_json::tests::test_json_array ... ignored
+test expr::builtin_json::tests::test_json_invalid_arguments ... ignored
+test expr::builtin_json::tests::test_json_merge ... ignored
+test expr::builtin_json::tests::test_json_modify ... ignored
+test expr::builtin_json::tests::test_json_object ... ignored
+test expr::builtin_json::tests::test_json_type ... ignored
+test expr::builtin_json::tests::test_json_unquote ... ignored
+test expr::builtin_like::tests::test_like ... ignored
+test expr::builtin_like::tests::test_regexp ... ignored
+test expr::builtin_like::tests::test_regexp_binary ... ignored
+test expr::builtin_math::tests::test_abs ... ignored
+test expr::builtin_math::tests::test_acos ... ignored
+test expr::builtin_math::tests::test_asin ... ignored
+test expr::builtin_math::tests::test_atan_1_arg ... ignored
+test expr::builtin_math::tests::test_atan_2_args ... ignored
+test expr::builtin_math::tests::test_ceil ... ignored
+test expr::builtin_math::tests::test_conv ... ignored
+test expr::builtin_math::tests::test_cos ... ignored
+test expr::builtin_math::tests::test_cot ... ignored
+test expr::builtin_math::tests::test_crc32 ... ignored
+test expr::builtin_math::tests::test_degrees ... ignored
+test expr::builtin_math::tests::test_exp ... ignored
+test expr::builtin_math::tests::test_floor ... ignored
+test expr::builtin_math::tests::test_log10 ... ignored
+test expr::builtin_math::tests::test_log2 ... ignored
+test expr::builtin_math::tests::test_log_1_arg ... ignored
+test expr::builtin_math::tests::test_log_2_args ... ignored
+test expr::builtin_math::tests::test_overflow_abs ... ignored
+test expr::builtin_math::tests::test_pi ... ignored
+test expr::builtin_math::tests::test_pow ... ignored
+test expr::builtin_math::tests::test_pow_overflow ... ignored
+test expr::builtin_math::tests::test_radians ... ignored
+test expr::builtin_math::tests::test_rand ... ignored
+test expr::builtin_math::tests::test_rand_with_seed ... ignored
+test expr::builtin_math::tests::test_round ... ignored
+test expr::builtin_math::tests::test_round_frac ... ignored
+test expr::builtin_math::tests::test_sign ... ignored
+test expr::builtin_math::tests::test_sin ... ignored
+test expr::builtin_math::tests::test_sqrt ... ignored
+test expr::builtin_math::tests::test_tan ... ignored
+test expr::builtin_math::tests::test_truncate_decimal ... ignored
+test expr::builtin_math::tests::test_truncate_int ... ignored
+test expr::builtin_math::tests::test_truncate_real ... ignored
+test expr::builtin_miscellaneous::tests::test_decimal_any_value ... ignored
+test expr::builtin_miscellaneous::tests::test_duration_any_value ... ignored
+test expr::builtin_miscellaneous::tests::test_inet6_aton ... ignored
+test expr::builtin_miscellaneous::tests::test_inet6_ntoa ... ignored
+test expr::builtin_miscellaneous::tests::test_inet_aton ... ignored
+test expr::builtin_miscellaneous::tests::test_inet_ntoa ... ignored
+test expr::builtin_miscellaneous::tests::test_int_any_value ... ignored
+test expr::builtin_miscellaneous::tests::test_is_ipv4 ... ignored
+test expr::builtin_miscellaneous::tests::test_is_ipv4_compat ... ignored
+test expr::builtin_miscellaneous::tests::test_is_ipv4_mapped ... ignored
+test expr::builtin_miscellaneous::tests::test_is_ipv6 ... ignored
+test expr::builtin_miscellaneous::tests::test_json_any_value ... ignored
+test expr::builtin_miscellaneous::tests::test_real_any_value ... ignored
+test expr::builtin_miscellaneous::tests::test_string_any_value ... ignored
+test expr::builtin_miscellaneous::tests::test_time_any_value ... ignored
+test expr::builtin_op::tests::test_bit_and ... ignored
+test expr::builtin_op::tests::test_bit_neg ... ignored
+test expr::builtin_op::tests::test_bit_or ... ignored
+test expr::builtin_op::tests::test_bit_xor ... ignored
+test expr::builtin_op::tests::test_left_shift ... ignored
+test expr::builtin_op::tests::test_logic_op ... ignored
+test expr::builtin_op::tests::test_right_shift ... ignored
+test expr::builtin_op::tests::test_unary_minus_op ... ignored
+test expr::builtin_op::tests::test_unary_op ... ignored
+test expr::builtin_op::tests::test_unary_op_overflow ... ignored
+test expr::builtin_other::tests::test_bit_count ... ignored
+test expr::builtin_string::tests::test_ascii ... ignored
+test expr::builtin_string::tests::test_bin ... ignored
+test expr::builtin_string::tests::test_bit_length ... ignored
+test expr::builtin_string::tests::test_char_length ... ignored
+test expr::builtin_string::tests::test_concat ... ignored
+test expr::builtin_string::tests::test_concat_ws ... ignored
+test expr::builtin_string::tests::test_elt ... ignored
+test expr::builtin_string::tests::test_encoded_size ... ignored
+test expr::builtin_string::tests::test_field_int ... ignored
+test expr::builtin_string::tests::test_field_real ... ignored
+test expr::builtin_string::tests::test_field_string ... ignored
+test expr::builtin_string::tests::test_from_base64 ... ignored
+test expr::builtin_string::tests::test_hex_int_arg ... ignored
+test expr::builtin_string::tests::test_hex_str_arg ... ignored
+test expr::builtin_string::tests::test_instr ... ignored
+test expr::builtin_string::tests::test_instr_binary ... ignored
+test expr::builtin_string::tests::test_left ... ignored
+test expr::builtin_string::tests::test_left_binary ... ignored
+test expr::builtin_string::tests::test_length ... ignored
+test expr::builtin_string::tests::test_locate_2_args ... ignored
+test expr::builtin_string::tests::test_locate_3_args ... ignored
+test expr::builtin_string::tests::test_locate_binary_2_args ... ignored
+test expr::builtin_string::tests::test_locate_binary_3_args ... ignored
+test expr::builtin_string::tests::test_lower ... ignored
+test expr::builtin_string::tests::test_lpad ... ignored
+test expr::builtin_string::tests::test_lpad_binary ... ignored
+test expr::builtin_string::tests::test_ltrim ... ignored
+test expr::builtin_string::tests::test_replace ... ignored
+test expr::builtin_string::tests::test_reverse ... ignored
+test expr::builtin_string::tests::test_reverse_binary ... ignored
+test expr::builtin_string::tests::test_right ... ignored
+test expr::builtin_string::tests::test_right_binary ... ignored
+test expr::builtin_string::tests::test_rpad ... ignored
+test expr::builtin_string::tests::test_rpad_binary ... ignored
+test expr::builtin_string::tests::test_rtrim ... ignored
+test expr::builtin_string::tests::test_space ... ignored
+test expr::builtin_string::tests::test_strcmp ... ignored
+test expr::builtin_string::tests::test_substring_2_args ... ignored
+test expr::builtin_string::tests::test_substring_3_args ... ignored
+test expr::builtin_string::tests::test_substring_binary_2_args ... ignored
+test expr::builtin_string::tests::test_substring_binary_3_args ... ignored
+test expr::builtin_string::tests::test_substring_index ... ignored
+test expr::builtin_string::tests::test_to_base64 ... ignored
+test expr::builtin_string::tests::test_trim_1_arg ... ignored
+test expr::builtin_string::tests::test_trim_2_args ... ignored
+test expr::builtin_string::tests::test_trim_3_args ... ignored
+test expr::builtin_string::tests::test_un_hex ... ignored
+test expr::builtin_string::tests::test_upper ... ignored
+test expr::builtin_string::tests::test_validate_target_len_for_pad ... ignored
+test expr::builtin_time::tests::test_add_sub_datetime_and_duration ... ignored
+test expr::builtin_time::tests::test_add_sub_datetime_and_string ... ignored
+test expr::builtin_time::tests::test_add_sub_duration_and_duration ... ignored
+test expr::builtin_time::tests::test_add_sub_duration_and_string ... ignored
+test expr::builtin_time::tests::test_add_sub_time_datetime_null ... ignored
+test expr::builtin_time::tests::test_add_sub_time_duration_null ... ignored
+test expr::builtin_time::tests::test_add_sub_time_string_null ... ignored
+test expr::builtin_time::tests::test_date ... ignored
+test expr::builtin_time::tests::test_date_diff ... ignored
+test expr::builtin_time::tests::test_date_format ... ignored
+test expr::builtin_time::tests::test_day_name ... ignored
+test expr::builtin_time::tests::test_day_of_month ... ignored
+test expr::builtin_time::tests::test_day_of_week ... ignored
+test expr::builtin_time::tests::test_day_of_year ... ignored
+test expr::builtin_time::tests::test_hour_min_sec_micro_sec ... ignored
+test expr::builtin_time::tests::test_last_day ... ignored
+test expr::builtin_time::tests::test_month ... ignored
+test expr::builtin_time::tests::test_month_name ... ignored
+test expr::builtin_time::tests::test_period_add ... ignored
+test expr::builtin_time::tests::test_period_diff ... ignored
+test expr::builtin_time::tests::test_to_days ... ignored
+test expr::builtin_time::tests::test_week_day ... ignored
+test expr::builtin_time::tests::test_week_of_year ... ignored
+test expr::builtin_time::tests::test_week_with_mode ... ignored
+test expr::builtin_time::tests::test_week_without_mode ... ignored
+test expr::builtin_time::tests::test_year ... ignored
+test expr::builtin_time::tests::test_year_week_with_mode ... ignored
+test expr::builtin_time::tests::test_year_week_without_mode ... ignored
+test expr::column::tests::test_column_eval ... ignored
+test expr::column::tests::test_hybrid_type ... ignored
+test expr::column::tests::test_with_pad_char_to_full_length ... ignored
+test expr::constant::tests::test_constant_eval ... ignored
+test expr::ctx::tests::test_handle_division_by_zero ... ignored
+test expr::ctx::tests::test_handle_invalid_time_error ... ignored
+test expr::ctx::tests::test_handle_truncate ... ignored
+test expr::ctx::tests::test_max_warning_cnt ... ignored
+test expr::scalar_function::tests::test_check_args ... ignored
+test expr::tests::test_expression_eval ... ignored
+test macros::tests::test_other_err ... ignored
+test rpn_expr::impl_arithmetic::tests::test_decimal_divide ... ignored
+test rpn_expr::impl_arithmetic::tests::test_divide_by_zero ... ignored
+test rpn_expr::impl_arithmetic::tests::test_int_divide_decimal ... ignored
+test rpn_expr::impl_arithmetic::tests::test_int_divide_decimal_overflow ... ignored
+test rpn_expr::impl_arithmetic::tests::test_int_divide_int ... ignored
+test rpn_expr::impl_arithmetic::tests::test_int_divide_int_overflow ... ignored
+test rpn_expr::impl_arithmetic::tests::test_int_multiply ... ignored
+test rpn_expr::impl_arithmetic::tests::test_int_uint_multiply ... ignored
+test rpn_expr::impl_arithmetic::tests::test_minus_decimal ... ignored
+test rpn_expr::impl_arithmetic::tests::test_minus_int ... ignored
+test rpn_expr::impl_arithmetic::tests::test_minus_real ... ignored
+test rpn_expr::impl_arithmetic::tests::test_mod_decimal ... ignored
+test rpn_expr::impl_arithmetic::tests::test_mod_int ... ignored
+test rpn_expr::impl_arithmetic::tests::test_mod_int_unsigned ... ignored
+test rpn_expr::impl_arithmetic::tests::test_mod_real ... ignored
+test rpn_expr::impl_arithmetic::tests::test_multiply_decimal ... ignored
+test rpn_expr::impl_arithmetic::tests::test_plus_decimal ... ignored
+test rpn_expr::impl_arithmetic::tests::test_plus_int ... ignored
+test rpn_expr::impl_arithmetic::tests::test_plus_real ... ignored
+test rpn_expr::impl_arithmetic::tests::test_real_divide ... ignored
+test rpn_expr::impl_arithmetic::tests::test_real_multiply ... ignored
+test rpn_expr::impl_arithmetic::tests::test_uint_uint_multiply ... ignored
+test rpn_expr::impl_cast::tests::test_bool_as_json ... ignored
+test rpn_expr::impl_cast::tests::test_bytes_as_duration ... ignored
+test rpn_expr::impl_cast::tests::test_decimal_as_duration ... ignored
+test rpn_expr::impl_cast::tests::test_decimal_as_int ... ignored
+test rpn_expr::impl_cast::tests::test_decimal_as_json ... ignored
+test rpn_expr::impl_cast::tests::test_decimal_as_signed_decimal ... ignored
+test rpn_expr::impl_cast::tests::test_decimal_as_signed_real ... ignored
+test rpn_expr::impl_cast::tests::test_decimal_as_string ... ignored
+test rpn_expr::impl_cast::tests::test_decimal_as_uint ... ignored
+test rpn_expr::impl_cast::tests::test_decimal_as_unsigned_decimal ... ignored
+test rpn_expr::impl_cast::tests::test_decimal_as_unsigned_real ... ignored
+test rpn_expr::impl_cast::tests::test_double_real_as_string ... ignored
+test rpn_expr::impl_cast::tests::test_duration_as_decimal ... ignored
+test rpn_expr::impl_cast::tests::test_duration_as_duration ... ignored
+test rpn_expr::impl_cast::tests::test_duration_as_int ... ignored
+test rpn_expr::impl_cast::tests::test_duration_as_json ... ignored
+test rpn_expr::impl_cast::tests::test_duration_as_real ... ignored
+test rpn_expr::impl_cast::tests::test_duration_as_string ... ignored
+test rpn_expr::impl_cast::tests::test_float_real_as_string ... ignored
+test rpn_expr::impl_cast::tests::test_in_union ... ignored
+test rpn_expr::impl_cast::tests::test_int_as_duration ... ignored
+test rpn_expr::impl_cast::tests::test_int_as_int_others ... ignored
+test rpn_expr::impl_cast::tests::test_int_as_json ... ignored
+test rpn_expr::impl_cast::tests::test_int_as_string ... ignored
+test rpn_expr::impl_cast::tests::test_json_as_decimal ... ignored
+test rpn_expr::impl_cast::tests::test_json_as_duration ... ignored
+test rpn_expr::impl_cast::tests::test_json_as_int ... ignored
+test rpn_expr::impl_cast::tests::test_json_as_json ... ignored
+test rpn_expr::impl_cast::tests::test_json_as_real ... ignored
+test rpn_expr::impl_cast::tests::test_json_as_string ... ignored
+test rpn_expr::impl_cast::tests::test_json_as_uint ... ignored
+test rpn_expr::impl_cast::tests::test_real_as_decimal ... ignored
+test rpn_expr::impl_cast::tests::test_real_as_duration ... ignored
+test rpn_expr::impl_cast::tests::test_real_as_int ... ignored
+test rpn_expr::impl_cast::tests::test_real_as_json ... ignored
+test rpn_expr::impl_cast::tests::test_real_as_signed_real ... ignored
+test rpn_expr::impl_cast::tests::test_real_as_uint ... ignored
+test rpn_expr::impl_cast::tests::test_real_as_unsigned_real ... ignored
+test rpn_expr::impl_cast::tests::test_signed_int_as_signed_decimal ... ignored
+test rpn_expr::impl_cast::tests::test_signed_int_as_signed_real ... ignored
+test rpn_expr::impl_cast::tests::test_signed_int_as_unsigned_decimal ... ignored
+test rpn_expr::impl_cast::tests::test_signed_int_as_unsigned_int ... ignored
+test rpn_expr::impl_cast::tests::test_signed_int_as_unsigned_real ... ignored
+test rpn_expr::impl_cast::tests::test_string_as_int_or_uint ... ignored
+test rpn_expr::impl_cast::tests::test_string_as_json ... ignored
+test rpn_expr::impl_cast::tests::test_string_as_signed_decimal ... ignored
+test rpn_expr::impl_cast::tests::test_string_as_signed_real ... ignored
+test rpn_expr::impl_cast::tests::test_string_as_string ... ignored
+test rpn_expr::impl_cast::tests::test_string_as_unsigned_decimal ... ignored
+test rpn_expr::impl_cast::tests::test_string_as_unsigned_real ... ignored
+test rpn_expr::impl_cast::tests::test_time_as_decimal ... ignored
+test rpn_expr::impl_cast::tests::test_time_as_duration ... ignored
+test rpn_expr::impl_cast::tests::test_time_as_int_and_uint ... ignored
+test rpn_expr::impl_cast::tests::test_time_as_json ... ignored
+test rpn_expr::impl_cast::tests::test_time_as_real ... ignored
+test rpn_expr::impl_cast::tests::test_time_as_string ... ignored
+test rpn_expr::impl_cast::tests::test_uint_as_json ... ignored
+test rpn_expr::impl_cast::tests::test_uint_as_string ... ignored
+test rpn_expr::impl_cast::tests::test_unsigned_int_as_signed_or_unsigned_decimal ... ignored
+test rpn_expr::impl_cast::tests::test_unsigned_int_as_signed_or_unsigned_real ... ignored
+test rpn_expr::impl_compare::tests::test_coalesce ... ignored
+test rpn_expr::impl_compare::tests::test_compare_decimal ... ignored
+test rpn_expr::impl_compare::tests::test_compare_duration ... ignored
+test rpn_expr::impl_compare::tests::test_compare_int_2 ... ignored
+test rpn_expr::impl_compare::tests::test_compare_real ... ignored
+test rpn_expr::impl_compare::tests::test_compare_signed_int ... ignored
+test rpn_expr::impl_compare::tests::test_in ... ignored
+test rpn_expr::impl_control::tests::test_case_when ... ignored
+test rpn_expr::impl_control::tests::test_if ... ignored
+test rpn_expr::impl_control::tests::test_if_null ... ignored
+test rpn_expr::impl_json::tests::test_json_array ... ignored
+test rpn_expr::impl_json::tests::test_json_extract ... ignored
+test rpn_expr::impl_json::tests::test_json_merge ... ignored
+test rpn_expr::impl_json::tests::test_json_modify ... ignored
+test rpn_expr::impl_json::tests::test_json_object ... ignored
+test rpn_expr::impl_json::tests::test_json_remove ... ignored
+test rpn_expr::impl_json::tests::test_json_type ... ignored
+test rpn_expr::impl_json::tests::test_json_unquote ... ignored
+test rpn_expr::impl_like::tests::test_like ... ignored
+test rpn_expr::impl_math::tests::test_abs_decimal ... ignored
+test rpn_expr::impl_math::tests::test_abs_int ... ignored
+test rpn_expr::impl_math::tests::test_abs_real ... ignored
+test rpn_expr::impl_math::tests::test_ceil_dec_to_dec ... ignored
+test rpn_expr::impl_math::tests::test_ceil_dec_to_int ... ignored
+test rpn_expr::impl_math::tests::test_ceil_int_to_int ... ignored
+test rpn_expr::impl_math::tests::test_ceil_real ... ignored
+test rpn_expr::impl_math::tests::test_floor_dec_to_dec ... ignored
+test rpn_expr::impl_math::tests::test_floor_dec_to_int ... ignored
+test rpn_expr::impl_math::tests::test_floor_int_to_int ... ignored
+test rpn_expr::impl_math::tests::test_floor_real ... ignored
+test rpn_expr::impl_op::tests::test_is_false ... ignored
+test rpn_expr::impl_op::tests::test_is_null ... ignored
+test rpn_expr::impl_op::tests::test_is_true ... ignored
+test rpn_expr::impl_op::tests::test_logical_and ... ignored
+test rpn_expr::impl_op::tests::test_logical_or ... ignored
+test rpn_expr::impl_op::tests::test_unary_not_decimal ... ignored
+test rpn_expr::impl_op::tests::test_unary_not_int ... ignored
+test rpn_expr::impl_op::tests::test_unary_not_real ... ignored
+test rpn_expr::impl_time::tests::test_date_format ... ignored
+test rpn_expr::types::expr_builder::tests::test_append_rpn_nodes_recursively ... ignored
+test rpn_expr::types::expr_builder::tests::test_expr_with_val ... ignored
+test rpn_expr::types::expr_builder::tests::test_max_columns_check ... ignored
+test rpn_expr::types::expr_builder::tests::test_validator_fixed_args_fn ... ignored
+test rpn_expr::types::expr_builder::tests::test_validator_raw_vargs_fn_with_min_args ... ignored
+test rpn_expr::types::expr_builder::tests::test_validator_vargs_fn ... ignored
+test rpn_expr::types::expr_builder::tests::test_validator_vargs_fn_with_min_args ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_binary_function_raw_column ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_binary_function_scalar_scalar ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_binary_function_scalar_vector ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_binary_function_vector_scalar ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_binary_function_vector_vector ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_comprehensive ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_fail_1 ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_fail_2 ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_fail_3 ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_single_column_node_mismatch_rows ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_single_column_node_normal ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_single_constant_node ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_single_fn_call_node ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_ternary_function ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_unary_function_raw_column ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_unary_function_scalar ... ignored
+test rpn_expr::types::expr_eval::tests::test_eval_unary_function_vector ... ignored
+test rpn_expr::types::expr_eval::tests::test_parse_and_eval ... ignored
+test storage::fixture::tests::test_basic ... ignored
+test storage::ranges_iter::tests::test_basic ... ignored
+test storage::scanner::tests::test_next ... ignored
+test storage::scanner::tests::test_scanned_range_backward ... ignored
+test storage::scanner::tests::test_scanned_range_forward ... ignored
+test storage::scanner::tests::test_scanned_rows ... ignored
+test util::tests::test_is_prefix_next ... ignored
+test util::tests::test_prefix_next ... ignored
+test codec::batch::lazy_column::benches::bench_lazy_batch_column_by_vec_clone             ... bench:      53,834 ns/iter (+/- 10,090)
+test codec::batch::lazy_column::benches::bench_lazy_batch_column_by_vec_push_raw_10bytes  ... bench:      62,062 ns/iter (+/- 2,376)
+test codec::batch::lazy_column::benches::bench_lazy_batch_column_clone_and_decode         ... bench:      11,005 ns/iter (+/- 3,811)
+test codec::batch::lazy_column::benches::bench_lazy_batch_column_clone_and_decode_decoded ... bench:         890 ns/iter (+/- 52)
+test codec::batch::lazy_column::benches::bench_lazy_batch_column_clone_decoded            ... bench:         889 ns/iter (+/- 45)
+test codec::batch::lazy_column::benches::bench_lazy_batch_column_push_raw_4bytes          ... bench:       8,070 ns/iter (+/- 1,808)
+test codec::mysql::duration::benches::bench_checked_add_and_sub_duration                  ... bench:          82 ns/iter (+/- 2)
+test codec::mysql::duration::benches::bench_codec                                         ... bench:         465 ns/iter (+/- 24)
+test codec::mysql::duration::benches::bench_hours                                         ... bench:       3,143 ns/iter (+/- 173)
+test codec::mysql::duration::benches::bench_parse                                         ... bench:         708 ns/iter (+/- 119)
+test codec::mysql::duration::benches::bench_round_frac                                    ... bench:          20 ns/iter (+/- 0)
+test codec::mysql::duration::benches::bench_to_decimal                                    ... bench:         396 ns/iter (+/- 13)
+test rpn_expr::types::expr_eval::tests::bench_eval_compare_1024_rows                      ... bench:      10,490 ns/iter (+/- 618)
+test rpn_expr::types::expr_eval::tests::bench_eval_compare_5_rows                         ... bench:         189 ns/iter (+/- 27)
+test rpn_expr::types::expr_eval::tests::bench_eval_plus_1024_rows                         ... bench:      13,192 ns/iter (+/- 772)
+
+test result: ok. 0 passed; 0 failed; 565 ignored; 15 measured; 0 filtered out
+
+     Running target/release/deps/tidb_query_codegen-b53004ba866dedd2
+
+running 11 tests
+test rpn_function::tests_normal::test_generic_generate_constructor ... ignored
+test rpn_function::tests_normal::test_generic_generate_dummy_fn_trait_impl ... ignored
+test rpn_function::tests_normal::test_generic_generate_evaluator ... ignored
+test rpn_function::tests_normal::test_generic_generate_fn_trait ... ignored
+test rpn_function::tests_normal::test_generic_generate_real_fn_trait_impl ... ignored
+test rpn_function::tests_normal::test_no_generic_generate_constructor ... ignored
+test rpn_function::tests_normal::test_no_generic_generate_dummy_fn_trait_impl ... ignored
+test rpn_function::tests_normal::test_no_generic_generate_evaluator ... ignored
+test rpn_function::tests_normal::test_no_generic_generate_fn_trait ... ignored
+test rpn_function::tests_normal::test_no_generic_generate_real_fn_trait_impl ... ignored
+test rpn_function::tests_normal::test_no_generic_with_extras_generate_real_fn_trait_impl ... ignored
+
+test result: ok. 0 passed; 0 failed; 11 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/tidb_query_datatype-acc2ec1a23fcca00
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+     Running target/release/deps/tikv-d33ac8ac8957bcc1
+
+running 304 tests
+test config::coprocessor_read_pool_test::test_validate ... ignored
+test config::storage_read_pool_test::test_validate ... ignored
+test config::tests::test_block_size ... ignored
+test config::tests::test_check_critical_cfg_with ... ignored
+test config::tests::test_create_parent_dir_if_missing ... ignored
+test config::tests::test_keepalive_check ... ignored
+test config::tests::test_parse_log_level ... ignored
+test config::tests::test_persist_cfg ... ignored
+test coprocessor::endpoint::tests::test_channel_size ... ignored
+test coprocessor::endpoint::tests::test_empty_streaming_response ... ignored
+test coprocessor::endpoint::tests::test_error_streaming_response ... ignored
+test coprocessor::endpoint::tests::test_error_unary_response ... ignored
+test coprocessor::endpoint::tests::test_full ... ignored
+test coprocessor::endpoint::tests::test_handle_time ... ignored
+test coprocessor::endpoint::tests::test_invalid_req_body ... ignored
+test coprocessor::endpoint::tests::test_invalid_req_type ... ignored
+test coprocessor::endpoint::tests::test_outdated_request ... ignored
+test coprocessor::endpoint::tests::test_special_streaming_handlers ... ignored
+test coprocessor::endpoint::tests::test_stack_guard ... ignored
+test coprocessor::statistics::analyze::tests::test_sample_collector ... ignored
+test coprocessor::statistics::cmsketch::tests::test_cm_sketch ... ignored
+test coprocessor::statistics::cmsketch::tests::test_hash ... ignored
+test coprocessor::statistics::fmsketch::tests::test_sketch ... ignored
+test coprocessor::statistics::histogram::tests::test_buckets_limit ... ignored
+test coprocessor::statistics::histogram::tests::test_histogram ... ignored
+test raftstore::coprocessor::config::tests::test_config_validate ... ignored
+test raftstore::coprocessor::dispatcher::tests::test_order ... ignored
+test raftstore::coprocessor::dispatcher::tests::test_trigger_right_hook ... ignored
+test raftstore::coprocessor::properties::tests::test_get_range_entries_and_versions ... ignored
+test raftstore::coprocessor::properties::tests::test_mvcc_properties ... ignored
+test raftstore::coprocessor::properties::tests::test_range_properties ... ignored
+test raftstore::coprocessor::properties::tests::test_range_properties_with_blob_index ... ignored
+test raftstore::coprocessor::region_info_accessor::tests::test_basic_updating ... ignored
+test raftstore::coprocessor::region_info_accessor::tests::test_clear_overlapped_regions ... ignored
+test raftstore::coprocessor::region_info_accessor::tests::test_epoch_stale_check ... ignored
+test raftstore::coprocessor::region_info_accessor::tests::test_extreme_cases ... ignored
+test raftstore::coprocessor::region_info_accessor::tests::test_ignore_invalid_version ... ignored
+test raftstore::coprocessor::region_info_accessor::tests::test_merge ... ignored
+test raftstore::coprocessor::region_info_accessor::tests::test_split ... ignored
+test raftstore::coprocessor::split_check::half::tests::test_get_region_approximate_middle_cf ... ignored
+test raftstore::coprocessor::split_check::half::tests::test_split_check ... ignored
+test raftstore::coprocessor::split_check::keys::tests::test_region_approximate_keys ... ignored
+test raftstore::coprocessor::split_check::keys::tests::test_region_approximate_keys_sub_region ... ignored
+test raftstore::coprocessor::split_check::keys::tests::test_split_check ... ignored
+test raftstore::coprocessor::split_check::size::tests::test_checker_with_max_twice_bigger_than_split_size ... ignored
+test raftstore::coprocessor::split_check::size::tests::test_checker_with_same_max_and_split_size ... ignored
+test raftstore::coprocessor::split_check::size::tests::test_get_approximate_split_keys ... ignored
+test raftstore::coprocessor::split_check::size::tests::test_get_approximate_split_keys_error ... ignored
+test raftstore::coprocessor::split_check::size::tests::test_region_approximate_size ... ignored
+test raftstore::coprocessor::split_check::size::tests::test_region_maybe_inaccurate_approximate_size ... ignored
+test raftstore::coprocessor::split_check::size::tests::test_split_check ... ignored
+test raftstore::coprocessor::split_check::table::tests::test_last_key_of_region ... ignored
+test raftstore::coprocessor::split_check::table::tests::test_table_check_observer ... ignored
+test raftstore::coprocessor::split_observer::tests::test_forget_encode ... ignored
+test raftstore::coprocessor::split_observer::tests::test_split ... ignored
+test raftstore::store::bootstrap::tests::test_bootstrap ... ignored
+test raftstore::store::config::tests::test_config_validate ... ignored
+test raftstore::store::fsm::apply::tests::pending_cmd_leak ... ignored
+test raftstore::store::fsm::apply::tests::pending_cmd_leak_dtor_not_abort ... ignored
+test raftstore::store::fsm::apply::tests::test_basic_flow ... ignored
+test raftstore::store::fsm::apply::tests::test_check_sst_for_ingestion ... ignored
+test raftstore::store::fsm::apply::tests::test_handle_raft_committed_entries ... ignored
+test raftstore::store::fsm::apply::tests::test_should_write_to_engine ... ignored
+test raftstore::store::fsm::apply::tests::test_split ... ignored
+test raftstore::store::fsm::batch::tests::test_batch ... ignored
+test raftstore::store::fsm::router::tests::test_basic ... ignored
+test raftstore::store::fsm::store::tests::test_calc_region_declined_bytes ... ignored
+test raftstore::store::fsm::store::tests::test_is_range_covered ... ignored
+test raftstore::store::peer::tests::test_entry_context ... ignored
+test raftstore::store::peer::tests::test_request_inspector ... ignored
+test raftstore::store::peer::tests::test_sync_log ... ignored
+test raftstore::store::peer::tests::test_urgent ... ignored
+test raftstore::store::peer_storage::tests::test_canceling_snapshot ... ignored
+test raftstore::store::peer_storage::tests::test_storage_append ... ignored
+test raftstore::store::peer_storage::tests::test_storage_apply_snapshot ... ignored
+test raftstore::store::peer_storage::tests::test_storage_cache_fetch ... ignored
+test raftstore::store::peer_storage::tests::test_storage_cache_update ... ignored
+test raftstore::store::peer_storage::tests::test_storage_clear_meta ... ignored
+test raftstore::store::peer_storage::tests::test_storage_compact ... ignored
+test raftstore::store::peer_storage::tests::test_storage_create_snapshot ... ignored
+test raftstore::store::peer_storage::tests::test_storage_entries ... ignored
+test raftstore::store::peer_storage::tests::test_storage_term ... ignored
+test raftstore::store::peer_storage::tests::test_sync_log ... ignored
+test raftstore::store::peer_storage::tests::test_try_finish_snapshot ... ignored
+test raftstore::store::region_snapshot::tests::test_delete_files_in_range_for_titan ... ignored
+test raftstore::store::region_snapshot::tests::test_iterate ... ignored
+test raftstore::store::region_snapshot::tests::test_peekable ... ignored
+test raftstore::store::region_snapshot::tests::test_reverse_iterate ... ignored
+test raftstore::store::region_snapshot::tests::test_reverse_iterate_with_lower_bound ... ignored
+test raftstore::store::region_snapshot::tests::test_seek_and_seek_prev ... ignored
+test raftstore::store::snap::snap_io::tests::test_cf_build_and_apply_plain_files ... ignored
+test raftstore::store::snap::snap_io::tests::test_cf_build_and_apply_sst_files ... ignored
+test raftstore::store::snap::tests::test_display_path ... ignored
+test raftstore::store::snap::tests::test_empty_snap_file ... ignored
+test raftstore::store::snap::tests::test_empty_snap_validation ... ignored
+test raftstore::store::snap::tests::test_gen_snapshot_meta ... ignored
+test raftstore::store::snap::tests::test_non_empty_snap_file ... ignored
+test raftstore::store::snap::tests::test_non_empty_snap_validation ... ignored
+test raftstore::store::snap::tests::test_snap_corruption_on_meta_file ... ignored
+test raftstore::store::snap::tests::test_snap_corruption_on_size_or_checksum ... ignored
+test raftstore::store::snap::tests::test_snap_deletion_on_registry ... ignored
+test raftstore::store::snap::tests::test_snap_mgr_create_dir ... ignored
+test raftstore::store::snap::tests::test_snap_mgr_v2 ... ignored
+test raftstore::store::snap::tests::test_snapshot_max_total_size ... ignored
+test raftstore::store::util::tests::test_check_key_in_region ... ignored
+test raftstore::store::util::tests::test_check_peer_id ... ignored
+test raftstore::store::util::tests::test_check_region_epoch ... ignored
+test raftstore::store::util::tests::test_check_store_id ... ignored
+test raftstore::store::util::tests::test_check_term ... ignored
+test raftstore::store::util::tests::test_conf_change_type_str ... ignored
+test raftstore::store::util::tests::test_conf_state_from_region ... ignored
+test raftstore::store::util::tests::test_epoch_stale ... ignored
+test raftstore::store::util::tests::test_first_vote_msg ... ignored
+test raftstore::store::util::tests::test_is_initial_msg ... ignored
+test raftstore::store::util::tests::test_lease ... ignored
+test raftstore::store::util::tests::test_on_same_store ... ignored
+test raftstore::store::util::tests::test_peer ... ignored
+test raftstore::store::util::tests::test_region_sibling ... ignored
+test raftstore::store::util::tests::test_timespec_u64 ... ignored
+test raftstore::store::worker::compact::tests::test_check_space_redundancy ... ignored
+test raftstore::store::worker::compact::tests::test_compact_range ... ignored
+test raftstore::store::worker::consistency_check::tests::test_consistency_check ... ignored
+test raftstore::store::worker::pd::tests::test_collect_stats ... ignored
+test raftstore::store::worker::raftlog_gc::tests::test_gc_raft_log ... ignored
+test raftstore::store::worker::read::tests::test_read ... ignored
+test raftstore::store::worker::region::tests::test_pending_applies ... ignored
+test raftstore::store::worker::region::tests::test_pending_delete_ranges ... ignored
+test server::config::tests::test_config_validate ... ignored
+test server::config::tests::test_store_labels ... ignored
+test server::debug::tests::test_bad_regions ... ignored
+test server::debug::tests::test_debug_raw_scan ... ignored
+test server::debug::tests::test_get ... ignored
+test server::debug::tests::test_modify_tikv_config ... ignored
+test server::debug::tests::test_mvcc_checker ... ignored
+test server::debug::tests::test_raft_log ... ignored
+test server::debug::tests::test_recreate_region ... ignored
+test server::debug::tests::test_region_info ... ignored
+test server::debug::tests::test_region_overlap ... ignored
+test server::debug::tests::test_region_size ... ignored
+test server::debug::tests::test_remove_failed_stores ... ignored
+test server::debug::tests::test_scan_mvcc ... ignored
+test server::debug::tests::test_store_region ... ignored
+test server::debug::tests::test_tombstone_regions ... ignored
+test server::debug::tests::test_tombstone_regions_by_id ... ignored
+test server::debug::tests::test_validate_db_and_cf ... ignored
+test server::gc_worker::tests::test_auto_gc_a_round_without_rewind ... ignored
+test server::gc_worker::tests::test_auto_gc_rewinding ... ignored
+test server::gc_worker::tests::test_destroy_range ... ignored
+test server::gc_worker::tests::test_gc_config_validate ... ignored
+test server::gc_worker::tests::test_gc_manager_initialize ... ignored
+test server::gc_worker::tests::test_make_context ... ignored
+test server::gc_worker::tests::test_update_safe_point ... ignored
+test server::load_statistics::linux::tests::test_thread_load_statistic ... ignored
+test server::lock_manager::config::tests::test_config_validate ... ignored
+test server::lock_manager::deadlock::tests::test_detect_table ... ignored
+test server::lock_manager::deadlock::tests::test_detect_table_expire ... ignored
+test server::lock_manager::tests::test_has_waiter ... ignored
+test server::lock_manager::waiter_manager::tests::test_extract_raw_key_from_process_result ... ignored
+test server::lock_manager::waiter_manager::tests::test_wait_table_add_and_remove ... ignored
+test server::lock_manager::waiter_manager::tests::test_wait_table_is_empty ... ignored
+test server::lock_manager::waiter_manager::tests::test_wait_table_take_ready_waiters ... ignored
+test server::lock_manager::waiter_manager::tests::test_wait_table_to_wait_for_entries ... ignored
+test server::lock_manager::waiter_manager::tests::test_waiter_manager ... ignored
+test server::resolve::tests::test_resolve_store_peer_addr ... ignored
+test server::resolve::tests::test_resolve_store_state_offline ... ignored
+test server::resolve::tests::test_resolve_store_state_tombstone ... ignored
+test server::resolve::tests::test_resolve_store_state_up ... ignored
+test server::resolve::tests::test_store_address_refresh ... ignored
+test server::server::tests::test_peer_resolve ... ignored
+test server::service::kv::tests::test_extract_key_error_write_conflict ... ignored
+test server::service::kv::tests::test_poll_future_notify_with_slow_poller ... ignored
+test server::service::kv::tests::test_poll_future_notify_with_slow_source ... ignored
+test server::status_server::tests::test_config_endpoint ... ignored
+test server::status_server::tests::test_status_service ... ignored
+test server::status_server::tests::test_status_service_fail_endpoints_should_give_404_when_failpoints_are_disable ... ignored
+test storage::kv::btree_engine::tests::test_bounds_of_btree_engine ... ignored
+test storage::kv::btree_engine::tests::test_btree_engine ... ignored
+test storage::kv::btree_engine::tests::test_get_not_exist_cf ... ignored
+test storage::kv::btree_engine::tests::test_iterator ... ignored
+test storage::kv::btree_engine::tests::test_linear_of_btree_engine ... ignored
+test storage::kv::btree_engine::tests::test_statistic_of_btree_engine ... ignored
+test storage::kv::perf_context::tests::test_deref ... ignored
+test storage::kv::perf_context::tests::test_field_operations ... ignored
+test storage::kv::rocksdb_engine::tests::rocksdb_reopen ... ignored
+test storage::kv::rocksdb_engine::tests::test_rocksdb ... ignored
+test storage::kv::rocksdb_engine::tests::test_rocksdb_linear ... ignored
+test storage::kv::rocksdb_engine::tests::test_rocksdb_perf_statistics ... ignored
+test storage::kv::rocksdb_engine::tests::test_rocksdb_statistic ... ignored
+test storage::lock_manager::util::tests::test_extract_lock_from_result ... ignored
+test storage::mvcc::lock::tests::test_lock ... ignored
+test storage::mvcc::lock::tests::test_lock_type ... ignored
+test storage::mvcc::reader::point_getter::tests::test_get_latest_value ... ignored
+test storage::mvcc::reader::point_getter::tests::test_multi_basic_1 ... ignored
+test storage::mvcc::reader::point_getter::tests::test_multi_basic_2 ... ignored
+test storage::mvcc::reader::point_getter::tests::test_multi_basic_3 ... ignored
+test storage::mvcc::reader::point_getter::tests::test_multi_locked ... ignored
+test storage::mvcc::reader::point_getter::tests::test_omit_value ... ignored
+test storage::mvcc::reader::point_getter::tests::test_single_basic ... ignored
+test storage::mvcc::reader::reader::tests::test_check_lock ... ignored
+test storage::mvcc::reader::reader::tests::test_get_txn_commit_info ... ignored
+test storage::mvcc::reader::reader::tests::test_get_txn_commit_info_of_pessimistic_txn ... ignored
+test storage::mvcc::reader::reader::tests::test_get_write ... ignored
+test storage::mvcc::reader::reader::tests::test_need_gc ... ignored
+test storage::mvcc::reader::reader::tests::test_scan_locks ... ignored
+test storage::mvcc::reader::reader::tests::test_seek_write ... ignored
+test storage::mvcc::reader::scanner::backward::tests::test_basic ... ignored
+test storage::mvcc::reader::scanner::backward::tests::test_many_tombstones ... ignored
+test storage::mvcc::reader::scanner::backward::tests::test_move_prev_user_key_out_of_bound_1 ... ignored
+test storage::mvcc::reader::scanner::backward::tests::test_move_prev_user_key_out_of_bound_2 ... ignored
+test storage::mvcc::reader::scanner::backward::tests::test_move_prev_user_key_out_of_bound_3 ... ignored
+test storage::mvcc::reader::scanner::backward::tests::test_range ... ignored
+test storage::mvcc::reader::scanner::backward::tests::test_reverse_get_out_of_bound_1 ... ignored
+test storage::mvcc::reader::scanner::backward::tests::test_reverse_get_out_of_bound_2 ... ignored
+test storage::mvcc::reader::scanner::forward::tests::test_get_out_of_bound ... ignored
+test storage::mvcc::reader::scanner::forward::tests::test_move_next_user_key_out_of_bound_1 ... ignored
+test storage::mvcc::reader::scanner::forward::tests::test_move_next_user_key_out_of_bound_2 ... ignored
+test storage::mvcc::reader::scanner::forward::tests::test_range ... ignored
+test storage::mvcc::reader::scanner::tests::test_scan_with_lock ... ignored
+test storage::mvcc::reader::scanner::tests::test_scan_with_lock_and_write ... ignored
+test storage::mvcc::reader::scanner::txn_entry::tests::test_get_out_of_bound ... ignored
+test storage::mvcc::reader::scanner::txn_entry::tests::test_move_next_user_key_out_of_bound_1 ... ignored
+test storage::mvcc::reader::scanner::txn_entry::tests::test_move_next_user_key_out_of_bound_2 ... ignored
+test storage::mvcc::reader::scanner::txn_entry::tests::test_range ... ignored
+test storage::mvcc::reader::util::tests::test_check_lock ... ignored
+test storage::mvcc::tests::test_ts ... ignored
+test storage::mvcc::txn::tests::test_check_txn_status ... ignored
+test storage::mvcc::txn::tests::test_cleanup ... ignored
+test storage::mvcc::txn::tests::test_collapse_prev_rollback ... ignored
+test storage::mvcc::txn::tests::test_constraint_check_with_overlapping_txn ... ignored
+test storage::mvcc::txn::tests::test_gc ... ignored
+test storage::mvcc::txn::tests::test_lock_info_validation ... ignored
+test storage::mvcc::txn::tests::test_min_commit_ts ... ignored
+test storage::mvcc::txn::tests::test_mvcc_txn_commit_err ... ignored
+test storage::mvcc::txn::tests::test_mvcc_txn_commit_ok ... ignored
+test storage::mvcc::txn::tests::test_mvcc_txn_prewrite ... ignored
+test storage::mvcc::txn::tests::test_mvcc_txn_prewrite_insert ... ignored
+test storage::mvcc::txn::tests::test_mvcc_txn_read ... ignored
+test storage::mvcc::txn::tests::test_mvcc_txn_rollback ... ignored
+test storage::mvcc::txn::tests::test_mvcc_txn_rollback_after_commit ... ignored
+test storage::mvcc::txn::tests::test_mvcc_txn_rollback_before_prewrite ... ignored
+test storage::mvcc::txn::tests::test_non_pessimistic_lock_conflict ... ignored
+test storage::mvcc::txn::tests::test_overwrite_pessimistic_lock ... ignored
+test storage::mvcc::txn::tests::test_pessimistic_lock ... ignored
+test storage::mvcc::txn::tests::test_pessimistic_rollback ... ignored
+test storage::mvcc::txn::tests::test_pessimistic_txn_ttl ... ignored
+test storage::mvcc::txn::tests::test_read_commit ... ignored
+test storage::mvcc::txn::tests::test_rollback_del ... ignored
+test storage::mvcc::txn::tests::test_rollback_lock_optimistic ... ignored
+test storage::mvcc::txn::tests::test_rollback_lock_pessimistic ... ignored
+test storage::mvcc::txn::tests::test_scan_keys ... ignored
+test storage::mvcc::txn::tests::test_scan_values_in_default ... ignored
+test storage::mvcc::txn::tests::test_seek_ts ... ignored
+test storage::mvcc::txn::tests::test_skip_constraint_check ... ignored
+test storage::mvcc::txn::tests::test_txn_heart_beat ... ignored
+test storage::mvcc::txn::tests::test_write ... ignored
+test storage::mvcc::txn::tests::test_write_size ... ignored
+test storage::mvcc::write::tests::test_is_protected ... ignored
+test storage::mvcc::write::tests::test_write ... ignored
+test storage::mvcc::write::tests::test_write_type ... ignored
+test storage::tests::test_async_batch_get_command ... ignored
+test storage::tests::test_batch_get ... ignored
+test storage::tests::test_batch_raw_get ... ignored
+test storage::tests::test_cf_error ... ignored
+test storage::tests::test_check_key_ranges ... ignored
+test storage::tests::test_check_txn_status ... ignored
+test storage::tests::test_cleanup ... ignored
+test storage::tests::test_cleanup_check_ttl ... ignored
+test storage::tests::test_delete_range ... ignored
+test storage::tests::test_get_put ... ignored
+test storage::tests::test_high_priority_get_put ... ignored
+test storage::tests::test_high_priority_no_block ... ignored
+test storage::tests::test_raw_batch_delete ... ignored
+test storage::tests::test_raw_batch_get ... ignored
+test storage::tests::test_raw_batch_put ... ignored
+test storage::tests::test_raw_batch_scan ... ignored
+test storage::tests::test_raw_delete_range ... ignored
+test storage::tests::test_raw_scan ... ignored
+test storage::tests::test_resolve_lock ... ignored
+test storage::tests::test_resolve_lock_lite ... ignored
+test storage::tests::test_scan ... ignored
+test storage::tests::test_scan_lock ... ignored
+test storage::tests::test_sched_too_busy ... ignored
+test storage::tests::test_txn ... ignored
+test storage::tests::test_txn_heart_beat ... ignored
+test storage::txn::latch::tests::test_wakeup ... ignored
+test storage::txn::latch::tests::test_wakeup_by_multi_cmds ... ignored
+test storage::txn::scheduler::tests::test_command_latches ... ignored
+test storage::txn::store::tests::test_fixture_get ... ignored
+test storage::txn::store::tests::test_fixture_scanner ... ignored
+test storage::txn::store::tests::test_scan_with_bound ... ignored
+test storage::txn::store::tests::test_scanner_verify_bound ... ignored
+test storage::txn::store::tests::test_snapshot_store_batch_get ... ignored
+test storage::txn::store::tests::test_snapshot_store_get ... ignored
+test storage::txn::store::tests::test_snapshot_store_reverse_scan ... ignored
+test storage::txn::store::tests::test_snapshot_store_scan ... ignored
+test raftstore::coprocessor::properties::tests::bench_mvcc_properties                    ... bench:       2,702 ns/iter (+/- 485)
+test raftstore::coprocessor::split_check::size::tests::bench_get_region_approximate_size ... bench:      34,583 ns/iter (+/- 5,264)
+test raftstore::store::fsm::router::tests::bench_send                                    ... bench:         141 ns/iter (+/- 6)
+test server::lock_manager::tests::bench_lock_mgr_clone                                   ... bench:         385 ns/iter (+/- 20)
+test storage::txn::store::benches::bench_fixture_batch_get                               ... bench:      14,554 ns/iter (+/- 991)
+test storage::txn::store::benches::bench_fixture_get                                     ... bench:         112 ns/iter (+/- 10)
+test storage::txn::store::benches::bench_fixture_scanner                                 ... bench:     519,232 ns/iter (+/- 23,701)
+test storage::txn::store::benches::bench_fixture_scanner_next                            ... bench:     501,034 ns/iter (+/- 80,945)
+test storage::txn::store::benches::bench_fixture_scanner_scan                            ... bench:     654,509 ns/iter (+/- 46,415)
+
+test result: ok. 0 passed; 0 failed; 295 ignored; 9 measured; 0 filtered out
+
+     Running target/release/deps/coprocessor_executors-9bd22851f26da893
+Benchmarking table_scan_datum_absent_large_row/Memory/normal/next=1024
+Benchmarking table_scan_datum_absent_large_row/Memory/normal/next=1024: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 2465.3s or reduce sample count to 10
+Benchmarking table_scan_datum_absent_large_row/Memory/normal/next=1024: Collecting 100 samples in estimated 2465.3 s (5050 iterations)
+Benchmarking table_scan_datum_absent_large_row/Memory/normal/next=1024: Analyzing
+table_scan_datum_absent_large_row/Memory/normal/next=1024
+                        time:   [5.4072 ms 5.4651 ms 5.5162 ms]
+                        change: [+2.5690% +4.4561% +6.3835%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 6 outliers among 100 measurements (6.00%)
+  1 (1.00%) low severe
+  5 (5.00%) low mild
+Benchmarking table_scan_datum_absent_large_row/Memory/batch/next=1024
+Benchmarking table_scan_datum_absent_large_row/Memory/batch/next=1024: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 2499.3s or reduce sample count to 10
+Benchmarking table_scan_datum_absent_large_row/Memory/batch/next=1024: Collecting 100 samples in estimated 2499.3 s (5050 iterations)
+Benchmarking table_scan_datum_absent_large_row/Memory/batch/next=1024: Analyzing
+table_scan_datum_absent_large_row/Memory/batch/next=1024
+                        time:   [2.2085 ms 2.2424 ms 2.2756 ms]
+                        change: [-3.4645% -1.8386% -0.0426%] (p = 0.03 < 0.05)
+                        Change within noise threshold.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) low mild
+  1 (1.00%) high mild
+Benchmarking table_scan_datum_absent_large_row/RocksDB/normal/with_dag/rows=5000
+Benchmarking table_scan_datum_absent_large_row/RocksDB/normal/with_dag/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 2574.2s or reduce sample count to 10
+Benchmarking table_scan_datum_absent_large_row/RocksDB/normal/with_dag/rows=5000: Collecting 100 samples in estimated 2574.2 s (5050 iterations)
+Benchmarking table_scan_datum_absent_large_row/RocksDB/normal/with_dag/rows=5000: Analyzing
+table_scan_datum_absent_large_row/RocksDB/normal/with_dag/rows=5000
+                        time:   [29.031 ms 29.415 ms 29.780 ms]
+                        change: [-6.0484% -4.6396% -3.2440%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) low mild
+Benchmarking table_scan_datum_absent_large_row/RocksDB/batch/with_dag/rows=5000
+Benchmarking table_scan_datum_absent_large_row/RocksDB/batch/with_dag/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 2387.1s or reduce sample count to 10
+Benchmarking table_scan_datum_absent_large_row/RocksDB/batch/with_dag/rows=5000: Collecting 100 samples in estimated 2387.1 s (5050 iterations)
+Benchmarking table_scan_datum_absent_large_row/RocksDB/batch/with_dag/rows=5000: Analyzing
+table_scan_datum_absent_large_row/RocksDB/batch/with_dag/rows=5000
+                        time:   [14.117 ms 14.337 ms 14.537 ms]
+                        change: [-4.1227% -2.4123% -0.6507%] (p = 0.01 < 0.05)
+                        Change within noise threshold.
+Found 8 outliers among 100 measurements (8.00%)
+  8 (8.00%) low mild
+
+Benchmarking table_scan_long_datum_all/Memory/normal/next=1024
+Benchmarking table_scan_long_datum_all/Memory/normal/next=1024: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1306.9s or reduce sample count to 10
+Benchmarking table_scan_long_datum_all/Memory/normal/next=1024: Collecting 100 samples in estimated 1306.9 s (5050 iterations)
+Benchmarking table_scan_long_datum_all/Memory/normal/next=1024: Analyzing
+table_scan_long_datum_all/Memory/normal/next=1024
+                        time:   [482.57 us 489.60 us 496.37 us]
+                        change: [+0.9472% +3.5439% +6.1128%] (p = 0.01 < 0.05)
+                        Change within noise threshold.
+Found 6 outliers among 100 measurements (6.00%)
+  6 (6.00%) low mild
+Benchmarking table_scan_long_datum_all/Memory/batch/next=1024
+Benchmarking table_scan_long_datum_all/Memory/batch/next=1024: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1212.2s or reduce sample count to 10
+Benchmarking table_scan_long_datum_all/Memory/batch/next=1024: Collecting 100 samples in estimated 1212.2 s (5050 iterations)
+Benchmarking table_scan_long_datum_all/Memory/batch/next=1024: Analyzing
+table_scan_long_datum_all/Memory/batch/next=1024
+                        time:   [364.88 us 369.82 us 374.56 us]
+                        change: [+5.4687% +8.1808% +10.891%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 7 outliers among 100 measurements (7.00%)
+  6 (6.00%) low mild
+  1 (1.00%) high mild
+Benchmarking table_scan_long_datum_all/RocksDB/normal/with_dag/rows=5000
+Benchmarking table_scan_long_datum_all/RocksDB/normal/with_dag/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1167.6s or reduce sample count to 10
+Benchmarking table_scan_long_datum_all/RocksDB/normal/with_dag/rows=5000: Collecting 100 samples in estimated 1167.6 s (5050 iterations)
+Benchmarking table_scan_long_datum_all/RocksDB/normal/with_dag/rows=5000: Analyzing
+table_scan_long_datum_all/RocksDB/normal/with_dag/rows=5000
+                        time:   [4.4054 ms 4.4961 ms 4.5808 ms]
+                        change: [+3.1992% +5.6062% +8.1572%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 9 outliers among 100 measurements (9.00%)
+  8 (8.00%) low mild
+  1 (1.00%) high mild
+Benchmarking table_scan_long_datum_all/RocksDB/batch/with_dag/rows=5000
+Benchmarking table_scan_long_datum_all/RocksDB/batch/with_dag/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1231.5s or reduce sample count to 10
+Benchmarking table_scan_long_datum_all/RocksDB/batch/with_dag/rows=5000: Collecting 100 samples in estimated 1231.5 s (5050 iterations)
+Benchmarking table_scan_long_datum_all/RocksDB/batch/with_dag/rows=5000: Analyzing
+table_scan_long_datum_all/RocksDB/batch/with_dag/rows=5000
+                        time:   [3.7836 ms 3.8438 ms 3.9005 ms]
+                        change: [+1.6067% +3.9341% +6.3419%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+
+Benchmarking table_scan_primary_key/Memory/normal/next=1024
+Benchmarking table_scan_primary_key/Memory/normal/next=1024: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1236.7s or reduce sample count to 10
+Benchmarking table_scan_primary_key/Memory/normal/next=1024: Collecting 100 samples in estimated 1236.7 s (5050 iterations)
+Benchmarking table_scan_primary_key/Memory/normal/next=1024: Analyzing
+table_scan_primary_key/Memory/normal/next=1024
+                        time:   [164.90 us 166.95 us 168.89 us]
+                        change: [-0.4688% +2.5891% +5.7132%] (p = 0.10 > 0.05)
+                        No change in performance detected.
+Found 7 outliers among 100 measurements (7.00%)
+  7 (7.00%) low mild
+Benchmarking table_scan_primary_key/Memory/batch/next=1024
+Benchmarking table_scan_primary_key/Memory/batch/next=1024: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1261.7s or reduce sample count to 10
+Benchmarking table_scan_primary_key/Memory/batch/next=1024: Collecting 100 samples in estimated 1261.7 s (5050 iterations)
+Benchmarking table_scan_primary_key/Memory/batch/next=1024: Analyzing
+table_scan_primary_key/Memory/batch/next=1024
+                        time:   [133.83 us 136.25 us 138.56 us]
+                        change: [-2.3674% +0.3088% +3.1143%] (p = 0.83 > 0.05)
+                        No change in performance detected.
+Benchmarking table_scan_primary_key/RocksDB/normal/with_dag/rows=5000
+Benchmarking table_scan_primary_key/RocksDB/normal/with_dag/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1144.7s or reduce sample count to 10
+Benchmarking table_scan_primary_key/RocksDB/normal/with_dag/rows=5000: Collecting 100 samples in estimated 1144.7 s (5050 iterations)
+Benchmarking table_scan_primary_key/RocksDB/normal/with_dag/rows=5000: Analyzing
+table_scan_primary_key/RocksDB/normal/with_dag/rows=5000
+                        time:   [3.0567 ms 3.1148 ms 3.1733 ms]
+                        change: [-2.2764% +0.1698% +2.5690%] (p = 0.89 > 0.05)
+                        No change in performance detected.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking table_scan_primary_key/RocksDB/batch/with_dag/rows=5000
+Benchmarking table_scan_primary_key/RocksDB/batch/with_dag/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1118.2s or reduce sample count to 10
+Benchmarking table_scan_primary_key/RocksDB/batch/with_dag/rows=5000: Collecting 100 samples in estimated 1118.2 s (5050 iterations)
+Benchmarking table_scan_primary_key/RocksDB/batch/with_dag/rows=5000: Analyzing
+table_scan_primary_key/RocksDB/batch/with_dag/rows=5000
+                        time:   [2.6264 ms 2.6843 ms 2.7432 ms]
+                        change: [-2.8873% -0.5493% +1.9872%] (p = 0.66 > 0.05)
+                        No change in performance detected.
+
+Benchmarking index_scan_index/Memory/normal/next=1024
+Benchmarking index_scan_index/Memory/normal/next=1024: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1314.4s or reduce sample count to 10
+Benchmarking index_scan_index/Memory/normal/next=1024: Collecting 100 samples in estimated 1314.4 s (5050 iterations)
+Benchmarking index_scan_index/Memory/normal/next=1024: Analyzing
+index_scan_index/Memory/normal/next=1024
+                        time:   [267.18 us 270.56 us 273.73 us]
+                        change: [-3.9197% -1.6250% +0.6550%] (p = 0.16 > 0.05)
+                        No change in performance detected.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) low mild
+Benchmarking index_scan_index/Memory/batch/next=1024
+Benchmarking index_scan_index/Memory/batch/next=1024: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1337.7s or reduce sample count to 10
+Benchmarking index_scan_index/Memory/batch/next=1024: Collecting 100 samples in estimated 1337.7 s (5050 iterations)
+Benchmarking index_scan_index/Memory/batch/next=1024: Analyzing
+index_scan_index/Memory/batch/next=1024
+                        time:   [153.02 us 155.34 us 157.48 us]
+                        change: [-0.1196% +2.3656% +5.0880%] (p = 0.08 > 0.05)
+                        No change in performance detected.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) low mild
+Benchmarking index_scan_index/RocksDB/normal/with_dag/rows=5000
+Benchmarking index_scan_index/RocksDB/normal/with_dag/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1213.7s or reduce sample count to 10
+Benchmarking index_scan_index/RocksDB/normal/with_dag/rows=5000: Collecting 100 samples in estimated 1213.7 s (5050 iterations)
+Benchmarking index_scan_index/RocksDB/normal/with_dag/rows=5000: Analyzing
+index_scan_index/RocksDB/normal/with_dag/rows=5000
+                        time:   [3.8344 ms 3.8953 ms 3.9530 ms]
+                        change: [+5.0558% +7.8303% +10.712%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+Benchmarking index_scan_index/RocksDB/batch/with_dag/rows=5000
+Benchmarking index_scan_index/RocksDB/batch/with_dag/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1246.1s or reduce sample count to 10
+Benchmarking index_scan_index/RocksDB/batch/with_dag/rows=5000: Collecting 100 samples in estimated 1246.1 s (5050 iterations)
+Benchmarking index_scan_index/RocksDB/batch/with_dag/rows=5000: Analyzing
+index_scan_index/RocksDB/batch/with_dag/rows=5000
+                        time:   [3.0381 ms 3.0856 ms 3.1293 ms]
+                        change: [+1.7000% +4.6407% +7.8573%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 18 outliers among 100 measurements (18.00%)
+  14 (14.00%) low mild
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking index_scan_primary_key/Memory/normal/next=1024
+Benchmarking index_scan_primary_key/Memory/normal/next=1024: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 2187.2s or reduce sample count to 10
+Benchmarking index_scan_primary_key/Memory/normal/next=1024: Collecting 100 samples in estimated 2187.2 s (5050 iterations)
+Benchmarking index_scan_primary_key/Memory/normal/next=1024: Analyzing
+index_scan_primary_key/Memory/normal/next=1024
+                        time:   [363.94 us 368.36 us 372.47 us]
+                        change: [-1.5126% +0.7648% +3.1152%] (p = 0.52 > 0.05)
+                        No change in performance detected.
+Found 6 outliers among 100 measurements (6.00%)
+  5 (5.00%) low mild
+  1 (1.00%) high mild
+Benchmarking index_scan_primary_key/Memory/batch/next=1024
+Benchmarking index_scan_primary_key/Memory/batch/next=1024: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1380.7s or reduce sample count to 10
+Benchmarking index_scan_primary_key/Memory/batch/next=1024: Collecting 100 samples in estimated 1380.7 s (5050 iterations)
+Benchmarking index_scan_primary_key/Memory/batch/next=1024: Analyzing
+index_scan_primary_key/Memory/batch/next=1024
+                        time:   [143.41 us 145.35 us 147.10 us]
+                        change: [-0.0101% +2.5823% +5.3123%] (p = 0.06 > 0.05)
+                        No change in performance detected.
+Found 6 outliers among 100 measurements (6.00%)
+  3 (3.00%) low mild
+  3 (3.00%) high mild
+Benchmarking index_scan_primary_key/RocksDB/normal/with_dag/rows=5000
+Benchmarking index_scan_primary_key/RocksDB/normal/with_dag/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1282.4s or reduce sample count to 10
+Benchmarking index_scan_primary_key/RocksDB/normal/with_dag/rows=5000: Collecting 100 samples in estimated 1282.4 s (5050 iterations)
+Benchmarking index_scan_primary_key/RocksDB/normal/with_dag/rows=5000: Analyzing
+index_scan_primary_key/RocksDB/normal/with_dag/rows=5000
+                        time:   [4.4601 ms 4.5216 ms 4.5829 ms]
+                        change: [-2.7104% -0.4044% +1.7355%] (p = 0.73 > 0.05)
+                        No change in performance detected.
+Found 17 outliers among 100 measurements (17.00%)
+  5 (5.00%) low severe
+  7 (7.00%) low mild
+  5 (5.00%) high mild
+Benchmarking index_scan_primary_key/RocksDB/batch/with_dag/rows=5000
+Benchmarking index_scan_primary_key/RocksDB/batch/with_dag/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1284.6s or reduce sample count to 10
+Benchmarking index_scan_primary_key/RocksDB/batch/with_dag/rows=5000: Collecting 100 samples in estimated 1284.6 s (5050 iterations)
+Benchmarking index_scan_primary_key/RocksDB/batch/with_dag/rows=5000: Analyzing
+index_scan_primary_key/RocksDB/batch/with_dag/rows=5000
+                        time:   [3.0096 ms 3.0459 ms 3.0799 ms]
+                        change: [-4.4515% -2.1648% +0.5825%] (p = 0.09 > 0.05)
+                        No change in performance detected.
+Found 19 outliers among 100 measurements (19.00%)
+  2 (2.00%) low severe
+  10 (10.00%) low mild
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+
+Benchmarking selection_binary_func_column_constant/normal/rows=5000
+Benchmarking selection_binary_func_column_constant/normal/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 13.7s or reduce sample count to 40
+Benchmarking selection_binary_func_column_constant/normal/rows=5000: Collecting 100 samples in estimated 13.748 s (5050 iterations)
+Benchmarking selection_binary_func_column_constant/normal/rows=5000: Analyzing
+selection_binary_func_column_constant/normal/rows=5000
+                        time:   [1.3605 ms 1.3673 ms 1.3749 ms]
+                        change: [+0.1545% +1.6951% +3.3558%] (p = 0.04 < 0.05)
+                        Change within noise threshold.
+Found 17 outliers among 100 measurements (17.00%)
+  5 (5.00%) low severe
+  5 (5.00%) high mild
+  7 (7.00%) high severe
+Benchmarking selection_binary_func_column_constant/batch/rows=5000
+Benchmarking selection_binary_func_column_constant/batch/rows=5000: Warming up for 3.0000 s
+Benchmarking selection_binary_func_column_constant/batch/rows=5000: Collecting 100 samples in estimated 8.8146 s (10k iterations)
+Benchmarking selection_binary_func_column_constant/batch/rows=5000: Analyzing
+selection_binary_func_column_constant/batch/rows=5000
+                        time:   [286.05 us 286.72 us 287.38 us]
+                        change: [+4.5344% +6.3967% +8.4799%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 10 outliers among 100 measurements (10.00%)
+  1 (1.00%) low mild
+  4 (4.00%) high mild
+  5 (5.00%) high severe
+
+Benchmarking simple_aggr_count_1/normal/rows=5000
+Benchmarking simple_aggr_count_1/normal/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 12.6s or reduce sample count to 40
+Benchmarking simple_aggr_count_1/normal/rows=5000: Collecting 100 samples in estimated 12.564 s (5050 iterations)
+Benchmarking simple_aggr_count_1/normal/rows=5000: Analyzing
+simple_aggr_count_1/normal/rows=5000
+                        time:   [1.0233 ms 1.0263 ms 1.0294 ms]
+                        change: [-7.5591% -5.9213% -4.4235%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 13 outliers among 100 measurements (13.00%)
+  7 (7.00%) low severe
+  3 (3.00%) high mild
+  3 (3.00%) high severe
+Benchmarking simple_aggr_count_1/batch/rows=5000
+Benchmarking simple_aggr_count_1/batch/rows=5000: Warming up for 3.0000 s
+Benchmarking simple_aggr_count_1/batch/rows=5000: Collecting 100 samples in estimated 6.9879 s (10k iterations)
+Benchmarking simple_aggr_count_1/batch/rows=5000: Analyzing
+simple_aggr_count_1/batch/rows=5000
+                        time:   [45.030 us 45.192 us 45.357 us]
+                        change: [+2.8206% +4.8838% +7.0986%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low severe
+  3 (3.00%) high severe
+
+Benchmarking simple_aggr_count_int_col/normal/rows=5000
+Benchmarking simple_aggr_count_int_col/normal/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 14.8s or reduce sample count to 40
+Benchmarking simple_aggr_count_int_col/normal/rows=5000: Collecting 100 samples in estimated 14.809 s (5050 iterations)
+Benchmarking simple_aggr_count_int_col/normal/rows=5000: Analyzing
+simple_aggr_count_int_col/normal/rows=5000
+                        time:   [1.4468 ms 1.4661 ms 1.4853 ms]
+                        change: [+0.2833% +1.7786% +3.1746%] (p = 0.01 < 0.05)
+                        Change within noise threshold.
+Found 13 outliers among 100 measurements (13.00%)
+  8 (8.00%) low mild
+  4 (4.00%) high mild
+  1 (1.00%) high severe
+Benchmarking simple_aggr_count_int_col/batch/rows=5000
+Benchmarking simple_aggr_count_int_col/batch/rows=5000: Warming up for 3.0000 s
+Benchmarking simple_aggr_count_int_col/batch/rows=5000: Collecting 100 samples in estimated 8.5666 s (10k iterations)
+Benchmarking simple_aggr_count_int_col/batch/rows=5000: Analyzing
+simple_aggr_count_int_col/batch/rows=5000
+                        time:   [242.70 us 243.55 us 244.42 us]
+                        change: [+3.9202% +5.4751% +7.1634%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking hash_aggr_count_1_first_group_by_int_col_real_col_2_groups/normal/rows=5000
+Benchmarking hash_aggr_count_1_first_group_by_int_col_real_col_2_groups/normal/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 33.8s or reduce sample count to 20
+Benchmarking hash_aggr_count_1_first_group_by_int_col_real_col_2_groups/normal/rows=5000: Collecting 100 samples in estimated 33.765 s (5050 iterations)
+Benchmarking hash_aggr_count_1_first_group_by_int_col_real_col_2_groups/normal/rows=5000: Analyzing
+hash_aggr_count_1_first_group_by_int_col_real_col_2_groups/normal/rows=5000
+                        time:   [3.4412 ms 3.4784 ms 3.5096 ms]
+                        change: [-1.1422% -0.1477% +0.9237%] (p = 0.79 > 0.05)
+                        No change in performance detected.
+Found 10 outliers among 100 measurements (10.00%)
+  2 (2.00%) low severe
+  3 (3.00%) low mild
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+Benchmarking hash_aggr_count_1_first_group_by_int_col_real_col_2_groups/batch/rows=5000
+Benchmarking hash_aggr_count_1_first_group_by_int_col_real_col_2_groups/batch/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 13.6s or reduce sample count to 40
+Benchmarking hash_aggr_count_1_first_group_by_int_col_real_col_2_groups/batch/rows=5000: Collecting 100 samples in estimated 13.644 s (5050 iterations)
+Benchmarking hash_aggr_count_1_first_group_by_int_col_real_col_2_groups/batch/rows=5000: Analyzing
+hash_aggr_count_1_first_group_by_int_col_real_col_2_groups/batch/rows=5000
+                        time:   [974.67 us 977.04 us 979.42 us]
+                        change: [-0.1885% +1.1643% +2.6790%] (p = 0.11 > 0.05)
+                        No change in performance detected.
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) low mild
+  2 (2.00%) high severe
+
+Benchmarking hash_aggr_count_1_group_by_decimal_col_2_groups/normal/rows=5000
+Benchmarking hash_aggr_count_1_group_by_decimal_col_2_groups/normal/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 24.6s or reduce sample count to 30
+Benchmarking hash_aggr_count_1_group_by_decimal_col_2_groups/normal/rows=5000: Collecting 100 samples in estimated 24.633 s (5050 iterations)
+Benchmarking hash_aggr_count_1_group_by_decimal_col_2_groups/normal/rows=5000: Analyzing
+hash_aggr_count_1_group_by_decimal_col_2_groups/normal/rows=5000
+                        time:   [2.7888 ms 2.8138 ms 2.8367 ms]
+                        change: [-1.7037% -0.6488% +0.4331%] (p = 0.24 > 0.05)
+                        No change in performance detected.
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) low severe
+  1 (1.00%) low mild
+Benchmarking hash_aggr_count_1_group_by_decimal_col_2_groups/batch/rows=5000
+Benchmarking hash_aggr_count_1_group_by_decimal_col_2_groups/batch/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 11.7s or reduce sample count to 40
+Benchmarking hash_aggr_count_1_group_by_decimal_col_2_groups/batch/rows=5000: Collecting 100 samples in estimated 11.666 s (5050 iterations)
+Benchmarking hash_aggr_count_1_group_by_decimal_col_2_groups/batch/rows=5000: Analyzing
+hash_aggr_count_1_group_by_decimal_col_2_groups/batch/rows=5000
+                        time:   [1.0907 ms 1.0992 ms 1.1074 ms]
+                        change: [-2.0448% -1.3219% -0.5823%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 5 outliers among 100 measurements (5.00%)
+  2 (2.00%) low severe
+  3 (3.00%) high severe
+
+Benchmarking hash_aggr_count_1_group_by_int_col_2_groups/normal/rows=5000
+Benchmarking hash_aggr_count_1_group_by_int_col_2_groups/normal/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 19.2s or reduce sample count to 30
+Benchmarking hash_aggr_count_1_group_by_int_col_2_groups/normal/rows=5000: Collecting 100 samples in estimated 19.220 s (5050 iterations)
+Benchmarking hash_aggr_count_1_group_by_int_col_2_groups/normal/rows=5000: Analyzing
+hash_aggr_count_1_group_by_int_col_2_groups/normal/rows=5000
+                        time:   [2.4857 ms 2.5028 ms 2.5197 ms]
+                        change: [+1.1662% +1.9577% +2.7411%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 12 outliers among 100 measurements (12.00%)
+  5 (5.00%) low severe
+  2 (2.00%) low mild
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+Benchmarking hash_aggr_count_1_group_by_int_col_2_groups/batch/rows=5000
+Benchmarking hash_aggr_count_1_group_by_int_col_2_groups/batch/rows=5000: Warming up for 3.0000 s
+Benchmarking hash_aggr_count_1_group_by_int_col_2_groups/batch/rows=5000: Collecting 100 samples in estimated 8.9072 s (10k iterations)
+Benchmarking hash_aggr_count_1_group_by_int_col_2_groups/batch/rows=5000: Analyzing
+hash_aggr_count_1_group_by_int_col_2_groups/batch/rows=5000
+                        time:   [268.02 us 269.79 us 271.24 us]
+                        change: [-4.6498% -3.8047% -2.9178%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 5 outliers among 100 measurements (5.00%)
+  2 (2.00%) low severe
+  2 (2.00%) low mild
+  1 (1.00%) high mild
+
+Benchmarking hash_aggr_count_1_group_by_int_col_real_col_2_groups/normal/rows=5000
+Benchmarking hash_aggr_count_1_group_by_int_col_real_col_2_groups/normal/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 28.6s or reduce sample count to 20
+Benchmarking hash_aggr_count_1_group_by_int_col_real_col_2_groups/normal/rows=5000: Collecting 100 samples in estimated 28.642 s (5050 iterations)
+Benchmarking hash_aggr_count_1_group_by_int_col_real_col_2_groups/normal/rows=5000: Analyzing
+hash_aggr_count_1_group_by_int_col_real_col_2_groups/normal/rows=5000
+                        time:   [3.0176 ms 3.0266 ms 3.0357 ms]
+                        change: [-2.2850% -1.4436% -0.2398%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 7 outliers among 100 measurements (7.00%)
+  1 (1.00%) low mild
+  5 (5.00%) high mild
+  1 (1.00%) high severe
+Benchmarking hash_aggr_count_1_group_by_int_col_real_col_2_groups/batch/rows=5000
+Benchmarking hash_aggr_count_1_group_by_int_col_real_col_2_groups/batch/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 9.9s or reduce sample count to 40
+Benchmarking hash_aggr_count_1_group_by_int_col_real_col_2_groups/batch/rows=5000: Collecting 100 samples in estimated 9.9198 s (5050 iterations)
+Benchmarking hash_aggr_count_1_group_by_int_col_real_col_2_groups/batch/rows=5000: Analyzing
+hash_aggr_count_1_group_by_int_col_real_col_2_groups/batch/rows=5000
+                        time:   [796.49 us 799.23 us 801.70 us]
+                        change: [+0.3142% +0.8535% +1.4452%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 4 outliers among 100 measurements (4.00%)
+  2 (2.00%) low mild
+  2 (2.00%) high mild
+
+Benchmarking stream_aggr_count_1_first_group_by_int_col_real_col_2_groups/normal/rows=5000
+Benchmarking stream_aggr_count_1_first_group_by_int_col_real_col_2_groups/normal/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 30.1s or reduce sample count to 20
+Benchmarking stream_aggr_count_1_first_group_by_int_col_real_col_2_groups/normal/rows=5000: Collecting 100 samples in estimated 30.072 s (5050 iterations)
+Benchmarking stream_aggr_count_1_first_group_by_int_col_real_col_2_groups/normal/rows=5000: Analyzing
+stream_aggr_count_1_first_group_by_int_col_real_col_2_groups/normal/rows=5000
+                        time:   [2.5676 ms 2.5887 ms 2.6091 ms]
+                        change: [-3.1215% -2.2567% -1.3633%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 9 outliers among 100 measurements (9.00%)
+  2 (2.00%) low severe
+  1 (1.00%) low mild
+  4 (4.00%) high mild
+  2 (2.00%) high severe
+Benchmarking stream_aggr_count_1_first_group_by_int_col_real_col_2_groups/batch/rows=5000
+Benchmarking stream_aggr_count_1_first_group_by_int_col_real_col_2_groups/batch/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 12.5s or reduce sample count to 40
+Benchmarking stream_aggr_count_1_first_group_by_int_col_real_col_2_groups/batch/rows=5000: Collecting 100 samples in estimated 12.523 s (5050 iterations)
+Benchmarking stream_aggr_count_1_first_group_by_int_col_real_col_2_groups/batch/rows=5000: Analyzing
+stream_aggr_count_1_first_group_by_int_col_real_col_2_groups/batch/rows=5000
+                        time:   [739.92 us 742.45 us 745.08 us]
+                        change: [-0.2020% +0.3482% +0.9136%] (p = 0.23 > 0.05)
+                        No change in performance detected.
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low mild
+  3 (3.00%) high mild
+
+Benchmarking stream_aggr_count_1_group_by_decimal_col_2_groups/normal/rows=5000
+Benchmarking stream_aggr_count_1_group_by_decimal_col_2_groups/normal/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 19.2s or reduce sample count to 30
+Benchmarking stream_aggr_count_1_group_by_decimal_col_2_groups/normal/rows=5000: Collecting 100 samples in estimated 19.179 s (5050 iterations)
+Benchmarking stream_aggr_count_1_group_by_decimal_col_2_groups/normal/rows=5000: Analyzing
+stream_aggr_count_1_group_by_decimal_col_2_groups/normal/rows=5000
+                        time:   [1.9606 ms 1.9820 ms 2.0021 ms]
+                        change: [-5.7724% -4.4991% -3.1961%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 14 outliers among 100 measurements (14.00%)
+  7 (7.00%) low severe
+  4 (4.00%) low mild
+  1 (1.00%) high mild
+  2 (2.00%) high severe
+Benchmarking stream_aggr_count_1_group_by_decimal_col_2_groups/batch/rows=5000
+Benchmarking stream_aggr_count_1_group_by_decimal_col_2_groups/batch/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 9.8s or reduce sample count to 50
+Benchmarking stream_aggr_count_1_group_by_decimal_col_2_groups/batch/rows=5000: Collecting 100 samples in estimated 9.7726 s (5050 iterations)
+Benchmarking stream_aggr_count_1_group_by_decimal_col_2_groups/batch/rows=5000: Analyzing
+stream_aggr_count_1_group_by_decimal_col_2_groups/batch/rows=5000
+                        time:   [802.22 us 807.74 us 812.71 us]
+                        change: [+5.5531% +6.7054% +7.7200%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 14 outliers among 100 measurements (14.00%)
+  2 (2.00%) low severe
+  8 (8.00%) low mild
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking stream_aggr_count_1_group_by_int_col_2_groups/normal/rows=5000
+Benchmarking stream_aggr_count_1_group_by_int_col_2_groups/normal/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 14.8s or reduce sample count to 40
+Benchmarking stream_aggr_count_1_group_by_int_col_2_groups/normal/rows=5000: Collecting 100 samples in estimated 14.807 s (5050 iterations)
+Benchmarking stream_aggr_count_1_group_by_int_col_2_groups/normal/rows=5000: Analyzing
+stream_aggr_count_1_group_by_int_col_2_groups/normal/rows=5000
+                        time:   [1.6239 ms 1.6320 ms 1.6406 ms]
+                        change: [+0.2465% +0.8505% +1.4136%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 7 outliers among 100 measurements (7.00%)
+  1 (1.00%) low mild
+  6 (6.00%) high mild
+Benchmarking stream_aggr_count_1_group_by_int_col_2_groups/batch/rows=5000
+Benchmarking stream_aggr_count_1_group_by_int_col_2_groups/batch/rows=5000: Warming up for 3.0000 s
+Benchmarking stream_aggr_count_1_group_by_int_col_2_groups/batch/rows=5000: Collecting 100 samples in estimated 9.1904 s (10k iterations)
+Benchmarking stream_aggr_count_1_group_by_int_col_2_groups/batch/rows=5000: Analyzing
+stream_aggr_count_1_group_by_int_col_2_groups/batch/rows=5000
+                        time:   [327.27 us 331.13 us 334.49 us]
+                        change: [-1.1008% -0.3646% +0.3576%] (p = 0.35 > 0.05)
+                        No change in performance detected.
+Found 11 outliers among 100 measurements (11.00%)
+  3 (3.00%) low severe
+  6 (6.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking stream_aggr_count_1_group_by_int_col_real_col_2_groups/normal/rows=5000
+Benchmarking stream_aggr_count_1_group_by_int_col_real_col_2_groups/normal/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 23.4s or reduce sample count to 30
+Benchmarking stream_aggr_count_1_group_by_int_col_real_col_2_groups/normal/rows=5000: Collecting 100 samples in estimated 23.432 s (5050 iterations)
+Benchmarking stream_aggr_count_1_group_by_int_col_real_col_2_groups/normal/rows=5000: Analyzing
+stream_aggr_count_1_group_by_int_col_real_col_2_groups/normal/rows=5000
+                        time:   [2.0838 ms 2.1020 ms 2.1202 ms]
+                        change: [-2.9841% -2.0080% -1.0613%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) low mild
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking stream_aggr_count_1_group_by_int_col_real_col_2_groups/batch/rows=5000
+Benchmarking stream_aggr_count_1_group_by_int_col_real_col_2_groups/batch/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 8.6s or reduce sample count to 50
+Benchmarking stream_aggr_count_1_group_by_int_col_real_col_2_groups/batch/rows=5000: Collecting 100 samples in estimated 8.6431 s (5050 iterations)
+Benchmarking stream_aggr_count_1_group_by_int_col_real_col_2_groups/batch/rows=5000: Analyzing
+stream_aggr_count_1_group_by_int_col_real_col_2_groups/batch/rows=5000
+                        time:   [561.42 us 568.62 us 575.23 us]
+                        change: [-2.8966% -0.4844% +2.1562%] (p = 0.71 > 0.05)
+                        No change in performance detected.
+
+Benchmarking select_50_col_order_by_1_col_limit_small/RocksDB/normal/with_dag/rows=5000
+Benchmarking select_50_col_order_by_1_col_limit_small/RocksDB/normal/with_dag/rows=5000: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 1308.8s or reduce sample count to 10
+Benchmarking select_50_col_order_by_1_col_limit_small/RocksDB/normal/with_dag/rows=5000: Collecting 100 samples in estimated 1308.8 s (5050 iterations)
+Benchmarking select_50_col_order_by_1_col_limit_small/RocksDB/normal/with_dag/rows=5000: Analyzing
+select_50_col_order_by_1_col_limit_small/RocksDB/normal/with_dag/rows=5000
+                        time:   [23.340 ms 23.541 ms 23.725 ms]
+                        change: [-0.6498% +0.5741% +1.8570%] (p = 0.38 > 0.05)
+                        No change in performance detected.
+Found 5 outliers among 100 measurements (5.00%)
+  1 (1.00%) low severe
+  4 (4.00%) low mild
+Benchmarking select_50_col_order_by_1_col_limit_small/RocksDB/batch/with_dag/rows=5000
+Benchmarking select_50_col_order_by_1_col_limit_small/RocksDB/batch/with_dag/rows=5000: Warming up for 3.0000 s
+thread 'main' panicked at 'not yet implemented', components/tidb_query/src/batch/runner.rs:102:21
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace.
+
+error: bench failed

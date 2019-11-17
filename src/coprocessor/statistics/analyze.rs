@@ -9,6 +9,7 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query::codec::datum;
 use tidb_query::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
+use tidb_query::expr::EvalContext;
 use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
 
 use super::cmsketch::CmSketch;
@@ -38,6 +39,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req.get_start_ts(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
+            req_ctx.bypass_locks.clone(),
         );
         Ok(Self {
             req,
@@ -103,6 +105,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
                 let mut scanner = ScanExecutor::index_scan_with_cols_len(
+                    EvalContext::default(),
                     i64::from(req.get_num_columns()),
                     mem::replace(&mut self.ranges, Vec::new()),
                     self.storage.take().unwrap(),
@@ -176,7 +179,8 @@ impl<S: Snapshot> SampleBuilder<S> {
 
         let mut meta = TableScan::default();
         meta.set_columns(cols_info);
-        let table_scanner = ScanExecutor::table_scan(meta, ranges, storage, false)?;
+        let table_scanner =
+            ScanExecutor::table_scan(meta, EvalContext::default(), ranges, storage, false)?;
         Ok(Self {
             data: table_scanner,
             col_len,
@@ -205,7 +209,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         ];
         while let Some(row) = self.data.next()? {
             let row = row.take_origin()?;
-            let cols = row.get_binary_cols()?;
+            let cols = row.get_binary_cols(&mut EvalContext::default())?;
             let retrieve_len = cols.len();
             let mut cols_iter = cols.into_iter();
             if self.col_len != retrieve_len {
@@ -310,7 +314,7 @@ mod tests {
         let cases = vec![Datum::I64(1), Datum::Null, Datum::I64(2), Datum::I64(5)];
 
         for data in cases {
-            sample.collect(datum::encode_value(&[data]).unwrap());
+            sample.collect(datum::encode_value(&mut EvalContext::default(), &[data]).unwrap());
         }
         assert_eq!(sample.samples.len(), max_sample_size);
         assert_eq!(sample.null_count, 1);

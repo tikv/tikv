@@ -15,7 +15,7 @@ use crate::batch::executors::util::hash_aggr_helper::HashAggregationHelper;
 use crate::batch::executors::util::*;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use crate::expr::EvalConfig;
+use crate::expr::{EvalConfig, EvalContext};
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder, RpnStackNode, RpnStackNodeVectorValue};
 use crate::storage::IntervalRange;
 use crate::Result;
@@ -106,10 +106,11 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
         aggr_defs: Vec<Expr>,
     ) -> Result<Self> {
         let schema_len = src.schema().len();
+        let mut ctx = EvalContext::new(config.clone());
         let mut group_by_exps = Vec::with_capacity(group_by_exp_defs.len());
         for def in group_by_exp_defs {
             group_by_exps.push(RpnExpressionBuilder::build_from_expr_tree(
-                def, &config.tz, schema_len,
+                def, &mut ctx, schema_len,
             )?);
         }
 
@@ -217,7 +218,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         // Decode columns with mutable input first, so subsequent access to input can be immutable
         // (and the borrow checker will be happy)
         ensure_columns_decoded(
-            &context.cfg.tz,
+            context,
             &self.group_by_exps,
             src_schema,
             &mut input_physical_columns,
@@ -249,6 +250,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                                 value.encode(
                                     logical_row_idx,
                                     field_type,
+                                    context,
                                     &mut self.group_key_buffer,
                                 )?;
                             }
@@ -259,6 +261,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                                 physical_value.encode(
                                     logical_rows[logical_row_idx],
                                     field_type,
+                                    context,
                                     &mut self.group_key_buffer,
                                 )?;
                             }
@@ -402,7 +405,6 @@ mod tests {
 
     use crate::batch::executors::util::aggr_executor::tests::*;
     use crate::codec::data_type::*;
-    use crate::codec::mysql::Tz;
     use crate::rpn_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
     use crate::rpn_expr::RpnExpressionBuilder;
 
@@ -469,16 +471,17 @@ mod tests {
         assert_eq!(r.physical_columns.rows_len(), 4);
         assert_eq!(r.physical_columns.columns_len(), 5); // 3 result column, 2 group by column
 
+        let mut ctx = EvalContext::default();
         // Let's check the two group by column first.
         r.physical_columns[3]
-            .ensure_all_decoded(&Tz::utc(), &exec.schema()[3])
+            .ensure_all_decoded(&mut ctx, &exec.schema()[3])
             .unwrap();
         assert_eq!(
             r.physical_columns[3].decoded().as_int_slice(),
             &[Some(5), Some(1), None, None]
         );
         r.physical_columns[4]
-            .ensure_all_decoded(&Tz::utc(), &exec.schema()[4])
+            .ensure_all_decoded(&mut ctx, &exec.schema()[4])
             .unwrap();
         assert_eq!(
             r.physical_columns[4].decoded().as_real_slice(),
