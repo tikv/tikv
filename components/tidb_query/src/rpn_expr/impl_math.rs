@@ -1,5 +1,5 @@
-use tidb_query_codegen::rpn_fn;
 use num::traits::Pow;
+use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
@@ -813,9 +813,21 @@ mod tests {
     #[test]
     fn test_pow() {
         let cases = vec![
-            (Some(Real::from(1.0f64)), Some(Real::from(3.0f64)), Some(Real::from(1.0f64))),
-            (Some(Real::from(3.0f64)), Some(Real::from(0.0f64)), Some(Real::from(1.0f64))),
-            (Some(Real::from(2.0f64)), Some(Real::from(4.0f64)), Some(Real::from(16.0f64))),
+            (
+                Some(Real::from(1.0f64)),
+                Some(Real::from(3.0f64)),
+                Some(Real::from(1.0f64)),
+            ),
+            (
+                Some(Real::from(3.0f64)),
+                Some(Real::from(0.0f64)),
+                Some(Real::from(1.0f64)),
+            ),
+            (
+                Some(Real::from(2.0f64)),
+                Some(Real::from(4.0f64)),
+                Some(Real::from(16.0f64)),
+            ),
             (Some(Real::from(4.0f64)), None, None),
             (None, Some(Real::from(4.0f64)), None),
             (None, None, None),
