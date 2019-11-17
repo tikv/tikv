@@ -33,3 +33,9 @@ impl IntoOther<RaftError> for EngineTraitsError {
         RaftError::Store(raft::StorageError::Other(self.into()))
     }
 }
+
+pub fn into_other<F, T>(e: F) -> T
+where F: IntoOther<T>
+{
+    e.into_other()    
+}
