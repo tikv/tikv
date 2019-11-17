@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::any::Any;
 use std::convert::{TryFrom, TryInto};
 
 use codec::prelude::NumberDecoder;
@@ -142,7 +141,7 @@ impl RpnExpressionBuilder {
         func_meta: RpnFnMeta,
         args_len: usize,
         return_field_type: impl Into<FieldType>,
-        metadata: Box<dyn Any + Send>,
+        metadata: Box<dyn std::any::Any + Send>,
     ) -> Self {
         let node = RpnExpressionNode::FnCall {
             func_meta,
