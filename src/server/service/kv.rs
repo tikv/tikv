@@ -259,7 +259,7 @@ impl ReadBatcher {
     }
 
     fn is_batchable_context(ctx: &Context) -> bool {
-        storage::is_normal_priority(ctx.get_priority()) && !ctx.get_replica_read()
+        ctx.get_priority() == CommandPri::Normal && !ctx.get_replica_read()
     }
 
     fn add_get(&mut self, request_id: u64, request: &mut GetRequest) {

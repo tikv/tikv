@@ -35,7 +35,7 @@ use self::metrics::*;
 use self::mvcc::{Lock, TsSet};
 use self::txn::scheduler::Scheduler as TxnScheduler;
 
-pub use self::commands::{is_normal_priority, Options, PointGetCommand};
+pub use self::commands::{Options, PointGetCommand};
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind};
 pub use self::kv::{

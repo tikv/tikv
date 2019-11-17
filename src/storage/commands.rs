@@ -569,21 +569,6 @@ pub fn get_priority_tag(priority: CommandPri) -> CommandPriority {
     }
 }
 
-pub fn get_priority_code(priority: CommandPri) -> u8 {
-    match priority {
-        CommandPri::Low => 1,
-        CommandPri::Normal => 2,
-        CommandPri::High => 3,
-    }
-}
-
-pub fn is_normal_priority(priority: CommandPri) -> bool {
-    match priority {
-        CommandPri::Normal => true,
-        _ => false,
-    }
-}
-
 #[derive(Clone, Default)]
 pub struct Options {
     pub lock_ttl: u64,
