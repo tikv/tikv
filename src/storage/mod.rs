@@ -29,7 +29,7 @@ use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
 use tikv_util::collections::HashMap;
 use tikv_util::future_pool::FuturePool;
 
-use self::commands::{get_priority_tag, Command};
+use self::commands::{get_priority_tag, Command, CommandKind};
 use self::kv::with_tls_engine;
 use self::metrics::*;
 use self::mvcc::{Lock, TsSet};
@@ -497,10 +497,9 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         duration: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Pause {
+        let cmd = Command {
             ctx,
-            keys,
-            duration,
+            kind: CommandKind::Pause { keys, duration },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.pause.inc();
@@ -509,7 +508,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// The prewrite phase of a transaction. The first phase of 2PC.
     ///
-    /// Schedules a [`Command::Prewrite`].
+    /// Schedules a [`CommandKind::Prewrite`].
     pub fn async_prewrite(
         &self,
         ctx: Context,
@@ -526,12 +525,14 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 return Ok(());
             }
         }
-        let cmd = Command::Prewrite {
+        let cmd = Command {
             ctx,
-            mutations,
-            primary,
-            start_ts,
-            options,
+            kind: CommandKind::Prewrite {
+                mutations,
+                primary,
+                start_ts,
+                options,
+            },
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
@@ -539,7 +540,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     }
 
     /// Acquire a Pessimistic lock on the keys.
-    /// Schedules a [`Command::AcquirePessimisticLock`].
+    /// Schedules a [`CommandKind::AcquirePessimisticLock`].
     pub fn async_acquire_pessimistic_lock(
         &self,
         ctx: Context,
@@ -561,12 +562,14 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 return Ok(());
             }
         }
-        let cmd = Command::AcquirePessimisticLock {
+        let cmd = Command {
             ctx,
-            keys,
-            primary,
-            start_ts,
-            options,
+            kind: CommandKind::AcquirePessimisticLock {
+                keys,
+                primary,
+                start_ts,
+                options,
+            },
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.acquire_pessimistic_lock.inc();
@@ -575,7 +578,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Commit the transaction that started at `lock_ts`.
     ///
-    /// Schedules a [`Command::Commit`].
+    /// Schedules a [`CommandKind::Commit`].
     pub fn async_commit(
         &self,
         ctx: Context,
@@ -584,11 +587,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         commit_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Commit {
+        let cmd = Command {
             ctx,
-            keys,
-            lock_ts,
-            commit_ts,
+            kind: CommandKind::Commit {
+                keys,
+                lock_ts,
+                commit_ts,
+            },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
@@ -603,7 +608,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// still be replicated via Raft. This is used to notify that the data will be deleted by
     /// `unsafe_destroy_range` soon.
     ///
-    /// Schedules a [`Command::DeleteRange`].
+    /// Schedules a [`CommandKind::DeleteRange`].
     pub fn async_delete_range(
         &self,
         ctx: Context,
@@ -633,7 +638,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Rollback mutations on a single key.
     ///
-    /// Schedules a [`Command::Cleanup`].
+    /// Schedules a [`CommandKind::Cleanup`].
     pub fn async_cleanup(
         &self,
         ctx: Context,
@@ -642,11 +647,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         current_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Cleanup {
+        let cmd = Command {
             ctx,
-            key,
-            start_ts,
-            current_ts,
+            kind: CommandKind::Cleanup {
+                key,
+                start_ts,
+                current_ts,
+            },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
@@ -655,7 +662,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Rollback from the transaction that was started at `start_ts`.
     ///
-    /// Schedules a [`Command::Rollback`].
+    /// Schedules a [`CommandKind::Rollback`].
     pub fn async_rollback(
         &self,
         ctx: Context,
@@ -663,10 +670,9 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         start_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Rollback {
+        let cmd = Command {
             ctx,
-            keys,
-            start_ts,
+            kind: CommandKind::Rollback { keys, start_ts },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc();
@@ -675,7 +681,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
     ///
-    /// Schedules a [`Command::PessimisticRollback`].
+    /// Schedules a [`CommandKind::PessimisticRollback`].
     pub fn async_pessimistic_rollback(
         &self,
         ctx: Context,
@@ -689,11 +695,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             return Ok(());
         }
 
-        let cmd = Command::PessimisticRollback {
+        let cmd = Command {
             ctx,
-            keys,
-            start_ts,
-            for_update_ts,
+            kind: CommandKind::PessimisticRollback {
+                keys,
+                start_ts,
+                for_update_ts,
+            },
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
@@ -702,7 +710,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Check the specified primary key and enlarge it's TTL if necessary. Returns the new TTL.
     ///
-    /// Schedules a [`Command::TxnHeartBeat`].
+    /// Schedules a [`CommandKind::TxnHeartBeat`].
     pub fn async_txn_heart_beat(
         &self,
         ctx: Context,
@@ -711,11 +719,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         advise_ttl: u64,
         callback: Callback<TxnStatus>,
     ) -> Result<()> {
-        let cmd = Command::TxnHeartBeat {
+        let cmd = Command {
             ctx,
-            primary_key,
-            start_ts,
-            advise_ttl,
+            kind: CommandKind::TxnHeartBeat {
+                primary_key,
+                start_ts,
+                advise_ttl,
+            },
         };
         self.schedule(cmd, StorageCb::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.txn_heart_beat.inc();
@@ -731,7 +741,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
     /// no information about the transaction, results will be both 0.
     ///
-    /// Schedules a [`Command::CheckTxnStatus`].
+    /// Schedules a [`CommandKind::CheckTxnStatus`].
     pub fn async_check_txn_status(
         &self,
         ctx: Context,
@@ -742,13 +752,15 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         rollback_if_not_exist: bool,
         callback: Callback<TxnStatus>,
     ) -> Result<()> {
-        let cmd = Command::CheckTxnStatus {
+        let cmd = Command {
             ctx,
-            primary_key,
-            lock_ts,
-            caller_start_ts,
-            current_ts,
-            rollback_if_not_exist,
+            kind: CommandKind::CheckTxnStatus {
+                primary_key,
+                lock_ts,
+                caller_start_ts,
+                current_ts,
+                rollback_if_not_exist,
+            },
         };
         self.schedule(cmd, StorageCb::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.check_txn_status.inc();
@@ -757,7 +769,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     ///
-    /// Schedules a [`Command::ScanLock`].
+    /// Schedules a [`CommandKind::ScanLock`].
     pub fn async_scan_locks(
         &self,
         ctx: Context,
@@ -766,15 +778,17 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         limit: usize,
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
-        let cmd = Command::ScanLock {
+        let cmd = Command {
             ctx,
-            max_ts,
-            start_key: if start_key.is_empty() {
-                None
-            } else {
-                Some(Key::from_raw(&start_key))
+            kind: CommandKind::ScanLock {
+                max_ts,
+                start_key: if start_key.is_empty() {
+                    None
+                } else {
+                    Some(Key::from_raw(&start_key))
+                },
+                limit,
             },
-            limit,
         };
         self.schedule(cmd, StorageCb::Locks(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.scan_lock.inc();
@@ -787,20 +801,22 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// before the safe point.
     ///
     /// `txn_status` maps lock_ts to commit_ts. If a transaction is rolled back, it is mapped to 0.
-    /// For an example, check the [`Command::ResolveLock`] docs.
+    /// For an example, check the [`CommandKind::ResolveLock`] docs.
     ///
-    /// Schedules a [`Command::ResolveLock`].
+    /// Schedules a [`CommandKind::ResolveLock`].
     pub fn async_resolve_lock(
         &self,
         ctx: Context,
         txn_status: HashMap<u64, u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::ResolveLock {
+        let cmd = Command {
             ctx,
-            txn_status,
-            scan_key: None,
-            key_locks: vec![],
+            kind: CommandKind::ResolveLock {
+                txn_status,
+                scan_key: None,
+                key_locks: vec![],
+            },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock.inc();
@@ -812,7 +828,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// During the GC operation, this should be called to clean up stale locks whose timestamp is
     /// before the safe point.
     ///
-    /// Schedules a [`Command::ResolveLockLite`].
+    /// Schedules a [`CommandKind::ResolveLockLite`].
     pub fn async_resolve_lock_lite(
         &self,
         ctx: Context,
@@ -821,11 +837,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         resolve_keys: Vec<Key>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::ResolveLockLite {
+        let cmd = Command {
             ctx,
-            start_ts,
-            commit_ts,
-            resolve_keys,
+            kind: CommandKind::ResolveLockLite {
+                start_ts,
+                commit_ts,
+                resolve_keys,
+            },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc();
@@ -1408,7 +1426,10 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         key: Key,
         callback: Callback<MvccInfo>,
     ) -> Result<()> {
-        let cmd = Command::MvccByKey { ctx, key };
+        let cmd = Command {
+            ctx,
+            kind: CommandKind::MvccByKey { key },
+        };
         self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.key_mvcc.inc();
 
@@ -1423,7 +1444,10 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         start_ts: u64,
         callback: Callback<Option<(Key, MvccInfo)>>,
     ) -> Result<()> {
-        let cmd = Command::MvccByStartTs { ctx, start_ts };
+        let cmd = Command {
+            ctx,
+            kind: CommandKind::MvccByStartTs { start_ts },
+        };
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
         Ok(())
