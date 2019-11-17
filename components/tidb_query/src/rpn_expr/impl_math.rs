@@ -1,7 +1,7 @@
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
-use crate::codec::mysql::{RoundMode, DEFAULT_FSP};
+use crate::codec::mysql::{self, RoundMode};
 use crate::codec::Error;
 use crate::expr::EvalContext;
 use crate::Result;
@@ -320,7 +320,7 @@ impl Round for RoundDec {
     fn round(ctx: &mut EvalContext, arg: &Self::Type) -> Result<Option<Self::Type>> {
         Ok(arg
             .to_owned()
-            .round(DEFAULT_FSP, RoundMode::HalfEven)
+            .round(mysql::DEFAULT_FSP, RoundMode::HalfEven)
             .into_result(ctx)
             .map(Some)?)
     }
@@ -340,7 +340,11 @@ impl Round for RoundWithFracInt {
         if digits >= 0 {
             Ok(Some(*number))
         } else {
+            let digits = std::cmp::max(i64::from(std::i32::MIN) + 1, digits);
             let power = 10.0_f64.powi(-digits as i32);
+            if power.is_infinite() {
+                return Ok(Some(0));
+            }
             let frac = *number as f64 / power;
             Ok(Some((frac.round() * power) as i64))
         }
@@ -358,7 +362,15 @@ impl Round for RoundWithFracReal {
         number: &Self::Type,
         digits: Int,
     ) -> Result<Option<Self::Type>> {
+        let digits = if digits >= 0 {
+            std::cmp::min(i64::from(mysql::MAX_FSP), digits)
+        } else {
+            std::cmp::max(i64::from(std::i32::MIN) + 1, digits)
+        };
         let power = 10.0_f64.powi(-digits as i32);
+        if power.is_infinite() {
+            return Ok(Real::new(0.0_f64).ok());
+        }
         let frac = number.into_inner() / power;
         Ok(Real::new(frac.round() * power).ok())
     }
@@ -375,6 +387,11 @@ impl Round for RoundWithFracDec {
         number: &Self::Type,
         digits: Int,
     ) -> Result<Option<Self::Type>> {
+        let digits = if digits >= 0 {
+            std::cmp::min(i64::from(mysql::decimal::MAX_FRACTION), digits)
+        } else {
+            std::cmp::max(i64::from(std::i8::MIN), digits)
+        };
         Ok(number
             .to_owned()
             .round(digits as i8, RoundMode::HalfEven)
@@ -471,7 +488,7 @@ mod tests {
     #[test]
     fn test_pi() {
         let output = RpnFnScalarEvaluator::new()
-            .evaluate(ScalarFuncSig::Pi)
+            .evaluate::<Real>(ScalarFuncSig::Pi)
             .unwrap();
         assert_eq!(output, Some(Real::from(std::f64::consts::PI)));
     }
@@ -488,7 +505,7 @@ mod tests {
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Log1Arg)
+                .evaluate::<Real>(ScalarFuncSig::Log1Arg)
                 .unwrap();
             assert_eq!(output, expect, "{:?}", input);
         }
@@ -509,7 +526,7 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(a1)
                 .push_param(a2)
-                .evaluate(ScalarFuncSig::Log2Args)
+                .evaluate::<Real>(ScalarFuncSig::Log2Args)
                 .unwrap();
             assert_eq!(output, expect, "arg1 {:?}, arg2 {:?}", a1, a2);
         }
@@ -527,7 +544,7 @@ mod tests {
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Log2)
+                .evaluate::<Real>(ScalarFuncSig::Log2)
                 .unwrap();
             assert_eq!(output, expect, "{:?}", input);
         }
@@ -545,7 +562,7 @@ mod tests {
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Log10)
+                .evaluate::<Real>(ScalarFuncSig::Log10)
                 .unwrap();
             assert_eq!(output, expect, "{:?}", input);
         }
@@ -584,15 +601,13 @@ mod tests {
 
     #[test]
     fn test_abs_real() {
-        let test_cases: Vec<(Real, Option<Real>)> = vec![
-            (Real::new(3.5).unwrap(), Real::new(3.5).ok()),
-            (Real::new(-3.5).unwrap(), Real::new(3.5).ok()),
-        ];
+        let test_cases = vec![(3.5_f64, 3.5_f64), (-3.5_f64, 3.5_f64)];
 
         for (arg, expect_output) in test_cases {
+            let expect_output = Real::new(expect_output).ok();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(ScalarFuncSig::AbsReal)
+                .evaluate::<Real>(ScalarFuncSig::AbsReal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
@@ -802,73 +817,88 @@ mod tests {
 
     #[test]
     fn test_round_int() {
-        let test_cases: Vec<(Int, Option<Int>)> = vec![
-            (1, Some(1)),
-            (Int::max_value(), Some(Int::max_value())),
-            (Int::min_value(), Some(Int::min_value())),
+        let test_cases = vec![
+            (1, 1),
+            (std::i64::MAX, std::i64::MAX),
+            (std::i64::MIN, std::i64::MIN),
         ];
 
         for (arg, expect_output) in test_cases {
+            let expect_output = Some(expect_output);
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(ScalarFuncSig::RoundInt)
+                .evaluate::<Int>(ScalarFuncSig::RoundInt)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
+
+        test_unary_func_ok_none::<Int, Int>(ScalarFuncSig::RoundInt);
     }
 
     #[test]
     fn test_round_real() {
-        let test_cases: Vec<(Real, Option<Real>)> = vec![
-            (Real::from(3.45_f64), Some(Real::from(3_f64))),
-            (Real::from(-3.45_f64), Some(Real::from(-3_f64))),
-            (Real::from(std::f64::MAX), Some(Real::from(std::f64::MAX))),
-            (Real::from(std::f64::MIN), Some(Real::from(std::f64::MIN))),
+        let test_cases = vec![
+            (3.45_f64, 3_f64),
+            (-3.45_f64, -3_f64),
+            (std::f64::MAX, std::f64::MAX),
+            (std::f64::MIN, std::f64::MIN),
         ];
 
         for (arg, expect_output) in test_cases {
+            let arg = Real::from(arg);
+            let expect_output = Real::new(expect_output).ok();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(ScalarFuncSig::RoundReal)
+                .evaluate::<Real>(ScalarFuncSig::RoundReal)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
+
+        test_unary_func_ok_none::<Real, Real>(ScalarFuncSig::RoundReal);
     }
 
     #[test]
     fn test_round_dec() {
-        let test_cases: Vec<(Decimal, Option<Decimal>)> = vec![
-            ("123.456".parse().unwrap(), Some("123.000".parse().unwrap())),
-            ("123.656".parse().unwrap(), Some("124.000".parse().unwrap())),
-            (
-                "-123.456".parse().unwrap(),
-                Some("-123.000".parse().unwrap()),
-            ),
+        let test_cases = vec![
+            ("123.456", "123.000"),
+            ("123.656", "124.000"),
+            ("-123.456", "-123.000"),
         ];
 
         for (arg, expect_output) in test_cases {
+            let arg = arg.parse::<Decimal>().ok();
+            let expect_output = expect_output.parse::<Decimal>().ok();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(ScalarFuncSig::RoundDec)
+                .evaluate::<Decimal>(ScalarFuncSig::RoundDec)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
+
+        test_unary_func_ok_none::<Decimal, Decimal>(ScalarFuncSig::RoundDec);
     }
 
     #[test]
     fn test_round_with_frac_int() {
-        let test_cases: Vec<(Int, Int, Option<Int>)> = vec![
-            (23, 2, Some(23)),
-            (23, -1, Some(20)),
-            (-27, -1, Some(-30)),
-            (-27, -2, Some(0)),
+        let test_cases = vec![
+            (23, 2, 23),
+            (23, -1, 20),
+            (-27, -1, -30),
+            (-27, -2, 0),
+            (1234567890, std::i64::MAX, 1234567890),
+            (-1234567890, std::i64::MAX, -1234567890),
+            (1234567890, std::i64::MIN, 0),
+            (-1234567890, std::i64::MIN, 0),
+            (1234567890, std::i32::MIN as i64, 0),
+            (-1234567890, std::i32::MIN as i64, 0),
         ];
 
         for (arg0, arg1, expect_output) in test_cases {
+            let expect_output = Some(expect_output);
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .push_param(arg1)
-                .evaluate(ScalarFuncSig::RoundWithFracInt)
+                .evaluate::<Int>(ScalarFuncSig::RoundWithFracInt)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
@@ -876,44 +906,83 @@ mod tests {
 
     #[test]
     fn test_round_with_frac_real() {
-        let test_cases: Vec<(Real, Int, Option<Real>)> = vec![
-            (Real::from(-1.298_f64), 1, Some(Real::from(-1.3_f64))),
-            (Real::from(-1.298_f64), 0, Some(Real::from(-1.0_f64))),
-            (Real::from(23.298_f64), 2, Some(Real::from(23.30_f64))),
-            (Real::from(23.298_f64), -1, Some(Real::from(20.0_f64))),
+        let test_cases = vec![
+            (-1.298_f64, 1, -1.3_f64),
+            (-1.298_f64, 0, -1.0_f64),
+            (23.298_f64, 2, 23.30_f64),
+            (23.298_f64, -1, 20.0_f64),
+            (23.298_f64, -2, 0.0_f64),
+            (23.298_f64, -3, 0.0_f64),
+            (1234567890.123_f64, std::i64::MAX, 1234567890.123_f64),
+            (-1234567890.123_f64, std::i64::MAX, -1234567890.123_f64),
+            (1234567890.123_f64, std::i64::MIN, 0.0_f64),
+            (-1234567890.123_f64, std::i64::MIN, 0.0_f64),
+            (
+                1234567890.123_f64,
+                mysql::MAX_FSP as i64 + 1,
+                1234567890.123_f64,
+            ),
+            (
+                -1234567890.123_f64,
+                mysql::MAX_FSP as i64 + 1,
+                -1234567890.123_f64,
+            ),
+            (1234567890.123_f64, std::i32::MIN as i64, 0.0_f64),
+            (-1234567890.123_f64, std::i32::MIN as i64, 0.0_f64),
         ];
 
         for (arg0, arg1, expect_output) in test_cases {
+            let arg0 = Real::from(arg0);
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .push_param(arg1)
-                .evaluate(ScalarFuncSig::RoundWithFracReal)
+                .evaluate::<Real>(ScalarFuncSig::RoundWithFracReal)
                 .unwrap();
-            assert_eq!(output, expect_output);
+            assert!((output.unwrap().into_inner() - expect_output).abs() < std::f64::EPSILON);
         }
     }
 
     #[test]
     fn test_round_with_frac_dec() {
-        let test_cases: Vec<(Decimal, Int, Option<Decimal>)> = vec![
+        let test_cases = vec![
+            ("150.000", 2, "150.00"),
+            ("150.257", 1, "150.3"),
+            ("153.257", -1, "150"),
+            ("153.257", -2, "200"),
+            ("153.257", -3, "0"),
             (
-                "150.000".parse().unwrap(),
-                2,
-                Some("150.00".parse().unwrap()),
+                "1234567890.123",
+                std::i64::MAX,
+                "1234567890.123000000000000000000000000000",
             ),
             (
-                "150.257".parse().unwrap(),
-                1,
-                Some("150.3".parse().unwrap()),
+                "-1234567890.123",
+                std::i64::MAX,
+                "-1234567890.123000000000000000000000000000",
             ),
-            ("153.257".parse().unwrap(), -1, Some("150".parse().unwrap())),
+            ("1234567890.123", std::i64::MIN, "0"),
+            ("-1234567890.123", std::i64::MIN, "0"),
+            (
+                "1234567890.123",
+                mysql::decimal::MAX_FRACTION as i64 + 1,
+                "1234567890.123000000000000000000000000000",
+            ),
+            (
+                "-1234567890.123",
+                mysql::decimal::MAX_FRACTION as i64 + 1,
+                "-1234567890.123000000000000000000000000000",
+            ),
+            ("1234567890.123", std::i8::MIN as i64 + 1, "0"),
+            ("-1234567890.123", std::i8::MIN as i64 + 1, "0"),
         ];
 
         for (arg0, arg1, expect_output) in test_cases {
+            let arg0 = arg0.parse::<Decimal>().ok();
+            let expect_output = expect_output.parse::<Decimal>().ok();
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .push_param(arg1)
-                .evaluate(ScalarFuncSig::RoundWithFracDec)
+                .evaluate::<Decimal>(ScalarFuncSig::RoundWithFracDec)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
@@ -930,7 +999,7 @@ mod tests {
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Sign)
+                .evaluate::<Int>(ScalarFuncSig::Sign)
                 .unwrap();
             assert_eq!(expect, output, "{:?}", input);
         }
@@ -948,7 +1017,7 @@ mod tests {
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Sqrt)
+                .evaluate::<Real>(ScalarFuncSig::Sqrt)
                 .unwrap();
             assert_eq!(expect, output, "{:?}", input);
         }
@@ -982,7 +1051,7 @@ mod tests {
 
     #[test]
     fn test_sin() {
-        let valid_test_cases = vec![
+        let test_cases = vec![
             (0.0_f64, 0.0_f64),
             (
                 std::f64::consts::PI / 4.0_f64,
@@ -991,10 +1060,10 @@ mod tests {
             (std::f64::consts::PI / 2.0_f64, 1.0_f64),
             (std::f64::consts::PI, 0.0_f64),
         ];
-        for (input, expect) in valid_test_cases {
-            let output: Option<Real> = RpnFnScalarEvaluator::new()
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
                 .push_param(Some(Real::from(input)))
-                .evaluate(ScalarFuncSig::Sin)
+                .evaluate::<Real>(ScalarFuncSig::Sin)
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
         }
@@ -1009,9 +1078,9 @@ mod tests {
             (-std::f64::consts::PI, -1f64),
         ];
         for (input, expect) in test_cases {
-            let output: Option<Real> = RpnFnScalarEvaluator::new()
+            let output = RpnFnScalarEvaluator::new()
                 .push_param(Some(Real::from(input)))
-                .evaluate(ScalarFuncSig::Cos)
+                .evaluate::<Real>(ScalarFuncSig::Cos)
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
         }
@@ -1030,9 +1099,9 @@ mod tests {
             ),
         ];
         for (input, expect) in test_cases {
-            let output: Option<Real> = RpnFnScalarEvaluator::new()
+            let output = RpnFnScalarEvaluator::new()
                 .push_param(Some(Real::from(input)))
-                .evaluate(ScalarFuncSig::Tan)
+                .evaluate::<Real>(ScalarFuncSig::Tan)
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
         }
@@ -1057,9 +1126,9 @@ mod tests {
             ),
         ];
         for (input, expect) in test_cases {
-            let output: Option<Real> = RpnFnScalarEvaluator::new()
+            let output = RpnFnScalarEvaluator::new()
                 .push_param(Some(Real::from(input)))
-                .evaluate(ScalarFuncSig::Cot)
+                .evaluate::<Real>(ScalarFuncSig::Cot)
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
         }

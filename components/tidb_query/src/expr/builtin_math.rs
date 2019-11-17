@@ -10,7 +10,7 @@ use rand_xorshift::XorShiftRng;
 use time;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use crate::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
+use crate::codec::mysql::{self, Decimal, RoundMode};
 use crate::codec::Datum;
 
 impl ScalarFunc {
@@ -210,7 +210,7 @@ impl ScalarFunc {
         let number = try_opt!(self.children[0].eval_decimal(ctx, row));
         let result: Result<Decimal> = number
             .into_owned()
-            .round(DEFAULT_FSP, RoundMode::HalfEven)
+            .round(mysql::DEFAULT_FSP, RoundMode::HalfEven)
             .into();
         result.map(|t| Some(Cow::Owned(t)))
     }
@@ -229,7 +229,11 @@ impl ScalarFunc {
         if digits >= 0 {
             Ok(Some(number))
         } else {
+            let digits = std::cmp::max(i64::from(std::i32::MIN) + 1, digits);
             let power = 10.0_f64.powi(-digits as i32);
+            if power.is_infinite() {
+                return Ok(Some(0));
+            }
             let frac = number as f64 / power;
             Ok(Some((frac.round() * power) as i64))
         }
@@ -244,7 +248,15 @@ impl ScalarFunc {
         let number = try_opt!(self.children[0].eval_real(ctx, row));
         let digits = try_opt!(self.children[1].eval_int(ctx, row));
 
+        let digits = if digits >= 0 {
+            std::cmp::min(i64::from(mysql::MAX_FSP), digits)
+        } else {
+            std::cmp::max(i64::from(std::i32::MIN) + 1, digits)
+        };
         let power = 10.0_f64.powi(-digits as i32);
+        if power.is_infinite() {
+            return Ok(Some(0.0_f64));
+        }
         let frac = number / power;
         Ok(Some(frac.round() * power))
     }
@@ -258,6 +270,11 @@ impl ScalarFunc {
         let number = try_opt!(self.children[0].eval_decimal(ctx, row));
         let digits = try_opt!(self.children[1].eval_int(ctx, row));
 
+        let digits = if digits >= 0 {
+            std::cmp::min(i64::from(mysql::decimal::MAX_FRACTION), digits)
+        } else {
+            std::cmp::max(i64::from(std::i8::MIN), digits)
+        };
         let result: Result<Decimal> = number
             .into_owned()
             .round(digits as i8, RoundMode::HalfEven)
@@ -560,6 +577,7 @@ mod tests {
     use tidb_query_datatype::{self, FieldTypeAccessor, FieldTypeFlag};
     use tipb::ScalarFuncSig;
 
+    use crate::codec::mysql;
     use crate::codec::Datum;
     use crate::expr::tests::{check_overflow, eval_func, eval_func_with, str2dec};
 
@@ -1009,6 +1027,42 @@ mod tests {
                 Datum::I64(0),
             ),
             (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(1234567890),
+                Datum::I64(std::i64::MAX),
+                Datum::I64(1234567890),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(-1234567890),
+                Datum::I64(std::i64::MAX),
+                Datum::I64(-1234567890),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(1234567890),
+                Datum::I64(std::i64::MIN),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(-1234567890),
+                Datum::I64(std::i64::MIN),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(1234567890),
+                Datum::I64(std::i32::MIN as i64),
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracInt,
+                Datum::I64(-1234567890),
+                Datum::I64(std::i32::MIN as i64),
+                Datum::I64(0),
+            ),
+            (
                 ScalarFuncSig::RoundWithFracDec,
                 str2dec("150.000"),
                 Datum::I64(2),
@@ -1026,6 +1080,54 @@ mod tests {
                 Datum::I64(-1),
                 str2dec("150"),
             ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("1234567890.123"),
+                Datum::I64(std::i64::MAX),
+                str2dec("1234567890.123000000000000000000000000000"),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("-1234567890.123"),
+                Datum::I64(std::i64::MAX),
+                str2dec("-1234567890.123000000000000000000000000000"),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("1234567890.123"),
+                Datum::I64(std::i64::MIN),
+                str2dec("0"),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("-1234567890.123"),
+                Datum::I64(std::i64::MIN),
+                str2dec("0"),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("1234567890.123"),
+                Datum::I64(mysql::decimal::MAX_FRACTION as i64 + 1),
+                str2dec("1234567890.123000000000000000000000000000"),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("-1234567890.123"),
+                Datum::I64(mysql::decimal::MAX_FRACTION as i64 + 1),
+                str2dec("-1234567890.123000000000000000000000000000"),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("1234567890.123"),
+                Datum::I64(std::i8::MIN as i64 + 1),
+                str2dec("0"),
+            ),
+            (
+                ScalarFuncSig::RoundWithFracDec,
+                str2dec("-1234567890.123"),
+                Datum::I64(std::i8::MIN as i64 + 1),
+                str2dec("0"),
+            ),
         ];
 
         let real_tests = vec![
@@ -1033,6 +1135,46 @@ mod tests {
             (Datum::F64(-1.298_f64), Datum::I64(0), -1.0_f64),
             (Datum::F64(23.298_f64), Datum::I64(2), 23.30_f64),
             (Datum::F64(23.298_f64), Datum::I64(-1), 20.0_f64),
+            (
+                Datum::F64(1234567890.123_f64),
+                Datum::I64(std::i64::MAX),
+                1234567890.123_f64,
+            ),
+            (
+                Datum::F64(-1234567890.123_f64),
+                Datum::I64(std::i64::MAX),
+                -1234567890.123_f64,
+            ),
+            (
+                Datum::F64(1234567890.123_f64),
+                Datum::I64(std::i64::MIN),
+                0.0_f64,
+            ),
+            (
+                Datum::F64(-1234567890.123_f64),
+                Datum::I64(std::i64::MIN),
+                0.0_f64,
+            ),
+            (
+                Datum::F64(1234567890.123_f64),
+                Datum::I64(mysql::MAX_FSP as i64 + 1),
+                1234567890.123_f64,
+            ),
+            (
+                Datum::F64(-1234567890.123_f64),
+                Datum::I64(mysql::MAX_FSP as i64 + 1),
+                -1234567890.123_f64,
+            ),
+            (
+                Datum::F64(1234567890.123_f64),
+                Datum::I64(std::i32::MIN as i64),
+                0.0_f64,
+            ),
+            (
+                Datum::F64(-1234567890.123_f64),
+                Datum::I64(std::i32::MIN as i64),
+                0.0_f64,
+            ),
         ];
 
         for (sig, arg0, arg1, exp) in tests {
