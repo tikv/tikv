@@ -2932,7 +2932,9 @@ mod tests {
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use engine::rocks::Writable;
     use engine::{WriteBatch, DB};
-    use engine_rocks::RocksEngine;
+    use engine_rocks::{Compat, RocksEngine};
+    use engine_traits::Peekable as PeekableTrait;
+    use engine::Peekable;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
@@ -3200,7 +3202,7 @@ mod tests {
             e => panic!("unexpected apply result: {:?}", e),
         };
         let apply_state = match snapshot_rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(Some(RegionTask::Gen { kv_snap, .. })) => kv_snap
+            Ok(Some(RegionTask::Gen { kv_snap, .. })) => kv_snap.c()
                 .get_msg_cf(CF_RAFT, &apply_state_key)
                 .unwrap()
                 .unwrap(),

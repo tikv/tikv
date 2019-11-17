@@ -2,12 +2,11 @@
 
 use std::fmt::{self, Debug, Formatter};
 use std::ops::Deref;
-use std::option::Option;
 use std::sync::Arc;
 
-use super::{CFHandle, DBVector, ReadOptions, UnsafeSnap, DB};
+use super::{CFHandle, UnsafeSnap, DB};
 use crate::iterable::IterOptionsExt;
-use crate::{DBIterator, Error, IterOption, Iterable, Peekable, Result};
+use crate::{DBIterator, Error, IterOption, Iterable, Result};
 
 #[repr(C)] // Guarantee same representation as in engine_rocks
 pub struct Snapshot {
@@ -99,26 +98,5 @@ impl Iterable for Snapshot {
             opt.set_snapshot(&self.snap);
         }
         Ok(DBIterator::new_cf(&self.db, handle, opt))
-    }
-}
-
-impl Peekable for Snapshot {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        let mut opt = ReadOptions::new();
-        unsafe {
-            opt.set_snapshot(&self.snap);
-        }
-        let v = self.db.get_opt(key, &opt)?;
-        Ok(v)
-    }
-
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = super::util::get_cf_handle(&self.db, cf)?;
-        let mut opt = ReadOptions::new();
-        unsafe {
-            opt.set_snapshot(&self.snap);
-        }
-        let v = self.db.get_cf_opt(handle, key, &opt)?;
-        Ok(v)
     }
 }

@@ -15,9 +15,9 @@ use engine::rocks::{
 use engine::Engines;
 use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine::{IterOption, Peekable};
+use engine::IterOption;
 use engine_rocks::{Compat, RocksEngineIterator};
-use engine_traits::{Iterable, Iterator, SeekKey};
+use engine_traits::{Iterable, Iterator, SeekKey, Peekable};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 
@@ -299,13 +299,13 @@ impl Snapshot for RocksSnapshot {
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get"; "key" => %key);
-        let v = box_try!(self.get_value(key.as_encoded()));
+        let v = box_try!(self.c().get_value(key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
-        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
+        let v = box_try!(self.c().get_value_cf(cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 

@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 use std::{cmp, mem, u64};
 
 use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
-use engine::{Engines, Peekable};
+use engine::Engines;
+use engine_traits::Peekable;
+use engine_rocks::Compat;
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -2637,7 +2639,7 @@ impl ReadExecutor {
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
             // TODO: check whether cf exists or not.
-            snapshot
+            snapshot.c()
                 .get_value_cf(cf, &keys::data_key(key))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -2649,7 +2651,7 @@ impl ReadExecutor {
                     )
                 })
         } else {
-            snapshot
+            snapshot.c()
                 .get_value(&keys::data_key(key))
                 .unwrap_or_else(|e| {
                     panic!(

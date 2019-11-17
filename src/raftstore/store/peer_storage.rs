@@ -14,6 +14,8 @@ use engine::rocks::{DBOptions, Writable};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
+use engine_traits::Peekable as PeekableTrait;
+use engine_rocks::Compat;
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -22,6 +24,7 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
+use crate::into_other::into_other;
 use crate::raftstore::store::fsm::GenSnapTask;
 use crate::raftstore::store::util::conf_state_from_region;
 use crate::raftstore::store::ProposalContext;
@@ -1352,8 +1355,10 @@ pub fn do_snapshot(
         "region_id" => region_id,
     );
 
+    let msg = kv_snap.c().get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+        .map_err(into_other::<_, raft::Error>)?;
     let apply_state: RaftApplyState =
-        match kv_snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))? {
+        match msg {
             None => {
                 return Err(storage_error(format!(
                     "could not load raft state of region {}",
@@ -1367,7 +1372,9 @@ pub fn do_snapshot(
     let term = if idx == apply_state.get_truncated_state().get_index() {
         apply_state.get_truncated_state().get_term()
     } else {
-        match raft_snap.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))? {
+        let msg = raft_snap.c().get_msg::<Entry>(&keys::raft_log_key(region_id, idx))
+            .map_err(into_other::<_, raft::Error>)?;
+        match msg {
             None => {
                 return Err(storage_error(format!(
                     "entry {} of {} not found.",
@@ -1385,12 +1392,12 @@ pub fn do_snapshot(
     mgr.register(key.clone(), SnapEntry::Generating);
     defer!(mgr.deregister(&key, &SnapEntry::Generating));
 
-    let state: RegionLocalState = kv_snap
+    let state: RegionLocalState = kv_snap.c()
         .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
         .and_then(|res| match res {
             None => Err(box_err!("could not find region info")),
             Some(state) => Ok(state),
-        })?;
+        }).map_err(into_other::<_, raft::Error>)?;
 
     if state.get_state() != PeerState::Normal {
         return Err(storage_error(format!(

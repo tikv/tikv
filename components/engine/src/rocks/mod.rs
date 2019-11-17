@@ -47,23 +47,10 @@ mod tests {
         engine.put_msg(key, &r).unwrap();
         engine.put_msg_cf(handle, key, &r).unwrap();
 
-        let snap = Snapshot::new(Arc::clone(&engine));
-
-        let mut r1: Region = engine.get_msg(key).unwrap().unwrap();
+        let r1: Region = engine.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r1);
         let r1_cf: Region = engine.get_msg_cf(cf, key).unwrap().unwrap();
         assert_eq!(r, r1_cf);
-
-        let mut r2: Region = snap.get_msg(key).unwrap().unwrap();
-        assert_eq!(r, r2);
-        let r2_cf: Region = snap.get_msg_cf(cf, key).unwrap().unwrap();
-        assert_eq!(r, r2_cf);
-
-        r.set_id(11);
-        engine.put_msg(key, &r).unwrap();
-        r1 = engine.get_msg(key).unwrap().unwrap();
-        r2 = snap.get_msg(key).unwrap().unwrap();
-        assert_ne!(r1, r2);
 
         let b: Option<Region> = engine.get_msg(b"missing_key").unwrap();
         assert!(b.is_none());
