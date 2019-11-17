@@ -8,7 +8,7 @@ use std::time::Duration;
 use engine::rocks::TablePropertiesCollection;
 use engine::CfName;
 use engine::IterOption;
-use engine::Peekable;
+use engine_traits::Peekable;
 use engine::CF_DEFAULT;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;

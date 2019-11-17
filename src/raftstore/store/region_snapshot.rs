@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{DBVector, TablePropertiesCollection, DB};
+use engine::rocks::{TablePropertiesCollection, DB};
 use engine::{
-    self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
+    self, IterOption, Snapshot,
     SyncSnapshot,
 };
-use engine_rocks::{Compat, RocksEngineIterator};
-use engine_traits::SeekKey;
+use engine_rocks::{Compat, RocksEngineIterator, RocksDBVector};
+use engine_traits::{SeekKey, Peekable, Result as EngineResult, ReadOptions};
 use kvproto::metapb::Region;
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
 use engine_traits::util::check_key_in_range;
-use engine_traits::{Iterable, Iterator};
+use engine_traits::{Iterable, Iterator, Error as EngineError};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -135,7 +135,9 @@ impl Clone for RegionSnapshot {
 }
 
 impl Peekable for RegionSnapshot {
-    fn get_value(&self, key: &[u8]) -> EngineResult<Option<DBVector>> {
+    type DBVector = RocksDBVector;
+
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> EngineResult<Option<Self::DBVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),
@@ -144,7 +146,7 @@ impl Peekable for RegionSnapshot {
         )
         .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
-        self.snap.get_value(&data_key).map_err(|e| {
+        self.snap.c().get_value_opt(opts, &data_key).map_err(|e| {
             CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
             if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
@@ -166,7 +168,7 @@ impl Peekable for RegionSnapshot {
         })
     }
 
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
+    fn get_value_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> EngineResult<Option<Self::DBVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),
@@ -175,7 +177,7 @@ impl Peekable for RegionSnapshot {
         )
         .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
-        self.snap.get_value_cf(cf, &data_key).map_err(|e| {
+        self.snap.c().get_value_cf_opt(opts, cf, &data_key).map_err(|e| {
             CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
             if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
@@ -419,7 +421,7 @@ mod tests {
     use engine::{ALL_CFS, CF_DEFAULT};
     use engine_rocks::RocksIOLimiter;
     use engine_rocks::RocksSstWriterBuilder;
-    use engine_traits::{SstWriter, SstWriterBuilder};
+    use engine_traits::{SstWriter, SstWriterBuilder, Peekable};
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;
 
