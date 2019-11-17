@@ -1,4 +1,5 @@
 use tidb_query_codegen::rpn_fn;
+use num::traits::Pow;
 
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
@@ -301,6 +302,22 @@ fn cot(arg: &Option<Real>) -> Result<Option<Real>> {
             }
         }
         None => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            let pow = (lhs.into_inner()).pow(rhs.into_inner());
+            if pow.is_infinite() || pow.is_nan() {
+                Err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)).into())
+            } else {
+                Ok(Real::new(pow).ok())
+            }
+        }
+        _ => Ok(None),
     }
 }
 
@@ -791,5 +808,26 @@ mod tests {
             .push_param(Some(Real::from(0.0_f64)))
             .evaluate::<Real>(ScalarFuncSig::Cot)
             .is_err());
+    }
+
+    #[test]
+    fn test_pow() {
+        let cases = vec![
+            (Some(Real::from(1.0f64)), Some(Real::from(3.0f64)), Some(Real::from(1.0f64))),
+            (Some(Real::from(3.0f64)), Some(Real::from(0.0f64)), Some(Real::from(1.0f64))),
+            (Some(Real::from(2.0f64)), Some(Real::from(4.0f64)), Some(Real::from(16.0f64))),
+            (Some(Real::from(4.0f64)), None, None),
+            (None, Some(Real::from(4.0f64)), None),
+            (None, None, None),
+        ];
+
+        for (lhs, rhs, expect) in cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::Pow)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
     }
 }
