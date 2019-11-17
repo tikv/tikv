@@ -9,6 +9,9 @@ use crate::storage::metrics::{CommandKind, CommandPriority};
 use crate::storage::mvcc::Lock;
 use crate::storage::types::{Key, Mutation};
 
+pub const CMD_TAG_GC: &str = "gc";
+pub const CMD_TAG_UNSAFE_DESTROY_RANGE: &str = "unsafe_destroy_range";
+
 pub struct PointGetCommand {
     pub(super) ctx: Context,
     pub(super) key: Key,
@@ -236,178 +239,6 @@ pub enum Command {
     MvccByStartTs { ctx: Context, start_ts: u64 },
 }
 
-impl Display for Command {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
-            Command::Prewrite {
-                ref ctx,
-                ref mutations,
-                start_ts,
-                ..
-            } => write!(
-                f,
-                "kv::command::prewrite mutations({}) @ {} | {:?}",
-                mutations.len(),
-                start_ts,
-                ctx
-            ),
-            Command::AcquirePessimisticLock {
-                ref ctx,
-                ref keys,
-                start_ts,
-                ref options,
-                ..
-            } => write!(
-                f,
-                "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}",
-                keys.len(),
-                start_ts,
-                options.for_update_ts,
-                ctx
-            ),
-            Command::Commit {
-                ref ctx,
-                ref keys,
-                lock_ts,
-                commit_ts,
-                ..
-            } => write!(
-                f,
-                "kv::command::commit {} {} -> {} | {:?}",
-                keys.len(),
-                lock_ts,
-                commit_ts,
-                ctx
-            ),
-            Command::Cleanup {
-                ref ctx,
-                ref key,
-                start_ts,
-                ..
-            } => write!(f, "kv::command::cleanup {} @ {} | {:?}", key, start_ts, ctx),
-            Command::Rollback {
-                ref ctx,
-                ref keys,
-                start_ts,
-                ..
-            } => write!(
-                f,
-                "kv::command::rollback keys({}) @ {} | {:?}",
-                keys.len(),
-                start_ts,
-                ctx
-            ),
-            Command::PessimisticRollback {
-                ref ctx,
-                ref keys,
-                start_ts,
-                for_update_ts,
-            } => write!(
-                f,
-                "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}",
-                keys.len(),
-                start_ts,
-                for_update_ts,
-                ctx
-            ),
-            Command::TxnHeartBeat {
-                ref ctx,
-                ref primary_key,
-                start_ts,
-                advise_ttl,
-            } => write!(
-                f,
-                "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}",
-                primary_key, start_ts, advise_ttl, ctx
-            ),
-            Command::CheckTxnStatus {
-                ref ctx,
-                ref primary_key,
-                lock_ts,
-                caller_start_ts,
-                current_ts,
-                ..
-            } => write!(
-                f,
-                "kv::command::check_txn_status {} @ {} curr({}, {}) | {:?}",
-                primary_key, lock_ts, caller_start_ts, current_ts, ctx
-            ),
-            Command::ScanLock {
-                ref ctx,
-                max_ts,
-                ref start_key,
-                limit,
-                ..
-            } => write!(
-                f,
-                "kv::scan_lock {:?} {} @ {} | {:?}",
-                start_key, limit, max_ts, ctx
-            ),
-            Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
-            Command::ResolveLockLite { .. } => write!(f, "kv::resolve_lock_lite"),
-            Command::DeleteRange {
-                ref ctx,
-                ref start_key,
-                ref end_key,
-            } => write!(
-                f,
-                "kv::command::delete range [{:?}, {:?}) | {:?}",
-                start_key, end_key, ctx
-            ),
-            Command::Pause {
-                ref ctx,
-                ref keys,
-                duration,
-            } => write!(
-                f,
-                "kv::command::pause keys:({}) {} ms | {:?}",
-                keys.len(),
-                duration,
-                ctx
-            ),
-            Command::MvccByKey { ref ctx, ref key } => {
-                write!(f, "kv::command::mvccbykey {:?} | {:?}", key, ctx)
-            }
-            Command::MvccByStartTs {
-                ref ctx,
-                ref start_ts,
-            } => write!(f, "kv::command::mvccbystartts {:?} | {:?}", start_ts, ctx),
-        }
-    }
-}
-
-impl Debug for Command {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self)
-    }
-}
-
-pub const CMD_TAG_GC: &str = "gc";
-pub const CMD_TAG_UNSAFE_DESTROY_RANGE: &str = "unsafe_destroy_range";
-
-pub fn get_priority_tag(priority: CommandPri) -> CommandPriority {
-    match priority {
-        CommandPri::Low => CommandPriority::low,
-        CommandPri::Normal => CommandPriority::normal,
-        CommandPri::High => CommandPriority::high,
-    }
-}
-
-pub fn get_priority_code(priority: CommandPri) -> u8 {
-    match priority {
-        CommandPri::Low => 1,
-        CommandPri::Normal => 2,
-        CommandPri::High => 3,
-    }
-}
-
-pub fn is_normal_priority(priority: CommandPri) -> bool {
-    match priority {
-        CommandPri::Normal => true,
-        _ => false,
-    }
-}
-
 impl Command {
     pub fn readonly(&self) -> bool {
         match *self {
@@ -581,6 +412,175 @@ impl Command {
             _ => {}
         }
         bytes
+    }
+}
+
+impl Display for Command {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match *self {
+            Command::Prewrite {
+                ref ctx,
+                ref mutations,
+                start_ts,
+                ..
+            } => write!(
+                f,
+                "kv::command::prewrite mutations({}) @ {} | {:?}",
+                mutations.len(),
+                start_ts,
+                ctx
+            ),
+            Command::AcquirePessimisticLock {
+                ref ctx,
+                ref keys,
+                start_ts,
+                ref options,
+                ..
+            } => write!(
+                f,
+                "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}",
+                keys.len(),
+                start_ts,
+                options.for_update_ts,
+                ctx
+            ),
+            Command::Commit {
+                ref ctx,
+                ref keys,
+                lock_ts,
+                commit_ts,
+                ..
+            } => write!(
+                f,
+                "kv::command::commit {} {} -> {} | {:?}",
+                keys.len(),
+                lock_ts,
+                commit_ts,
+                ctx
+            ),
+            Command::Cleanup {
+                ref ctx,
+                ref key,
+                start_ts,
+                ..
+            } => write!(f, "kv::command::cleanup {} @ {} | {:?}", key, start_ts, ctx),
+            Command::Rollback {
+                ref ctx,
+                ref keys,
+                start_ts,
+                ..
+            } => write!(
+                f,
+                "kv::command::rollback keys({}) @ {} | {:?}",
+                keys.len(),
+                start_ts,
+                ctx
+            ),
+            Command::PessimisticRollback {
+                ref ctx,
+                ref keys,
+                start_ts,
+                for_update_ts,
+            } => write!(
+                f,
+                "kv::command::pessimistic_rollback keys({}) @ {} {} | {:?}",
+                keys.len(),
+                start_ts,
+                for_update_ts,
+                ctx
+            ),
+            Command::TxnHeartBeat {
+                ref ctx,
+                ref primary_key,
+                start_ts,
+                advise_ttl,
+            } => write!(
+                f,
+                "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}",
+                primary_key, start_ts, advise_ttl, ctx
+            ),
+            Command::CheckTxnStatus {
+                ref ctx,
+                ref primary_key,
+                lock_ts,
+                caller_start_ts,
+                current_ts,
+                ..
+            } => write!(
+                f,
+                "kv::command::check_txn_status {} @ {} curr({}, {}) | {:?}",
+                primary_key, lock_ts, caller_start_ts, current_ts, ctx
+            ),
+            Command::ScanLock {
+                ref ctx,
+                max_ts,
+                ref start_key,
+                limit,
+                ..
+            } => write!(
+                f,
+                "kv::scan_lock {:?} {} @ {} | {:?}",
+                start_key, limit, max_ts, ctx
+            ),
+            Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
+            Command::ResolveLockLite { .. } => write!(f, "kv::resolve_lock_lite"),
+            Command::DeleteRange {
+                ref ctx,
+                ref start_key,
+                ref end_key,
+            } => write!(
+                f,
+                "kv::command::delete range [{:?}, {:?}) | {:?}",
+                start_key, end_key, ctx
+            ),
+            Command::Pause {
+                ref ctx,
+                ref keys,
+                duration,
+            } => write!(
+                f,
+                "kv::command::pause keys:({}) {} ms | {:?}",
+                keys.len(),
+                duration,
+                ctx
+            ),
+            Command::MvccByKey { ref ctx, ref key } => {
+                write!(f, "kv::command::mvccbykey {:?} | {:?}", key, ctx)
+            }
+            Command::MvccByStartTs {
+                ref ctx,
+                ref start_ts,
+            } => write!(f, "kv::command::mvccbystartts {:?} | {:?}", start_ts, ctx),
+        }
+    }
+}
+
+impl Debug for Command {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+pub fn get_priority_tag(priority: CommandPri) -> CommandPriority {
+    match priority {
+        CommandPri::Low => CommandPriority::low,
+        CommandPri::Normal => CommandPriority::normal,
+        CommandPri::High => CommandPriority::high,
+    }
+}
+
+pub fn get_priority_code(priority: CommandPri) -> u8 {
+    match priority {
+        CommandPri::Low => 1,
+        CommandPri::Normal => 2,
+        CommandPri::High => 3,
+    }
+}
+
+pub fn is_normal_priority(priority: CommandPri) -> bool {
+    match priority {
+        CommandPri::Normal => true,
+        _ => false,
     }
 }
 
