@@ -5,9 +5,13 @@ use futures::sync::oneshot::{Receiver, Sender};
 use futures::{self, Future};
 use hyper::service::service_fn;
 use hyper::{self, Body, Method, Request, Response, Server, StatusCode};
-use tokio_threadpool::{Builder, ThreadPool};
-use regex::Regex;
+#[cfg(target_os = "linux")]
+use pprof;
+#[cfg(target_os = "linux")]
 use prost::Message;
+#[cfg(target_os = "linux")]
+use regex::Regex;
+use tokio_threadpool::{Builder, ThreadPool};
 
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -75,6 +79,7 @@ impl StatusServer {
             .unwrap_or_else(|| thread_name.to_owned())
     }
 
+    #[cfg(target_os = "linux")]
     fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
         move |frames| {
             let name = Self::extract_thread_name(&frames.thread_name);
@@ -82,6 +87,7 @@ impl StatusServer {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub fn dump_rsprof(
         seconds: u64,
         frequency: i32,
@@ -120,6 +126,7 @@ impl StatusServer {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub fn dump_rsperf_to_resp(
         req: Request<Body>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
@@ -229,7 +236,12 @@ impl StatusServer {
                     match (method, path.as_ref()) {
                         (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
                         (Method::GET, "/status") => Box::new(ok(Response::default())),
-                        (Method::GET, "/debug/pprof/profile") => Self::dump_rsperf_to_resp(req),
+                        (Method::GET, "/debug/pprof/profile") => {
+                            #[cfg(target_os = "linux")]
+                                { Self::dump_rsperf_to_resp(req) }
+                            #[cfg(not(target_os = "linux"))]
+                                { Box::new(ok(Response::default())) }
+                        }
                         _ => Box::new(ok(StatusServer::err_response(
                             StatusCode::NOT_FOUND,
                             "path not found",

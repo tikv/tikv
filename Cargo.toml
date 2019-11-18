@@ -178,6 +178,8 @@ signal = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }
+criterion-papi = "0.1"
+pprof = { version = "0.3", features = ["flamegraph", "protobuf"] }
 
 [workspace]
 members = [
