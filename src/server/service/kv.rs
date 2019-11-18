@@ -2221,7 +2221,8 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
         cb,
     );
 
-    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+    let caller_start_ts = req.get_caller_start_ts();
+    AndThenWith::new(res, f.map_err(Error::from)).map(move |v| {
         let mut resp = CheckTxnStatusResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -2237,7 +2238,7 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
                         min_commit_ts,
                     } => {
                         resp.set_lock_ttl(lock_ttl);
-                        if min_commit_ts != 0 {
+                        if min_commit_ts > caller_start_ts {
                             resp.set_action(Action::MinCommitTsPushed);
                         }
                     }
