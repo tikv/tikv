@@ -42,13 +42,11 @@ impl Latch {
         None
     }
 
-    pub fn pop_front(&mut self, s: usize) -> Option<u64> {
+    pub fn pop_front(&mut self, s: usize) -> Option<(usize, u64)> {
         for item in self.waiting.iter_mut() {
-            if let Some((v, cid)) = item {
+            if let Some((v, _)) = item {
                 if *v == s {
-                    let id = Some(*cid);
-                    *item = None;
-                    return id;
+                    return item.take();
                 }
             }
         }
@@ -58,7 +56,7 @@ impl Latch {
     pub fn wait_for_wake(&mut self, s: usize, cid: u64) {
         if let Some(item) = self.waiting.back_mut() {
             if item.is_none() {
-                *item = Some((s, cid));
+                item.replace((s, cid));
                 return;
             }
         }
@@ -66,9 +64,6 @@ impl Latch {
     }
 
     pub fn maybe_shrink(&mut self, limit: usize) {
-        if self.waiting.len() < limit {
-            return;
-        }
         while !self.waiting.is_empty() {
             let item = self.waiting.front().unwrap();
             if item.is_none() {
@@ -179,7 +174,7 @@ impl Latches {
         let mut wakeup_list: Vec<u64> = vec![];
         for &i in &lock.required_slots[..lock.owned_count] {
             let mut latch = self.lock_latch(i);
-            let front = latch.pop_front(i).unwrap();
+            let (_, front) = latch.pop_front(i).unwrap();
             assert_eq!(front, who);
             if let Some(wakeup) = latch.front(i) {
                 wakeup_list.push(wakeup);
