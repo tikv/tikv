@@ -22,7 +22,7 @@ pub fn fuzz_codec_bytes(data: &[u8]) -> Result<(), Error> {
 
 #[inline(always)]
 pub fn fuzz_codec_number(data: &[u8]) -> Result<(), Error> {
-    use codec::number::NumberCodec;
+    use codec::number::{NumberCodec, NumberEncoder};
     {
         let mut cursor = Cursor::new(data);
         let n = cursor.read_as_u64()?;
