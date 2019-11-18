@@ -8,10 +8,10 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64};
 
-use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
+use engine::rocks::{WriteBatch, WriteOptions, DB};
 use engine::Engines;
-use engine_traits::Peekable;
-use engine_rocks::Compat;
+use engine_traits::{Peekable, Snapshot};
+use engine_rocks::{RocksSnapshot, RocksSyncSnapshot};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -2591,7 +2591,7 @@ impl RequestInspector for Peer {
 pub struct ReadExecutor {
     check_epoch: bool,
     engine: Arc<DB>,
-    snapshot: Option<SyncSnapshot>,
+    snapshot: Option<RocksSyncSnapshot>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
 }
@@ -2619,7 +2619,7 @@ impl ReadExecutor {
             return;
         }
         let engine = self.engine.clone();
-        self.snapshot = Some(Snapshot::new(engine).into_sync());
+        self.snapshot = Some(RocksSnapshot::new(engine).into_sync());
         // Reading current timespec after snapshot, in case we do not
         // expire lease in time.
         atomic::fence(atomic::Ordering::Release);
@@ -2639,7 +2639,7 @@ impl ReadExecutor {
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
             // TODO: check whether cf exists or not.
-            snapshot.c()
+            snapshot
                 .get_value_cf(cf, &keys::data_key(key))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -2651,7 +2651,7 @@ impl ReadExecutor {
                     )
                 })
         } else {
-            snapshot.c()
+            snapshot
                 .get_value(&keys::data_key(key))
                 .unwrap_or_else(|e| {
                     panic!(
@@ -2738,8 +2738,9 @@ impl ReadExecutor {
         let mut response = RaftCmdResponse::default();
         response.set_responses(responses.into());
         let snapshot = if need_snapshot {
+            let newsnap = self.snapshot.as_ref().unwrap().as_raw().clone();
             Some(RegionSnapshot::from_snapshot(
-                self.snapshot.clone().unwrap(),
+                newsnap,
                 region.to_owned(),
             ))
         } else {

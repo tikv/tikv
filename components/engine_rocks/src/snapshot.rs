@@ -153,6 +153,10 @@ impl RocksSyncSnapshot {
     pub fn from_ref(raw: &RawSyncSnapshot) -> &RocksSyncSnapshot {
         unsafe { &*(raw as *const _ as *const _) }
     }
+
+    pub fn as_raw(&self) -> &RawSyncSnapshot {
+        unsafe { &*(self as *const _ as *const _) }
+    }
 }
 
 impl SyncSnapshot<RocksSnapshot> for RocksSyncSnapshot { }
