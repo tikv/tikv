@@ -1016,13 +1016,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             match txn_status {
                 TxnStatus::TtlExpire | TxnStatus::LockNotExist => {
                     let key_hashes = gen_key_hashes_if_needed(lock_mgr, &[&primary_key]);
-                    wake_up_waiters_if_needed(
-                        lock_mgr,
-                        lock_ts,
-                        key_hashes,
-                        0,
-                        is_pessimistic_txn,
-                    );
+                    wake_up_waiters_if_needed(lock_mgr, lock_ts, key_hashes, 0, is_pessimistic_txn);
                 }
                 TxnStatus::Rollbacked
                 | TxnStatus::Committed { .. }

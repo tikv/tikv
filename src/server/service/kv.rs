@@ -34,7 +34,7 @@ use kvproto::kvrpcpb::{self, *};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use prometheus::HistogramTimer;
+use prometheus::{Histogram, HistogramTimer};
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::metrics::HistogramReader;
@@ -54,7 +54,7 @@ const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f64 = 0.3;
 const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 70;
 const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.0;
 const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_PENDING_COMMANDS: usize = 300;
-const REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO: f64 = 0.1; // against jittering
+const REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO: f64 = 0.5; // against jittering
 
 const WRITE_BATCH_WRITE_BYTES_LIMIT: usize = 2097152; // 2MB
 
@@ -95,8 +95,54 @@ impl BatchableRequestKind {
     }
 }
 
+struct DualHistogramReader {
+    first_reader: HistogramReader,
+    second_reader: Option<HistogramReader>,
+}
+
+impl DualHistogramReader {
+    fn new(first: Histogram, second: Option<Histogram>) -> Self {
+        DualHistogramReader {
+            first_reader: HistogramReader::new(first),
+            second_reader: second.map(|h| HistogramReader::new(h)),
+        }
+    }
+
+    fn consume_first(&mut self) -> f64 {
+        self.first_reader.consume_latest_avg()
+    }
+
+    #[allow(dead_code)]
+    fn read_first(&self) -> f64 {
+        self.first_reader.read_latest_avg()
+    }
+
+    fn consume_second(&mut self) -> f64 {
+        if let Some(reader) = &mut self.second_reader {
+            reader.consume_latest_avg()
+        } else {
+            self.first_reader.consume_latest_avg()
+        }
+    }
+
+    #[allow(dead_code)]
+    fn read_second(&self) -> f64 {
+        if let Some(reader) = &self.second_reader {
+            reader.read_latest_avg()
+        } else {
+            self.first_reader.read_latest_avg()
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RequestLoad {
+    Heavy,
+    Light,
+}
+
 struct RequestLoadEstimator {
-    latency_reader: Option<HistogramReader>,
+    latency_reader: Option<DualHistogramReader>,
     latency_estimation: f64,
     latency_threshold: f64,
     atomic_load_reader: Option<Arc<AtomicUsize>>,
@@ -106,6 +152,7 @@ struct RequestLoadEstimator {
     thread_load_estimation: usize,
     thread_load_threshold: usize,
     sample_size: usize,
+    load_estimation: RequestLoad,
 }
 
 impl RequestLoadEstimator {
@@ -121,10 +168,11 @@ impl RequestLoadEstimator {
             thread_load_estimation: 0,
             thread_load_threshold: 0,
             sample_size: 0,
+            load_estimation: RequestLoad::Light,
         }
     }
 
-    fn monitor_latency(&mut self, reader: HistogramReader, threshold: f64) {
+    fn monitor_latency(&mut self, reader: DualHistogramReader, threshold: f64) {
         self.latency_reader.replace(reader);
         self.latency_threshold = threshold;
         self.thread_load_estimation = REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR;
@@ -136,93 +184,81 @@ impl RequestLoadEstimator {
         self.thread_load_estimation = REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR;
     }
 
-    // only used to determine light load if another metrics is present.
-    fn monitor_thread(&mut self, reader: Arc<ThreadLoad>, threshold: usize) {
+    fn monitor_thread(&mut self, reader: Arc<ThreadLoad>) {
         self.thread_load_reader.replace(reader);
-        self.thread_load_threshold = threshold;
     }
 
-    fn in_light_load(&mut self) -> bool {
-        self.sample_size += 1;
-        if let Some(reader) = &self.thread_load_reader {
-            if reader.load()
-                < (self.thread_load_estimation as f64 * REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO)
-                    as usize
-            {
-                return true;
-            }
-        } else if self.latency_reader.is_some()
-            && self.latency_estimation
-                < self.latency_threshold * REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO
-            || self.atomic_load_reader.is_some()
-                && self.atomic_load_estimation
-                    < (self.atomic_load_threshold as f64
-                        * REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO)
-                        as usize
-        {
-            return true;
-        }
-        false
+    fn load(&self) -> RequestLoad {
+        self.load_estimation
     }
 
-    fn in_heavy_load(&self) -> bool {
-        if self.latency_reader.is_some() {
-            self.thread_load_estimation > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR
-                && self.latency_estimation > self.latency_threshold
-        } else if self.atomic_load_reader.is_some() {
-            self.thread_load_estimation > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR
-                && self.atomic_load_estimation > self.atomic_load_threshold
-        } else {
-            false
-        }
-    }
-
-    // Collect monitored metrics. When primary metrics is present and sample_secondary is set,
-    // will update thread load estimation only if primary load is high.
-    fn collect(&mut self, sample_secondary: bool) {
+    // Collect monitored metrics.
+    // When in light load, update thread load estimation when primary load is high.
+    // When in heavy load, estimate with second getter of primary load if present.
+    fn collect(&mut self) {
         self.sample_size += 1;
         if self.sample_size > REQUEST_LOAD_ESTIMATE_SAMPLE_WINDOW {
             self.sample_size = 0;
             let thread_load = if let Some(reader) = &self.thread_load_reader {
                 reader.load()
             } else {
+                error!("missing thread load reader in RequestLoadEstimator");
                 0
             };
             if let Some(reader) = &mut self.latency_reader {
-                let latency = reader.consume_latest_avg() * 1000.0;
+                let latency = if self.load_estimation == RequestLoad::Light {
+                    reader.consume_first() * 1000.0
+                } else {
+                    reader.consume_second() * 1000.0
+                };
                 self.latency_estimation = self.latency_estimation * 0.7 + latency * 0.3;
-                // when latency is the major metrics, sample thread load for busy hours.
-                if sample_secondary && thread_load > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR {
+                if self.load_estimation == RequestLoad::Heavy
+                    || thread_load > self.thread_load_estimation
+                {
                     // thread load is less sensitive to workload,
                     // a small barrier here to make sure we have good samples of thread load.
-                    if latency > self.latency_threshold {
-                        self.thread_load_estimation =
-                            (self.thread_load_estimation + thread_load) / 2;
-                    }
+                    self.thread_load_estimation = (self.thread_load_estimation + thread_load) / 2;
                 }
             } else if let Some(reader) = &mut self.atomic_load_reader {
                 let atomic_load = reader.load(Ordering::Relaxed);
-                self.atomic_load_estimation = (self.atomic_load_estimation * 7 + atomic_load * 3) / 10;
-                // when latency is the major metrics, sample thread load for busy hours.
-                if sample_secondary && thread_load > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR {
+                self.atomic_load_estimation =
+                    (self.atomic_load_estimation * 7 + atomic_load * 3) / 10;
+                if self.load_estimation == RequestLoad::Heavy
+                    || thread_load > self.thread_load_estimation
+                {
                     // thread load is less sensitive to workload,
                     // a small barrier here to make sure we have good samples of thread load.
-                    if atomic_load > self.atomic_load_threshold {
-                        self.thread_load_estimation =
-                            (self.thread_load_estimation + thread_load) / 2;
+                    self.thread_load_estimation = (self.thread_load_estimation + thread_load) / 2;
+                }
+            } else {
+                error!("missing primary reader in RequestLoadEstimator");
+            }
+            // refresh based on latest sample
+            if self.load_estimation == RequestLoad::Light {
+                // update load estimation when thread load and primary load is high enough
+                if self.thread_load_estimation > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR {
+                    if self.latency_reader.is_some()
+                        && self.latency_estimation > self.latency_threshold
+                        || self.atomic_load_reader.is_some()
+                            && self.atomic_load_estimation > self.atomic_load_threshold
+                    {
+                        self.load_estimation = RequestLoad::Heavy;
+                        self.thread_load_threshold = self.thread_load_estimation;
                     }
                 }
             } else {
-                self.thread_load_estimation = (self.thread_load_estimation + thread_load) / 2;
+                if self.thread_load_estimation
+                    < (self.thread_load_threshold as f64
+                        * REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO)
+                        as usize
+                    || self.latency_reader.is_some()
+                        && self.latency_estimation
+                            < self.latency_threshold * REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO
+                {
+                    self.load_estimation = RequestLoad::Light;
+                }
             }
         }
-    }
-
-    // Clear old samples for collector to work unbiasedly. Called once before `collect`.
-    fn clear(&mut self) {
-        self.thread_load_estimation = REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR;
-        self.latency_estimation = 0.0;
-        self.atomic_load_estimation = 0;
     }
 }
 
@@ -232,7 +268,6 @@ struct BatchLimiter {
     timeout: Option<Duration>,
     last_submit_time: Instant,
     estimator: RequestLoadEstimator,
-    enable_batch: bool,
     batch_input: usize,
 }
 
@@ -244,39 +279,17 @@ impl BatchLimiter {
         cmd: BatchableRequestKind,
         timeout: Option<Duration>,
         latency_threshold: f64,
-        latency_reader: HistogramReader,
+        latency_reader: DualHistogramReader,
         thread_load_reader: Arc<ThreadLoad>,
     ) -> Self {
         let mut estimator = RequestLoadEstimator::new();
         estimator.monitor_latency(latency_reader, latency_threshold);
-        estimator.monitor_thread(thread_load_reader, 0);
+        estimator.monitor_thread(thread_load_reader);
         BatchLimiter {
             cmd,
             timeout,
             last_submit_time: Instant::now(),
             estimator,
-            enable_batch: false,
-            batch_input: 0,
-        }
-    }
-
-    /// Construct a new `BatchLimiter` with provided timeout-duration and reader on thread-load
-    /// Limiter will control batching w.r.t. thread load pressure.
-    #[allow(dead_code)]
-    fn with_thread_load(
-        cmd: BatchableRequestKind,
-        timeout: Option<Duration>,
-        thread_load_threshold: usize,
-        thread_load_reader: Arc<ThreadLoad>,
-    ) -> Self {
-        let mut estimator = RequestLoadEstimator::new();
-        estimator.monitor_thread(thread_load_reader, thread_load_threshold);
-        BatchLimiter {
-            cmd,
-            timeout,
-            last_submit_time: Instant::now(),
-            estimator,
-            enable_batch: false,
             batch_input: 0,
         }
     }
@@ -293,13 +306,12 @@ impl BatchLimiter {
     ) -> Self {
         let mut estimator = RequestLoadEstimator::new();
         estimator.monitor_atomic_usize(atomic_usize, load_threshold);
-        estimator.monitor_thread(thread_load_reader, 0);
+        estimator.monitor_thread(thread_load_reader);
         BatchLimiter {
             cmd,
             timeout,
             last_submit_time: Instant::now(),
             estimator,
-            enable_batch: false,
             batch_input: 0,
         }
     }
@@ -323,7 +335,7 @@ impl BatchLimiter {
     /// Whether current batch needs more requests.
     #[inline]
     fn needs_more(&self) -> bool {
-        self.enable_batch
+        self.estimator.load() == RequestLoad::Heavy
     }
 
     /// Observe a tick from timer guard. Limiter will update statistics at this point.
@@ -332,18 +344,7 @@ impl BatchLimiter {
         if self.disabled() {
             return;
         }
-        if self.enable_batch {
-            self.estimator.collect(false);
-            if self.estimator.in_light_load() {
-                self.estimator.clear();
-                self.enable_batch = false;
-            }
-        } else {
-            self.estimator.collect(true);
-            if self.estimator.in_heavy_load() {
-                self.enable_batch = true;
-            }
-        }
+        self.estimator.collect();
     }
 
     /// Observe the size of commands been examined by batcher.
@@ -357,7 +358,7 @@ impl BatchLimiter {
     #[inline]
     fn observe_submit(&mut self, now: Instant, size: usize) {
         self.last_submit_time = now;
-        if self.enable_batch {
+        if self.estimator.load() == RequestLoad::Heavy {
             REQUEST_BATCH_SIZE_HISTOGRAM_VEC
                 .with_label_values(&[self.cmd.as_str()])
                 .observe(self.batch_input as f64);
@@ -762,7 +763,10 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
                     BatchableRequestKind::PointGet,
                     timeout,
                     REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY,
-                    HistogramReader::new(GRPC_MSG_HISTOGRAM_VEC.kv_get.clone()),
+                    DualHistogramReader::new(
+                        GRPC_MSG_HISTOGRAM_VEC.kv_get.clone(),
+                        Some(GRPC_MSG_HISTOGRAM_VEC.kv_batch_get_command.clone()),
+                    ),
                     readpool_thread_load,
                 ),
                 Box::new(ReadBatcher::new()),
