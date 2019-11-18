@@ -31,7 +31,7 @@ use prometheus::HistogramTimer;
 use tikv_util::{collections::HashMap, time::SlowTimer};
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
-use crate::storage::lock_manager::{self, LockMgr};
+use crate::storage::lock_manager::{self, LockManager};
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
 use crate::storage::txn::sched_pool::SchedPool;
@@ -144,7 +144,7 @@ impl TaskContext {
     }
 }
 
-struct SchedulerInner<L: LockMgr> {
+struct SchedulerInner<L: LockManager> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
 
@@ -173,7 +173,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl<L: LockMgr> SchedulerInner<L> {
+impl<L: LockManager> SchedulerInner<L> {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -240,15 +240,15 @@ impl<L: LockMgr> SchedulerInner<L> {
 
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
-pub struct Scheduler<E: Engine, L: LockMgr> {
+pub struct Scheduler<E: Engine, L: LockManager> {
     // `engine` is `None` means currently the program is in scheduler worker threads.
     engine: Option<E>,
     inner: Arc<SchedulerInner<L>>,
 }
 
-unsafe impl<E: Engine, L: LockMgr> Send for Scheduler<E, L> {}
+unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
 
-impl<E: Engine, L: LockMgr> Scheduler<E, L> {
+impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Creates a scheduler.
     pub fn new(
         engine: E,
@@ -292,7 +292,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
     }
 }
 
-impl<E: Engine, L: LockMgr> Scheduler<E, L> {
+impl<E: Engine, L: LockManager> Scheduler<E, L> {
     fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, Self, L> {
         let pool = if priority == CommandPri::High || is_sys_cmd {
             self.inner.high_priority_pool.clone()
@@ -472,7 +472,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
     }
 }
 
-impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
+impl<E: Engine, L: LockManager> MsgScheduler for Scheduler<E, L> {
     fn on_msg(&self, task: Msg) {
         match task {
             Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),

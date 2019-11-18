@@ -10,7 +10,7 @@ use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
-use crate::storage::lock_manager::{self, LockMgr};
+use crate::storage::lock_manager::{self, Lock, LockManager};
 use crate::storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
 };
@@ -114,7 +114,7 @@ pub trait MsgScheduler: Clone + Send + 'static {
     fn on_msg(&self, task: Msg);
 }
 
-pub struct Executor<E: Engine, S: MsgScheduler, L: LockMgr> {
+pub struct Executor<E: Engine, S: MsgScheduler, L: LockManager> {
     // We put time consuming tasks to the thread pool.
     sched_pool: Option<SchedPool>,
     // And the tasks completes we post a completion to the `Scheduler`.
@@ -125,7 +125,7 @@ pub struct Executor<E: Engine, S: MsgScheduler, L: LockMgr> {
     _phantom: PhantomData<E>,
 }
 
-impl<E: Engine, S: MsgScheduler, L: LockMgr> Executor<E, S, L> {
+impl<E: Engine, S: MsgScheduler, L: LockManager> Executor<E, S, L> {
     pub fn new(scheduler: S, pool: SchedPool, lock_mgr: Option<L>) -> Self {
         Executor {
             sched_pool: Some(pool),
@@ -466,13 +466,13 @@ fn process_read_impl<E: Engine>(
 
 // If lock_mgr has waiters, there may be some transactions waiting for these keys,
 // so calculates keys' hashes to wake up them.
-fn gen_key_hashes_if_needed<L: LockMgr, K: Borrow<Key>>(
+fn gen_key_hashes_if_needed<L: LockManager, K: Borrow<Key>>(
     lock_mgr: &Option<L>,
     keys: &[K],
 ) -> Option<Vec<u64>> {
     lock_mgr.as_ref().and_then(|lm| {
         if lm.has_waiter() {
-            Some(lock_manager::gen_key_hashes(keys))
+            Some(keys.iter().map(|key| key.borrow().gen_hash()).collect())
         } else {
             None
         }
@@ -480,7 +480,7 @@ fn gen_key_hashes_if_needed<L: LockMgr, K: Borrow<Key>>(
 }
 
 // Wake up pessimistic transactions that waiting for these locks
-fn wake_up_waiters_if_needed<L: LockMgr>(
+fn wake_up_waiters_if_needed<L: LockManager>(
     lock_mgr: &Option<L>,
     lock_ts: u64,
     key_hashes: Option<Vec<u64>>,
@@ -489,6 +489,16 @@ fn wake_up_waiters_if_needed<L: LockMgr>(
 ) {
     if let Some(lm) = lock_mgr {
         lm.wake_up(lock_ts, key_hashes, commit_ts, is_pessimistic_txn);
+    }
+}
+
+fn extract_lock_from_result(res: &StorageResult<()>) -> Lock {
+    match res {
+        Err(StorageError::Txn(Error::Mvcc(MvccError::KeyIsLocked(info)))) => Lock {
+            ts: info.get_lock_version(),
+            hash: Key::from_raw(info.get_key()).gen_hash(),
+        },
+        _ => panic!("unexpected mvcc error"),
     }
 }
 
@@ -501,7 +511,7 @@ struct WriteResult {
     lock_info: Option<(lock_manager::Lock, bool, i64)>,
 }
 
-fn process_write_impl<S: Snapshot, L: LockMgr>(
+fn process_write_impl<S: Snapshot, L: LockManager>(
     cmd: Command,
     snapshot: S,
     lock_mgr: Option<L>,
@@ -587,7 +597,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                 let modifies = txn.into_modifies();
                 (pr, modifies, rows, cmd.ctx, None)
             } else {
-                let lock = lock_manager::extract_lock_from_result(&locks[0]);
+                let lock = extract_lock_from_result(&locks[0]);
                 let pr = ProcessResult::MultiRes { results: locks };
                 let lock_info = Some((lock, options.is_first_lock, options.wait_timeout));
                 // Wait for lock released
@@ -702,12 +712,12 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                         .entry((current_lock.ts, current_lock.for_update_ts != 0))
                         .and_modify(|key_hashes: &mut Option<Vec<u64>>| {
                             if let Some(key_hashes) = key_hashes {
-                                key_hashes.push(lock_manager::gen_key_hash(&current_key));
+                                key_hashes.push(current_key.gen_hash());
                             }
                         })
                         .or_insert_with(|| {
                             if has_waiter {
-                                Some(vec![lock_manager::gen_key_hash(&current_key)])
+                                Some(vec![current_key.gen_hash()])
                             } else {
                                 None
                             }
@@ -896,4 +906,24 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
         values.push((ts, v));
     }
     Ok((lock, writes, values))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_lock_from_result() {
+        let raw_key = b"key".to_vec();
+        let key = Key::from_raw(&raw_key);
+        let ts = 100;
+        let mut info = LockInfo::default();
+        info.set_key(raw_key);
+        info.set_lock_version(ts);
+        info.set_lock_ttl(100);
+        let case = StorageError::from(Error::from(MvccError::KeyIsLocked(info)));
+        let lock = extract_lock_from_result(&Err(case));
+        assert_eq!(lock.ts, ts);
+        assert_eq!(lock.hash, key.gen_hash());
+    }
 }
