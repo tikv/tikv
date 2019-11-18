@@ -193,6 +193,9 @@ test:
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
+# Only use in CI
+ci_test:
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --all-targets --no-run --message-format=json
 
 ## Static analysis
 ## ---------------
