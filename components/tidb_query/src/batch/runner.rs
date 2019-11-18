@@ -458,13 +458,17 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut ctx = EvalContext::new(self.config.clone());
         // record count less than batch size and is not drained
         while record_len < self.stream_min_rows_each_iter && !is_drained {
+            let mut current_chunk = Chunk::default();
             let (drained, len) = self.internal_handle_request(
                 true,
                 self.stream_batch_size,
-                &mut chunk,
+                &mut current_chunk,
                 &mut warnings,
                 &mut ctx,
             )?;
+            chunk
+                .mut_rows_data()
+                .extend_from_slice(current_chunk.get_rows_data());
             record_len += len;
             is_drained = drained;
 
