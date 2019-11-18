@@ -134,7 +134,6 @@ match_template = { path = "components/match_template" }
 cop_datatype = { path = "components/cop_datatype" }
 cop_codegen = { path = "components/cop_codegen" }
 codec = { path = "components/codec" }
-pprof = { version = "0.3", features = ["flamegraph", "protobuf"] }
 prost = "0.5.0"
 tipb_helper = { path = "components/tipb_helper" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
