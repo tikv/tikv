@@ -136,6 +136,25 @@ impl RpnExpressionBuilder {
     }
 
     #[cfg(test)]
+    pub fn push_fn_call_with_metadata(
+        mut self,
+        func_meta: RpnFnMeta,
+        args_len: usize,
+        return_field_type: impl Into<FieldType>,
+        metadata: Box<dyn std::any::Any + Send>,
+    ) -> Self {
+        let node = RpnExpressionNode::FnCall {
+            func_meta,
+            args_len,
+            field_type: return_field_type.into(),
+            implicit_args: vec![],
+            metadata,
+        };
+        self.0.push(node);
+        self
+    }
+
+    #[cfg(test)]
     pub fn push_fn_call_with_implicit_args(
         mut self,
         func_meta: RpnFnMeta,
