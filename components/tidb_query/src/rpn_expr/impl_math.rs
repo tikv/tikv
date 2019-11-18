@@ -312,6 +312,12 @@ fn cot(arg: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
+fn degrees(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| Real::new(n.to_degrees()).ok()))
+}
+
+#[inline]
+#[rpn_fn]
 pub fn asin(arg: &Option<Real>) -> Result<Option<Real>> {
     Ok(arg.map_or(None, |arg| Real::new(arg.asin()).ok()))
 }
@@ -759,6 +765,28 @@ mod tests {
                 .push_param(Some(Real::from(x)))
                 .evaluate(ScalarFuncSig::Exp);
             assert!(output.is_err());
+        }
+    }
+
+    #[test]
+    fn test_degrees() {
+        let tests_cases = vec![
+            (None, None),
+            (Some(std::f64::NAN), None),
+            (Some(0f64), Some(Real::from(0f64))),
+            (Some(1f64), Some(Real::from(57.29577951308232_f64))),
+            (Some(std::f64::consts::PI), Some(Real::from(180.0_f64))),
+            (
+                Some(-std::f64::consts::PI / 2.0_f64),
+                Some(Real::from(-90.0_f64)),
+            ),
+        ];
+        for (input, expect) in tests_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Degrees)
+                .unwrap();
+            assert_eq!(expect, output, "{:?}", input);
         }
     }
 
