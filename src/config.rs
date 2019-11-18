@@ -620,6 +620,7 @@ pub struct TitanDBConfig {
     pub dirname: String,
     pub disable_gc: bool,
     pub max_background_gc: i32,
+    // The value of this field will be truncated to seconds.
     pub purge_obsolete_files_period: ReadableDuration,
 }
 
@@ -784,7 +785,7 @@ impl DbConfig {
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
-            // TODO: rmeove CF_RAFT.
+            // TODO: remove CF_RAFT.
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
         ]
     }
@@ -1310,6 +1311,27 @@ impl TiKvConfig {
         }
         if !db_exist(&kv_db_path) && db_exist(&self.raft_store.raftdb_path) {
             return Err("default rocksdb not exist, buf raftdb exist".into());
+        }
+
+        // Check blob file dir is empty when titan is disabled
+        if !self.rocksdb.titan.enabled {
+            let titandb_path = if self.rocksdb.titan.dirname.is_empty() {
+                Path::new(&kv_db_path).join("titandb")
+            } else {
+                Path::new(&self.rocksdb.titan.dirname).to_path_buf()
+            };
+            if let Err(e) =
+                tikv_util::config::check_data_dir_empty(titandb_path.to_str().unwrap(), "blob")
+            {
+                return Err(format!(
+                    "check: titandb-data-dir-empty; err: \"{}\"; \
+                     hint: You have disabled titan when its data directory is not empty. \
+                     To properly shutdown titan, please enter fallback blob-run-mode and \
+                     wait till titandb files are all safely ingested.",
+                    e
+                )
+                .into());
+            }
         }
 
         let expect_keepalive = self.raft_store.raft_heartbeat_interval() * 2;
