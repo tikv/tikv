@@ -1287,7 +1287,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 return Ok(c);
             }
         }
-        Err(Error::InvalidCf(cf.to_owned()))
+        Err(Error::InvalidCf(Box::new(cf.to_owned())))
     }
 
     /// Check if key range is valid

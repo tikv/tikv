@@ -374,8 +374,9 @@ impl<E: Engine> AssertionStorage<E> {
         let locks: Vec<(&[u8], &[u8], u64)> = res
             .iter()
             .filter_map(|x| {
-                if let Err(storage::Error::Txn(box txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info)))) =
-                    x
+                if let Err(storage::Error::Txn(box txn::Error::Mvcc(mvcc::Error::KeyIsLocked(
+                    info,
+                )))) = x
                 {
                     Some((
                         info.get_key(),

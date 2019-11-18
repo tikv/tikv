@@ -53,7 +53,7 @@ quick_error! {
             description("max key size exceeded")
             display("max key size exceeded, size: {}, limit: {}", size, limit)
         }
-        InvalidCf (cf_name: String) {
+        InvalidCf (cf_name: Box<String>) {
             description("invalid cf name")
             display("invalid cf name: {}", cf_name)
         }
