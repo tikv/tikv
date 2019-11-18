@@ -328,7 +328,6 @@ fn format_radix(mut x: u64, radix: u32) -> String {
     r.iter().rev().collect::<String>()
 }
 
-
 #[inline]
 #[rpn_fn]
 pub fn asin(arg: &Option<Real>) -> Result<Option<Real>> {
@@ -1009,7 +1008,6 @@ mod tests {
         }
     }
 
-    
     #[test]
     fn test_asin() {
         let test_cases = vec![
