@@ -2191,7 +2191,7 @@ fn future_txn_heart_beat<E: Engine, L: LockMgr>(
         } else {
             match v {
                 Ok(txn_status) => {
-                    if let TxnStatus::Uncommitted { lock_ttl } = txn_status {
+                    if let TxnStatus::Uncommitted { lock_ttl, .. } = txn_status {
                         resp.set_lock_ttl(lock_ttl);
                     } else {
                         unreachable!();
@@ -2228,13 +2228,19 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
         } else {
             match v {
                 Ok(txn_status) => match txn_status {
-                    TxnStatus::Rollbacked => resp.set_rollback_reason(RollbackReason::NoReason),
-                    TxnStatus::TtlExpire => resp.set_rollback_reason(RollbackReason::TtlExpire),
-                    TxnStatus::LockNotExist => {
-                        resp.set_rollback_reason(RollbackReason::LockNotExist)
-                    }
+                    TxnStatus::Rollbacked => resp.set_action(Action::NoAction),
+                    TxnStatus::TtlExpire => resp.set_action(Action::TtlExpireRollback),
+                    TxnStatus::LockNotExist => resp.set_action(Action::LockNotExistRollback),
                     TxnStatus::Committed { commit_ts } => resp.set_commit_version(commit_ts),
-                    TxnStatus::Uncommitted { lock_ttl } => resp.set_lock_ttl(lock_ttl),
+                    TxnStatus::Uncommitted {
+                        lock_ttl,
+                        min_commit_ts,
+                    } => {
+                        resp.set_lock_ttl(lock_ttl);
+                        if min_commit_ts != 0 {
+                            resp.set_action(Action::MinCommitTsPushed);
+                        }
+                    }
                 },
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
