@@ -707,7 +707,6 @@ impl<S: Snapshot> MvccTxn<S> {
                     return Ok((TxnStatus::TtlExpire, is_pessimistic_txn));
                 }
 
-                let lock_ttl = lock.ttl;
                 // If this is a large transaction and the lock is active, push forward the minCommitTS.
                 // lock.minCommitTS == 0 may be a secondary lock, or not a large transaction.
                 if lock.min_commit_ts > 0 && caller_start_ts >= lock.min_commit_ts {
@@ -721,7 +720,10 @@ impl<S: Snapshot> MvccTxn<S> {
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.update_ts.inc();
                 }
 
-                Ok((TxnStatus::uncommitted(lock_ttl), is_pessimistic_txn))
+                Ok((
+                    TxnStatus::uncommitted(lock.ttl, lock.min_commit_ts),
+                    is_pessimistic_txn,
+                ))
             }
             _ => self
                 .check_txn_status_missing_lock(primary_key, rollback_if_not_exist)
@@ -1135,7 +1137,7 @@ mod tests {
             ts(20, 0),
             ts(20, 0),
             true,
-            uncommitted(100),
+            uncommitted(100, ts(20, 1)),
         );
         // The the min_commit_ts should be ts(20, 1)
         must_commit_err(&engine, k, ts(10, 0), ts(15, 0));
@@ -1150,7 +1152,7 @@ mod tests {
             ts(40, 0),
             ts(40, 0),
             true,
-            uncommitted(100),
+            uncommitted(100, ts(40, 1)),
         );
         must_commit(&engine, k, ts(30, 0), ts(50, 0));
     }
@@ -1974,7 +1976,7 @@ mod tests {
             ts(6, 0),
             ts(7, 0),
             r,
-            uncommitted(100),
+            uncommitted(100, ts(7, 0)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(7, 0), false);
 
@@ -1987,7 +1989,7 @@ mod tests {
             ts(9, 0),
             ts(8, 0),
             r,
-            uncommitted(100),
+            uncommitted(100, ts(9, 1)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -2000,7 +2002,7 @@ mod tests {
             ts(8, 0),
             ts(10, 0),
             r,
-            uncommitted(100),
+            uncommitted(100, ts(9, 1)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(9, 1), false);
 
@@ -2012,7 +2014,7 @@ mod tests {
             ts(11, 0),
             ts(9, 0),
             r,
-            uncommitted(100),
+            uncommitted(100, ts(11, 1)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(11, 1), false);
 
@@ -2024,7 +2026,7 @@ mod tests {
             ts(12, 0),
             ts(12, 0),
             r,
-            uncommitted(100),
+            uncommitted(100, ts(12, 1)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(12, 1), false);
 
@@ -2036,7 +2038,7 @@ mod tests {
             ts(13, 1),
             ts(13, 3),
             r,
-            uncommitted(100),
+            uncommitted(100, ts(13, 3)),
         );
         must_large_txn_locked(&engine, k, ts(5, 0), 100, ts(13, 3), false);
 
@@ -2094,7 +2096,7 @@ mod tests {
             ts(21, 105),
             ts(21, 105),
             r,
-            uncommitted(100),
+            uncommitted(100, ts(21, 106)),
         );
         must_large_txn_locked(&engine, k, ts(20, 0), 100, ts(21, 106), false);
 
@@ -2121,7 +2123,7 @@ mod tests {
             ts(10, 0),
             ts(10, 0),
             r,
-            uncommitted(100),
+            uncommitted(100, 0),
         );
         must_large_txn_locked(&engine, k, ts(4, 0), 100, 0, true);
 
@@ -2164,7 +2166,7 @@ mod tests {
             ts(160, 0),
             ts(160, 0),
             r,
-            uncommitted(100),
+            uncommitted(100, 0),
         );
         must_large_txn_locked(&engine, k, ts(150, 0), 100, 0, true);
         must_check_txn_status(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), r, TtlExpire);
