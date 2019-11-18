@@ -8,14 +8,15 @@ use self::util::ReadLiteralExt;
 use failure::Error;
 use std::io::Cursor;
 use tidb_query::expr::{EvalConfig, EvalContext};
-use codec::prelude::{MemComparableByteEncoder, MemComparableByteCodec};
+use codec::prelude::MemComparableByteEncoder;
+use codec::prelude::byte::MemComparableByteCodec;
 
 #[inline(always)]
 pub fn fuzz_codec_bytes(data: &[u8]) -> Result<(), Error> {
     let _ = MemComparableByteEncoder::write_comparable_bytes(data);
     let _ = MemComparableByteEncoder::write_comparable_bytes_desc(data);
-    let _ = MemComparableByteCodec::get_first_encoded_len_desc(data)
-    let _ = MemComparableByteCodec::get_first_encoded_len(data)
+    let _ = MemComparableByteCodec::get_first_encoded_len_desc(data);
+    let _ = MemComparableByteCodec::get_first_encoded_len(data);
     Ok(())
 }
 
