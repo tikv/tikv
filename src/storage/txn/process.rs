@@ -15,10 +15,11 @@ use crate::storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
+use crate::storage::types::ProcessResult;
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
     Command, CommandKind, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
-    ScanMode, Snapshot, Statistics, StorageCallback, TxnStatus, Value,
+    ScanMode, Snapshot, Statistics, TxnStatus, Value,
 };
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
@@ -26,56 +27,6 @@ use tikv_util::time::{Instant, SlowTimer};
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
-
-/// Process result of a command.
-pub enum ProcessResult {
-    Res,
-    MultiRes { results: Vec<StorageResult<()>> },
-    MvccKey { mvcc: MvccInfo },
-    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
-    Locks { locks: Vec<LockInfo> },
-    TxnStatus { txn_status: TxnStatus },
-    NextCommand { cmd: Command },
-    Failed { err: StorageError },
-}
-
-impl StorageCallback {
-    /// Delivers the process result of a command to the storage callback.
-    pub fn execute(self, pr: ProcessResult) {
-        match self {
-            StorageCallback::Boolean(cb) => match pr {
-                ProcessResult::Res => cb(Ok(())),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
-            StorageCallback::Booleans(cb) => match pr {
-                ProcessResult::MultiRes { results } => cb(Ok(results)),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
-            StorageCallback::MvccInfoByKey(cb) => match pr {
-                ProcessResult::MvccKey { mvcc } => cb(Ok(mvcc)),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
-            StorageCallback::MvccInfoByStartTs(cb) => match pr {
-                ProcessResult::MvccStartTs { mvcc } => cb(Ok(mvcc)),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
-            StorageCallback::Locks(cb) => match pr {
-                ProcessResult::Locks { locks } => cb(Ok(locks)),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
-            StorageCallback::TxnStatus(cb) => match pr {
-                ProcessResult::TxnStatus { txn_status } => cb(Ok(txn_status)),
-                ProcessResult::Failed { err } => cb(Err(err)),
-                _ => panic!("process result mismatch"),
-            },
-        }
-    }
-}
 
 /// Task is a running command.
 pub struct Task {
@@ -654,7 +605,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 &lock_mgr,
                 start_ts,
                 key_hashes,
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 is_pessimistic_txn,
             );
             statistics.add(&txn.take_statistics());
@@ -674,7 +625,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 &lock_mgr,
                 start_ts,
                 key_hashes,
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 is_pessimistic_txn,
             );
             statistics.add(&txn.take_statistics());
@@ -694,7 +645,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 txn.pessimistic_rollback(k, for_update_ts)?;
             }
 
-            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, TimeStamp::min(), true);
+            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, TimeStamp::zero(), true);
             statistics.add(&txn.take_statistics());
             (
                 ProcessResult::MultiRes { results: vec![] },
@@ -777,7 +728,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                             &lock_mgr,
                             ts,
                             key_hashes,
-                            TimeStamp::min(),
+                            TimeStamp::zero(),
                             is_pessimistic_txn,
                         );
                     });
@@ -841,7 +792,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
-                txn_status: TxnStatus::uncommitted(lock_ttl, TimeStamp::min()),
+                txn_status: TxnStatus::uncommitted(lock_ttl, TimeStamp::zero()),
             };
             (pr, txn.into_modifies(), 1, cmd.ctx, None)
         }
@@ -869,7 +820,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                         &lock_mgr,
                         lock_ts,
                         key_hashes,
-                        TimeStamp::min(),
+                        TimeStamp::zero(),
                         is_pessimistic_txn,
                     );
                 }
@@ -920,7 +871,7 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
         let opt = reader.seek_write(key, ts)?;
         match opt {
             Some((commit_ts, write)) => {
-                ts = commit_ts.decr();
+                ts = commit_ts.prev();
                 writes.push((commit_ts, write));
             }
             None => break,

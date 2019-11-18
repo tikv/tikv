@@ -56,8 +56,8 @@ const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
     region_id: u64,
-    conf_ver: TimeStamp,
-    version: TimeStamp,
+    conf_ver: u64,
+    version: u64,
     term: u64,
 }
 
@@ -66,8 +66,8 @@ impl RegionVerId {
     fn from_context(ctx: &Context) -> Self {
         RegionVerId {
             region_id: ctx.get_region_id(),
-            conf_ver: ctx.get_region_epoch().get_conf_ver().into(),
-            version: ctx.get_region_epoch().get_version().into(),
+            conf_ver: ctx.get_region_epoch().get_conf_ver(),
+            version: ctx.get_region_epoch().get_version(),
             term: ctx.get_term(),
         }
     }

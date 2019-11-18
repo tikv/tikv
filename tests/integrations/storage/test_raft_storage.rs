@@ -211,9 +211,9 @@ fn write_test_data<E: Engine>(
             .into_iter()
             .for_each(|res| res.unwrap());
         storage
-            .commit(ctx.clone(), vec![Key::from_raw(k)], ts, ts.incr())
+            .commit(ctx.clone(), vec![Key::from_raw(k)], ts, ts.next())
             .unwrap();
-        ts = ts.incr().incr();
+        ts.incr().incr();
     }
 }
 

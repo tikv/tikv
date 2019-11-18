@@ -118,7 +118,7 @@ impl<E: Engine> Store<E> {
         Self {
             store: SyncTestStorageBuilder::from_engine(engine).build().unwrap(),
             current_ts: 1.into(),
-            last_committed_ts: TimeStamp::min(),
+            last_committed_ts: TimeStamp::zero(),
             handles: vec![],
         }
     }

@@ -116,10 +116,7 @@ mod tests {
         ]);
 
         let mut ts: TimeStamp = 1.into();
-        let mut alloc_ts = || {
-            ts = ts.incr();
-            ts
-        };
+        let mut alloc_ts = || *ts.incr();
         for i in 0..5 {
             let start = alloc_ts();
             let key = format!("{}", i);

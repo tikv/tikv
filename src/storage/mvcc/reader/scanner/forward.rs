@@ -335,7 +335,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         // `current_user_key` must have reserved space here, so its clone has reserved space too.
         // So no reallocation happens in `append_ts`.
         self.write_cursor.internal_seek(
-            &current_user_key.clone().append_ts(TimeStamp::min()),
+            &current_user_key.clone().append_ts(TimeStamp::zero()),
             &mut self.statistics.write,
         )?;
 

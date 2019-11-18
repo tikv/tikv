@@ -196,7 +196,7 @@ impl<S: Snapshot> MvccReader<S> {
                     WriteType::Delete => {
                         return Ok(None);
                     }
-                    WriteType::Lock | WriteType::Rollback => ts = commit_ts.decr(),
+                    WriteType::Lock | WriteType::Rollback => ts = commit_ts.prev(),
                 },
                 None => return Ok(None),
             }
@@ -221,7 +221,7 @@ impl<S: Snapshot> MvccReader<S> {
             if commit_ts <= start_ts {
                 break;
             }
-            seek_ts = commit_ts.decr();
+            seek_ts = commit_ts.prev();
         }
         Ok(None)
     }
@@ -340,7 +340,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
             let key =
                 Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec()).truncate_ts()?;
-            start = Some(key.clone().append_ts(TimeStamp::min()));
+            start = Some(key.clone().append_ts(TimeStamp::zero()));
             keys.push(key);
         }
     }
@@ -719,7 +719,7 @@ mod tests {
         // But if the `safe_point` is older than all versions, we don't need gc too.
         let props = check_need_gc(Arc::clone(&db), region.clone(), 0, false).unwrap();
         assert_eq!(props.min_ts, TimeStamp::max());
-        assert_eq!(props.max_ts, TimeStamp::min());
+        assert_eq!(props.max_ts, TimeStamp::zero());
         assert_eq!(props.num_rows, 0);
         assert_eq!(props.num_puts, 0);
         assert_eq!(props.num_versions, 0);
@@ -1162,28 +1162,28 @@ mod tests {
                 LockType::Put,
                 Some(b"v1".to_vec()),
                 5.into(),
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             (
                 b"k2".to_vec(),
                 LockType::Put,
                 Some(b"v2".to_vec()),
                 10.into(),
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             (
                 b"k3".to_vec(),
                 LockType::Delete,
                 None,
                 10.into(),
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             (
                 b"k3\x00".to_vec(),
                 LockType::Lock,
                 None,
                 10.into(),
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             (
                 b"k5".to_vec(),
@@ -1205,7 +1205,7 @@ mod tests {
                     short_value,
                     for_update_ts,
                     0,
-                    TimeStamp::min(),
+                    TimeStamp::zero(),
                 ),
             )
         })

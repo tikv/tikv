@@ -308,7 +308,7 @@ impl Command {
             CommandKind::ResolveLock { .. }
             | CommandKind::DeleteRange { .. }
             | CommandKind::Pause { .. }
-            | CommandKind::MvccByKey { .. } => TimeStamp::min(),
+            | CommandKind::MvccByKey { .. } => TimeStamp::zero(),
         }
     }
 

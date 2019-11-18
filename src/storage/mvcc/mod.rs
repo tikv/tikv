@@ -58,9 +58,16 @@ impl TsSet {
         }
     }
 
-    #[cfg(test)]
     pub fn from_u64s(ts: Vec<u64>) -> Self {
-        Self::new(ts.into_iter().map(Into::into).collect())
+        // This conversion is safe because TimeStamp is a transparent wrapper over u64.
+        let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
+        Self::new(ts)
+    }
+
+    pub fn vec_from_u64s(ts: Vec<u64>) -> Self {
+        // This conversion is safe because TimeStamp is a transparent wrapper over u64.
+        let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
+        Self::vec(ts)
     }
 
     /// Create a `TsSet` from the given vec of timestamps, but it will be forced to use `Vec` as the
@@ -478,7 +485,7 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
     ) -> Error {
-        must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::min(), false)
+        must_prewrite_put_err_impl(engine, key, value, pk, ts, TimeStamp::zero(), false)
     }
 
     pub fn must_pessimistic_prewrite_put_err<E: Engine>(
@@ -531,7 +538,7 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
     ) {
-        must_prewrite_delete_impl(engine, key, pk, ts, TimeStamp::min(), false);
+        must_prewrite_delete_impl(engine, key, pk, ts, TimeStamp::zero(), false);
     }
 
     pub fn must_pessimistic_prewrite_delete<E: Engine>(
@@ -575,7 +582,7 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
     ) {
-        must_prewrite_lock_impl(engine, key, pk, ts, TimeStamp::min(), false);
+        must_prewrite_lock_impl(engine, key, pk, ts, TimeStamp::zero(), false);
     }
 
     pub fn must_prewrite_lock_err<E: Engine>(
@@ -842,7 +849,7 @@ pub mod tests {
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::min(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), true).unwrap();
         txn.gc(Key::from_raw(key), safe_point.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -1042,7 +1049,7 @@ pub mod tests {
     ) {
         let expect = (
             keys.into_iter().map(Key::from_raw).collect(),
-            next_start.map(|x| Key::from_raw(x).append_ts(TimeStamp::min())),
+            next_start.map(|x| Key::from_raw(x).append_ts(TimeStamp::zero())),
         );
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut reader =

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use keys::Instant as PdInstant;
+use keys::UnixSecs as PdInstant;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;

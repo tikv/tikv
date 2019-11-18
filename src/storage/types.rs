@@ -2,14 +2,12 @@
 
 //! Core data types.
 
-use std::fmt::Debug;
-
-use kvproto::kvrpcpb::LockInfo;
-
 use crate::storage::{
     mvcc::{Lock, TimeStamp, Write},
-    Callback, Result,
+    Callback, Command, Error as StorageError, Result,
 };
+use kvproto::kvrpcpb::LockInfo;
+use std::fmt::Debug;
 
 pub use keys::{Key, KvPair, Value};
 
@@ -104,4 +102,54 @@ pub enum StorageCallback {
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
     TxnStatus(Callback<TxnStatus>),
+}
+
+/// Process result of a command.
+pub enum ProcessResult {
+    Res,
+    MultiRes { results: Vec<Result<()>> },
+    MvccKey { mvcc: MvccInfo },
+    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
+    Locks { locks: Vec<LockInfo> },
+    TxnStatus { txn_status: TxnStatus },
+    NextCommand { cmd: Command },
+    Failed { err: StorageError },
+}
+
+impl StorageCallback {
+    /// Delivers the process result of a command to the storage callback.
+    pub fn execute(self, pr: ProcessResult) {
+        match self {
+            StorageCallback::Boolean(cb) => match pr {
+                ProcessResult::Res => cb(Ok(())),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            },
+            StorageCallback::Booleans(cb) => match pr {
+                ProcessResult::MultiRes { results } => cb(Ok(results)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            },
+            StorageCallback::MvccInfoByKey(cb) => match pr {
+                ProcessResult::MvccKey { mvcc } => cb(Ok(mvcc)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            },
+            StorageCallback::MvccInfoByStartTs(cb) => match pr {
+                ProcessResult::MvccStartTs { mvcc } => cb(Ok(mvcc)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            },
+            StorageCallback::Locks(cb) => match pr {
+                ProcessResult::Locks { locks } => cb(Ok(locks)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            },
+            StorageCallback::TxnStatus(cb) => match pr {
+                ProcessResult::TxnStatus { txn_status } => cb(Ok(txn_status)),
+                ProcessResult::Failed { err } => cb(Err(err)),
+                _ => panic!("process result mismatch"),
+            },
+        }
+    }
 }

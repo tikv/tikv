@@ -233,7 +233,7 @@ impl<E: Engine> SyncTestStorage<E> {
         let mut txn_status = HashMap::default();
         txn_status.insert(
             start_ts.into(),
-            commit_ts.map(Into::into).unwrap_or_else(TimeStamp::min),
+            commit_ts.map(Into::into).unwrap_or_else(TimeStamp::zero),
         );
         wait_op!(|cb| self.store.async_resolve_lock(ctx, txn_status, cb)).unwrap()
     }

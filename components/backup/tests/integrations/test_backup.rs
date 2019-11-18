@@ -104,14 +104,13 @@ impl TestSuite {
             endpoints,
             tikv_cli,
             context,
-            ts: TimeStamp::min(),
+            ts: TimeStamp::zero(),
             _env: env,
         }
     }
 
     fn alloc_ts(&mut self) -> TimeStamp {
-        self.ts = self.ts.incr();
-        self.ts
+        *self.ts.incr()
     }
 
     fn stop(mut self) {
@@ -285,7 +284,7 @@ fn test_backup_and_import() {
         backup_ts,
         format!(
             "local://{}",
-            tmp.path().join(format!("{}", backup_ts.incr())).display()
+            tmp.path().join(format!("{}", backup_ts.next())).display()
         ),
     );
     let resps2 = rx.collect().wait().unwrap();
@@ -345,7 +344,7 @@ fn test_backup_and_import() {
         format!(
             "local://{}",
             tmp.path()
-                .join(format!("{}", backup_ts.incr().incr()))
+                .join(format!("{}", backup_ts.next().next()))
                 .display()
         ),
     );

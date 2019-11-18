@@ -1,7 +1,7 @@
+use crate::timestamp::TimeStamp;
 use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tikv_util::codec;
 use tikv_util::codec::bytes;
 use tikv_util::codec::bytes::BytesEncoder;
@@ -85,7 +85,7 @@ impl Key {
     #[inline]
     pub fn append_ts(self, ts: TimeStamp) -> Key {
         let mut encoded = self.0;
-        encoded.encode_u64_desc(ts.0).unwrap();
+        encoded.encode_u64_desc(ts.into_inner()).unwrap();
         Key(encoded)
     }
 
@@ -152,7 +152,7 @@ impl Key {
             return Err(codec::Error::KeyLength);
         }
         let mut ts = &key[len - number::U64_SIZE..];
-        Ok(TimeStamp(number::decode_u64_desc(&mut ts)?))
+        Ok(number::decode_u64_desc(&mut ts)?.into())
     }
 
     /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to the encoded
@@ -217,131 +217,9 @@ impl Display for Key {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct TimeStamp(u64);
-
-const TSO_PHYSICAL_SHIFT_BITS: u64 = 18;
-
-impl TimeStamp {
-    /// Create a time stamp from physical and logical components.
-    pub fn compose(physical: u64, logical: u64) -> TimeStamp {
-        TimeStamp((physical << TSO_PHYSICAL_SHIFT_BITS) + logical)
-    }
-
-    pub const fn min() -> TimeStamp {
-        TimeStamp(0)
-    }
-
-    pub const fn max() -> TimeStamp {
-        TimeStamp(std::u64::MAX)
-    }
-
-    pub const fn new(ts: u64) -> TimeStamp {
-        TimeStamp(ts)
-    }
-
-    /// Extracts physical part of a timestamp, in milliseconds.
-    pub fn extract_physical(self) -> u64 {
-        self.0 >> TSO_PHYSICAL_SHIFT_BITS
-    }
-
-    pub fn incr(self) -> TimeStamp {
-        TimeStamp(self.0 + 1)
-    }
-
-    pub fn decr(self) -> TimeStamp {
-        TimeStamp(self.0 - 1)
-    }
-
-    pub fn is_zero(self) -> bool {
-        self.0 == 0
-    }
-
-    pub fn into_inner(self) -> u64 {
-        self.0
-    }
-}
-
-impl From<u64> for TimeStamp {
-    fn from(ts: u64) -> TimeStamp {
-        TimeStamp(ts)
-    }
-}
-
-impl From<&u64> for TimeStamp {
-    fn from(ts: &u64) -> TimeStamp {
-        TimeStamp(*ts)
-    }
-}
-
-impl fmt::Display for TimeStamp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        Display::fmt(&self.0, f)
-    }
-}
-
-impl slog::Value for TimeStamp {
-    fn serialize(
-        &self,
-        record: &slog::Record,
-        key: slog::Key,
-        serializer: &mut dyn slog::Serializer,
-    ) -> slog::Result {
-        slog::Value::serialize(&self.0, record, key, serializer)
-    }
-}
-
-/// A time in seconds since the start of the Unix epoch.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Instant(u64);
-
-impl Instant {
-    pub fn now() -> Instant {
-        Instant(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        )
-    }
-
-    pub fn zero() -> Instant {
-        Instant(0)
-    }
-
-    pub fn into_inner(self) -> u64 {
-        self.0
-    }
-
-    pub fn is_zero(self) -> bool {
-        self.0 == 0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_ts() {
-        let physical = 1568700549751;
-        let logical = 108;
-        let ts = TimeStamp::compose(physical, logical);
-        assert_eq!(ts, 411225436913926252.into());
-
-        let extracted_physical = ts.extract_physical();
-        assert_eq!(extracted_physical, physical);
-    }
-
-    #[test]
-    fn test_split_ts() {
-        let k = b"k";
-        let ts = TimeStamp(123);
-        assert!(Key::split_on_ts_for(k).is_err());
-        let enc = Key::from_encoded_slice(k).append_ts(ts);
-        let res = Key::split_on_ts_for(enc.as_encoded()).unwrap();
-        assert_eq!(res, (k.as_ref(), ts));
-    }
 
     #[test]
     fn test_is_user_key_eq() {

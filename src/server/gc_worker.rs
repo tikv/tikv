@@ -258,7 +258,7 @@ impl<E: Engine> GCRunner<E> {
         mut next_scan_key: Option<Key>,
     ) -> Result<Option<Key>> {
         let snapshot = self.get_snapshot(ctx)?;
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::min(), !ctx.get_not_fill_cache()).unwrap();
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), !ctx.get_not_fill_cache()).unwrap();
         for k in keys {
             let gc_info = txn.gc(k.clone(), safe_point)?;
 
@@ -736,7 +736,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     ) -> GCManager<S, R> {
         GCManager {
             cfg,
-            safe_point: TimeStamp::min(),
+            safe_point: TimeStamp::zero(),
             safe_point_last_check_time: Instant::now(),
             worker_scheduler,
             gc_manager_ctx: GCManagerContext::new(),
@@ -799,7 +799,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// updated to a greater value than initial value.
     fn initialize(&mut self) {
         debug!("gc-manager is initializing");
-        self.safe_point = TimeStamp::min();
+        self.safe_point = TimeStamp::zero();
         self.try_update_safe_point();
         debug!("gc-manager started"; "safe_point" => self.safe_point);
     }
@@ -1451,7 +1451,7 @@ mod tests {
     fn test_update_safe_point() {
         let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
         let mut gc_manager = test_util.gc_manager.take().unwrap();
-        assert_eq!(gc_manager.safe_point, TimeStamp::min());
+        assert_eq!(gc_manager.safe_point, TimeStamp::zero());
         test_util.add_next_safe_point(233);
         assert!(gc_manager.try_update_safe_point());
         assert_eq!(gc_manager.safe_point, 233.into());
@@ -1475,11 +1475,11 @@ mod tests {
     fn test_gc_manager_initialize() {
         let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
         let mut gc_manager = test_util.gc_manager.take().unwrap();
-        assert_eq!(gc_manager.safe_point, TimeStamp::min());
+        assert_eq!(gc_manager.safe_point, TimeStamp::zero());
         test_util.add_next_safe_point(0);
         test_util.add_next_safe_point(5);
         gc_manager.initialize();
-        assert_eq!(gc_manager.safe_point, TimeStamp::min());
+        assert_eq!(gc_manager.safe_point, TimeStamp::zero());
         assert!(gc_manager.try_update_safe_point());
         assert_eq!(gc_manager.safe_point, 5.into());
     }

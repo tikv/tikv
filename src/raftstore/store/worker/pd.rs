@@ -28,7 +28,7 @@ use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
-use keys::Instant;
+use keys::UnixSecs;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
@@ -96,7 +96,7 @@ pub struct StoreStat {
     pub engine_total_keys_read: u64,
     pub engine_last_total_bytes_read: u64,
     pub engine_last_total_keys_read: u64,
-    pub last_report_ts: Instant,
+    pub last_report_ts: UnixSecs,
 
     pub region_bytes_read: LocalHistogram,
     pub region_keys_read: LocalHistogram,
@@ -116,7 +116,7 @@ impl Default for StoreStat {
             region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
 
-            last_report_ts: Instant::zero(),
+            last_report_ts: UnixSecs::zero(),
             engine_total_bytes_read: 0,
             engine_total_keys_read: 0,
             engine_last_total_bytes_read: 0,
@@ -137,7 +137,7 @@ pub struct PeerStat {
     pub last_read_keys: u64,
     pub last_written_bytes: u64,
     pub last_written_keys: u64,
-    pub last_report_ts: Instant,
+    pub last_report_ts: UnixSecs,
 }
 
 impl Display for Task {
@@ -291,7 +291,7 @@ pub struct Runner<T: PdClient> {
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
     // Records the boot time.
-    start_ts: Instant,
+    start_ts: UnixSecs,
 
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
@@ -325,7 +325,7 @@ impl<T: PdClient> Runner<T> {
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
-            start_ts: Instant::now(),
+            start_ts: UnixSecs::now(),
             scheduler,
             stats_monitor,
         }
@@ -550,7 +550,7 @@ impl<T: PdClient> Runner<T> {
         stats.set_interval(interval);
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
-        self.store_stat.last_report_ts = Instant::now();
+        self.store_stat.last_report_ts = UnixSecs::now();
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
         self.store_stat.region_bytes_read.flush();
@@ -843,7 +843,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     peer_stat.last_written_keys = written_keys;
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
-                    peer_stat.last_report_ts = Instant::now();
+                    peer_stat.last_report_ts = UnixSecs::now();
                     if last_report_ts.is_zero() {
                         last_report_ts = self.start_ts;
                     }

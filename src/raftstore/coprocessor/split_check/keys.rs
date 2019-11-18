@@ -239,11 +239,11 @@ mod tests {
         let write_value = if fill_short_value {
             Write::new(
                 WriteType::Put,
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 Some(b"shortvalue".to_vec()),
             )
         } else {
-            Write::new(WriteType::Put, TimeStamp::min(), None)
+            Write::new(WriteType::Put, TimeStamp::zero(), None)
         }
         .as_ref()
         .to_bytes();
@@ -377,7 +377,7 @@ mod tests {
                     .append_ts(2.into())
                     .as_encoded(),
             );
-            let write_v = Write::new(WriteType::Put, TimeStamp::min(), None)
+            let write_v = Write::new(WriteType::Put, TimeStamp::zero(), None)
                 .as_ref()
                 .to_bytes();
             let write_cf = db.cf_handle(CF_WRITE).unwrap();
@@ -427,7 +427,7 @@ mod tests {
                     .append_ts(2.into())
                     .as_encoded(),
             );
-            let write_v = Write::new(WriteType::Put, TimeStamp::min(), None)
+            let write_v = Write::new(WriteType::Put, TimeStamp::zero(), None)
                 .as_ref()
                 .to_bytes();
             db.put_cf(write_cf, &key, &write_v).unwrap();

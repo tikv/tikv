@@ -15,7 +15,7 @@ use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 
-use keys::Instant as PdInstant;
+use keys::UnixSecs as PdInstant;
 use pd_client::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;

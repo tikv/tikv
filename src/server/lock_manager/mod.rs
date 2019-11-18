@@ -16,7 +16,7 @@ use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::{
-    lock_manager::Lock, txn::ProcessResult, LockManager as LockManagerTrait, StorageCallback,
+    lock_manager::Lock, types::ProcessResult, LockManager as LockManagerTrait, StorageCallback,
     TimeStamp,
 };
 use pd_client::PdClient;

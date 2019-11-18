@@ -587,7 +587,7 @@ mod tests {
         fn store(&self) -> SnapshotStore<RocksSnapshot> {
             SnapshotStore::new(
                 self.snapshot.clone(),
-                COMMIT_TS.incr(),
+                COMMIT_TS.next(),
                 IsolationLevel::Si,
                 true,
                 Default::default(),
@@ -810,7 +810,7 @@ mod tests {
         let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
         let store = SnapshotStore::new(
             snap,
-            TimeStamp::min(),
+            TimeStamp::zero(),
             IsolationLevel::Si,
             true,
             Default::default(),
@@ -837,7 +837,7 @@ mod tests {
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
         let store2 = SnapshotStore::new(
             snap2,
-            TimeStamp::min(),
+            TimeStamp::zero(),
             IsolationLevel::Si,
             true,
             Default::default(),

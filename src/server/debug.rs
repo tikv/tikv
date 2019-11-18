@@ -1833,9 +1833,9 @@ mod tests {
                 version,
                 0,
                 None,
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 0,
-                TimeStamp::min(),
+                TimeStamp::zero(),
             );
             let value = lock.to_bytes();
             engine
@@ -2239,9 +2239,9 @@ mod tests {
                 ts.into(),
                 0,
                 v,
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 0,
-                TimeStamp::min(),
+                TimeStamp::zero(),
             );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
         }

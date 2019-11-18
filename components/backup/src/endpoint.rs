@@ -815,11 +815,8 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut ts: TimeStamp = 1.into();
-        let mut alloc_ts = || {
-            ts = ts.incr();
-            ts
-        };
+        let mut ts = TimeStamp::new(1);
+        let mut alloc_ts = || *ts.incr();
         let mut backup_tss = vec![];
         // Multi-versions for key 0..9.
         for len in &[SHORT_VALUE_MAX_LEN - 1, SHORT_VALUE_MAX_LEN * 2] {
@@ -893,10 +890,7 @@ pub mod tests {
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
         let mut ts: TimeStamp = 1.into();
-        let mut alloc_ts = || {
-            ts = ts.incr();
-            ts
-        };
+        let mut alloc_ts = || *ts.incr();
         let start = alloc_ts();
         let key = format!("{}", start);
         must_prewrite_put(
@@ -967,10 +961,7 @@ pub mod tests {
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
         let mut ts: TimeStamp = 1.into();
-        let mut alloc_ts = || {
-            ts = ts.incr();
-            ts
-        };
+        let mut alloc_ts = || *ts.incr();
         let start = alloc_ts();
         let key = format!("{}", start);
         must_prewrite_put(

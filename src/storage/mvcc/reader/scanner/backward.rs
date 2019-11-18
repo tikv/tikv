@@ -179,7 +179,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         // We need to save last desired version, because when we may move to an unwanted version
         // at any time.
         let mut last_version = None;
-        let mut last_checked_commit_ts = TimeStamp::min();
+        let mut last_checked_commit_ts = TimeStamp::zero();
 
         for i in 0..REVERSE_SEEK_BOUND {
             if i > 0 {

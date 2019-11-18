@@ -33,7 +33,7 @@ use tikv_util::{collections::HashMap, time::SlowTimer};
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockManager};
 use crate::storage::txn::latch::{Latches, Lock};
-use crate::storage::txn::process::{Executor, MsgScheduler, ProcessResult, Task};
+use crate::storage::txn::process::{Executor, MsgScheduler, Task};
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
 use crate::storage::{
@@ -42,6 +42,7 @@ use crate::storage::{
         SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC,
         SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
     },
+    types::ProcessResult,
     Key,
 };
 use crate::storage::{
@@ -638,9 +639,9 @@ mod tests {
                             10.into(),
                             20,
                             None,
-                            TimeStamp::min(),
+                            TimeStamp::zero(),
                             0,
-                            TimeStamp::min(),
+                            TimeStamp::zero(),
                         ),
                     )],
                 },
@@ -649,7 +650,7 @@ mod tests {
                 ctx: Context::default(),
                 kind: CommandKind::ResolveLockLite {
                     start_ts: 10.into(),
-                    commit_ts: TimeStamp::min(),
+                    commit_ts: TimeStamp::zero(),
                     resolve_keys: vec![Key::from_raw(b"k")],
                 },
             },

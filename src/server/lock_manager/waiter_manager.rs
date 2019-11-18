@@ -6,7 +6,7 @@ use super::metrics::*;
 use crate::storage::lock_manager::Lock;
 use crate::storage::mvcc::{Error as MvccError, TimeStamp};
 use crate::storage::txn::Error as TxnError;
-use crate::storage::txn::ProcessResult;
+use crate::storage::types::ProcessResult;
 use crate::storage::{Error as StorageError, StorageCallback};
 use futures::Future;
 use kvproto::deadlock::WaitForEntry;
@@ -434,14 +434,14 @@ mod tests {
         let mut wait_table = WaitTable::new(Arc::new(AtomicUsize::new(0)));
         for i in 0..10 {
             let n = i as u64;
-            wait_table.add_waiter(n.into(), dummy_waiter(TimeStamp::min(), n.into(), n));
+            wait_table.add_waiter(n.into(), dummy_waiter(TimeStamp::zero(), n.into(), n));
         }
         assert_eq!(10, wait_table.size());
         for i in (0..10).rev() {
             let n = i as u64;
             assert!(wait_table
                 .remove_waiter(
-                    TimeStamp::min(),
+                    TimeStamp::zero(),
                     Lock {
                         ts: n.into(),
                         hash: n
@@ -452,9 +452,9 @@ mod tests {
         assert_eq!(0, wait_table.size());
         assert!(wait_table
             .remove_waiter(
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 Lock {
-                    ts: TimeStamp::min(),
+                    ts: TimeStamp::zero(),
                     hash: 0
                 }
             )
@@ -474,7 +474,7 @@ mod tests {
         assert!(wait_table.take_ready_waiters(ts, hashes.clone()).is_empty());
 
         for hash in hashes.iter() {
-            wait_table.add_waiter(ts, dummy_waiter(TimeStamp::min(), ts, *hash));
+            wait_table.add_waiter(ts, dummy_waiter(TimeStamp::zero(), ts, *hash));
         }
         hashes.sort();
 
@@ -574,11 +574,11 @@ mod tests {
             tx.send(result).unwrap();
         });
         waiter_mgr_scheduler.wait_for(
-            TimeStamp::min(),
+            TimeStamp::zero(),
             StorageCallback::Boolean(cb),
             ProcessResult::Res,
             Lock {
-                ts: TimeStamp::min(),
+                ts: TimeStamp::zero(),
                 hash: 0,
             },
             0,
@@ -597,11 +597,11 @@ mod tests {
             tx.send(result).unwrap();
         });
         waiter_mgr_scheduler.wait_for(
-            TimeStamp::min(),
+            TimeStamp::zero(),
             StorageCallback::Boolean(cb),
             ProcessResult::Res,
             Lock {
-                ts: TimeStamp::min(),
+                ts: TimeStamp::zero(),
                 hash: 0,
             },
             100,
@@ -619,16 +619,16 @@ mod tests {
             tx.send(result).unwrap();
         });
         waiter_mgr_scheduler.wait_for(
-            TimeStamp::min(),
+            TimeStamp::zero(),
             StorageCallback::Boolean(cb),
             ProcessResult::Res,
             Lock {
-                ts: TimeStamp::min(),
+                ts: TimeStamp::zero(),
                 hash: 1,
             },
             0,
         );
-        waiter_mgr_scheduler.wake_up(TimeStamp::min(), vec![3, 1, 2], 1.into());
+        waiter_mgr_scheduler.wake_up(TimeStamp::zero(), vec![3, 1, 2], 1.into());
         assert!(rx
             .recv_timeout(Duration::from_millis(500))
             .unwrap()

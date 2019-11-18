@@ -116,16 +116,16 @@ impl Lock {
                 ts,
                 ttl,
                 None,
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 0,
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ));
         }
 
         let mut short_value = None;
-        let mut for_update_ts = TimeStamp::min();
+        let mut for_update_ts = TimeStamp::zero();
         let mut txn_size: u64 = 0;
-        let mut min_commit_ts = TimeStamp::min();
+        let mut min_commit_ts = TimeStamp::zero();
         while !b.is_empty() {
             match b.read_u8()? {
                 SHORT_VALUE_PREFIX => {
@@ -259,9 +259,9 @@ mod tests {
                 1.into(),
                 10,
                 None,
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 0,
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -269,9 +269,9 @@ mod tests {
                 1.into(),
                 10,
                 Some(b"short_value".to_vec()),
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 0,
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Put,
@@ -281,7 +281,7 @@ mod tests {
                 None,
                 10.into(),
                 0,
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -291,7 +291,7 @@ mod tests {
                 Some(b"short_value".to_vec()),
                 10.into(),
                 0,
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Put,
@@ -299,9 +299,9 @@ mod tests {
                 1.into(),
                 10,
                 None,
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 16,
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -309,9 +309,9 @@ mod tests {
                 1.into(),
                 10,
                 Some(b"short_value".to_vec()),
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 16,
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Put,
@@ -321,7 +321,7 @@ mod tests {
                 None,
                 10.into(),
                 16,
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Delete,
@@ -331,7 +331,7 @@ mod tests {
                 Some(b"short_value".to_vec()),
                 10.into(),
                 0,
-                TimeStamp::min(),
+                TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Put,
@@ -359,9 +359,9 @@ mod tests {
             1.into(),
             10,
             Some(b"short_value".to_vec()),
-            TimeStamp::min(),
+            TimeStamp::zero(),
             0,
-            TimeStamp::min(),
+            TimeStamp::zero(),
         );
         let v = lock.to_bytes();
         assert!(Lock::parse(&v[..4]).is_err());
@@ -376,9 +376,9 @@ mod tests {
             100.into(),
             3,
             None,
-            TimeStamp::min(),
+            TimeStamp::zero(),
             1,
-            TimeStamp::min(),
+            TimeStamp::zero(),
         );
 
         let empty = Default::default();

@@ -791,9 +791,9 @@ fn test_debug_scan_mvcc() {
             1.into(),
             10,
             None,
-            TimeStamp::min(),
+            TimeStamp::zero(),
             0,
-            TimeStamp::min(),
+            TimeStamp::zero(),
         )
         .to_bytes();
         let cf_handle = engine.cf_handle(CF_LOCK).unwrap();

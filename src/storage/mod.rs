@@ -50,7 +50,9 @@ pub use self::mvcc::{Scanner as StoreScanner, TimeStamp};
 pub use self::readpool_impl::*;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
-pub use self::types::{Key, KvPair, Mutation, MvccInfo, StorageCallback, TxnStatus, Value};
+pub use self::types::{
+    Key, KvPair, Mutation, MvccInfo, ProcessResult, StorageCallback, TxnStatus, Value,
+};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -249,12 +251,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
             // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
             // here.
-            let bypass_locks = TsSet::vec(
-                ctx.take_resolved_locks()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-            );
+            let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
             Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
@@ -316,7 +313,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             let mut statistics = Statistics::default();
                             let mut snap_store = SnapshotStore::new(
                                 snapshot,
-                                TimeStamp::min(),
+                                TimeStamp::zero(),
                                 ctx.get_isolation_level(),
                                 !ctx.get_not_fill_cache(),
                                 Default::default(),
@@ -328,12 +325,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 snap_store.set_isolation_level(get.ctx.get_isolation_level());
                                 // The bypass_locks set will be checked at most once. `TsSet::vec`
                                 // is more efficient here.
-                                snap_store.set_bypass_locks(TsSet::vec(
-                                    get.ctx
-                                        .take_resolved_locks()
-                                        .into_iter()
-                                        .map(Into::into)
-                                        .collect(),
+                                snap_store.set_bypass_locks(TsSet::vec_from_u64s(
+                                    get.ctx.take_resolved_locks(),
                                 ));
                                 results.push(
                                     snap_store
@@ -371,12 +364,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            let bypass_locks = TsSet::new(
-                ctx.take_resolved_locks()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-            );
+            let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
             Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
@@ -448,12 +436,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            let bypass_locks = TsSet::new(
-                ctx.take_resolved_locks()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-            );
+            let bypass_locks = TsSet::from_u64s(ctx.take_resolved_locks());
             Self::with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
@@ -2227,7 +2210,7 @@ mod tests {
                 Context::default(),
                 Key::from_raw(b"x"),
                 100.into(),
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -3765,7 +3748,7 @@ mod tests {
                 txn_status.insert(
                     ts,
                     if *is_rollback {
-                        TimeStamp::min() // rollback
+                        TimeStamp::zero() // rollback
                     } else {
                         (ts.into_inner() + 5).into() // commit, commit_ts = start_ts + 5
                     },
@@ -3827,7 +3810,7 @@ mod tests {
             .async_resolve_lock_lite(
                 Context::default(),
                 99.into(),
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 resolve_keys,
                 expect_ok_callback(tx.clone(), 0),
             )
@@ -3858,7 +3841,7 @@ mod tests {
             .async_resolve_lock_lite(
                 Context::default(),
                 99.into(),
-                TimeStamp::min(),
+                TimeStamp::zero(),
                 vec![Key::from_raw(b"a")],
                 expect_ok_callback(tx.clone(), 0),
             )
@@ -3960,7 +3943,7 @@ mod tests {
                 k.clone(),
                 10.into(),
                 90,
-                expect_value_callback(tx.clone(), 0, uncommitted(100, TimeStamp::min())),
+                expect_value_callback(tx.clone(), 0, uncommitted(100, TimeStamp::zero())),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -3973,7 +3956,7 @@ mod tests {
                 k.clone(),
                 10.into(),
                 110,
-                expect_value_callback(tx.clone(), 0, uncommitted(110, TimeStamp::min())),
+                expect_value_callback(tx.clone(), 0, uncommitted(110, TimeStamp::zero())),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4078,7 +4061,7 @@ mod tests {
                 ts(12, 0),
                 ts(15, 0),
                 true,
-                expect_value_callback(tx.clone(), 0, uncommitted(100, TimeStamp::min())),
+                expect_value_callback(tx.clone(), 0, uncommitted(100, TimeStamp::zero())),
             )
             .unwrap();
         rx.recv().unwrap();

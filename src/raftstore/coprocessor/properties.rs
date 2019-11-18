@@ -56,7 +56,7 @@ impl MvccProperties {
     pub fn new() -> MvccProperties {
         MvccProperties {
             min_ts: TimeStamp::max(),
-            max_ts: TimeStamp::min(),
+            max_ts: TimeStamp::zero(),
             num_rows: 0,
             num_puts: 0,
             num_versions: 0,

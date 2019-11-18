@@ -198,7 +198,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // The current key exists under any of the following conditions:
         // 1.The current write type is `PUT`
         // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
-        if write.write_type == WriteType::Put || self.key_exist(&key, write_commit_ts.decr())? {
+        if write.write_type == WriteType::Put || self.key_exist(&key, write_commit_ts.prev())? {
             return Err(Error::AlreadyExist { key: key.to_raw()? });
         }
 
@@ -486,7 +486,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 (
                     lock.lock_type,
                     lock.short_value.take(),
-                    lock.for_update_ts != TimeStamp::min(),
+                    !lock.for_update_ts.is_zero(),
                 )
             }
             _ => {
@@ -528,7 +528,7 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     pub fn rollback(&mut self, key: Key) -> Result<bool> {
-        self.cleanup(key, TimeStamp::min())
+        self.cleanup(key, TimeStamp::zero())
     }
 
     fn check_txn_status_missing_lock(
@@ -590,15 +590,13 @@ impl<S: Snapshot> MvccTxn<S> {
             Some(ref lock) if lock.ts == self.start_ts => {
                 // If current_ts is not 0, check the Lock's TTL.
                 // If the lock is not expired, do not rollback it but report key is locked.
-                if !current_ts.is_zero()
-                    && lock.ts.extract_physical() + lock.ttl >= current_ts.extract_physical()
-                {
+                if !current_ts.is_zero() && lock.ts.physical() + lock.ttl >= current_ts.physical() {
                     return Err(Error::KeyIsLocked(
                         lock.clone().into_lock_info(key.into_raw()?),
                     ));
                 }
 
-                let is_pessimistic_txn = lock.for_update_ts != TimeStamp::min();
+                let is_pessimistic_txn = !lock.for_update_ts.is_zero();
                 self.rollback_lock(key, lock, is_pessimistic_txn)?;
                 Ok(is_pessimistic_txn)
             }
@@ -670,7 +668,7 @@ impl<S: Snapshot> MvccTxn<S> {
         );
         Err(Error::TxnLockNotFound {
             start_ts: self.start_ts,
-            commit_ts: TimeStamp::min(),
+            commit_ts: TimeStamp::zero(),
             key: primary_key.into_raw()?,
         })
     }
@@ -701,7 +699,7 @@ impl<S: Snapshot> MvccTxn<S> {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 let is_pessimistic_txn = !lock.for_update_ts.is_zero();
 
-                if lock.ts.extract_physical() + lock.ttl < current_ts.extract_physical() {
+                if lock.ts.physical() + lock.ttl < current_ts.physical() {
                     // If the lock is expired, clean it up.
                     self.rollback_lock(primary_key, lock, is_pessimistic_txn)?;
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
@@ -711,7 +709,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 // If this is a large transaction and the lock is active, push forward the minCommitTS.
                 // lock.minCommitTS == 0 may be a secondary lock, or not a large transaction.
                 if !lock.min_commit_ts.is_zero() && caller_start_ts >= lock.min_commit_ts {
-                    lock.min_commit_ts = caller_start_ts.incr();
+                    lock.min_commit_ts = caller_start_ts.next();
 
                     if lock.min_commit_ts < current_ts {
                         lock.min_commit_ts = current_ts;
@@ -740,7 +738,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let mut latest_delete = None;
         let mut is_completed = true;
         while let Some((commit, write)) = self.gc_reader.seek_write(&key, ts)? {
-            ts = commit.decr();
+            ts = commit.prev();
             found_versions += 1;
 
             if self.write_size >= MAX_TXN_WRITE_SIZE {
@@ -2143,7 +2141,7 @@ mod tests {
             ts(10, 0),
             ts(10, 0),
             r,
-            uncommitted(100, TimeStamp::min()),
+            uncommitted(100, TimeStamp::zero()),
         );
         must_large_txn_locked(&engine, k, ts(4, 0), 100, 0, true);
 
@@ -2186,7 +2184,7 @@ mod tests {
             ts(160, 0),
             ts(160, 0),
             r,
-            uncommitted(100, TimeStamp::min()),
+            uncommitted(100, TimeStamp::zero()),
         );
         must_large_txn_locked(&engine, k, ts(150, 0), 100, 0, true);
         must_check_txn_status(&engine, k, ts(150, 0), ts(160, 0), ts(260, 0), r, TtlExpire);
