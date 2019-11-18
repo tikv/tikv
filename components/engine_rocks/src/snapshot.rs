@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use engine::rocks::Snapshot as RawSnapshot;
 use engine::rocks::SyncSnapshot as RawSyncSnapshot;
-use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot};
+use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot, SyncSnapshot};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
 
@@ -42,18 +42,20 @@ impl RocksSnapshot {
         unsafe { &*(raw as *const _ as *const _) }
     }
 
-    pub fn into_sync(self) -> RocksSyncSnapshot {
-        RocksSyncSnapshot(Arc::new(self))
-    }
-
     pub fn get_db(&self) -> &DB {
         self.db.as_ref()
     }
 }
 
 impl Snapshot for RocksSnapshot {
+    type SyncSnapshot = RocksSyncSnapshot;
+
     fn cf_names(&self) -> Vec<&str> {
         self.db.cf_names()
+    }
+
+    fn into_sync(self) -> RocksSyncSnapshot {
+        RocksSyncSnapshot(Arc::new(self))
     }
 }
 
@@ -152,3 +154,5 @@ impl RocksSyncSnapshot {
         unsafe { &*(raw as *const _ as *const _) }
     }
 }
+
+impl SyncSnapshot<RocksSnapshot> for RocksSyncSnapshot { }
