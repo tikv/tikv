@@ -35,6 +35,8 @@ pub fn concat(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
         }
     }
     Ok(Some(output))
+}
+
 #[rpn_fn]
 #[inline]
 pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
