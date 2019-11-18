@@ -310,6 +310,8 @@ pub struct RaftInvalidProposeMetrics {
     pub stale_command: u64,
     pub epoch_not_match: u64,
     pub read_index_no_leader: u64,
+    pub region_not_initialized: u64,
+    pub is_applying_snapshot: u64,
 }
 
 impl Default for RaftInvalidProposeMetrics {
@@ -322,6 +324,8 @@ impl Default for RaftInvalidProposeMetrics {
             stale_command: 0,
             epoch_not_match: 0,
             read_index_no_leader: 0,
+            region_not_initialized: 0,
+            is_applying_snapshot: 0,
         }
     }
 }
@@ -369,6 +373,18 @@ impl RaftInvalidProposeMetrics {
                 .with_label_values(&["read_index_no_leader"])
                 .inc_by(self.read_index_no_leader as i64);
             self.read_index_no_leader = 0;
+        }
+        if self.region_not_initialized > 0 {
+            RAFT_INVALID_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["region_not_initialized"])
+                .inc_by(self.region_not_initialized as i64);
+            self.region_not_initialized = 0;
+        }
+        if self.is_applying_snapshot > 0 {
+            RAFT_INVALID_PROPOSAL_COUNTER_VEC
+                .with_label_values(&["is_applying_snapshot"])
+                .inc_by(self.is_applying_snapshot as i64);
+            self.is_applying_snapshot = 0;
         }
     }
 }

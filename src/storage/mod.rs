@@ -4361,7 +4361,7 @@ mod tests {
                 ts(9, 1),
                 ts(9, 1),
                 true,
-                expect_value_callback(tx.clone(), 0, Rollbacked),
+                expect_value_callback(tx.clone(), 0, LockNotExist),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4458,7 +4458,7 @@ mod tests {
                 ts(126, 0),
                 ts(127, 0),
                 true,
-                expect_value_callback(tx.clone(), 0, Rollbacked),
+                expect_value_callback(tx.clone(), 0, TtlExpire),
             )
             .unwrap();
         rx.recv().unwrap();
