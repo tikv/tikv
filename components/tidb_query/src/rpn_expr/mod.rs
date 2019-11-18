@@ -335,6 +335,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CastJsonAsJson => map_cast_func(expr)?,
         ScalarFuncSig::Length => length_fn_meta(),
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
+        ScalarFuncSig::Concat => concat_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
