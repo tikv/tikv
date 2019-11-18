@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::super::types::Value;
-use super::{Error, Result, TsSet};
+use super::{ErrorInner, Result, TsSet};
 use crate::storage::{
     Key, Mutation, FOR_UPDATE_TS_PREFIX, MIN_COMMIT_TS_PREFIX, SHORT_VALUE_MAX_LEN,
     SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
@@ -119,9 +119,9 @@ impl Lock {
 
     pub fn parse(mut b: &[u8]) -> Result<Lock> {
         if b.is_empty() {
-            return Err(Error::BadFormatLock);
+            return Err(ErrorInner::BadFormatLock.into());
         }
-        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(Error::BadFormatLock)?;
+        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatLock)?;
         let primary = bytes::decode_compact_bytes(&mut b)?;
         let ts = number::decode_var_u64(&mut b)?;
         let ttl = if b.is_empty() {
@@ -210,7 +210,7 @@ impl Lock {
         }
 
         // There is a pending lock. Client should wait or clean it.
-        Err(Error::KeyIsLocked(self.into_lock_info(raw_key)))
+        Err(ErrorInner::KeyIsLocked(self.into_lock_info(raw_key)).into())
     }
 }
 

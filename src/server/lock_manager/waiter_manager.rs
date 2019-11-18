@@ -4,7 +4,7 @@ use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
 use crate::storage::lock_manager::Lock;
-use crate::storage::mvcc::Error as MvccError;
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::Error as TxnError;
 use crate::storage::txn::{execute_callback, ProcessResult};
 use crate::storage::{Error as StorageError, StorageCb};
@@ -312,12 +312,14 @@ impl WaiterManager {
             .remove_waiter(start_ts, lock)
             .and_then(|waiter| {
                 let pr = ProcessResult::Failed {
-                    err: StorageError::from(TxnError::from(MvccError::Deadlock {
-                        start_ts,
-                        lock_ts: waiter.lock.ts,
-                        lock_key: extract_raw_key_from_process_result(&waiter.pr).to_vec(),
-                        deadlock_key_hash,
-                    })),
+                    err: StorageError::from(TxnError::from(MvccError::from(
+                        MvccErrorInner::Deadlock {
+                            start_ts,
+                            lock_ts: waiter.lock.ts,
+                            lock_key: extract_raw_key_from_process_result(&waiter.pr).to_vec(),
+                            deadlock_key_hash,
+                        },
+                    ))),
                 };
                 execute_callback(waiter.cb, pr);
                 Some(())
@@ -378,13 +380,13 @@ fn wake_up_waiter(waiter: Waiter, commit_ts: u64) {
     //
     // If so TiDB can use this `conflict_start_ts` as `for_update_ts`
     // directly, there is no need to get a ts from PD.
-    let mvcc_err = MvccError::WriteConflict {
+    let mvcc_err = MvccError::from(MvccErrorInner::WriteConflict {
         start_ts: waiter.start_ts,
         conflict_start_ts: waiter.lock.ts,
         conflict_commit_ts: commit_ts,
         key: vec![],
         primary: vec![],
-    };
+    });
     let pr = ProcessResult::Failed {
         err: StorageError::from(TxnError::from(mvcc_err)),
     };
@@ -396,9 +398,9 @@ fn extract_raw_key_from_process_result(pr: &ProcessResult) -> &[u8] {
         ProcessResult::MultiRes { results } => {
             assert!(results.len() == 1);
             match &results[0] {
-                Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info)))) => {
-                    info.get_key()
-                }
+                Err(StorageError::Txn(TxnError::Mvcc(MvccError(
+                    box MvccErrorInner::KeyIsLocked(info),
+                )))) => info.get_key(),
                 _ => panic!("unexpected mvcc error"),
             }
         }
@@ -610,9 +612,9 @@ mod tests {
         let mut info = LockInfo::default();
         info.set_key(raw_key.clone());
         let pr = ProcessResult::MultiRes {
-            results: vec![Err(StorageError::from(TxnError::from(
-                MvccError::KeyIsLocked(info),
-            )))],
+            results: vec![Err(StorageError::from(TxnError::from(MvccError::from(
+                MvccErrorInner::KeyIsLocked(info),
+            ))))],
         };
         assert_eq!(raw_key, extract_raw_key_from_process_result(&pr));
     }

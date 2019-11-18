@@ -12,7 +12,8 @@ use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::lock_manager::{self, Lock, LockManager};
 use crate::storage::mvcc::{
-    Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
+    Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock, MvccReader, MvccTxn, Write,
+    MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
 use crate::storage::{
@@ -535,7 +536,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 for m in mutations {
                     match txn.prewrite(m, &primary, &options) {
                         Ok(_) => {}
-                        e @ Err(MvccError::KeyIsLocked { .. }) => {
+                        e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                             locks.push(e.map_err(Error::from).map_err(StorageError::from));
                         }
                         Err(e) => return Err(Error::from(e)),
@@ -550,7 +551,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                         &options,
                     ) {
                         Ok(_) => {}
-                        e @ Err(MvccError::KeyIsLocked { .. }) => {
+                        e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                             locks.push(e.map_err(Error::from).map_err(StorageError::from));
                         }
                         Err(e) => return Err(Error::from(e)),
@@ -582,7 +583,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for (k, should_not_exist) in keys {
                 match txn.acquire_pessimistic_lock(k, &primary, should_not_exist, &options) {
                     Ok(_) => {}
-                    e @ Err(MvccError::KeyIsLocked { .. }) => {
+                    e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                         locks.push(e.map_err(Error::from).map_err(StorageError::from));
                         break;
                     }

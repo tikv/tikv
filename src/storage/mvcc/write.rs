@@ -2,7 +2,7 @@
 
 use super::super::types::Value;
 use super::lock::LockType;
-use super::{Error, Result};
+use super::{Error, ErrorInner, Result};
 use crate::storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use byteorder::ReadBytesExt;
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
@@ -115,9 +115,9 @@ impl Write {
 
     pub fn parse(mut b: &[u8]) -> Result<Write> {
         if b.is_empty() {
-            return Err(Error::BadFormatWrite);
+            return Err(ErrorInner::BadFormatWrite.into());
         }
-        let write_type = WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)?;
+        let write_type = WriteType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatWrite)?;
         let start_ts = number::decode_var_u64(&mut b)?;
         if b.is_empty() {
             return Ok(Write::new(write_type, start_ts, None));
@@ -138,7 +138,7 @@ impl Write {
     }
 
     pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
-        WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)
+        WriteType::from_u8(b.read_u8()?).ok_or_else(|| Error::from(ErrorInner::BadFormatWrite))
     }
 
     pub fn is_protected(&self) -> bool {
