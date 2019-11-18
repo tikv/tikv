@@ -16,13 +16,15 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Txn(err: txn::Error) {
+        Txn(err: Box<txn::Error>) {
             from()
+            from(err: txn::Error) -> (Box::new(err))
             cause(err)
             description(err.description())
         }
-        Mvcc(err: mvcc::Error) {
+        Mvcc(err: Box<mvcc::Error>) {
             from()
+            from(err: mvcc::Error) -> (Box::new(err))
             cause(err)
             description(err.description())
         }
@@ -34,8 +36,9 @@ quick_error! {
             cause(err.as_ref())
             description(err.description())
         }
-        Io(err: IoError) {
+        Io(err: Box<IoError>) {
             from()
+            from(err: IoError) -> (Box::new(err))
             cause(err)
             description(err.description())
         }

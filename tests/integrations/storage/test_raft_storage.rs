@@ -1,5 +1,4 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::thread;
 use std::time::Duration;
 
@@ -103,7 +102,7 @@ fn test_raft_storage_rollback_before_prewrite() {
     assert!(ret.is_err());
     let err = ret.unwrap_err();
     match err {
-        storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => {}
+        storage::Error::Txn(box txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => {}
         _ => {
             panic!("expect WriteConflict error, but got {:?}", err);
         }
@@ -140,7 +139,7 @@ fn test_raft_storage_store_not_match() {
     ctx.set_peer(peer);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
     let res = storage.get(ctx.clone(), &key, 20);
-    if let storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e))) =
+    if let storage::Error::Txn(box txn::Error::Engine(kv::Error::Request(ref e))) =
         *res.as_ref().err().unwrap()
     {
         assert!(e.has_store_not_match());

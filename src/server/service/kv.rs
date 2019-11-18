@@ -2630,8 +2630,8 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
     match *res {
         // TODO: use `Error::cause` instead.
         Err(Error::Engine(EngineError::Request(ref e)))
-        | Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e))))
-        | Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
+        | Err(Error::Txn(box TxnError::Engine(EngineError::Request(ref e))))
+        | Err(Error::Txn(box TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
             Some(e.to_owned())
         }
         Err(Error::SchedTooBusy) => {
@@ -2661,7 +2661,7 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
 
 fn extract_committed(err: &storage::Error) -> Option<u64> {
     match *err {
-        storage::Error::Txn(TxnError::Mvcc(MvccError::Committed { commit_ts })) => Some(commit_ts),
+        storage::Error::Txn(box TxnError::Mvcc(MvccError::Committed { commit_ts })) => Some(commit_ts),
         _ => None,
     }
 }
@@ -2669,11 +2669,11 @@ fn extract_committed(err: &storage::Error) -> Option<u64> {
 fn extract_key_error(err: &storage::Error) -> KeyError {
     let mut key_error = KeyError::default();
     match err {
-        storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info))) => {
+        storage::Error::Txn(box TxnError::Mvcc(MvccError::KeyIsLocked(info))) => {
             key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock
-        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict {
+        storage::Error::Txn(box TxnError::Mvcc(MvccError::WriteConflict {
             start_ts,
             conflict_start_ts,
             conflict_commit_ts,
@@ -2691,23 +2691,23 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             // for compatibility with older versions.
             key_error.set_retryable(format!("{:?}", err));
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { key })) => {
+        storage::Error::Txn(box TxnError::Mvcc(MvccError::AlreadyExist { key })) => {
             let mut exist = AlreadyExist::default();
             exist.set_key(key.clone());
             key_error.set_already_exist(exist);
         }
         // failed in commit
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
+        storage::Error::Txn(box TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts"; "err" => ?err);
             key_error.set_retryable(format!("{:?}", err));
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnNotFound { start_ts, key })) => {
+        storage::Error::Txn(box TxnError::Mvcc(MvccError::TxnNotFound { start_ts, key })) => {
             let mut txn_not_found = TxnNotFound::default();
             txn_not_found.set_start_ts(*start_ts);
             txn_not_found.set_primary_key(key.to_owned());
             key_error.set_txn_not_found(txn_not_found);
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::Deadlock {
+        storage::Error::Txn(box TxnError::Mvcc(MvccError::Deadlock {
             lock_ts,
             lock_key,
             deadlock_key_hash,
@@ -2720,7 +2720,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             deadlock.set_deadlock_key_hash(*deadlock_key_hash);
             key_error.set_deadlock(deadlock);
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::CommitTsExpired {
+        storage::Error::Txn(box TxnError::Mvcc(MvccError::CommitTsExpired {
             start_ts,
             commit_ts,
             key,

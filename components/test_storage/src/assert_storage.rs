@@ -213,10 +213,10 @@ impl<E: Engine> AssertionStorage<E> {
 
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
-            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(kv::Error::Request(
+            storage::Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(kv::Error::Request(
                 ref e,
             ))))
-            | storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e)))
+            | storage::Error::Txn(box txn::Error::Engine(kv::Error::Request(ref e)))
             | storage::Error::Engine(kv::Error::Request(ref e)) => {
                 assert!(
                     e.has_not_leader() | e.has_stale_command(),
@@ -237,7 +237,7 @@ impl<E: Engine> AssertionStorage<E> {
         assert!(resp.is_err());
         let err = resp.unwrap_err();
         match err {
-            storage::Error::Txn(txn::Error::InvalidTxnTso {
+            storage::Error::Txn(box txn::Error::InvalidTxnTso {
                 start_ts,
                 commit_ts,
             }) => {
@@ -374,7 +374,7 @@ impl<E: Engine> AssertionStorage<E> {
         let locks: Vec<(&[u8], &[u8], u64)> = res
             .iter()
             .filter_map(|x| {
-                if let Err(storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info)))) =
+                if let Err(storage::Error::Txn(box txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info)))) =
                     x
                 {
                     Some((
@@ -409,7 +409,7 @@ impl<E: Engine> AssertionStorage<E> {
             .unwrap_err();
 
         match err {
-            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict {
+            storage::Error::Txn(box txn::Error::Mvcc(mvcc::Error::WriteConflict {
                 start_ts,
                 conflict_start_ts,
                 ref key,

@@ -77,7 +77,7 @@ impl LockMgr for DummyLockMgr {
 
 pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
     match res {
-        Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info)))) => Lock {
+        Err(StorageError::Txn(box TxnError::Mvcc(MvccError::KeyIsLocked(info)))) => Lock {
             ts: info.get_lock_version(),
             hash: gen_key_hash(&Key::from_raw(info.get_key())),
         },

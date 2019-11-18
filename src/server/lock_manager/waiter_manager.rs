@@ -396,7 +396,7 @@ fn extract_raw_key_from_process_result(pr: &ProcessResult) -> &[u8] {
         ProcessResult::MultiRes { results } => {
             assert!(results.len() == 1);
             match &results[0] {
-                Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info)))) => {
+                Err(StorageError::Txn(box TxnError::Mvcc(MvccError::KeyIsLocked(info)))) => {
                     info.get_key()
                 }
                 _ => panic!("unexpected mvcc error"),
