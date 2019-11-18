@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
-use crate::storage::mvcc::{default_not_found_error, Result, Write};
+use crate::storage::mvcc::{default_not_found_error, Result, TsSet, Write};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
     Cursor, CursorBuilder, Iterator, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics,
@@ -64,6 +64,16 @@ impl<S: Snapshot> ScannerBuilder<S> {
     pub fn range(mut self, lower_bound: Option<Key>, upper_bound: Option<Key>) -> Self {
         self.0.lower_bound = lower_bound;
         self.0.upper_bound = upper_bound;
+        self
+    }
+
+    /// Set locks that the scanner can bypass. Locks with start_ts in the specified set will be
+    /// ignored during scanning.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn bypass_locks(mut self, locks: TsSet) -> Self {
+        self.0.bypass_locks = locks;
         self
     }
 
@@ -138,6 +148,8 @@ pub struct ScannerConfig<S: Snapshot> {
 
     ts: u64,
     desc: bool,
+
+    bypass_locks: TsSet,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -151,6 +163,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             upper_bound: None,
             ts,
             desc,
+            bypass_locks: Default::default(),
         }
     }
 
@@ -425,5 +438,47 @@ mod tests {
     fn test_scan_with_lock() {
         test_scan_with_lock_impl(false);
         test_scan_with_lock_impl(true);
+    }
+
+    fn test_scan_bypass_locks_impl(desc: bool) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        for i in 0..5 {
+            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 10);
+            must_commit(&engine, &[i], 10, 20);
+        }
+
+        // Locks are: 30, 40, 50, 60, 70
+        for i in 0..5 {
+            must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 30 + u64::from(i) * 10);
+        }
+
+        let bypass_locks = TsSet::new(vec![30, 41, 50]);
+
+        // Scan at ts 65 will meet locks at 40 and 60.
+        let mut expected_result = vec![
+            (vec![0], Some(vec![b'v', 0])),
+            (vec![1], None),
+            (vec![2], Some(vec![b'v', 2])),
+            (vec![3], None),
+            (vec![4], Some(vec![b'v', 4])),
+        ];
+
+        if desc {
+            expected_result = expected_result.into_iter().rev().collect();
+        }
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let scanner = ScannerBuilder::new(snapshot.clone(), 65, desc)
+            .bypass_locks(bypass_locks)
+            .build()
+            .unwrap();
+        check_scan_result(scanner, &expected_result);
+    }
+
+    #[test]
+    fn test_scan_bypass_locks() {
+        test_scan_bypass_locks_impl(false);
+        test_scan_bypass_locks_impl(true);
     }
 }

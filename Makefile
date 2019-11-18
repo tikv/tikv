@@ -155,6 +155,13 @@ dist_release:
 # additional sanity checks and file movement.
 build_dist_release:
 	make x-build-dist
+	# Reduce binary size by compressing binaries.
+	# FIXME: Currently errors with `Couldn't find DIE referenced by DW_AT_abstract_origin`
+	# dwz ${CARGO_TARGET_DIR}/release/tikv-server
+	# FIXME: https://sourceware.org/bugzilla/show_bug.cgi?id=24764
+	# dwz ${CARGO_TARGET_DIR}/release/tikv-ctl
+	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-server
+	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-ctl
 
 # Distributable bins with SSE4.2 optimizations
 dist_unportable_release:
@@ -186,6 +193,10 @@ test:
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
+# This is used for CI test
+ci_test:
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --all-targets --no-run --message-format=json
+	bash scripts/check-bins-for-jemalloc.sh
 
 ## Static analysis
 ## ---------------
