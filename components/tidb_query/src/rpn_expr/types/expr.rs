@@ -41,7 +41,10 @@ impl RpnExpressionNode {
     }
 
     #[cfg(test)]
-    pub fn expr_tp(&self) -> ExprType {
+    pub fn expr_tp(&self) -> tipb::ExprType {
+        use tidb_query_datatype::EvalType;
+        use tipb::ExprType;
+
         match self {
             RpnExpressionNode::FnCall { .. } => ExprType::ScalarFunc,
             RpnExpressionNode::Constant { value, .. } => match value.eval_type() {
