@@ -48,7 +48,7 @@ pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
         }
     }))
 }
-  
+
 #[rpn_fn]
 #[inline]
 pub fn hex_str_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
@@ -214,7 +214,7 @@ mod tests {
             assert_eq!(output, expect_output);
         }
     }
-     
+
     #[test]
     fn test_hex_str_arg() {
         let cases = vec![
@@ -231,7 +231,7 @@ mod tests {
                 .push_param(arg)
                 .evaluate(ScalarFuncSig::HexStrArg)
                 .unwrap();
-                assert_eq!(output, expect_output);
+            assert_eq!(output, expect_output);
         }
-     }
+    }
 }
