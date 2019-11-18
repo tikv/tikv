@@ -9,7 +9,7 @@ use failure::Error;
 use std::io::Cursor;
 use tidb_query::expr::{EvalConfig, EvalContext};
 use codec::prelude::MemComparableByteEncoder;
-use codec::prelude::byte::MemComparableByteCodec;
+use codec::byte::MemComparableByteCodec;
 
 #[inline(always)]
 pub fn fuzz_codec_bytes(data: &[u8]) -> Result<(), Error> {
