@@ -311,7 +311,7 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
     match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => {
             let pow = (lhs.into_inner()).pow(rhs.into_inner());
-            if pow.is_infinite() || pow.is_nan() {
+            if pow.is_infinite() {
                 Err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)).into())
             } else {
                 Ok(Real::new(pow).ok())
@@ -869,9 +869,9 @@ mod tests {
             assert_eq!(output, expect);
         }
     }
-  
-  #[test]  
-  fn test_asin() {
+
+    #[test]
+    fn test_asin() {
         let test_cases = vec![
             (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
             (
