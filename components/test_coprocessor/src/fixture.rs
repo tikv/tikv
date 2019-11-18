@@ -56,23 +56,27 @@ pub fn init_data_with_engine_and_commit<E: Engine>(
     init_data_with_details(ctx, engine, tbl, vals, commit, &Config::default())
 }
 
-pub fn init_data_with_details<E: Engine>(
+pub fn init_data_with_details<E: Engine, T: AsRef<str>>(
     ctx: Context,
     engine: E,
     tbl: &ProductTable,
-    vals: &[(i64, Option<&str>, i64)],
+    vals: &[(i64, Option<T>, i64)],
     commit: bool,
     cfg: &Config,
 ) -> (Store<E>, Endpoint<E>) {
     let mut store = Store::from_engine(engine);
 
     store.begin();
-    for &(id, name, count) in vals {
+    for (id, name, count) in vals {
+        let name = match name {
+            None => Datum::Null,
+            Some(v) => Datum::Bytes(str::as_bytes(v.as_ref()).into()),
+        };
         store
             .insert_into(&tbl)
-            .set(&tbl["id"], Datum::I64(id))
-            .set(&tbl["name"], name.map(str::as_bytes).into())
-            .set(&tbl["count"], Datum::I64(count))
+            .set(&tbl["id"], Datum::I64(*id))
+            .set(&tbl["name"], name)
+            .set(&tbl["count"], Datum::I64(*count))
             .execute_with_ctx(ctx.clone());
     }
     if commit {

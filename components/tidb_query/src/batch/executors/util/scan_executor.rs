@@ -55,6 +55,7 @@ pub struct ScanExecutorOptions<S, I> {
     pub is_backward: bool,
     pub is_key_only: bool,
     pub accept_point_range: bool,
+    pub is_scanned_range_aware: bool,
 }
 
 impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
@@ -66,6 +67,7 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
             is_backward,
             is_key_only,
             accept_point_range,
+            is_scanned_range_aware,
         }: ScanExecutorOptions<S, I>,
     ) -> Result<Self> {
         crate::codec::table::check_table_ranges(&key_ranges)?;
@@ -82,7 +84,7 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
                     .collect(),
                 scan_backward_in_range: is_backward,
                 is_key_only,
-                is_scanned_range_aware: false,
+                is_scanned_range_aware,
             }),
             is_ended: false,
         })

@@ -303,6 +303,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
                 }
             }
         }
+
         if record_cnt > 0 {
             let range = self.executor.take_scanned_range();
             return self

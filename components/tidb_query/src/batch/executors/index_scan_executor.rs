@@ -36,6 +36,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
         key_ranges: Vec<KeyRange>,
         is_backward: bool,
         unique: bool,
+        is_scanned_range_aware: bool,
     ) -> Result<Self> {
         // Note 1: `unique = true` doesn't completely mean that it is a unique index scan. Instead
         // it just means that we can use point-get for this index. In the following scenarios
@@ -74,6 +75,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             is_backward,
             is_key_only: false,
             accept_point_range: unique,
+            is_scanned_range_aware,
         })?;
         Ok(Self(wrapper))
     }
@@ -320,6 +322,7 @@ mod tests {
                 key_ranges,
                 true,
                 false,
+                false,
             )
             .unwrap();
 
@@ -372,6 +375,7 @@ mod tests {
                     columns_info[2].clone(),
                 ],
                 key_ranges,
+                false,
                 false,
                 false,
             )
@@ -449,6 +453,7 @@ mod tests {
                 key_ranges,
                 false,
                 false,
+                false,
             )
             .unwrap();
 
@@ -504,6 +509,7 @@ mod tests {
                 key_ranges,
                 false,
                 true,
+                false,
             )
             .unwrap();
 
