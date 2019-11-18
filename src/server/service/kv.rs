@@ -2228,9 +2228,13 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
         } else {
             match v {
                 Ok(txn_status) => match txn_status {
+                    TxnStatus::Rollbacked => resp.set_rollback_reason(RollbackReason::NoReason),
+                    TxnStatus::TtlExpire => resp.set_rollback_reason(RollbackReason::TtlExpire),
+                    TxnStatus::LockNotExist => {
+                        resp.set_rollback_reason(RollbackReason::LockNotExist)
+                    }
                     TxnStatus::Committed { commit_ts } => resp.set_commit_version(commit_ts),
                     TxnStatus::Uncommitted { lock_ttl } => resp.set_lock_ttl(lock_ttl),
-                    TxnStatus::Rollbacked | TxnStatus::RollbackedBefore => {}
                 },
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
