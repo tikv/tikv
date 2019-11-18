@@ -1631,7 +1631,6 @@ mod tests {
         expect_error(
             |e| match e {
                 Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                    ()
                 }
                 e => panic!("unexpected error chain: {:?}", e),
             },
@@ -1642,7 +1641,6 @@ mod tests {
         expect_error(
             |e| match e {
                 Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                    ()
                 }
                 e => panic!("unexpected error chain: {:?}", e),
             },
@@ -1660,7 +1658,6 @@ mod tests {
         expect_error(
             |e| match e {
                 Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                    ()
                 }
                 e => panic!("unexpected error chain: {:?}", e),
             },
