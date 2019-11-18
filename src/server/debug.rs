@@ -32,8 +32,10 @@ use crate::raftstore::store::{
     write_peer_state,
 };
 use crate::raftstore::store::{keys, PeerStorage};
+use crate::server::gc_worker::GCWorker;
 use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
+use crate::storage::Engine;
 use crate::storage::Iterator as EngineIterator;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
@@ -41,6 +43,8 @@ use tikv_util::config::ReadableSize;
 use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
+
+const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = RocksIterator<Arc<DB>>;
@@ -128,13 +132,14 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 }
 
 #[derive(Clone)]
-pub struct Debugger {
+pub struct Debugger<E: Engine> {
     engines: Engines,
+    gc_worker: Option<GCWorker<E>>,
 }
 
-impl Debugger {
-    pub fn new(engines: Engines) -> Debugger {
-        Debugger { engines }
+impl<E: Engine> Debugger<E> {
+    pub fn new(engines: Engines, gc_worker: Option<GCWorker<E>>) -> Debugger<E> {
+        Debugger { engines, gc_worker }
     }
 
     pub fn get_engine(&self) -> &Engines {
@@ -800,6 +805,22 @@ impl Debugger {
                     )));
                 }
                 Ok(())
+            }
+            Module::Server => {
+                if config_name == GC_IO_LIMITER_CONFIG_NAME {
+                    if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
+                        return self
+                            .gc_worker
+                            .as_ref()
+                            .expect("must be some")
+                            .change_io_limit(bytes_per_sec.0)
+                            .map_err(|e| Error::Other(e.into()));
+                    }
+                }
+                Err(Error::InvalidArgument(format!(
+                    "bad argument: {} {}",
+                    config_name, config_value
+                )))
             }
             _ => Err(Error::NotFound(format!("unsupported module: {:?}", module))),
         }
@@ -1490,7 +1511,9 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use crate::server::gc_worker::GCConfig;
     use crate::storage::mvcc::{Lock, LockType};
+    use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::Mutable;
@@ -1591,7 +1614,7 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> Debugger {
+    fn new_debugger() -> Debugger<TestEngine> {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
@@ -1610,10 +1633,13 @@ mod tests {
 
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
-        Debugger::new(engines)
+        let test_engine = TestEngineBuilder::new().build().unwrap();
+        let mut gc_worker = GCWorker::new(test_engine, None, None, GCConfig::default());
+        gc_worker.start().unwrap();
+        Debugger::new(engines, Some(gc_worker))
     }
 
-    impl Debugger {
+    impl Debugger<TestEngine> {
         fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
             db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
@@ -2322,5 +2348,19 @@ mod tests {
             cluster_id,
             debugger.get_cluster_id().expect("get cluster id")
         );
+    }
+
+    #[test]
+    fn test_modify_gc_io_limit() {
+        let debugger = new_debugger();
+        debugger
+            .modify_tikv_config(Module::Server, "gc", "10MB")
+            .unwrap_err();
+        debugger
+            .modify_tikv_config(Module::Storage, GC_IO_LIMITER_CONFIG_NAME, "10MB")
+            .unwrap_err();
+        debugger
+            .modify_tikv_config(Module::Server, GC_IO_LIMITER_CONFIG_NAME, "10MB")
+            .unwrap();
     }
 }
