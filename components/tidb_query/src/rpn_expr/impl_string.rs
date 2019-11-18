@@ -147,7 +147,6 @@ mod tests {
         }
     }
 
-    
     #[test]
     fn test_bit_length() {
         let test_cases = vec![
