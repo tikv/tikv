@@ -2341,6 +2341,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.ctx.raft_metrics.invalid_proposal.mismatch_peer_id += 1;
             return Err(e);
         }
+        // check whether the peer is initialized.
+        if !self.fsm.peer.is_initialized() {
+            self.ctx
+                .raft_metrics
+                .invalid_proposal
+                .region_not_initialized += 1;
+            return Err(Error::RegionNotInitialized(region_id));
+        }
+        // If the peer is applying snapshot, it may drop some sending messages, that could
+        // make clients wait for response until timeout.
+        if self.fsm.peer.mut_store().check_applying_snap() {
+            self.ctx.raft_metrics.invalid_proposal.is_applying_snapshot += 1;
+            // TODO: replace to a more suitable error.
+            return Err(Error::Other(box_err!("peer is applying snapshot.")));
+        }
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg, self.fsm.peer.term()) {
             self.ctx.raft_metrics.invalid_proposal.stale_command += 1;

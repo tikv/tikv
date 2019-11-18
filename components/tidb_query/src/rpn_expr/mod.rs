@@ -238,6 +238,14 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Log2Args => log_2_arg_fn_meta(),
         ScalarFuncSig::Log2 => log2_fn_meta(),
         ScalarFuncSig::Log10 => log10_fn_meta(),
+        ScalarFuncSig::Sin => sin_fn_meta(),
+        ScalarFuncSig::Cos => cos_fn_meta(),
+        ScalarFuncSig::Tan => tan_fn_meta(),
+        ScalarFuncSig::Cot => cot_fn_meta(),
+        ScalarFuncSig::Asin => asin_fn_meta(),
+        ScalarFuncSig::Acos => acos_fn_meta(),
+        ScalarFuncSig::Atan1Arg => atan_1_arg_fn_meta(),
+        ScalarFuncSig::Atan2Args => atan_2_args_fn_meta(),
         ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
         ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),
         ScalarFuncSig::CoalesceString => coalesce_fn_meta::<Bytes>(),
@@ -247,6 +255,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CoalesceJson => coalesce_fn_meta::<Json>(),
         ScalarFuncSig::Sign => sign_fn_meta(),
         ScalarFuncSig::Sqrt => sqrt_fn_meta(),
+        ScalarFuncSig::Exp => exp_fn_meta(),
         ScalarFuncSig::InInt => compare_in_fn_meta::<Int>(),
         ScalarFuncSig::InReal => compare_in_fn_meta::<Real>(),
         ScalarFuncSig::InString => compare_in_fn_meta::<Bytes>(),
@@ -271,6 +280,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonUnquoteSig => json_unquote_fn_meta(),
         ScalarFuncSig::JsonExtractSig => json_extract_fn_meta(),
         ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
+        ScalarFuncSig::Bin => bin_fn_meta(),
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
         ScalarFuncSig::CastIntAsString |
@@ -321,6 +331,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CastJsonAsDuration |
         ScalarFuncSig::CastJsonAsJson => map_cast_func(expr)?,
         ScalarFuncSig::Length => length_fn_meta(),
+        ScalarFuncSig::BitLength => bit_length_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
