@@ -3901,7 +3901,7 @@ mod tests {
                 k.clone(),
                 10,
                 90,
-                expect_value_callback(tx.clone(), 0, uncommitted(100)),
+                expect_value_callback(tx.clone(), 0, uncommitted(100, 0)),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -3914,7 +3914,7 @@ mod tests {
                 k.clone(),
                 10,
                 110,
-                expect_value_callback(tx.clone(), 0, uncommitted(110)),
+                expect_value_callback(tx.clone(), 0, uncommitted(110, 0)),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4019,7 +4019,7 @@ mod tests {
                 ts(12, 0),
                 ts(15, 0),
                 true,
-                expect_value_callback(tx.clone(), 0, uncommitted(100)),
+                expect_value_callback(tx.clone(), 0, uncommitted(100, 0)),
             )
             .unwrap();
         rx.recv().unwrap();
