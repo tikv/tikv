@@ -839,9 +839,9 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
             )?;
 
             // The lock is possibly resolved here only when the `check_txn_status` cleaned up the
-            // lock, and this may happen only when it returns `Rollbacked`.
+            // lock, and this may happen only when it returns `TtlExpire` or `LockNotExist`.
             match txn_status {
-                TxnStatus::Rollbacked => {
+                TxnStatus::TtlExpire | TxnStatus::LockNotExist => {
                     let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &[&primary_key]);
                     wake_up_waiters_if_needed(
                         &lock_mgr,
@@ -851,7 +851,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
                         is_pessimistic_txn,
                     );
                 }
-                TxnStatus::RollbackedBefore
+                TxnStatus::Rollbacked
                 | TxnStatus::Committed { .. }
                 | TxnStatus::Uncommitted { .. } => {}
             };
