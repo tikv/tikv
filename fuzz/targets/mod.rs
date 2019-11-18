@@ -8,19 +8,20 @@ use self::util::ReadLiteralExt;
 use failure::Error;
 use std::io::Cursor;
 use tidb_query::expr::{EvalConfig, EvalContext};
+use codec::prelude::{MemComparableByteEncoder, MemComparableByteCodec};
 
 #[inline(always)]
 pub fn fuzz_codec_bytes(data: &[u8]) -> Result<(), Error> {
-    let _ = tikv_util::codec::bytes::encode_bytes(data);
-    let _ = tikv_util::codec::bytes::encode_bytes_desc(data);
-    let _ = tikv_util::codec::bytes::encoded_bytes_len(data, true);
-    let _ = tikv_util::codec::bytes::encoded_bytes_len(data, false);
+    let _ = MemComparableByteEncoder::write_comparable_bytes(data);
+    let _ = MemComparableByteEncoder::write_comparable_bytes_desc(data);
+    let _ = MemComparableByteCodec::get_first_encoded_len_desc(data)
+    let _ = MemComparableByteCodec::get_first_encoded_len(data)
     Ok(())
 }
 
 #[inline(always)]
 pub fn fuzz_codec_number(data: &[u8]) -> Result<(), Error> {
-    use tikv_util::codec::number::NumberEncoder;
+    use codec::number::NumberCodec;
     {
         let mut cursor = Cursor::new(data);
         let n = cursor.read_as_u64()?;
@@ -69,20 +70,20 @@ pub fn fuzz_codec_number(data: &[u8]) -> Result<(), Error> {
     }
     {
         let buf = data.to_owned();
-        let _ = tikv_util::codec::number::decode_u64(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_u64_desc(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_u64_le(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_i64(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_i64_desc(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_i64_le(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_f64(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_f64_desc(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_f64_le(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_u32(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_u32_le(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_i32_le(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_u16(&mut buf.as_slice());
-        let _ = tikv_util::codec::number::decode_u16_le(&mut buf.as_slice());
+        let _ = NumberCodec::decode_u64(&mut buf.as_slice());
+        let _ = NumberCodec::decode_u64_desc(&mut buf.as_slice());
+        let _ = NumberCodec::decode_u64_le(&mut buf.as_slice());
+        let _ = NumberCodec::decode_i64(&mut buf.as_slice());
+        let _ = NumberCodec::decode_i64_desc(&mut buf.as_slice());
+        let _ = NumberCodec::decode_i64_le(&mut buf.as_slice());
+        let _ = NumberCodec::decode_f64(&mut buf.as_slice());
+        let _ = NumberCodec::decode_f64_desc(&mut buf.as_slice());
+        let _ = NumberCodec::decode_f64_le(&mut buf.as_slice());
+        let _ = NumberCodec::decode_u32(&mut buf.as_slice());
+        let _ = NumberCodec::decode_u32_le(&mut buf.as_slice());
+        let _ = NumberCodec::decode_i32_le(&mut buf.as_slice());
+        let _ = NumberCodec::decode_u16(&mut buf.as_slice());
+        let _ = NumberCodec::decode_u16_le(&mut buf.as_slice());
     }
     Ok(())
 }
