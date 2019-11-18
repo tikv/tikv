@@ -332,12 +332,8 @@ pub fn conv(
     #[derive(Copy, Clone)]
     struct IntWithSign(u64, bool);
 
-    fn sep_neg_sign(num: Int) -> IntWithSign {
-        if num > 0 {
-            IntWithSign(num as u64, false)
-        } else {
-            IntWithSign(-num as u64, true)
-        }
+    fn sep_sign_num(num: Int) -> IntWithSign {
+        IntWithSign(num.wrapping_abs() as u64, num < 0)
     }
 
     // Return true if convert BASE is valid.
@@ -396,8 +392,8 @@ pub fn conv(
     }
 
     if let (Some(n), Some(from_base), Some(to_base)) = (n, from_base, to_base) {
-        let from_base = sep_neg_sign(*from_base);
-        let to_base = sep_neg_sign(*to_base);
+        let from_base = sep_sign_num(*from_base);
+        let to_base = sep_sign_num(*to_base);
         if is_valid_base(from_base) && is_valid_base(to_base) {
             let s = String::from_utf8_lossy(n);
             let s = s.trim();
