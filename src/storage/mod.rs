@@ -1620,8 +1620,9 @@ mod tests {
                 1,
                 Options::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                    }
+                    Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(
+                        EngineError::Request(..),
+                    ))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -1629,7 +1630,9 @@ mod tests {
         rx.recv().unwrap();
         expect_error(
             |e| match e {
-                Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
+                    ()
+                }
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1638,7 +1641,9 @@ mod tests {
         );
         expect_error(
             |e| match e {
-                Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
+                    ()
+                }
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1654,7 +1659,9 @@ mod tests {
         );
         expect_error(
             |e| match e {
-                Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
+                    ()
+                }
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1675,8 +1682,9 @@ mod tests {
         for v in x {
             expect_error(
                 |e| match e {
-                    Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                    }
+                    Error::Txn(box txn::Error::Mvcc(mvcc::Error::Engine(
+                        EngineError::Request(..),
+                    ))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 },
                 v,
