@@ -950,9 +950,7 @@ impl PeerStorage {
             "state" => ?ctx.apply_state,
         );
 
-        fail_point!("before_apply_snap_update_region", |_| {
-            return Ok(());
-        });
+        fail_point!("before_apply_snap_update_region", |_| { Ok(()) });
 
         ctx.snap_region = Some(region);
         Ok(())
