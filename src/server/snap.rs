@@ -358,6 +358,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 self.pool.spawn(f).forget();
             }
             Task::Send { addr, msg, cb } => {
+                fail_point!("send_snapshot");
                 if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
                 {
                     warn!(
