@@ -4,7 +4,7 @@ use super::lock::{Lock, LockType};
 use super::metrics::*;
 use super::reader::MvccReader;
 use super::write::{Write, WriteType};
-use super::{extract_physical, Error, Result};
+use super::{extract_physical, ErrorInner, Result};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, TxnStatus, Value, CF_DEFAULT, CF_LOCK,
@@ -198,7 +198,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // 1.The current write type is `PUT`
         // 2.The current write type is `Rollback` or `Lock`, and the key have an older version.
         if write.write_type == WriteType::Put || self.key_exist(&key, write_commit_ts - 1)? {
-            return Err(Error::AlreadyExist { key: key.to_raw()? });
+            return Err(ErrorInner::AlreadyExist { key: key.to_raw()? }.into());
         }
 
         Ok(())
@@ -225,9 +225,9 @@ impl<S: Snapshot> MvccTxn<S> {
             let mut info = lock.into_lock_info(key.into_raw()?);
             // Set ttl to 0 so TiDB will resolve lock immediately.
             info.set_lock_ttl(0);
-            Err(Error::KeyIsLocked(info))
+            Err(ErrorInner::KeyIsLocked(info).into())
         } else {
-            Err(Error::Other("stale request".into()))
+            Err(ErrorInner::Other("stale request".into()).into())
         }
     }
 
@@ -241,14 +241,15 @@ impl<S: Snapshot> MvccTxn<S> {
         let for_update_ts = options.for_update_ts;
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
-                return Err(Error::KeyIsLocked(lock.into_lock_info(key.into_raw()?)));
+                return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
             }
             if lock.lock_type != LockType::Pessimistic {
-                return Err(Error::LockTypeNotMatch {
+                return Err(ErrorInner::LockTypeNotMatch {
                     start_ts: self.start_ts,
                     key: key.into_raw()?,
                     pessimistic: false,
-                });
+                }
+                .into());
             }
             // Overwrite the lock with small for_update_ts
             if for_update_ts > lock.for_update_ts {
@@ -277,13 +278,14 @@ impl<S: Snapshot> MvccTxn<S> {
                 MVCC_CONFLICT_COUNTER
                     .acquire_pessimistic_lock_conflict
                     .inc();
-                return Err(Error::WriteConflict {
+                return Err(ErrorInner::WriteConflict {
                     start_ts: self.start_ts,
                     conflict_start_ts: write.start_ts,
                     conflict_commit_ts: commit_ts,
                     key: key.into_raw()?,
                     primary: primary.to_vec(),
-                });
+                }
+                .into());
             }
 
             // Handle rollback.
@@ -291,10 +293,11 @@ impl<S: Snapshot> MvccTxn<S> {
             // as well as commit timestamp, the lock is already rollbacked.
             if write.start_ts == self.start_ts && commit_ts == self.start_ts {
                 assert!(write.write_type == WriteType::Rollback);
-                return Err(Error::PessimisticLockRollbacked {
+                return Err(ErrorInner::PessimisticLockRollbacked {
                     start_ts: self.start_ts,
                     key: key.into_raw()?,
-                });
+                }
+                .into());
             }
             // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
             if commit_ts > self.start_ts {
@@ -303,10 +306,11 @@ impl<S: Snapshot> MvccTxn<S> {
                         assert!(
                             commit_ts == self.start_ts && write.write_type == WriteType::Rollback
                         );
-                        return Err(Error::PessimisticLockRollbacked {
+                        return Err(ErrorInner::PessimisticLockRollbacked {
                             start_ts: self.start_ts,
                             key: key.into_raw()?,
-                        });
+                        }
+                        .into());
                     }
                 }
             }
@@ -348,10 +352,11 @@ impl<S: Snapshot> MvccTxn<S> {
                         "key" => %key,
                         "lock_ts" => lock.ts
                     );
-                    return Err(Error::PessimisticLockNotFound {
+                    return Err(ErrorInner::PessimisticLockNotFound {
                         start_ts: self.start_ts,
                         key: key.into_raw()?,
-                    });
+                    }
+                    .into());
                 }
                 return self.handle_non_pessimistic_lock_conflict(key, options.for_update_ts, lock);
             } else {
@@ -371,10 +376,11 @@ impl<S: Snapshot> MvccTxn<S> {
                 "key" => %key
             );
 
-            return Err(Error::PessimisticLockNotFound {
+            return Err(ErrorInner::PessimisticLockNotFound {
                 start_ts: self.start_ts,
                 key: key.into_raw()?,
-            });
+            }
+            .into());
         }
 
         // No need to check data constraint, it's resolved by pessimistic locks.
@@ -408,13 +414,14 @@ impl<S: Snapshot> MvccTxn<S> {
                 // type is Rollback.
                 if commit_ts >= self.start_ts {
                     MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                    return Err(Error::WriteConflict {
+                    return Err(ErrorInner::WriteConflict {
                         start_ts: self.start_ts,
                         conflict_start_ts: write.start_ts,
                         conflict_commit_ts: commit_ts,
                         key: key.into_raw()?,
                         primary: primary.to_vec(),
-                    });
+                    }
+                    .into());
                 }
                 self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
             }
@@ -423,15 +430,16 @@ impl<S: Snapshot> MvccTxn<S> {
         // Check whether the current key is locked at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
-                return Err(Error::KeyIsLocked(lock.into_lock_info(key.into_raw()?)));
+                return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
             }
             // TODO: remove it in future
             if lock.lock_type == LockType::Pessimistic {
-                return Err(Error::LockTypeNotMatch {
+                return Err(ErrorInner::LockTypeNotMatch {
                     start_ts: self.start_ts,
                     key: key.into_raw()?,
                     pessimistic: true,
-                });
+                }
+                .into());
             }
             // Duplicated command. No need to overwrite the lock and data.
             MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
@@ -460,11 +468,12 @@ impl<S: Snapshot> MvccTxn<S> {
                         "start_ts" => self.start_ts,
                         "commit_ts" => commit_ts,
                     );
-                    return Err(Error::LockTypeNotMatch {
+                    return Err(ErrorInner::LockTypeNotMatch {
                         start_ts: self.start_ts,
                         key: key.into_raw()?,
                         pessimistic: true,
-                    });
+                    }
+                    .into());
                 }
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
                 if commit_ts < lock.min_commit_ts {
@@ -475,12 +484,13 @@ impl<S: Snapshot> MvccTxn<S> {
                         "commit_ts" => commit_ts,
                         "min_commit_ts" => lock.min_commit_ts,
                     );
-                    return Err(Error::CommitTsExpired {
+                    return Err(ErrorInner::CommitTsExpired {
                         start_ts: self.start_ts,
                         commit_ts,
                         key: key.into_raw()?,
                         min_commit_ts: lock.min_commit_ts,
-                    });
+                    }
+                    .into());
                 }
                 (
                     lock.lock_type,
@@ -500,11 +510,12 @@ impl<S: Snapshot> MvccTxn<S> {
                             "start_ts" => self.start_ts,
                             "commit_ts" => commit_ts,
                         );
-                        Err(Error::TxnLockNotFound {
+                        Err(ErrorInner::TxnLockNotFound {
                             start_ts: self.start_ts,
                             commit_ts,
                             key: key.into_raw()?,
-                        })
+                        }
+                        .into())
                     }
                     // Committed by concurrent transaction.
                     Some((_, WriteType::Put))
@@ -569,10 +580,11 @@ impl<S: Snapshot> MvccTxn<S> {
 
                     Ok(TxnStatus::LockNotExist)
                 } else {
-                    Err(Error::TxnNotFound {
+                    Err(ErrorInner::TxnNotFound {
                         start_ts: self.start_ts,
                         key: primary_key.into_raw()?,
-                    })
+                    }
+                    .into())
                 }
             }
         }
@@ -592,9 +604,10 @@ impl<S: Snapshot> MvccTxn<S> {
                 if current_ts > 0
                     && extract_physical(lock.ts) + lock.ttl >= extract_physical(current_ts)
                 {
-                    return Err(Error::KeyIsLocked(
+                    return Err(ErrorInner::KeyIsLocked(
                         lock.clone().into_lock_info(key.into_raw()?),
-                    ));
+                    )
+                    .into());
                 }
 
                 let is_pessimistic_txn = lock.for_update_ts != 0;
@@ -604,7 +617,7 @@ impl<S: Snapshot> MvccTxn<S> {
             _ => match self.check_txn_status_missing_lock(key, true)? {
                 TxnStatus::Committed { commit_ts } => {
                     MVCC_CONFLICT_COUNTER.rollback_committed.inc();
-                    Err(Error::Committed { commit_ts })
+                    Err(ErrorInner::Committed { commit_ts }.into())
                 }
                 TxnStatus::Rollbacked => {
                     // Return Ok on Rollback already exist.
@@ -667,11 +680,12 @@ impl<S: Snapshot> MvccTxn<S> {
             "start_ts" => self.start_ts,
             "advise_ttl" => advise_ttl,
         );
-        Err(Error::TxnLockNotFound {
+        Err(ErrorInner::TxnLockNotFound {
             start_ts: self.start_ts,
             commit_ts: 0,
             key: primary_key.into_raw()?,
-        })
+        }
+        .into())
     }
 
     /// Check the status of a transaction.
@@ -804,7 +818,7 @@ mod tests {
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::WriteType;
-    use crate::storage::mvcc::{Error, MvccReader, MvccTxn};
+    use crate::storage::mvcc::{Error, ErrorInner, MvccReader, MvccTxn};
     use crate::storage::{
         Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN,
     };
@@ -2272,7 +2286,7 @@ mod tests {
         expected_lock_info.set_lock_type(Op::Put);
 
         let assert_lock_info_eq = |e, expected_lock_info: &kvproto::kvrpcpb::LockInfo| match e {
-            Error::KeyIsLocked(info) => assert_eq!(info, *expected_lock_info),
+            Error(box ErrorInner::KeyIsLocked(info)) => assert_eq!(info, *expected_lock_info),
             _ => panic!("unexpected error"),
         };
 

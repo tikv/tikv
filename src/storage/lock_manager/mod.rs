@@ -2,7 +2,7 @@
 
 use std::borrow::Borrow;
 
-use crate::storage::mvcc::Error as MvccError;
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::{Error as TxnError, ProcessResult};
 use crate::storage::Error as StorageError;
 use crate::storage::{Key, StorageCb};
@@ -77,7 +77,9 @@ impl LockMgr for DummyLockMgr {
 
 pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
     match res {
-        Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info)))) => Lock {
+        Err(StorageError::Txn(TxnError::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(
+            info,
+        ))))) => Lock {
             ts: info.get_lock_version(),
             hash: gen_key_hash(&Key::from_raw(info.get_key())),
         },
@@ -108,7 +110,9 @@ mod tests {
         info.set_key(raw_key);
         info.set_lock_version(ts);
         info.set_lock_ttl(100);
-        let case = StorageError::from(TxnError::from(MvccError::KeyIsLocked(info)));
+        let case = StorageError::from(TxnError::from(MvccError::from(
+            MvccErrorInner::KeyIsLocked(info),
+        )));
         let lock = extract_lock_from_result(&Err(case));
         assert_eq!(lock.ts, ts);
         assert_eq!(lock.hash, gen_key_hash(&key));

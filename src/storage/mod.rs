@@ -1572,7 +1572,9 @@ mod tests {
         rx.recv().unwrap();
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { .. })) => (),
+                Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked {
+                    ..
+                }))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1620,8 +1622,9 @@ mod tests {
                 1,
                 Options::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                    }
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::Engine(
+                        EngineError::Request(..),
+                    )))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -1629,7 +1632,9 @@ mod tests {
         rx.recv().unwrap();
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::Engine(
+                    EngineError::Request(..),
+                )))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1638,7 +1643,9 @@ mod tests {
         );
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::Engine(
+                    EngineError::Request(..),
+                )))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1654,7 +1661,9 @@ mod tests {
         );
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::Engine(
+                    EngineError::Request(..),
+                )))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1675,8 +1684,9 @@ mod tests {
         for v in x {
             expect_error(
                 |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                    }
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::Engine(
+                        EngineError::Request(..),
+                    )))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 },
                 v,
@@ -2001,7 +2011,9 @@ mod tests {
             .unwrap();
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(..))) => (),
+                Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked(
+                    ..,
+                )))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             x.remove(0),
@@ -2110,7 +2122,9 @@ mod tests {
                 105,
                 Options::default(),
                 expect_fail_callback(tx.clone(), 6, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => (),
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::WriteConflict { .. },
+                    ))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -2221,9 +2235,9 @@ mod tests {
                 ts(110, 0),
                 ts(120, 0),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info))) => {
-                        assert_eq!(info.get_lock_ttl(), 100)
-                    }
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::KeyIsLocked(info),
+                    ))) => assert_eq!(info.get_lock_ttl(), 100),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -3873,7 +3887,9 @@ mod tests {
                 10,
                 100,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                    ))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -3927,7 +3943,9 @@ mod tests {
                 11,
                 150,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                    ))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -3958,7 +3976,9 @@ mod tests {
                 ts(9, 1),
                 false,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnNotFound { .. })) => (),
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::TxnNotFound { .. },
+                    ))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -3989,7 +4009,9 @@ mod tests {
                 ts(9, 0),
                 Options::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => (),
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::WriteConflict { .. },
+                    ))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -4084,7 +4106,9 @@ mod tests {
                 ts(25, 0),
                 ts(28, 0),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                    ))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )

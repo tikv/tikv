@@ -263,7 +263,7 @@ mod tests {
     use super::*;
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::Error as MvccError;
+    use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::txn::Error as TxnError;
     use crate::storage::RocksEngine;
     use crate::storage::TestEngineBuilder;
@@ -281,7 +281,7 @@ mod tests {
             match scanner.next() {
                 Ok(None) => break,
                 Ok(Some((key, value))) => scan_result.push((key.to_raw().unwrap(), Some(value))),
-                Err(TxnError::Mvcc(MvccError::KeyIsLocked(mut info))) => {
+                Err(TxnError::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(mut info)))) => {
                     scan_result.push((info.take_key(), None))
                 }
                 e => panic!("got error while scanning: {:?}", e),

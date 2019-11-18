@@ -4,7 +4,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
 use crate::storage::mvcc::EntryScanner;
-use crate::storage::mvcc::Error as MvccError;
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TsSet};
 use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder, Write};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
@@ -57,7 +57,7 @@ pub trait Scanner: Send {
                     results.push(Ok((k.to_raw()?, v)));
                 }
                 Ok(None) => break,
-                Err(e @ Error::Mvcc(MvccError::KeyIsLocked { .. })) => {
+                Err(e @ Error::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked { .. }))) => {
                     results.push(Err(e));
                 }
                 Err(e) => return Err(e),
@@ -512,8 +512,8 @@ mod tests {
     use crate::storage::kv::{
         Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
     };
-    use crate::storage::mvcc::Error as MvccError;
     use crate::storage::mvcc::MvccTxn;
+    use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::{
         CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
         TestEngineBuilder, Value,
@@ -856,15 +856,15 @@ mod tests {
         data.insert(Key::from_raw(b"bb"), Ok(b"alphaalpha".to_vec()));
         data.insert(
             Key::from_raw(b"bba"),
-            Err(Error::Mvcc(MvccError::KeyIsLocked(
+            Err(Error::Mvcc(MvccError::from(MvccErrorInner::KeyIsLocked(
                 kvproto::kvrpcpb::LockInfo::default(),
-            ))),
+            )))),
         );
         data.insert(Key::from_raw(b"z"), Ok(b"beta".to_vec()));
         data.insert(Key::from_raw(b"ca"), Ok(b"hello".to_vec()));
         data.insert(
             Key::from_raw(b"zz"),
-            Err(Error::Mvcc(MvccError::BadFormatLock)),
+            Err(Error::Mvcc(MvccError::from(MvccErrorInner::BadFormatLock))),
         );
 
         FixtureStore::new(data)

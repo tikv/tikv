@@ -16,7 +16,9 @@ use crate::server::transport::RaftStoreRouter;
 use crate::server::Error;
 use crate::storage::kv::Error as EngineError;
 use crate::storage::lock_manager::LockMgr;
-use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
+use crate::storage::mvcc::{
+    Error as MvccError, ErrorInner as MvccErrorInner, LockType, Write as MvccWrite, WriteType,
+};
 use crate::storage::txn::Error as TxnError;
 use crate::storage::{
     self, Engine, Key, Mutation, Options, PointGetCommand, Storage, TxnStatus, Value,
@@ -2631,9 +2633,9 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
         // TODO: use `Error::cause` instead.
         Err(Error::Engine(EngineError::Request(ref e)))
         | Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e))))
-        | Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
-            Some(e.to_owned())
-        }
+        | Err(Error::Txn(TxnError::Mvcc(MvccError(box MvccErrorInner::Engine(
+            EngineError::Request(ref e),
+        ))))) => Some(e.to_owned()),
         Err(Error::SchedTooBusy) => {
             let mut err = RegionError::default();
             let mut server_is_busy_err = ServerIsBusy::default();
@@ -2661,7 +2663,9 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
 
 fn extract_committed(err: &storage::Error) -> Option<u64> {
     match *err {
-        storage::Error::Txn(TxnError::Mvcc(MvccError::Committed { commit_ts })) => Some(commit_ts),
+        storage::Error::Txn(TxnError::Mvcc(MvccError(box MvccErrorInner::Committed {
+            commit_ts,
+        }))) => Some(commit_ts),
         _ => None,
     }
 }
@@ -2669,18 +2673,18 @@ fn extract_committed(err: &storage::Error) -> Option<u64> {
 fn extract_key_error(err: &storage::Error) -> KeyError {
     let mut key_error = KeyError::default();
     match err {
-        storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info))) => {
+        storage::Error::Txn(TxnError::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info)))) => {
             key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock
-        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict {
+        storage::Error::Txn(TxnError::Mvcc(MvccError(box MvccErrorInner::WriteConflict {
             start_ts,
             conflict_start_ts,
             conflict_commit_ts,
             key,
             primary,
             ..
-        })) => {
+        }))) => {
             let mut write_conflict = WriteConflict::default();
             write_conflict.set_start_ts(*start_ts);
             write_conflict.set_conflict_ts(*conflict_start_ts);
@@ -2691,28 +2695,35 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             // for compatibility with older versions.
             key_error.set_retryable(format!("{:?}", err));
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { key })) => {
+        storage::Error::Txn(TxnError::Mvcc(MvccError(box MvccErrorInner::AlreadyExist {
+            key,
+        }))) => {
             let mut exist = AlreadyExist::default();
             exist.set_key(key.clone());
             key_error.set_already_exist(exist);
         }
         // failed in commit
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
+        storage::Error::Txn(TxnError::Mvcc(MvccError(box MvccErrorInner::TxnLockNotFound {
+            ..
+        }))) => {
             warn!("txn conflicts"; "err" => ?err);
             key_error.set_retryable(format!("{:?}", err));
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnNotFound { start_ts, key })) => {
+        storage::Error::Txn(TxnError::Mvcc(MvccError(box MvccErrorInner::TxnNotFound {
+            start_ts,
+            key,
+        }))) => {
             let mut txn_not_found = TxnNotFound::default();
             txn_not_found.set_start_ts(*start_ts);
             txn_not_found.set_primary_key(key.to_owned());
             key_error.set_txn_not_found(txn_not_found);
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::Deadlock {
+        storage::Error::Txn(TxnError::Mvcc(MvccError(box MvccErrorInner::Deadlock {
             lock_ts,
             lock_key,
             deadlock_key_hash,
             ..
-        })) => {
+        }))) => {
             warn!("txn deadlocks"; "err" => ?err);
             let mut deadlock = Deadlock::default();
             deadlock.set_lock_ts(*lock_ts);
@@ -2720,12 +2731,12 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             deadlock.set_deadlock_key_hash(*deadlock_key_hash);
             key_error.set_deadlock(deadlock);
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::CommitTsExpired {
+        storage::Error::Txn(TxnError::Mvcc(MvccError(box MvccErrorInner::CommitTsExpired {
             start_ts,
             commit_ts,
             key,
             min_commit_ts,
-        })) => {
+        }))) => {
             let mut commit_ts_expired = CommitTsExpired::default();
             commit_ts_expired.set_start_ts(*start_ts);
             commit_ts_expired.set_attempted_commit_ts(*commit_ts);
@@ -2867,13 +2878,15 @@ mod tests {
         let conflict_commit_ts = 109;
         let key = b"key".to_vec();
         let primary = b"primary".to_vec();
-        let case = storage::Error::from(TxnError::from(MvccError::WriteConflict {
-            start_ts,
-            conflict_start_ts,
-            conflict_commit_ts,
-            key: key.clone(),
-            primary: primary.clone(),
-        }));
+        let case = storage::Error::from(TxnError::from(MvccError::from(
+            MvccErrorInner::WriteConflict {
+                start_ts,
+                conflict_start_ts,
+                conflict_commit_ts,
+                key: key.clone(),
+                primary: primary.clone(),
+            },
+        )));
         let mut expect = KeyError::default();
         let mut write_conflict = WriteConflict::default();
         write_conflict.set_start_ts(start_ts);

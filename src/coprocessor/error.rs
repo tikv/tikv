@@ -71,8 +71,12 @@ impl From<storage::kv::Error> for Error {
 impl From<storage::mvcc::Error> for Error {
     fn from(err: storage::mvcc::Error) -> Self {
         match err {
-            storage::mvcc::Error::KeyIsLocked(info) => Error::Locked(info),
-            storage::mvcc::Error::Engine(engine_error) => Error::from(engine_error),
+            storage::mvcc::Error(box storage::mvcc::ErrorInner::KeyIsLocked(info)) => {
+                Error::Locked(info)
+            }
+            storage::mvcc::Error(box storage::mvcc::ErrorInner::Engine(engine_error)) => {
+                Error::from(engine_error)
+            }
             e => Error::Other(e.to_string()),
         }
     }
