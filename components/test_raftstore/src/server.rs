@@ -134,8 +134,8 @@ impl Simulator for ServerCluster {
         let store = create_raft_storage(
             RaftKv::new(sim_router.clone()),
             &cfg.storage,
+            &cfg.gc,
             storage_read_pool,
-            None,
             None,
             None,
             None,
