@@ -49,6 +49,15 @@ pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
     }))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn reverse(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let s = String::from_utf8_lossy(bytes);
+        s.chars().rev().collect::<String>().as_bytes().to_vec()
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,6 +211,43 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate(ScalarFuncSig::Ascii)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_reverse() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(b"olleh".to_vec())),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some("库据数".as_bytes().to_vec()),
+            ),
+            (
+                Some("忠犬ハチ公".as_bytes().to_vec()),
+                Some("公チハ犬忠".as_bytes().to_vec()),
+            ),
+            (
+                Some("あなたのことが好きです".as_bytes().to_vec()),
+                Some("すでき好がとこのたなあ".as_bytes().to_vec()),
+            ),
+            (
+                Some("Bayern München".as_bytes().to_vec()),
+                Some("nehcnüM nreyaB".as_bytes().to_vec()),
+            ),
+            (
+                Some("Η Αθηνά  ".as_bytes().to_vec()),
+                Some("  άνηθΑ Η".as_bytes().to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::Reverse)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
