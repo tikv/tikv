@@ -11,8 +11,9 @@ use crate::storage::{kv::Error as EngineError, mvcc, txn};
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Engine(err: EngineError) {
+        Engine(err: Box<EngineError>) {
             from()
+            from(err: EngineError) -> (Box::new(err))
             cause(err)
             description(err.description())
         }

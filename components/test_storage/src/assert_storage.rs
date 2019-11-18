@@ -217,7 +217,7 @@ impl<E: Engine> AssertionStorage<E> {
                 ref e,
             ))))
             | storage::Error::Txn(box txn::Error::Engine(kv::Error::Request(ref e)))
-            | storage::Error::Engine(kv::Error::Request(ref e)) => {
+            | storage::Error::Engine(box kv::Error::Request(ref e)) => {
                 assert!(
                     e.has_not_leader() | e.has_stale_command(),
                     "invalid error {:?}",

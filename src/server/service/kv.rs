@@ -2629,7 +2629,7 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
     use crate::storage::Error;
     match *res {
         // TODO: use `Error::cause` instead.
-        Err(Error::Engine(EngineError::Request(ref e)))
+        Err(Error::Engine(box EngineError::Request(ref e)))
         | Err(Error::Txn(box TxnError::Engine(EngineError::Request(ref e))))
         | Err(Error::Txn(box TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
             Some(e.to_owned())
