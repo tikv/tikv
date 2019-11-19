@@ -15,6 +15,7 @@ use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::SnapManager;
 use crate::server::gc_worker::GCWorker;
 use crate::storage::lock_manager::LockManager;
@@ -29,7 +30,7 @@ use super::raft_client::RaftClient;
 use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
-use super::transport::{RaftStoreRouter, ServerTransport};
+use super::transport::ServerTransport;
 use super::{Config, Result};
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
@@ -269,7 +270,6 @@ mod tests {
     use super::*;
 
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};

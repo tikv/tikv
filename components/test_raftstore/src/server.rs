@@ -18,6 +18,7 @@ use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use tikv::raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
@@ -25,8 +26,6 @@ use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::lock_manager::{Config as PessimisticTxnConfig, LockManager};
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::service::DebugService;
-use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::transport::{RaftStoreBlackHole, RaftStoreRouter};
 use tikv::server::Result as ServerResult;
 use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv, Server,

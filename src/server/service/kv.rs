@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::coprocessor::Endpoint;
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::{Callback, CasualMessage};
 use crate::server::gc_worker::GCWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
-use crate::server::transport::RaftStoreRouter;
 use crate::server::Error;
 use crate::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use crate::storage::lock_manager::LockManager;

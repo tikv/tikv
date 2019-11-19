@@ -14,10 +14,10 @@ use kvproto::raft_cmdpb::{
 };
 use tokio_sync::oneshot;
 
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};
 use crate::server::gc_worker::GCWorker;
-use crate::server::transport::RaftStoreRouter;
 use crate::storage::kv::Engine;
 use tikv_util::metrics;
 

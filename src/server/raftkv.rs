@@ -20,9 +20,9 @@ use kvproto::raft_cmdpb::{
 
 use super::metrics::*;
 use crate::raftstore::errors::Error as RaftServerError;
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use crate::raftstore::store::{RegionIterator, RegionSnapshot};
-use crate::server::transport::RaftStoreRouter;
 use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Error as KvError, ErrorInner as KvErrorInner,
     Iterator as EngineIterator, Modify, ScanMode, Snapshot,
