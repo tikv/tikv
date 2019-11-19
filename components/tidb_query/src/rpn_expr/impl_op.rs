@@ -134,7 +134,13 @@ fn decimal_is_false(arg: &Option<Decimal>) -> Result<Option<i64>> {
 #[inline]
 fn left_shift(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
     Ok(match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => Some((*lhs as u64).checked_shl(*rhs as u32).unwrap_or(0) as i64),
+        (Some(lhs), Some(rhs)) => {
+            if *rhs as u64 >= 64 {
+                Some(0)
+            } else {
+                Some((*lhs as u64).wrapping_shl(*rhs as u32) as i64)
+            }
+        }
         _ => None,
     })
 }
