@@ -37,6 +37,10 @@ use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+<<<<<<< HEAD
+=======
+use crate::storage::gc_worker::GcConfig;
+>>>>>>> f9b91cdc... rename GC to Gc in gc_worker
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
@@ -1344,7 +1348,7 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
     pub import: ImportConfig,
     pub pessimistic_txn: PessimisticTxnConfig,
-    pub gc: GCConfig,
+    pub gc: GcConfig,
 }
 
 impl Default for TiKvConfig {
@@ -1366,7 +1370,7 @@ impl Default for TiKvConfig {
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
-            gc: GCConfig::default(),
+            gc: GcConfig::default(),
         }
     }
 }

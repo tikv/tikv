@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use kvproto::kvrpcpb::Context;
 use test_storage::new_raft_engine;
-use tikv::server::gc_worker::{GCWorker, GC_MAX_PENDING_TASKS};
+use tikv::server::gc_worker::{GcWorker, GC_MAX_PENDING_TASKS};
 use tikv::storage;
 
 #[test]
@@ -12,7 +12,7 @@ fn test_gcworker_busy() {
     let _guard = crate::setup();
     let snapshot_fp = "raftkv_async_snapshot";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
-    let mut gc_worker = GCWorker::new(engine, None, None, Default::default());
+    let mut gc_worker = GcWorker::new(engine, None, None, Default::default());
     gc_worker.start().unwrap();
 
     fail::cfg(snapshot_fp, "pause").unwrap();

@@ -39,7 +39,7 @@ use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use tikv::server::gc_worker::GCWorker;
+use tikv::server::gc_worker::GcWorker;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
 type SimulateServerTransport =
@@ -143,7 +143,7 @@ impl Simulator for ServerCluster {
 
         let engine = RaftKv::new(sim_router.clone());
 
-        let mut gc_worker = GCWorker::new(engine.clone(), None, None, cfg.gc.clone());
+        let mut gc_worker = GcWorker::new(engine.clone(), None, None, cfg.gc.clone());
         gc_worker.start().unwrap();
 
         let mut lock_mgr = LockManager::new();

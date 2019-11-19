@@ -28,7 +28,7 @@ use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use tikv::raftstore::store::{fsm, LocalReader};
 use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
-use tikv::server::gc_worker::{AutoGCConfig, GCWorker};
+use tikv::server::gc_worker::{AutoGcConfig, GcWorker};
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve;
 use tikv::server::service::{DebugService, DiagnosticsService};
@@ -187,7 +187,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         None
     };
 
-    let mut gc_worker = GCWorker::new(
+    let mut gc_worker = GcWorker::new(
         engine.clone(),
         Some(engines.kv.clone()),
         Some(raft_router.clone()),
@@ -345,7 +345,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
     // Start auto gc
-    let auto_gc_cfg = AutoGCConfig::new(
+    let auto_gc_cfg = AutoGcConfig::new(
         Arc::clone(&pd_client),
         region_info_accessor.clone(),
         node.id(),

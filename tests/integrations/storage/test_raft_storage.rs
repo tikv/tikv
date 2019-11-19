@@ -9,7 +9,7 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
-use tikv::server::gc_worker::{AutoGCConfig, GCConfig};
+use tikv::server::gc_worker::{AutoGcConfig, GcConfig};
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
@@ -269,7 +269,7 @@ fn test_auto_gc() {
         .storages
         .iter()
         .map(|(id, engine)| {
-            let mut config = GCConfig::default();
+            let mut config = GcConfig::default();
             // Do not skip GC
             config.ratio_threshold = 0.9;
             let storage = SyncTestStorageBuilder::from_engine(engine.clone())
@@ -286,7 +286,7 @@ fn test_auto_gc() {
     for (id, storage) in &mut storages {
         let tx = finish_signal_tx.clone();
 
-        let mut cfg = AutoGCConfig::new_test_cfg(
+        let mut cfg = AutoGcConfig::new_test_cfg(
             Arc::clone(&pd_client),
             region_info_accessors.remove(id).unwrap(),
             *id,

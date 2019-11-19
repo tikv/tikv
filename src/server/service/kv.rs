@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use crate::coprocessor::Endpoint;
 use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::{Callback, CasualMessage};
-use crate::server::gc_worker::GCWorker;
+use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
@@ -454,7 +454,7 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
     /// Used to handle requests related to GC.
-    gc_worker: GCWorker<E>,
+    gc_worker: GcWorker<E>,
     // For handling KV requests.
     storage: Storage<E, L>,
     // For handling coprocessor requests.
@@ -479,7 +479,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         storage: Storage<E, L>,
-        gc_worker: GCWorker<E>,
+        gc_worker: GcWorker<E>,
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
@@ -1611,7 +1611,7 @@ fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
 
 fn handle_batch_commands_request<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    gc_worker: &GCWorker<E>,
+    gc_worker: &GcWorker<E>,
     cop: &Endpoint<E>,
     peer: &str,
     id: u64,
@@ -2332,7 +2332,7 @@ fn future_resolve_lock<E: Engine, L: LockManager>(
 }
 
 fn future_gc<E: Engine>(
-    gc_worker: &GCWorker<E>,
+    gc_worker: &GcWorker<E>,
     mut req: GcRequest,
 ) -> impl Future<Item = GcResponse, Error = Error> {
     let (cb, f) = paired_future_callback();

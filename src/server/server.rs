@@ -17,7 +17,7 @@ use tokio_timer::timer::Handle;
 use crate::coprocessor::Endpoint;
 use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::SnapManager;
-use crate::server::gc_worker::GCWorker;
+use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
 use tikv_util::security::SecurityManager;
@@ -75,7 +75,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        gc_worker: GCWorker<E>,
+        gc_worker: GcWorker<E>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = ThreadPoolBuilder::new()
@@ -348,7 +348,7 @@ mod tests {
         cfg.addr = "127.0.0.1:0".to_owned();
 
         let storage = TestStorageBuilder::new().build().unwrap();
-        let mut gc_worker = GCWorker::new(storage.get_engine(), None, None, Default::default());
+        let mut gc_worker = GcWorker::new(storage.get_engine(), None, None, Default::default());
         gc_worker.start().unwrap();
 
         let (tx, rx) = mpsc::channel();

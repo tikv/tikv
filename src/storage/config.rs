@@ -25,7 +25,7 @@ const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub data_dir: String,
-    // Replaced by `GCConfig.ratio_threshold`. Keep it for backward compatibility.
+    // Replaced by `GcConfig.ratio_threshold`. Keep it for backward compatibility.
     pub gc_ratio_threshold: f64,
     pub max_key_size: usize,
     pub scheduler_concurrency: usize,
