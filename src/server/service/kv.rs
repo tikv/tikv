@@ -15,7 +15,7 @@ use crate::server::snap::Task as SnapTask;
 use crate::server::transport::RaftStoreRouter;
 use crate::server::Error;
 use crate::storage::kv::Error as EngineError;
-use crate::storage::lock_manager::LockMgr;
+use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
 use crate::storage::{
@@ -208,7 +208,7 @@ impl BatchLimiter {
 }
 
 /// Batcher buffers specific requests in one stream of `batch_commands` in a batch for bulk submit.
-trait Batcher<E: Engine, L: LockMgr> {
+trait Batcher<E: Engine, L: LockManager> {
     /// Try to batch single batch_command request, returns whether the request is stashed.
     /// One batcher must only process requests from one unique command stream.
     fn filter(
@@ -259,7 +259,7 @@ impl ReadBatcher {
     }
 
     fn is_batchable_context(ctx: &Context) -> bool {
-        storage::is_normal_priority(ctx.get_priority()) && !ctx.get_replica_read()
+        ctx.get_priority() == CommandPri::Normal && !ctx.get_replica_read()
     }
 
     fn add_get(&mut self, request_id: u64, request: &mut GetRequest) {
@@ -292,7 +292,7 @@ impl ReadBatcher {
     }
 }
 
-impl<E: Engine, L: LockMgr> Batcher<E, L> for ReadBatcher {
+impl<E: Engine, L: LockManager> Batcher<E, L> for ReadBatcher {
     fn filter(
         &mut self,
         request_id: u64,
@@ -347,12 +347,12 @@ type ReqBatcherInner<E, L> = (BatchLimiter, Box<dyn Batcher<E, L> + Send>);
 
 /// ReqBatcher manages multiple `Batcher`s which batch requests from one unique stream of `batch_commands`
 // and controls the submit timing of those batchers based on respective `BatchLimiter`.
-struct ReqBatcher<E: Engine, L: LockMgr> {
+struct ReqBatcher<E: Engine, L: LockManager> {
     inners: BTreeMap<BatchableRequestKind, ReqBatcherInner<E, L>>,
     tx: Sender<(u64, batch_commands_response::Response)>,
 }
 
-impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
+impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
     /// Constructs a new `ReqBatcher` which provides batching of one request stream with specific response channel.
     pub fn new(
         tx: Sender<(u64, batch_commands_response::Response)>,
@@ -449,7 +449,7 @@ impl<E: Engine, L: LockMgr> ReqBatcher<E, L> {
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
+pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
     /// Used to handle requests related to GC.
     gc_worker: GCWorker<E>,
     // For handling KV requests.
@@ -472,7 +472,7 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> {
     readpool_normal_thread_load: Arc<ThreadLoad>,
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
+impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         storage: Storage<E, L>,
@@ -517,7 +517,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Service<T, E, L> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine, L: LockMgr> Tikv for Service<T, E, L> {
+impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T, E, L> {
     fn kv_get(&mut self, ctx: RpcContext<'_>, req: GetRequest, sink: UnarySink<GetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
         let future = future_get(&self.storage, req)
@@ -1606,7 +1606,7 @@ fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
     notify.notify(0);
 }
 
-fn handle_batch_commands_request<E: Engine, L: LockMgr>(
+fn handle_batch_commands_request<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     gc_worker: &GCWorker<E>,
     cop: &Endpoint<E>,
@@ -1854,7 +1854,7 @@ fn future_handle_empty(
         .map_err(|_| unreachable!())
 }
 
-fn future_get<E: Engine, L: LockMgr>(
+fn future_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: GetRequest,
 ) -> impl Future<Item = GetResponse, Error = Error> {
@@ -1879,7 +1879,7 @@ fn future_get<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_batch_get_command<E: Engine, L: LockMgr>(
+fn future_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
     requests: Vec<u64>,
@@ -1933,7 +1933,7 @@ fn future_batch_get_command<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_scan<E: Engine, L: LockMgr>(
+fn future_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: ScanRequest,
 ) -> impl Future<Item = ScanResponse, Error = Error> {
@@ -1967,7 +1967,7 @@ fn future_scan<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_prewrite<E: Engine, L: LockMgr>(
+fn future_prewrite<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: PrewriteRequest,
 ) -> impl Future<Item = PrewriteResponse, Error = Error> {
@@ -2011,7 +2011,7 @@ fn future_prewrite<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_acquire_pessimistic_lock<E: Engine, L: LockMgr>(
+fn future_acquire_pessimistic_lock<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: PessimisticLockRequest,
 ) -> impl Future<Item = PessimisticLockResponse, Error = Error> {
@@ -2053,7 +2053,7 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_pessimistic_rollback<E: Engine, L: LockMgr>(
+fn future_pessimistic_rollback<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: PessimisticRollbackRequest,
 ) -> impl Future<Item = PessimisticRollbackResponse, Error = Error> {
@@ -2078,7 +2078,7 @@ fn future_pessimistic_rollback<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_commit<E: Engine, L: LockMgr>(
+fn future_commit<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: CommitRequest,
 ) -> impl Future<Item = CommitResponse, Error = Error> {
@@ -2107,7 +2107,7 @@ fn future_commit<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_cleanup<E: Engine, L: LockMgr>(
+fn future_cleanup<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: CleanupRequest,
 ) -> impl Future<Item = CleanupResponse, Error = Error> {
@@ -2135,7 +2135,7 @@ fn future_cleanup<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_batch_get<E: Engine, L: LockMgr>(
+fn future_batch_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: BatchGetRequest,
 ) -> impl Future<Item = BatchGetResponse, Error = Error> {
@@ -2153,7 +2153,7 @@ fn future_batch_get<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_batch_rollback<E: Engine, L: LockMgr>(
+fn future_batch_rollback<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: BatchRollbackRequest,
 ) -> impl Future<Item = BatchRollbackResponse, Error = Error> {
@@ -2173,7 +2173,7 @@ fn future_batch_rollback<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_txn_heart_beat<E: Engine, L: LockMgr>(
+fn future_txn_heart_beat<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: TxnHeartBeatRequest,
 ) -> impl Future<Item = TxnHeartBeatResponse, Error = Error> {
@@ -2208,7 +2208,7 @@ fn future_txn_heart_beat<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_check_txn_status<E: Engine, L: LockMgr>(
+fn future_check_txn_status<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: CheckTxnStatusRequest,
 ) -> impl Future<Item = CheckTxnStatusResponse, Error = Error> {
@@ -2254,7 +2254,7 @@ fn future_check_txn_status<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_scan_lock<E: Engine, L: LockMgr>(
+fn future_scan_lock<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: ScanLockRequest,
 ) -> impl Future<Item = ScanLockResponse, Error = Error> {
@@ -2281,7 +2281,7 @@ fn future_scan_lock<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_resolve_lock<E: Engine, L: LockMgr>(
+fn future_resolve_lock<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: ResolveLockRequest,
 ) -> impl Future<Item = ResolveLockResponse, Error = Error> {
@@ -2342,7 +2342,7 @@ fn future_gc<E: Engine>(
     })
 }
 
-fn future_delete_range<E: Engine, L: LockMgr>(
+fn future_delete_range<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: DeleteRangeRequest,
 ) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
@@ -2366,7 +2366,7 @@ fn future_delete_range<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_raw_get<E: Engine, L: LockMgr>(
+fn future_raw_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawGetRequest,
 ) -> impl Future<Item = RawGetResponse, Error = Error> {
@@ -2387,7 +2387,7 @@ fn future_raw_get<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_raw_batch_get_command<E: Engine, L: LockMgr>(
+fn future_raw_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
     requests: Vec<u64>,
@@ -2444,7 +2444,7 @@ fn future_raw_batch_get_command<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_raw_batch_get<E: Engine, L: LockMgr>(
+fn future_raw_batch_get<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawBatchGetRequest,
 ) -> impl Future<Item = RawBatchGetResponse, Error = Error> {
@@ -2462,7 +2462,7 @@ fn future_raw_batch_get<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_raw_put<E: Engine, L: LockMgr>(
+fn future_raw_put<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawPutRequest,
 ) -> impl Future<Item = RawPutResponse, Error = Error> {
@@ -2486,7 +2486,7 @@ fn future_raw_put<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_raw_batch_put<E: Engine, L: LockMgr>(
+fn future_raw_batch_put<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawBatchPutRequest,
 ) -> impl Future<Item = RawBatchPutResponse, Error = Error> {
@@ -2511,7 +2511,7 @@ fn future_raw_batch_put<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_raw_delete<E: Engine, L: LockMgr>(
+fn future_raw_delete<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawDeleteRequest,
 ) -> impl Future<Item = RawDeleteResponse, Error = Error> {
@@ -2529,7 +2529,7 @@ fn future_raw_delete<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_raw_batch_delete<E: Engine, L: LockMgr>(
+fn future_raw_batch_delete<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawBatchDeleteRequest,
 ) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
@@ -2549,7 +2549,7 @@ fn future_raw_batch_delete<E: Engine, L: LockMgr>(
     })
 }
 
-fn future_raw_scan<E: Engine, L: LockMgr>(
+fn future_raw_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawScanRequest,
 ) -> impl Future<Item = RawScanResponse, Error = Error> {
@@ -2579,7 +2579,7 @@ fn future_raw_scan<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_raw_batch_scan<E: Engine, L: LockMgr>(
+fn future_raw_batch_scan<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawBatchScanRequest,
 ) -> impl Future<Item = RawBatchScanResponse, Error = Error> {
@@ -2603,7 +2603,7 @@ fn future_raw_batch_scan<E: Engine, L: LockMgr>(
         })
 }
 
-fn future_raw_delete_range<E: Engine, L: LockMgr>(
+fn future_raw_delete_range<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: RawDeleteRangeRequest,
 ) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
