@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::future::{ok, err};
+use futures::future::{err, ok};
 use futures::sync::oneshot::{Receiver, Sender};
 use futures::{self, Future};
 use hyper::service::service_fn;
@@ -51,8 +51,8 @@ impl StatusServer {
     }
 
     fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
-        where
-            T: Into<Body>,
+    where
+        T: Into<Body>,
     {
         Response::builder()
             .status(status_code)
@@ -113,10 +113,10 @@ impl StatusServer {
                                         .report()
                                         .frames_post_processor(Self::frames_post_processor())
                                         .build()
-                                        {
-                                            Ok(report) => ok(report),
-                                            Err(e) => err(e),
-                                        },
+                                    {
+                                        Ok(report) => ok(report),
+                                        Err(e) => err(e),
+                                    },
                                 )
                             },
                         ),
