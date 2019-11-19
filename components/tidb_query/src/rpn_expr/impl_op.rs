@@ -63,6 +63,39 @@ pub fn is_null<T: Evaluable>(arg: &Option<T>) -> Result<Option<i64>> {
 
 #[rpn_fn]
 #[inline]
+pub fn bit_and(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
+    Ok(match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => Some(lhs & rhs),
+        _ => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
+pub fn bit_or(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
+    Ok(match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => Some(lhs | rhs),
+        _ => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
+pub fn bit_xor(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
+    Ok(match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => Some(lhs ^ rhs),
+        _ => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
+pub fn bit_neg(arg: &Option<Int>) -> Result<Option<Int>> {
+    Ok(arg.map(|arg| !arg))
+}
+
+#[rpn_fn]
+#[inline]
 pub fn int_is_true(arg: &Option<Int>) -> Result<Option<i64>> {
     Ok(Some(arg.map_or(0, |v| (v != 0) as i64)))
 }
@@ -95,6 +128,15 @@ pub fn real_is_false(arg: &Option<Real>) -> Result<Option<i64>> {
 #[inline]
 fn decimal_is_false(arg: &Option<Decimal>) -> Result<Option<i64>> {
     Ok(Some(arg.as_ref().map_or(0, |v| v.is_zero() as i64)))
+}
+
+#[rpn_fn]
+#[inline]
+fn left_shift(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
+    Ok(match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => Some((*lhs as u64).checked_shl(*rhs as u32).unwrap_or(0) as i64),
+        _ => None,
+    })
 }
 
 #[cfg(test)]
@@ -280,6 +322,80 @@ mod tests {
     }
 
     #[test]
+    fn test_bit_and() {
+        let cases = vec![
+            (Some(123), Some(321), Some(65)),
+            (Some(-123), Some(321), Some(257)),
+            (None, Some(1), None),
+            (Some(1), None, None),
+            (None, None, None),
+        ];
+        for (lhs, rhs, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::BitAndSig)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_bit_or() {
+        let cases = vec![
+            (Some(123), Some(321), Some(379)),
+            (Some(-123), Some(321), Some(-59)),
+            (None, Some(1), None),
+            (Some(1), None, None),
+            (None, None, None),
+        ];
+        for (lhs, rhs, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::BitOrSig)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_bit_xor() {
+        let cases = vec![
+            (Some(123), Some(321), Some(314)),
+            (Some(-123), Some(321), Some(-316)),
+            (None, Some(1), None),
+            (Some(1), None, None),
+            (None, None, None),
+        ];
+        for (lhs, rhs, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::BitXorSig)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_bit_neg() {
+        let cases = vec![
+            (Some(123), Some(-124)),
+            (Some(-123), Some(122)),
+            (Some(0), Some(-1)),
+            (None, None),
+        ];
+        for (arg, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::BitNegSig)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
     fn test_is_true() {
         let test_cases = vec![
             (ScalarValue::Int(None), ScalarFuncSig::IntIsTrue, Some(0)),
@@ -344,6 +460,27 @@ mod tests {
                 .evaluate(sig)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}, {:?}", arg, sig);
+        }
+    }
+
+    #[test]
+    fn test_left_shift() {
+        let cases = vec![
+            (Some(123), Some(2), Some(492)),
+            (Some(-123), Some(-1), Some(0)),
+            (Some(123), Some(0), Some(123)),
+            (None, Some(1), None),
+            (Some(123), None, None),
+            (Some(-123), Some(60), Some(5764607523034234880)),
+            (None, None, None),
+        ];
+        for (lhs, rhs, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::LeftShift)
+                .unwrap();
+            assert_eq!(output, expected);
         }
     }
 }

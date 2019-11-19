@@ -201,7 +201,13 @@ impl<E: Engine> Store<E> {
     /// Directly creates a `SnapshotStore` over current committed data.
     pub fn to_snapshot_store(&self) -> SnapshotStore<E::Snap> {
         let snapshot = self.get_engine().snapshot(&Context::default()).unwrap();
-        SnapshotStore::new(snapshot, self.last_committed_ts, IsolationLevel::Si, true)
+        SnapshotStore::new(
+            snapshot,
+            self.last_committed_ts,
+            IsolationLevel::Si,
+            true,
+            Default::default(),
+        )
     }
 
     /// Strip off committed MVCC information to create a `FixtureStore`.

@@ -5,6 +5,48 @@ use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::Result;
 
+#[rpn_fn]
+#[inline]
+pub fn pi() -> Result<Option<Real>> {
+    Ok(Some(Real::from(std::f64::consts::PI)))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| f64_to_real(n.ln())))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
+    Ok(match (arg0, arg1) {
+        (Some(base), Some(n)) => f64_to_real(n.log(**base)),
+        _ => None,
+    })
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log2(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| f64_to_real(n.log2())))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn log10(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| f64_to_real(n.log10())))
+}
+
+// If the given f64 is finite, returns `Some(Real)`. Otherwise returns None.
+fn f64_to_real(n: f64) -> Option<Real> {
+    if n.is_finite() {
+        Some(Real::from(n))
+    } else {
+        None
+    }
+}
+
 #[inline]
 #[rpn_fn(capture = [ctx])]
 pub fn ceil<C: Ceil>(ctx: &mut EvalContext, arg: &Option<C::Input>) -> Result<Option<C::Output>> {
@@ -180,13 +222,204 @@ fn abs_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
     }
 }
 
+#[inline]
+#[rpn_fn]
+fn sign(arg: &Option<Real>) -> Result<Option<Int>> {
+    Ok(arg.and_then(|n| {
+        if *n > 0f64 {
+            Some(1)
+        } else if *n == 0f64 {
+            Some(0)
+        } else {
+            Some(-1)
+        }
+    }))
+}
+
+#[inline]
+#[rpn_fn]
+fn sqrt(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| {
+        if *n < 0f64 {
+            None
+        } else {
+            let res = n.sqrt();
+            if res.is_nan() {
+                None
+            } else {
+                Some(Real::from(res))
+            }
+        }
+    }))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn exp(arg: &Option<Real>) -> Result<Option<Real>> {
+    match arg {
+        Some(x) => {
+            let ret = x.exp();
+            if ret.is_infinite() {
+                Err(Error::overflow("DOUBLE", &format!("exp({})", x)).into())
+            } else {
+                Ok(Real::new(ret).ok())
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+fn sin(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map_or(None, |arg| Real::new(arg.sin()).ok()))
+}
+
+#[inline]
+#[rpn_fn]
+fn cos(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map_or(None, |arg| Real::new(arg.cos()).ok()))
+}
+
+#[inline]
+#[rpn_fn]
+fn tan(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map_or(None, |arg| Real::new(arg.tan()).ok()))
+}
+
+#[inline]
+#[rpn_fn]
+fn cot(arg: &Option<Real>) -> Result<Option<Real>> {
+    match arg {
+        Some(arg) => {
+            let tan = arg.tan();
+            let cot = tan.recip();
+            if cot.is_infinite() {
+                Err(Error::overflow("DOUBLE", format!("cot({})", arg)).into())
+            } else {
+                Ok(Real::new(cot).ok())
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn asin(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map_or(None, |arg| Real::new(arg.asin()).ok()))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn acos(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map_or(None, |arg| Real::new(arg.acos()).ok()))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn atan_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map_or(None, |arg| Real::new(arg.atan()).ok()))
+}
+
+#[inline]
+#[rpn_fn]
+pub fn atan_2_args(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
+    Ok(match (arg0, arg1) {
+        (Some(arg0), Some(arg1)) => Real::new(arg0.atan2(arg1.into_inner())).ok(),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+
+    #[test]
+    fn test_pi() {
+        let output = RpnFnScalarEvaluator::new()
+            .evaluate(ScalarFuncSig::Pi)
+            .unwrap();
+        assert_eq!(output, Some(Real::from(std::f64::consts::PI)));
+    }
+
+    #[test]
+    fn test_log_1_arg() {
+        let test_cases = vec![
+            (Some(std::f64::consts::E), Some(Real::from(1.0_f64))),
+            (Some(100.0), Some(Real::from(4.605170185988092_f64))),
+            (Some(-1.0), None),
+            (Some(0.0), None),
+            (None, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Log1Arg)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_log_2_arg() {
+        let test_cases = vec![
+            (Some(10.0_f64), Some(100.0_f64), Some(Real::from(2.0_f64))),
+            (Some(2.0_f64), Some(1.0_f64), Some(Real::from(0.0_f64))),
+            (Some(0.5_f64), Some(0.25_f64), Some(Real::from(2.0_f64))),
+            (Some(-0.23323_f64), Some(2.0_f64), None),
+            (None, None, None),
+            (Some(2.0_f64), None, None),
+            (None, Some(2.0_f64), None),
+        ];
+        for (a1, a2, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(a1)
+                .push_param(a2)
+                .evaluate(ScalarFuncSig::Log2Args)
+                .unwrap();
+            assert_eq!(output, expect, "arg1 {:?}, arg2 {:?}", a1, a2);
+        }
+    }
+
+    #[test]
+    fn test_log2() {
+        let test_cases = vec![
+            (Some(16_f64), Some(Real::from(4_f64))),
+            (Some(5_f64), Some(Real::from(2.321928094887362_f64))),
+            (Some(-1.234_f64), None),
+            (Some(0_f64), None),
+            (None, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Log2)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_log10() {
+        let test_cases = vec![
+            (Some(100_f64), Some(Real::from(2_f64))),
+            (Some(101_f64), Some(Real::from(2.0043213737826426_f64))),
+            (Some(-1.234_f64), None),
+            (Some(0_f64), None),
+            (None, None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Log10)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}", input);
+        }
+    }
 
     #[test]
     fn test_abs_int() {
@@ -435,5 +668,300 @@ mod tests {
         }
 
         test_unary_func_ok_none::<Int, Int>(ScalarFuncSig::FloorIntToInt);
+    }
+
+    #[test]
+    fn test_sign() {
+        let test_cases = vec![
+            (None, None),
+            (Some(42f64), Some(1)),
+            (Some(0f64), Some(0)),
+            (Some(-47f64), Some(-1)),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Sign)
+                .unwrap();
+            assert_eq!(expect, output, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_sqrt() {
+        let test_cases = vec![
+            (None, None),
+            (Some(64f64), Some(Real::from(8f64))),
+            (Some(2f64), Some(Real::from(std::f64::consts::SQRT_2))),
+            (Some(-16f64), None),
+            (Some(std::f64::NAN), None),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Sqrt)
+                .unwrap();
+            assert_eq!(expect, output, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_exp() {
+        let tests = vec![
+            (1_f64, std::f64::consts::E),
+            (1.23_f64, 3.4212295362896734),
+            (-1.23_f64, 0.2922925776808594),
+            (0_f64, 1_f64),
+        ];
+        for (x, expected) in tests {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(x)))
+                .evaluate(ScalarFuncSig::Exp)
+                .unwrap();
+            assert_eq!(output, Some(Real::from(expected)));
+        }
+        test_unary_func_ok_none::<Real, Real>(ScalarFuncSig::Exp);
+
+        let overflow_tests = vec![100000_f64];
+        for x in overflow_tests {
+            let output: Result<Option<Real>> = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(x)))
+                .evaluate(ScalarFuncSig::Exp);
+            assert!(output.is_err());
+        }
+    }
+
+    #[test]
+    fn test_sin() {
+        let valid_test_cases = vec![
+            (0.0_f64, 0.0_f64),
+            (
+                std::f64::consts::PI / 4.0_f64,
+                std::f64::consts::FRAC_1_SQRT_2,
+            ),
+            (std::f64::consts::PI / 2.0_f64, 1.0_f64),
+            (std::f64::consts::PI, 0.0_f64),
+        ];
+        for (input, expect) in valid_test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(input)))
+                .evaluate(ScalarFuncSig::Sin)
+                .unwrap();
+            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_cos() {
+        let test_cases = vec![
+            (0f64, 1f64),
+            (std::f64::consts::PI / 2f64, 0f64),
+            (std::f64::consts::PI, -1f64),
+            (-std::f64::consts::PI, -1f64),
+        ];
+        for (input, expect) in test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(input)))
+                .evaluate(ScalarFuncSig::Cos)
+                .unwrap();
+            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_tan() {
+        let test_cases = vec![
+            (0.0_f64, 0.0_f64),
+            (std::f64::consts::PI / 4.0_f64, 1.0_f64),
+            (-std::f64::consts::PI / 4.0_f64, -1.0_f64),
+            (std::f64::consts::PI, 0.0_f64),
+            (
+                (std::f64::consts::PI * 3.0) / 4.0,
+                f64::tan((std::f64::consts::PI * 3.0) / 4.0), //in mysql and rust, it equals -1.0000000000000002, not -1
+            ),
+        ];
+        for (input, expect) in test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(input)))
+                .evaluate(ScalarFuncSig::Tan)
+                .unwrap();
+            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_cot() {
+        let test_cases = vec![
+            (-1.0_f64, -0.6420926159343308_f64),
+            (1.0_f64, 0.6420926159343308_f64),
+            (
+                std::f64::consts::PI / 4.0_f64,
+                1.0_f64 / f64::tan(std::f64::consts::PI / 4.0_f64),
+            ),
+            (
+                std::f64::consts::PI / 2.0_f64,
+                1.0_f64 / f64::tan(std::f64::consts::PI / 2.0_f64),
+            ),
+            (
+                std::f64::consts::PI,
+                1.0_f64 / f64::tan(std::f64::consts::PI),
+            ),
+        ];
+        for (input, expect) in test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(input)))
+                .evaluate(ScalarFuncSig::Cot)
+                .unwrap();
+            assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+        }
+        assert!(RpnFnScalarEvaluator::new()
+            .push_param(Some(Real::from(0.0_f64)))
+            .evaluate::<Real>(ScalarFuncSig::Cot)
+            .is_err());
+    }
+
+    #[test]
+    fn test_asin() {
+        let test_cases = vec![
+            (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
+            (
+                Some(Real::from(1.0_f64)),
+                Some(Real::from(std::f64::consts::PI / 2.0_f64)),
+            ),
+            (
+                Some(Real::from(-1.0_f64)),
+                Some(Real::from(-std::f64::consts::PI / 2.0_f64)),
+            ),
+            (
+                Some(Real::from(std::f64::consts::SQRT_2 / 2.0_f64)),
+                Some(Real::from(std::f64::consts::PI / 4.0_f64)),
+            ),
+        ];
+        for (input, expect) in test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Asin)
+                .unwrap();
+            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+        }
+        let invalid_test_cases = vec![
+            (Some(Real::from(std::f64::INFINITY)), None),
+            (Some(Real::from(2.0_f64)), None),
+            (Some(Real::from(-2.0_f64)), None),
+        ];
+        for (input, expect) in invalid_test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Asin)
+                .unwrap();
+            assert_eq!(expect, output);
+        }
+    }
+
+    #[test]
+    fn test_acos() {
+        let test_cases = vec![
+            (
+                Some(Real::from(0.0_f64)),
+                Some(Real::from(std::f64::consts::PI / 2.0_f64)),
+            ),
+            (Some(Real::from(1.0_f64)), Some(Real::from(0.0_f64))),
+            (
+                Some(Real::from(-1.0_f64)),
+                Some(Real::from(std::f64::consts::PI)),
+            ),
+            (
+                Some(Real::from(std::f64::consts::SQRT_2 / 2.0_f64)),
+                Some(Real::from(std::f64::consts::PI / 4.0_f64)),
+            ),
+        ];
+        for (input, expect) in test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Acos)
+                .unwrap();
+            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+        }
+        let invalid_test_cases = vec![
+            (Some(Real::from(std::f64::INFINITY)), None),
+            (Some(Real::from(2.0_f64)), None),
+            (Some(Real::from(-2.0_f64)), None),
+        ];
+        for (input, expect) in invalid_test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Acos)
+                .unwrap();
+            assert_eq!(expect, output);
+        }
+    }
+
+    #[test]
+    fn test_atan_1_arg() {
+        let test_cases = vec![
+            (
+                Some(Real::from(1.0_f64)),
+                Some(Real::from(std::f64::consts::PI / 4.0_f64)),
+            ),
+            (
+                Some(Real::from(-1.0_f64)),
+                Some(Real::from(-std::f64::consts::PI / 4.0_f64)),
+            ),
+            (
+                Some(Real::from(std::f64::MAX)),
+                Some(Real::from(std::f64::consts::PI / 2.0_f64)),
+            ),
+            (
+                Some(Real::from(std::f64::MIN)),
+                Some(Real::from(-std::f64::consts::PI / 2.0_f64)),
+            ),
+            (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
+        ];
+        for (input, expect) in test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Atan1Arg)
+                .unwrap();
+            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_atan_2_args() {
+        let test_cases = vec![
+            (
+                Some(Real::from(0.0_f64)),
+                Some(Real::from(0.0_f64)),
+                Some(Real::from(0.0_f64)),
+            ),
+            (
+                Some(Real::from(0.0_f64)),
+                Some(Real::from(-1.0_f64)),
+                Some(Real::from(std::f64::consts::PI)),
+            ),
+            (
+                Some(Real::from(1.0_f64)),
+                Some(Real::from(-1.0_f64)),
+                Some(Real::from(3.0_f64 * std::f64::consts::PI / 4.0_f64)),
+            ),
+            (
+                Some(Real::from(-1.0_f64)),
+                Some(Real::from(1.0_f64)),
+                Some(Real::from(-std::f64::consts::PI / 4.0_f64)),
+            ),
+            (
+                Some(Real::from(1.0_f64)),
+                Some(Real::from(0.0_f64)),
+                Some(Real::from(std::f64::consts::PI / 2.0_f64)),
+            ),
+        ];
+        for (arg0, arg1, expect) in test_cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(ScalarFuncSig::Atan2Args)
+                .unwrap();
+            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+        }
     }
 }

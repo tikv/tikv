@@ -198,7 +198,13 @@ impl TestSuite {
         let sim = self.cluster.sim.rl();
         let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
         let snapshot = engine.snapshot(&self.context.clone()).unwrap();
-        let snap_store = SnapshotStore::new(snapshot, backup_ts, IsolationLevel::Si, false);
+        let snap_store = SnapshotStore::new(
+            snapshot,
+            backup_ts,
+            IsolationLevel::Si,
+            false,
+            Default::default(),
+        );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
             storage: TiKVStorage::from(snap_store),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
