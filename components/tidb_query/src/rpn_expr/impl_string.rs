@@ -5,6 +5,8 @@ use tidb_query_codegen::rpn_fn;
 use crate::codec::data_type::*;
 use crate::Result;
 
+const SPACE: u8 = 0o40u8;
+
 #[rpn_fn]
 #[inline]
 pub fn bin(num: &Option<Int>) -> Result<Option<Bytes>> {
@@ -62,6 +64,19 @@ pub fn reverse(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 #[inline]
 pub fn hex_int_arg(arg: &Option<Int>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|i| format!("{:X}", i).into_bytes()))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn ltrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let pos = bytes.iter().position(|&x| x != SPACE);
+        if let Some(i) = pos {
+            bytes[i..].to_vec()
+        } else {
+            b"".to_vec()
+        }
+    }))
 }
 
 #[cfg(test)]
@@ -276,6 +291,40 @@ mod tests {
                 .evaluate(ScalarFuncSig::HexIntArg)
                 .unwrap();
             assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_ltrim() {
+        let test_cases = vec![
+            (None, None),
+            (Some("   bar   "), Some("bar   ")),
+            (Some("   b   ar   "), Some("b   ar   ")),
+            (Some("bar"), Some("bar")),
+            (Some("    "), Some("")),
+            (Some("\t  bar"), Some("\t  bar")),
+            (Some("\r  bar"), Some("\r  bar")),
+            (Some("\n  bar"), Some("\n  bar")),
+            (Some("  \tbar"), Some("\tbar")),
+            (Some(""), Some("")),
+            (Some("  你好"), Some("你好")),
+            (Some("  你  好"), Some("你  好")),
+            (
+                Some("  분산 데이터베이스    "),
+                Some("분산 데이터베이스    "),
+            ),
+            (
+                Some("   あなたのことが好きです   "),
+                Some("あなたのことが好きです   "),
+            ),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::LTrim)
+                .unwrap();
+            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
         }
     }
 }
