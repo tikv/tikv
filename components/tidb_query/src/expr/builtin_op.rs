@@ -180,14 +180,22 @@ impl ScalarFunc {
     pub fn left_shift(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
-        let ret = (lhs as u64).checked_shl(rhs as u32).unwrap_or(0);
+        let ret = if rhs as u64 >= 64 {
+            0
+        } else {
+            (lhs as u64).wrapping_shl(rhs as u32)
+        };
         Ok(Some(ret as i64))
     }
 
     pub fn right_shift(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
-        let ret = (lhs as u64).checked_shr(rhs as u32).unwrap_or(0);
+        let ret = if rhs as u64 >= 64 {
+            0
+        } else {
+            (lhs as u64).wrapping_shr(rhs as u32)
+        };
         Ok(Some(ret as i64))
     }
 }
