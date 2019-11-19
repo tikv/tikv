@@ -4,13 +4,14 @@
 
 use std::cmp::Ordering;
 
+use keys::Key;
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Result, TimeStamp, WriteRef};
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
-use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics};
+use crate::storage::{Cursor, Lock, Snapshot, Statistics};
 
 use super::ScannerConfig;
 

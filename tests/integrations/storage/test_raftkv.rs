@@ -9,9 +9,10 @@ use raft::eraftpb::MessageType;
 
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
+use keys::Key;
 use test_raftstore::*;
 use tikv::storage::kv::*;
-use tikv::storage::{CFStatistics, Key};
+use tikv::storage::CFStatistics;
 use tikv_util::codec::bytes;
 use tikv_util::HandyRwLock;
 

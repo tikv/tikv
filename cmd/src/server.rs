@@ -178,11 +178,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let engine = RaftKv::new(raft_router.clone());
 
-    let storage_read_pool = storage::readpool_impl::build_read_pool(
-        &cfg.readpool.storage,
-        pd_sender.clone(),
-        engine.clone(),
-    );
+    let storage_read_pool =
+        storage::build_read_pool(&cfg.readpool.storage, pd_sender.clone(), engine.clone());
 
     let mut lock_mgr = if cfg.pessimistic_txn.enabled {
         Some(LockManager::new())

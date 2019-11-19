@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::IsolationLevel;
-
 use crate::storage::mvcc::write::{WriteRef, WriteType};
 use crate::storage::mvcc::{default_not_found_error, Lock, Result, TimeStamp, TsSet};
-use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value, CF_LOCK};
+use crate::storage::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics, CF_LOCK};
 use crate::storage::{CF_DEFAULT, CF_WRITE};
+use keys::{Key, Value};
+use kvproto::kvrpcpb::IsolationLevel;
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {

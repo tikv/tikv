@@ -3,10 +3,10 @@
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::Range;
 use engine::CF_WRITE;
+use keys::Key as MvccKey;
 use test_raftstore::*;
 use tikv::raftstore::store::keys::{data_key, DATA_MAX_KEY};
 use tikv::storage::mvcc::{TimeStamp, Write, WriteType};
-use tikv::storage::types::Key as MvccKey;
 use tikv_util::config::*;
 
 fn gen_mvcc_put_kv(

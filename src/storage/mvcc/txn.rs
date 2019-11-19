@@ -7,9 +7,9 @@ use super::write::{Write, WriteType};
 use super::{ErrorInner, Result, TimeStamp};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
-    is_short_value, Key, Mutation, Options, Statistics, TxnStatus, Value, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    is_short_value, Mutation, Options, Statistics, TxnStatus, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
+use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
 

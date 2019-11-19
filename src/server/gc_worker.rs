@@ -31,7 +31,8 @@ use crate::storage::kv::{
 };
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
-use crate::storage::{Callback, Error, ErrorInner, Key, Result};
+use crate::storage::{Callback, Error, ErrorInner, Result};
+use keys::Key;
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};

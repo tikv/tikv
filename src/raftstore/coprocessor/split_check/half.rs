@@ -176,7 +176,7 @@ mod tests {
 
     use crate::raftstore::coprocessor::properties::RangePropertiesCollectorFactory;
     use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::Key;
+    use keys::Key;
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;
     use tikv_util::worker::Runnable;

@@ -263,7 +263,7 @@ mod tests {
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::raftstore::store::keys::data_key;
     use crate::storage::mvcc::{TimeStamp, Write, WriteType};
-    use crate::storage::types::Key as MvccKey;
+    use keys::Key as MvccKey;
 
     use super::*;
 

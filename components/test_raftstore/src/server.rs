@@ -137,7 +137,7 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let storage_read_pool = storage::readpool_impl::build_read_pool_for_test(
+        let storage_read_pool = storage::build_read_pool_for_test(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
             raft_engine.clone(),
         );

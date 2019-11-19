@@ -396,7 +396,7 @@ mod tests {
     use crate::storage::mvcc::ScannerBuilder;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::txn::Scanner;
-    use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
+    use crate::storage::{CFStatistics, Cursor, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
     use engine::rocks::{IngestExternalFileOptions, Writable};
@@ -407,6 +407,7 @@ mod tests {
     use engine_rocks::RocksIOLimiter;
     use engine_rocks::{RocksSnapshot, RocksSstWriterBuilder};
     use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
+    use keys::Key;
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;
 

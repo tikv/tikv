@@ -6,10 +6,9 @@ use crate::storage::{
     mvcc::{Lock, TimeStamp, Write},
     Callback, Command, Error as StorageError, Result,
 };
+use keys::{Key, Value};
 use kvproto::kvrpcpb::LockInfo;
 use std::fmt::Debug;
-
-pub use keys::{Key, KvPair, Value};
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.

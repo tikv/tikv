@@ -350,10 +350,10 @@ pub mod tests {
     use crate::raftstore::store::{
         keys, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask,
     };
-    use crate::storage::Key;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use keys::Key;
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;

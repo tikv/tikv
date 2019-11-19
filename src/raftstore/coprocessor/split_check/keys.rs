@@ -217,12 +217,12 @@ mod tests {
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};
     use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::mvcc::{TimeStamp, Write, WriteType};
-    use crate::storage::Key;
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
     use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use keys::Key;
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;

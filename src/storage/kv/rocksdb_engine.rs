@@ -18,10 +18,11 @@ use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::RocksEngineIterator;
 use engine_traits::{Iterable, Iterator, Peekable, SeekKey};
+use keys::{Key, Value};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 
-use crate::storage::{BlockCacheConfig, Key, Value};
+use crate::storage::BlockCacheConfig;
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 

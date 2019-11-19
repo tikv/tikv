@@ -8,7 +8,8 @@ use crate::storage::mvcc::{
     ScannerBuilder, WriteRef,
 };
 use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TimeStamp, TsSet};
-use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
+use crate::storage::{Snapshot, Statistics};
+use keys::{Key, KvPair, Value};
 
 use super::{Error, ErrorInner, Result};
 

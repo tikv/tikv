@@ -6,9 +6,9 @@ use crate::storage::mvcc::lock::Lock;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{default_not_found_error, WriteRef};
 use crate::storage::mvcc::{Result, TimeStamp};
-use crate::storage::{Key, Value};
 use engine::IterOption;
 use engine::{CF_LOCK, CF_WRITE};
+use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;

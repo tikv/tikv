@@ -37,9 +37,8 @@ use crate::raftstore::store::{
 use crate::raftstore::store::{keys, PeerStorage};
 use crate::server::gc_worker::GCWorker;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use crate::storage::types::Key;
-use crate::storage::Engine;
-use crate::storage::Iterator as EngineIterator;
+use crate::storage::{Engine, Iterator as EngineIterator};
+use keys::Key;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;

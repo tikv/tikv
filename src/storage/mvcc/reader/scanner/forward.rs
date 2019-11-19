@@ -3,12 +3,13 @@
 use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
+use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{WriteRef, WriteType};
 use crate::storage::mvcc::{Result, TimeStamp};
-use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
+use crate::storage::{Cursor, Lock, Snapshot, Statistics};
 
 use super::ScannerConfig;
 

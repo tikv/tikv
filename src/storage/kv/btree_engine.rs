@@ -9,13 +9,13 @@ use std::sync::{Arc, RwLock};
 
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys::{Key, Value};
 use kvproto::kvrpcpb::Context;
 
 use crate::storage::kv::{
     Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError,
     ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, ScanMode, Snapshot,
 };
-use crate::storage::{Key, Value};
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
