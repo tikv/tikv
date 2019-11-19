@@ -15,7 +15,7 @@ use std::{error, result, str, thread, time, u64};
 use engine::rocks::Snapshot as DbSnapshot;
 use engine::rocks::DB;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_rocks::RocksEngine;
+use engine_rocks::{Compat, RocksEngine};
 use engine_traits::{CFHandleExt, ImportExt};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -28,7 +28,7 @@ use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
 use engine_rocks::RocksIOLimiter;
-use engine_traits::{IOLimiter, LimitWriter};
+use engine_traits::{IOLimiter, LimitWriter, Snapshot as SnapshotTrait};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size, sync_dir};
 use tikv_util::time::duration_to_sec;
@@ -620,7 +620,7 @@ impl Snap {
     ) -> RaftStoreResult<()> {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(kv_snap.get_db()) {
+            match self.validate(kv_snap.c().get_db().as_inner().clone()) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(

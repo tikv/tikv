@@ -34,10 +34,6 @@ impl Snapshot {
     pub fn cf_handle(&self, cf: &str) -> Result<&CFHandle> {
         super::util::get_cf_handle(&self.db, cf).map_err(Error::from)
     }
-
-    pub fn get_db(&self) -> Arc<DB> {
-        Arc::clone(&self.db)
-    }
 }
 
 impl Debug for Snapshot {

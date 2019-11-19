@@ -111,7 +111,7 @@ impl RegionSnapshot {
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
         let start = keys::enc_start_key(&self.region);
         let end = keys::enc_end_key(&self.region);
-        let prop = engine::util::get_range_properties_cf(&self.snap.get_db(), cf, &start, &end)?;
+        let prop = engine::util::get_range_properties_cf(&self.snap.get_db().as_inner(), cf, &start, &end)?;
         Ok(prop)
     }
 

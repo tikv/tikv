@@ -10,6 +10,7 @@ use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, 
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
 
+use crate::engine::RocksEngine;
 use crate::db_vector::RocksDBVector;
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
@@ -49,14 +50,11 @@ impl RocksSnapshot {
     pub fn as_raw(&self) -> &RawSnapshot {
         unsafe { &*(self as *const _ as *const _) }
     }
-
-    pub fn get_db(&self) -> &DB {
-        self.db.as_ref()
-    }
 }
 
 impl Snapshot for RocksSnapshot {
     type SyncSnapshot = RocksSyncSnapshot;
+    type KvEngine = RocksEngine;
 
     fn cf_names(&self) -> Vec<&str> {
         self.db.cf_names()
@@ -64,6 +62,10 @@ impl Snapshot for RocksSnapshot {
 
     fn into_sync(self) -> RocksSyncSnapshot {
         RocksSyncSnapshot(Arc::new(self))
+    }
+
+    fn get_db(&self) -> &RocksEngine {
+        RocksEngine::from_ref(&self.db)
     }
 }
 
