@@ -914,6 +914,11 @@ mod tests {
                 Some(Real::from(4.0f64)),
                 Some(Real::from(16.0f64)),
             ),
+            (
+                Some(Real::from(std::f64::INFINITY)),
+                Some(Real::from(0.0f64)),
+                Some(Real::from(1.0f64)),
+            ),
             (Some(Real::from(4.0f64)), None, None),
             (None, Some(Real::from(4.0f64)), None),
             (None, None, None),
@@ -926,6 +931,25 @@ mod tests {
                 .evaluate(ScalarFuncSig::Pow)
                 .unwrap();
             assert_eq!(output, expect);
+        }
+
+        let invalid_cases = vec![
+            (
+                Some(Real::from(std::f64::INFINITY)),
+                Some(Real::from(std::f64::INFINITY)),
+            ),
+            (
+                Some(Real::from(9999999.0f64)),
+                Some(Real::from(9999999.0f64)),
+            ),
+        ];
+
+        for (lhs, rhs) in invalid_cases {
+            assert!(RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::Pow)
+                .is_err());
         }
     }
 
