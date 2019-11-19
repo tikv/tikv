@@ -101,12 +101,8 @@ pub fn hex_str_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn locate_binary_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result<Option<i64>> {
-    let substr = match substr {
-        Some(v) => v,
-        _ => return Ok(None),
-    };
-    let s = match s {
-        Some(v) => v,
+    let (substr, s) = match (substr, s) {
+        (Some(v1), Some(v2)) => (v1, v2),
         _ => return Ok(None),
     };
 
