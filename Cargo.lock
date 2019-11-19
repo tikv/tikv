@@ -1371,7 +1371,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#45e0702fff1eb53ef709e365becd907e2152476b"
+source = "git+https://github.com/pingcap/kvproto.git#47672e7eabc02c4f7c6a971926293c9670dc7767"
 dependencies = [
  "futures",
  "grpcio",
@@ -2226,7 +2226,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/nrc/rust-protobuf?branch=v2.8#41b1542f4c8215d952834ffd0728f465c6d01a9e"
+source = "git+https://github.com/nrc/rust-protobuf?branch=v2.8#4df576feca3b10c01d55b0e7c634bfab30982087"
 dependencies = [
  "heck",
  "protobuf 2.8.0 (git+https://github.com/nrc/rust-protobuf?branch=v2.8)",
