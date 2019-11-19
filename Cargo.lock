@@ -1257,9 +1257,9 @@ dependencies = [
 
 [[package]]
 name = "inferno"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc3be2946c3916a4c6be1392eebb6c1e195726b0d2633dd7b8ecf234ffd50f3a"
+checksum = "880c9746895893d66a6b0ecf49d46271e3a0f6763ebbb910cb0dd7c2097a61f3"
 dependencies = [
  "chashmap",
  "crossbeam",
@@ -1274,7 +1274,7 @@ dependencies = [
  "quick-xml",
  "rgb",
  "str_stack",
- "structopt 0.3.3",
+ "structopt 0.3.4",
 ]
 
 [[package]]
@@ -1361,6 +1361,7 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
+ "farmhash",
  "hex",
  "kvproto",
  "panic_hook",
@@ -1371,7 +1372,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#45e0702fff1eb53ef709e365becd907e2152476b"
+source = "git+https://github.com/pingcap/kvproto.git#47672e7eabc02c4f7c6a971926293c9670dc7767"
 dependencies = [
  "futures",
  "grpcio",
@@ -1401,9 +1402,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.62"
+version = "0.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34fcd2c08d2f832f376f4173a231990fa5aef4e99fb569867318a227ef4c06ba"
+checksum = "1a31a0627fdf1f6a39ec0dd577e101440b7db22672c0901fe00a9a6fbb5c24e8"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -2226,7 +2227,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/nrc/rust-protobuf?branch=v2.8#41b1542f4c8215d952834ffd0728f465c6d01a9e"
+source = "git+https://github.com/nrc/rust-protobuf?branch=v2.8#4df576feca3b10c01d55b0e7c634bfab30982087"
 dependencies = [
  "heck",
  "protobuf 2.8.0 (git+https://github.com/nrc/rust-protobuf?branch=v2.8)",
@@ -3018,12 +3019,12 @@ dependencies = [
 
 [[package]]
 name = "structopt"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d4f66a4c0ddf7aee4677995697366de0749b0139057342eccbb609b12d0affc"
+checksum = "c167b61c7d4c126927f5346a4327ce20abf8a186b8041bbeb1ce49e5db49587b"
 dependencies = [
  "clap",
- "structopt-derive 0.3.3",
+ "structopt-derive 0.3.4",
 ]
 
 [[package]]
@@ -3040,9 +3041,9 @@ dependencies = [
 
 [[package]]
 name = "structopt-derive"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fe0c13e476b4e21ff7f5c4ace3818b6d7bdc16897c31c73862471bc1663acae"
+checksum = "519621841414165d2ad0d4c92be8f41844203f2b67e245f9345a5a12d40c69d7"
 dependencies = [
  "heck",
  "proc-macro-error",
@@ -3333,7 +3334,6 @@ dependencies = [
  "engine_traits",
  "fail",
  "failure",
- "farmhash",
  "fs2",
  "futures",
  "futures-cpupool",

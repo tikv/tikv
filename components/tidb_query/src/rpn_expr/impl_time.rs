@@ -183,13 +183,14 @@ mod tests {
     #[test]
     fn test_week_day() {
         let cases = vec![
-            ("2018-12-03", 0i64),
-            ("2018-12-04", 1i64),
-            ("2018-12-05", 2i64),
-            ("2018-12-06", 3i64),
-            ("2018-12-07", 4i64),
-            ("2018-12-08", 5i64),
-            ("2018-12-09", 6i64),
+            ("2018-12-03", Some(0i64)),
+            ("2018-12-04", Some(1i64)),
+            ("2018-12-05", Some(2i64)),
+            ("2018-12-06", Some(3i64)),
+            ("2018-12-07", Some(4i64)),
+            ("2018-12-08", Some(5i64)),
+            ("2018-12-09", Some(6i64)),
+            ("0000-00-00", None),
         ];
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
@@ -198,7 +199,7 @@ mod tests {
                 .push_param(datetime.clone())
                 .evaluate(ScalarFuncSig::WeekDay)
                 .unwrap();
-            assert_eq!(output, Some(exp));
+            assert_eq!(output, exp);
         }
         let output = RpnFnScalarEvaluator::new()
             .push_param(None::<DateTime>)

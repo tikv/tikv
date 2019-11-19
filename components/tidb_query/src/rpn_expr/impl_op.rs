@@ -81,6 +81,15 @@ pub fn bit_or(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
 
 #[rpn_fn]
 #[inline]
+pub fn bit_xor(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
+    Ok(match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => Some(lhs ^ rhs),
+        _ => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
 pub fn bit_neg(arg: &Option<Int>) -> Result<Option<Int>> {
     Ok(arg.map(|arg| !arg))
 }
@@ -125,7 +134,13 @@ fn decimal_is_false(arg: &Option<Decimal>) -> Result<Option<i64>> {
 #[inline]
 fn left_shift(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
     Ok(match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => Some((*lhs as u64).checked_shl(*rhs as u32).unwrap_or(0) as i64),
+        (Some(lhs), Some(rhs)) => {
+            if *rhs as u64 >= 64 {
+                Some(0)
+            } else {
+                Some((*lhs as u64).wrapping_shl(*rhs as u32) as i64)
+            }
+        }
         _ => None,
     })
 }
@@ -342,6 +357,25 @@ mod tests {
                 .push_param(lhs)
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::BitOrSig)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_bit_xor() {
+        let cases = vec![
+            (Some(123), Some(321), Some(314)),
+            (Some(-123), Some(321), Some(-316)),
+            (None, Some(1), None),
+            (Some(1), None, None),
+            (None, None, None),
+        ];
+        for (lhs, rhs, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::BitXorSig)
                 .unwrap();
             assert_eq!(output, expected);
         }
