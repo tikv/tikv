@@ -45,7 +45,7 @@ pub struct LockManager {
 
     waiter_count: Arc<AtomicUsize>,
 
-    // Record transactions once detected deadlock.
+    /// Record transactions which have sent requests to detect deadlock.
     detected: Arc<Vec<Mutex<HashSet<u64>>>>,
 }
 
@@ -238,8 +238,8 @@ impl LockManagerTrait for LockManager {
             self.waiter_mgr_scheduler
                 .wake_up(lock_ts, hashes, commit_ts);
         }
-        // If a pessimistic transaction is committed or rolled back and it once detected deadlock,
-        // clean up its wait-for entries in the deadlock detector.
+        // If a pessimistic transaction is committed or rolled back and it once sent requests to
+        // detect deadlock, clean up its wait-for entries in the deadlock detector.
         if is_pessimistic_txn && self.remove_from_detected(lock_ts) {
             self.detector_scheduler.clean_up(lock_ts);
         }
