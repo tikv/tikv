@@ -58,6 +58,12 @@ pub fn reverse(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     }))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn hex_int_arg(arg: &Option<Int>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|i| format!("{:X}", i).into_bytes()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +254,27 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate(ScalarFuncSig::Reverse)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    
+    #[test]
+    fn test_hex_int_arg() {
+        let test_cases = vec![
+            (Some(12), Some(b"C".to_vec())),
+            (Some(0x12), Some(b"12".to_vec())),
+            (Some(0b1100), Some(b"C".to_vec())),
+            (Some(0), Some(b"0".to_vec())),
+            (Some(-1), Some(b"FFFFFFFFFFFFFFFF".to_vec())),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::HexIntArg)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
