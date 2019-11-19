@@ -1363,8 +1363,10 @@ pub mod tests {
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{DBOptions, Env, DB};
-    use engine::{Engines, Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use engine::{Engines, Mutable, Peekable, Snapshot as DbSnapshot};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::Iterable;
+    use engine_rocks::Compat;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
@@ -1474,7 +1476,7 @@ pub mod tests {
     pub fn get_kv_count(snap: &DbSnapshot) -> usize {
         let mut kv_count = 0;
         for cf in SNAPSHOT_CFS {
-            snap.scan_cf(
+            snap.c().scan_cf(
                 cf,
                 &keys::data_key(b"a"),
                 &keys::data_key(b"z"),

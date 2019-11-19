@@ -5,10 +5,10 @@ use std::{fs, usize};
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{IngestExternalFileOptions, Snapshot as DbSnapshot, Writable, WriteBatch, DB};
-use engine::{CfName, Iterable};
-use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+use engine::CfName;
+use engine_rocks::{Compat, RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::IOLimiter;
-use engine_traits::{SstWriter, SstWriterBuilder};
+use engine_traits::{SstWriter, SstWriterBuilder, Iterable};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
 use super::Error;
@@ -36,7 +36,7 @@ pub fn build_plain_cf_file(
 ) -> Result<BuildStatistics, Error> {
     let mut file = box_try!(OpenOptions::new().write(true).create_new(true).open(path));
     let mut stats = BuildStatistics::default();
-    box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
+    box_try!(snap.c().scan_cf(cf, start_key, end_key, false, |key, value| {
         stats.key_count += 1;
         stats.total_size += key.len() + value.len();
         box_try!(file.encode_compact_bytes(key));
@@ -71,7 +71,7 @@ pub fn build_sst_cf_file<L: IOLimiter>(
         .as_ref()
         .map_or(0 as i64, |l| l.get_max_bytes_per_time());
     let mut bytes: i64 = 0;
-    box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
+    box_try!(snap.c().scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         if let Some(ref io_limiter) = io_limiter {
             if bytes >= base {

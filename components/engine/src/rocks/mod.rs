@@ -25,7 +25,6 @@ pub use rocksdb::{
 
 #[cfg(test)]
 mod tests {
-    use super::Snapshot;
     use crate::rocks::{util, Writable};
     use crate::{Iterable, Mutable, Peekable};
     use kvproto::metapb::Region;
@@ -132,24 +131,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(data.len(), 1);
-
-        let snap = Snapshot::new(Arc::clone(&engine));
-
-        engine.put(b"a3", b"v3").unwrap();
-        assert!(engine.seek(b"a3").unwrap().is_some());
-
-        let pair = snap.seek(b"a1").unwrap().unwrap();
-        assert_eq!(pair, (b"a1".to_vec(), b"v1".to_vec()));
-        assert!(snap.seek(b"a3").unwrap().is_none());
-
-        data.clear();
-
-        snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
-            data.push((key.to_vec(), value.to_vec()));
-            Ok(true)
-        })
-        .unwrap();
-
-        assert_eq!(data.len(), 2);
     }
 }

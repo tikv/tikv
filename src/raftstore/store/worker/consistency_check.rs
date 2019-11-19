@@ -7,8 +7,8 @@ use kvproto::metapb::Region;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 use engine::CF_RAFT;
-use engine::{Iterable, Snapshot};
-use engine_traits::Peekable;
+use engine::Snapshot;
+use engine_traits::{Peekable, Iterable};
 use engine_rocks::Compat;
 use tikv_util::worker::Runnable;
 
@@ -74,7 +74,7 @@ impl<C: CasualRouter> Runner<C> {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         for cf in cf_names {
-            let res = snap.scan_cf(cf, &start_key, &end_key, false, |k, v| {
+            let res = snap.c().scan_cf(cf, &start_key, &end_key, false, |k, v| {
                 digest.update(k);
                 digest.update(v);
                 Ok(true)

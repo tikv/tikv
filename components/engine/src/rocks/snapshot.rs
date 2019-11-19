@@ -4,8 +4,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 use super::{CFHandle, UnsafeSnap, DB};
-use crate::iterable::IterOptionsExt;
-use crate::{DBIterator, Error, IterOption, Iterable, Result};
+use crate::{Error, Result};
 
 #[repr(C)] // Guarantee same representation as in engine_rocks
 pub struct Snapshot {
@@ -52,24 +51,5 @@ impl Drop for Snapshot {
         unsafe {
             self.db.release_snap(&self.snap);
         }
-    }
-}
-
-impl Iterable for Snapshot {
-    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB> {
-        let mut opt = iter_opt.build_read_opts();
-        unsafe {
-            opt.set_snapshot(&self.snap);
-        }
-        DBIterator::new(&self.db, opt)
-    }
-
-    fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>> {
-        let handle = super::util::get_cf_handle(&self.db, cf)?;
-        let mut opt = iter_opt.build_read_opts();
-        unsafe {
-            opt.set_snapshot(&self.snap);
-        }
-        Ok(DBIterator::new_cf(&self.db, handle, opt))
     }
 }
