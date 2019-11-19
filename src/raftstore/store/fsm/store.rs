@@ -219,6 +219,7 @@ pub struct PollContext<T, C: 'static> {
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
+    pub current_time: Option<Timespec>,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -650,6 +651,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
+        self.poll_ctx.current_time = None;
         if !self.poll_ctx.queued_snapshot.is_empty() {
             let mut meta = self.poll_ctx.store_meta.lock().unwrap();
             meta.pending_snapshot_regions
@@ -901,6 +903,7 @@ where
             ready_res: Vec::new(),
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
+            current_time: None,
         };
         RaftPoller {
             tag: format!("[store {}]", ctx.store.get_id()),
