@@ -293,7 +293,11 @@ mod tests {
 
         // so split key will be z0080
         put_data(&engine, 0, 90, false);
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
             Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
@@ -304,7 +308,11 @@ mod tests {
         }
 
         put_data(&engine, 90, 160, true);
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         must_split_at(
             &rx,
             &region,
@@ -312,7 +320,11 @@ mod tests {
         );
 
         put_data(&engine, 160, 300, false);
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         must_split_at(
             &rx,
             &region,
@@ -324,7 +336,11 @@ mod tests {
         );
 
         put_data(&engine, 300, 500, false);
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         must_split_at(
             &rx,
             &region,
@@ -339,7 +355,7 @@ mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(region, true, CheckPolicy::Scan));
     }
 
     #[test]

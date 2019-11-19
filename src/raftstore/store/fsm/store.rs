@@ -1015,9 +1015,14 @@ impl RaftBatchSystem {
         mut workers: Workers,
         region_peers: Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>,
         builder: RaftPollerBuilder<T, C>,
-        cfg_controller: ConfigController,
+        mut cfg_controller: ConfigController,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
+
+        cfg_controller.register(
+            "coprocessor",
+            Box::new(workers.split_check_worker.scheduler()),
+        );
 
         let engines = builder.engines.clone();
         let snap_mgr = builder.snap_mgr.clone();

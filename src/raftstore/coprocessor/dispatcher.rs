@@ -124,7 +124,7 @@ impl CoprocessorHost {
         registry.register_split_check_observer(200, Box::new(SizeCheckObserver::new(ch.clone())));
         registry.register_split_check_observer(200, Box::new(KeysCheckObserver::new(ch)));
         // TableCheckObserver has higher priority than SizeCheckObserver.
-        registry.register_split_check_observer(100, Box::new(HalfCheckObserver::default()));
+        registry.register_split_check_observer(100, Box::new(HalfCheckObserver));
         registry.register_split_check_observer(400, Box::new(TableCheckObserver::default()));
         CoprocessorHost { registry }
     }

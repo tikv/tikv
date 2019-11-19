@@ -1358,7 +1358,7 @@ pub struct TiKvConfig {
     #[config(submodule)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub coprocessor: CopConfig,
     #[config(skip)]
     pub rocksdb: DbConfig,
@@ -1746,6 +1746,10 @@ pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) ->
 
 type CfgResult<T> = Result<T, Box<dyn Error>>;
 
+pub trait ConfigManager: Send {
+    fn dispatch(&mut self, _: ConfigChange) -> Result<(), Box<dyn Error>>;
+}
+
 /// ConfigController use to register each module's config manager,
 /// and dispatch the change of config to corresponding managers or
 /// return the change if the incoming change is invalid.
@@ -1769,6 +1773,10 @@ impl ConfigController {
             self.current.update(diff);
         }
         None
+    }
+
+    pub fn register(&mut self, module: &str, cfg_mgr: Box<dyn ConfigManager>) {
+        unimplemented!()
     }
 
     pub fn get_current(&self) -> &TiKvConfig {
