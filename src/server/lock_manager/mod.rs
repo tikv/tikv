@@ -16,7 +16,7 @@ use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::txn::{execute_callback, ProcessResult};
-use crate::storage::{lock_manager::Lock, LockMgr, StorageCb};
+use crate::storage::{lock_manager::Lock, LockManager as LockManagerTrait, StorageCb};
 use pd_client::RpcClient;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -163,7 +163,7 @@ impl LockManager {
     }
 }
 
-impl LockMgr for LockManager {
+impl LockManagerTrait for LockManager {
     fn wait_for(
         &self,
         start_ts: u64,
