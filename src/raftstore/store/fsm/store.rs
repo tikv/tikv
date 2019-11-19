@@ -1078,6 +1078,7 @@ impl RaftBatchSystem {
             Arc::clone(&engines.kv),
             self.router.clone(),
             Arc::clone(&workers.coprocessor_host),
+            cfg_controller.get_current().coprocessor.clone(),
         );
         box_try!(workers.split_check_worker.start(split_check_runner));
 

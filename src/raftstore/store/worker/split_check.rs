@@ -13,6 +13,7 @@ use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 
+use crate::raftstore::coprocessor::Config;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::coprocessor::SplitCheckerHost;
 use crate::raftstore::store::{Callback, CasualMessage, CasualRouter};
@@ -151,14 +152,21 @@ pub struct Runner<S> {
     engine: Arc<DB>,
     router: S,
     coprocessor: Arc<CoprocessorHost>,
+    cfg: Config,
 }
 
 impl<S: CasualRouter> Runner<S> {
-    pub fn new(engine: Arc<DB>, router: S, coprocessor: Arc<CoprocessorHost>) -> Runner<S> {
+    pub fn new(
+        engine: Arc<DB>,
+        router: S,
+        coprocessor: Arc<CoprocessorHost>,
+        cfg: Config,
+    ) -> Runner<S> {
         Runner {
             engine,
             router,
             coprocessor,
+            cfg,
         }
     }
 
@@ -176,12 +184,9 @@ impl<S: CasualRouter> Runner<S> {
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let mut host = self.coprocessor.new_split_checker_host(
-            region,
-            &self.engine,
-            task.auto_split,
-            task.policy,
-        );
+        let mut host = SplitCheckerHost::new(task.auto_split, &self.cfg);
+        self.coprocessor
+            .add_split_checker(&mut host, region, &self.engine, task.policy);
         if host.skip() {
             debug!("skip split check"; "region_id" => region.get_id());
             return;
@@ -243,8 +248,8 @@ impl<S: CasualRouter> Runner<S> {
 
     /// Gets the split keys by scanning the range.
     fn scan_split_keys(
-        &mut self,
-        host: &mut SplitCheckerHost,
+        &self,
+        host: &mut SplitCheckerHost<'_>,
         region: &Region,
         start_key: &[u8],
         end_key: &[u8],

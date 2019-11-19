@@ -119,32 +119,13 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: CasualRouter + Clone + Send + 'static>(cfg: Config, ch: C) -> CoprocessorHost {
+    pub fn new<C: CasualRouter + Clone + Send + 'static>(ch: C) -> CoprocessorHost {
         let mut registry = Registry::default();
-        let split_size_check_observer = SizeCheckObserver::new(
-            cfg.region_max_size.0,
-            cfg.region_split_size.0,
-            cfg.batch_split_limit,
-            ch.clone(),
-        );
-        registry.register_split_check_observer(200, Box::new(split_size_check_observer));
-
-        let split_keys_check_observer = KeysCheckObserver::new(
-            cfg.region_max_keys,
-            cfg.region_split_keys,
-            cfg.batch_split_limit,
-            ch,
-        );
-        registry.register_split_check_observer(200, Box::new(split_keys_check_observer));
-
+        registry.register_split_check_observer(200, Box::new(SizeCheckObserver::new(ch.clone())));
+        registry.register_split_check_observer(200, Box::new(KeysCheckObserver::new(ch)));
         // TableCheckObserver has higher priority than SizeCheckObserver.
-        registry.register_split_check_observer(
-            100,
-            Box::new(HalfCheckObserver::new(cfg.region_max_size.0)),
-        );
-        if cfg.split_region_on_table {
-            registry.register_split_check_observer(400, Box::new(TableCheckObserver::default()));
-        }
+        registry.register_split_check_observer(100, Box::new(HalfCheckObserver::default()));
+        registry.register_split_check_observer(400, Box::new(TableCheckObserver::default()));
         CoprocessorHost { registry }
     }
 
@@ -215,23 +196,21 @@ impl CoprocessorHost {
         }
     }
 
-    pub fn new_split_checker_host(
+    pub fn add_split_checker(
         &self,
+        host: &mut SplitCheckerHost<'_>,
         region: &Region,
         engine: &DB,
-        auto_split: bool,
         policy: CheckPolicy,
-    ) -> SplitCheckerHost {
-        let mut host = SplitCheckerHost::new(auto_split);
+    ) {
         loop_ob!(
             region,
             &self.registry.split_check_observers,
             add_checker,
-            &mut host,
+            host,
             engine,
             policy
         );
-        host
     }
 
     pub fn on_role_change(&self, region: &Region, role: StateRole) {

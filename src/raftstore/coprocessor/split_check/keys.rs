@@ -82,23 +82,12 @@ impl SplitChecker for Checker {
 }
 
 pub struct KeysCheckObserver<C> {
-    region_max_keys: u64,
-    split_keys: u64,
-    batch_split_limit: u64,
     router: Mutex<C>,
 }
 
 impl<C: CasualRouter> KeysCheckObserver<C> {
-    pub fn new(
-        region_max_keys: u64,
-        split_keys: u64,
-        batch_split_limit: u64,
-        router: C,
-    ) -> KeysCheckObserver<C> {
+    pub fn new(router: C) -> KeysCheckObserver<C> {
         KeysCheckObserver {
-            region_max_keys,
-            split_keys,
-            batch_split_limit,
             router: Mutex::new(router),
         }
     }
@@ -126,9 +115,9 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
                 );
                 // Need to check keys.
                 host.add_checker(Box::new(Checker::new(
-                    self.region_max_keys,
-                    self.split_keys,
-                    self.batch_split_limit,
+                    host.cfg.region_max_keys,
+                    host.cfg.region_split_keys,
+                    host.cfg.batch_split_limit,
                     policy,
                 )));
                 return;
@@ -145,18 +134,18 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
         }
 
         REGION_KEYS_HISTOGRAM.observe(region_keys as f64);
-        if region_keys >= self.region_max_keys {
+        if region_keys >= host.cfg.region_max_keys {
             info!(
                 "approximate keys over threshold, need to do split check";
                 "region_id" => region.get_id(),
                 "keys" => region_keys,
-                "threshold" => self.region_max_keys,
+                "threshold" => host.cfg.region_max_keys,
             );
             // Need to check keys.
             host.add_checker(Box::new(Checker::new(
-                self.region_max_keys,
-                self.split_keys,
-                self.batch_split_limit,
+                host.cfg.region_max_keys,
+                host.cfg.region_split_keys,
+                host.cfg.batch_split_limit,
                 policy,
             )));
         } else {
@@ -165,7 +154,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
                 "approximate keys less than threshold, does not need to do split check";
                 "region_id" => region.get_id(),
                 "keys" => region_keys,
-                "threshold" => self.region_max_keys,
+                "threshold" => host.cfg.region_max_keys,
             );
         }
     }
@@ -298,7 +287,8 @@ mod tests {
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
-            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
+            Arc::new(CoprocessorHost::new(tx.clone())),
+            cfg,
         );
 
         // so split key will be z0080

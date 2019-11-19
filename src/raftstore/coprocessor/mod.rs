@@ -111,7 +111,7 @@ pub trait SplitCheckObserver: Coprocessor {
     fn add_checker(
         &self,
         _: &mut ObserverContext<'_>,
-        _: &mut SplitCheckerHost,
+        _: &mut SplitCheckerHost<'_>,
         _: &DB,
         policy: CheckPolicy,
     );

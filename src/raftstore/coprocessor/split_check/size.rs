@@ -98,23 +98,12 @@ impl SplitChecker for Checker {
 }
 
 pub struct SizeCheckObserver<C> {
-    region_max_size: u64,
-    split_size: u64,
-    split_limit: u64,
     router: Mutex<C>,
 }
 
 impl<C: CasualRouter> SizeCheckObserver<C> {
-    pub fn new(
-        region_max_size: u64,
-        split_size: u64,
-        split_limit: u64,
-        router: C,
-    ) -> SizeCheckObserver<C> {
+    pub fn new(router: C) -> SizeCheckObserver<C> {
         SizeCheckObserver {
-            region_max_size,
-            split_size,
-            split_limit,
             router: Mutex::new(router),
         }
     }
@@ -142,9 +131,9 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 );
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
-                    self.region_max_size,
-                    self.split_size,
-                    self.split_limit,
+                    host.cfg.region_max_size.0,
+                    host.cfg.region_split_size.0,
+                    host.cfg.batch_split_limit,
                     policy,
                 )));
                 return;
@@ -162,22 +151,22 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
         }
 
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
-        if region_size >= self.region_max_size {
+        if region_size >= host.cfg.region_max_size.0 {
             info!(
                 "approximate size over threshold, need to do split check";
                 "region_id" => region.get_id(),
                 "size" => region_size,
-                "threshold" => self.region_max_size,
+                "threshold" => host.cfg.region_max_size.0,
             );
             // when meet large region use approximate way to produce split keys
-            if region_size >= self.region_max_size * self.split_limit * 2 {
+            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit * 2 {
                 policy = CheckPolicy::Approximate
             }
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
-                self.region_max_size,
-                self.split_size,
-                self.split_limit,
+                host.cfg.region_max_size.0,
+                host.cfg.region_split_size.0,
+                host.cfg.batch_split_limit,
                 policy,
             )));
         } else {
@@ -186,7 +175,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 "approximate size less than threshold, does not need to do split check";
                 "region_id" => region.get_id(),
                 "size" => region_size,
-                "threshold" => self.region_max_size,
+                "threshold" => host.cfg.region_max_size.0,
             );
         }
     }
@@ -425,7 +414,8 @@ pub mod tests {
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
-            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
+            Arc::new(CoprocessorHost::new(tx.clone())),
+            cfg,
         );
 
         // so split key will be [z0006]

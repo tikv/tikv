@@ -263,7 +263,6 @@ impl LockManagerTrait for LockManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raftstore::coprocessor::Config as CopConfig;
     use crate::server::resolve::Callback;
     use crate::storage::{
         mvcc::Error as MvccError, mvcc::ErrorInner as MvccErrorInner, txn::Error as TxnError,
@@ -293,7 +292,7 @@ mod tests {
 
     fn start_lock_manager() -> LockManager {
         let (tx, _rx) = mpsc::sync_channel(100);
-        let mut coprocessor_host = CoprocessorHost::new(CopConfig::default(), tx);
+        let mut coprocessor_host = CoprocessorHost::new(tx);
 
         let mut lock_mgr = LockManager::new();
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
