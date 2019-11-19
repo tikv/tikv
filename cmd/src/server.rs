@@ -237,7 +237,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
 
     // Create Debug service.
-    let debug_service = DebugService::new(engines.clone(), raft_router.clone());
+    let debug_service = DebugService::new(engines.clone(), raft_router.clone(), gc_worker.clone());
 
     // Create Backup service.
     let mut backup_worker = tikv_util::worker::Worker::new("backup-endpoint");
