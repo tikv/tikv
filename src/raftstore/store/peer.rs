@@ -2738,9 +2738,8 @@ impl ReadExecutor {
         let mut response = RaftCmdResponse::default();
         response.set_responses(responses.into());
         let snapshot = if need_snapshot {
-            let newsnap = self.snapshot.as_ref().unwrap().as_raw().clone();
             Some(RegionSnapshot::from_snapshot(
-                newsnap,
+                self.snapshot.clone().unwrap(),
                 region.to_owned(),
             ))
         } else {

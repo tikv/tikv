@@ -16,7 +16,7 @@ use engine::Engines;
 use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::IterOption;
-use engine_rocks::{Compat, RocksEngineIterator};
+use engine_rocks::RocksEngineIterator;
 use engine_traits::{Iterable, Iterator, SeekKey, Peekable};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
@@ -30,7 +30,7 @@ use super::{
     Result, ScanMode, Snapshot,
 };
 
-pub use engine::SyncSnapshot as RocksSnapshot;
+pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
@@ -299,19 +299,19 @@ impl Snapshot for RocksSnapshot {
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get"; "key" => %key);
-        let v = box_try!(self.c().get_value(key.as_encoded()));
+        let v = box_try!(self.get_value(key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn get_cf(&self, cf: CfName, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get_cf"; "cf" => cf, "key" => %key);
-        let v = box_try!(self.c().get_value_cf(cf, key.as_encoded()));
+        let v = box_try!(self.get_value_cf(cf, key.as_encoded()));
         Ok(v.map(|v| v.to_vec()))
     }
 
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
-        let iter = self.c().iterator_opt(iter_opt)?;
+        let iter = self.iterator_opt(iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 
@@ -322,7 +322,7 @@ impl Snapshot for RocksSnapshot {
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
-        let iter = self.c().iterator_cf_opt(cf, iter_opt)?;
+        let iter = self.iterator_cf_opt(cf, iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 }

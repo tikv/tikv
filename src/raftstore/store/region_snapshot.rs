@@ -3,10 +3,9 @@
 use engine::rocks::{TablePropertiesCollection, DB};
 use engine::{
     self, IterOption, Snapshot,
-    SyncSnapshot,
 };
-use engine_rocks::{Compat, RocksEngineIterator, RocksDBVector};
-use engine_traits::{SeekKey, Peekable, Result as EngineResult, ReadOptions};
+use engine_rocks::{Compat, RocksEngineIterator, RocksDBVector, RocksSnapshot, RocksSyncSnapshot};
+use engine_traits::{SeekKey, Peekable, Result as EngineResult, ReadOptions, Snapshot as SnapshotTrait};
 use kvproto::metapb::Region;
 use std::sync::Arc;
 
@@ -24,20 +23,20 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot {
-    snap: SyncSnapshot,
+    snap: RocksSyncSnapshot,
     region: Arc<Region>,
 }
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
+        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync().c().clone(), ps.region().clone())
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region)
+        RegionSnapshot::from_snapshot(RocksSnapshot::new(db).into_sync(), region)
     }
 
-    pub fn from_snapshot(snap: SyncSnapshot, region: Region) -> RegionSnapshot {
+    pub fn from_snapshot(snap: RocksSyncSnapshot, region: Region) -> RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
@@ -49,12 +48,12 @@ impl RegionSnapshot {
     }
 
     pub fn iter(&self, iter_opt: IterOption) -> RegionIterator {
-        RegionIterator::new(&self.snap, Arc::clone(&self.region), iter_opt)
+        RegionIterator::new(self.snap.as_raw(), Arc::clone(&self.region), iter_opt)
     }
 
     pub fn iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<RegionIterator> {
         Ok(RegionIterator::new_cf(
-            &self.snap,
+            self.snap.as_raw(),
             Arc::clone(&self.region),
             iter_opt,
             cf,
@@ -146,7 +145,7 @@ impl Peekable for RegionSnapshot {
         )
         .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
-        self.snap.c().get_value_opt(opts, &data_key).map_err(|e| {
+        self.snap.get_value_opt(opts, &data_key).map_err(|e| {
             CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
             if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
@@ -177,7 +176,7 @@ impl Peekable for RegionSnapshot {
         )
         .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
-        self.snap.c().get_value_cf_opt(opts, cf, &data_key).map_err(|e| {
+        self.snap.get_value_cf_opt(opts, cf, &data_key).map_err(|e| {
             CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
             if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
