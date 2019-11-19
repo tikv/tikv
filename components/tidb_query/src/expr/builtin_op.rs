@@ -194,7 +194,7 @@ impl ScalarFunc {
         let ret = if rhs as u64 >= 64 {
             0
         } else {
-            (lhs as u64).wrapping_shl(rhs as u32)
+            (lhs as u64).wrapping_shr(rhs as u32)
         };
         Ok(Some(ret as i64))
     }
