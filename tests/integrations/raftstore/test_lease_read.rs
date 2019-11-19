@@ -513,3 +513,117 @@ fn test_not_leader_read_lease() {
     // Even the leader steps down, it should respond to read index in time.
     rx.recv_timeout(heartbeat_interval).unwrap();
 }
+
+#[test]
+fn test_read_with_applied_index() {
+    let mut cluster = new_node_cluster(0, 3);
+
+    // Increase the election tick to make this test case running reliably.
+    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    let max_lease = Duration::from_secs(2);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 10;
+
+    cluster.pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k0", b"v0");
+    cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
+    cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
+    // Put and test again to ensure that peer 2 get the latest writes by message append
+    // instead of snapshot, so that transfer leader to peer 2 can 100% success.
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    let r1 = cluster.get_region(b"k1");
+    let old_leader = cluster.leader_of_region(r1.get_id()).unwrap();
+    assert_eq!(old_leader, new_peer(1, 1));
+
+    // Use a macro instead of a closure to avoid any capture of local variables.
+    macro_rules! read_on {
+        ($req: expr, $id:expr, $store_id:expr) => {{
+            let mut req = $req.clone();
+            req.mut_header().set_peer(new_peer($store_id, $id));
+            let (tx, rx) = mpsc::sync_channel(1);
+            let sim = cluster.sim.wl();
+            let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
+            sim.async_command_on_node($id, req, cb).unwrap();
+            rx
+        }};
+    }
+
+    let read_index_request = new_request(
+        r1.get_id(),
+        r1.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        false,
+    );
+
+    let applied_to = {
+        let resp = read_on!(read_index_request, 1, 1).recv().unwrap();
+        resp.get_responses()[0].get_read_index().get_read_index()
+    };
+
+    let mut read_request = new_request(
+        r1.get_id(),
+        r1.get_region_epoch().clone(),
+        vec![new_get_cmd(b"k1")],
+        true, // read quorum
+    );
+    read_request.mut_header().set_replica_read(true);
+
+    let filter = Box::new(RegionPacketFilter::new(r1.get_id(), 2).direction(Direction::Recv));
+    cluster.sim.wl().add_recv_filter(2, filter);
+
+    // Read with a position that the peer has already applied to
+    // should return immediately, even if the peer is isolated.
+    read_request.mut_header().set_applied_index(applied_to);
+    let resp = read_on!(read_request, 2, 2).recv().unwrap();
+    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
+
+    // Isolate 2 and then read with a new applied index could be delayed.
+    cluster.must_put(b"k1", b"v2");
+    read_request.mut_header().set_applied_index(applied_to + 1);
+    let resp_ch = read_on!(read_request, 2, 2);
+    assert!(resp_ch.recv_timeout(Duration::from_secs(2)).is_err());
+
+    // After peer 2 recovers from isolation, the pending read should be resolved.
+    cluster.sim.wl().clear_recv_filters(2);
+    cluster.must_put(b"k1", b"v3");
+    let resp = resp_ch.recv().unwrap();
+    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v2");
+
+    // Role change won't drop read requests with applied index.
+    read_request.mut_header().set_applied_index(applied_to + 4);
+    let resp_ch = read_on!(read_request, 2, 2);
+    assert!(resp_ch.recv_timeout(Duration::from_secs(2)).is_err());
+    cluster.must_transfer_leader(r1.get_id(), new_peer(2, 2));
+    cluster.must_put(b"k1", b"v4");
+    let resp = resp_ch.recv().unwrap();
+    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v4");
+
+    // Drop all append messages to peer 3, so that it will receives a snapshot later.
+    let filter = Box::new(
+        RegionPacketFilter::new(r1.get_id(), 3)
+        .direction(Direction::Recv)
+        .msg_type(MessageType::MsgAppend)
+    );
+    cluster.sim.wl().add_recv_filter(3, filter);
+
+    // After peer 3 receives and applys a snapshot, pending read should be responsed
+    // with the latest value.
+    read_request.mut_header().set_applied_index(applied_to + 10);
+    let resp_ch = read_on!(read_request, 3, 3);
+    for i in 0..10 {
+        cluster.must_put(b"k1", &format!("v{}", i).into_bytes());
+    }
+    assert!(resp_ch.recv_timeout(Duration::from_secs(2)).is_err());
+    cluster.sim.wl().clear_recv_filters(3);
+    cluster.must_put(b"k1", b"v10");
+    let resp = resp_ch.recv().unwrap();
+    assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v10");
+}

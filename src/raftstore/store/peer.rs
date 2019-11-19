@@ -2,11 +2,14 @@
 
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::collections::VecDeque;
+use std::collections::{BinaryHeap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
-use std::{cmp, mem, u64};
+use std::{
+    cmp::{self, Ordering as CmpOrdering, Reverse},
+    mem, u64,
+};
 
 use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
 use engine::{Engines, Peekable};
@@ -134,6 +137,7 @@ impl ReadIndexQueue {
                 "cannot find corresponding read from pending reads";
                 "id"=>?id, "read-index" =>read_index,
             );
+            panic!("advance read index fail");
         }
     }
 
@@ -142,6 +146,33 @@ impl ReadIndexQueue {
         {
             self.reads.shrink_to_fit();
         }
+    }
+}
+
+struct ApplyRead {
+    req: RaftCmdRequest,
+    cb: Callback,
+}
+
+impl PartialEq for ApplyRead {
+    fn eq(&self, other: &ApplyRead) -> bool {
+        let applied_1 = self.req.get_header().get_applied_index();
+        let applied_2 = other.req.get_header().get_applied_index();
+        applied_1 == applied_2
+    }
+}
+impl Eq for ApplyRead {}
+
+impl PartialOrd for ApplyRead {
+    fn partial_cmp(&self, other: &ApplyRead) -> Option<CmpOrdering> {
+        let applied_1 = self.req.get_header().get_applied_index();
+        let applied_2 = other.req.get_header().get_applied_index();
+        applied_1.partial_cmp(&applied_2)
+    }
+}
+impl Ord for ApplyRead {
+    fn cmp(&self, other: &ApplyRead) -> CmpOrdering {
+        self.partial_cmp(other).unwrap()
     }
 }
 
@@ -281,6 +312,9 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
     pending_reads: ReadIndexQueue,
+    // Some requests carry an applied index, so it's not necessary to call `read_index`.
+    // Just wait the Raft applys to the given index and then response those requests.
+    pending_apply_reads: BinaryHeap<Reverse<ApplyRead>>,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -384,6 +418,7 @@ impl Peer {
             proposals: Default::default(),
             apply_proposals: vec![],
             pending_reads: Default::default(),
+            pending_apply_reads: Default::default(),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -1542,8 +1577,8 @@ impl Peer {
             panic!("{} should not applying snapshot.", self.tag);
         }
 
-        self.raft_group
-            .advance_apply(apply_state.get_applied_index());
+        let applied_to = apply_state.get_applied_index();
+        self.raft_group.advance_apply(applied_to);
 
         let progress_to_be_updated = self.mut_store().applied_index_term() != applied_index_term;
         self.mut_store().set_applied_state(apply_state);
@@ -1578,6 +1613,22 @@ impl Peer {
             }
         }
         self.pending_reads.gc();
+
+        // Handles `pending_apply_reads`.
+        while let Some(Reverse(ApplyRead { req, cb })) = self.pending_apply_reads.pop() {
+            if req.get_header().get_applied_index() <= applied_to {
+                // `ReadIndex` should never carry an applied index.
+                let read_index = None;
+                cb.invoke_read(self.handle_read(ctx, req, true, read_index));
+            } else {
+                self.pending_apply_reads
+                    .push(Reverse(ApplyRead { req, cb }));
+                break;
+            }
+        }
+        if self.pending_apply_reads.capacity() >= self.pending_apply_reads.len() << 1 {
+            self.pending_apply_reads.shrink_to_fit();
+        }
 
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
@@ -1984,6 +2035,19 @@ impl Peer {
             return false;
         }
 
+        // The request carrys an applied index, so skip to call `read_index`.
+        if req.get_header().get_applied_index() != 0 {
+            let applied_to = self.get_store().applied_index();
+            if req.get_header().get_applied_index() <= applied_to {
+                // `ReadIndex` should never carry an applied index.
+                cb.invoke_read(self.handle_read(poll_ctx, req, true, None));
+            } else {
+                self.pending_apply_reads
+                    .push(Reverse(ApplyRead { req, cb }));
+            }
+            return false;
+        }
+
         let renew_lease_time = monotonic_raw_now();
         if self.is_leader() {
             match self.inspect_lease() {
@@ -2354,6 +2418,7 @@ impl Peer {
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             read.cmds.clear();
         }
+        self.pending_apply_reads.clear();
     }
 }
 

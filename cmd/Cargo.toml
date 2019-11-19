@@ -48,7 +48,7 @@ grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ] }
 raft = "0.6.0-alpha"
 hex = "0.3"
 vlog = "0.1.4"
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/hicqu/kvproto.git", branch = "follower-read-with-applied" }
 tikv_util = { path = "../components/tikv_util" }
 engine = { path = "../components/engine" }
 pd_client = { path = "../components/pd_client" }
