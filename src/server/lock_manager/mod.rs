@@ -19,6 +19,8 @@ use crate::storage::txn::{execute_callback, ProcessResult};
 use crate::storage::{lock_manager::Lock, LockManager as LockManagerTrait, StorageCb};
 use pd_client::PdClient;
 use spin::Mutex;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -30,7 +32,9 @@ const DETECTED_SLOTS_NUM: usize = 128;
 
 #[inline]
 fn detected_slot_idx(txn_ts: u64) -> usize {
-    txn_ts as usize & (DETECTED_SLOTS_NUM - 1)
+    let mut s = DefaultHasher::new();
+    txn_ts.hash(&mut s);
+    (s.finish() as usize) & (DETECTED_SLOTS_NUM - 1)
 }
 
 /// `LockManager` has two components working in two threads:
