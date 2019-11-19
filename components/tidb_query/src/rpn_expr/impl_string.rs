@@ -5,6 +5,8 @@ use tidb_query_codegen::rpn_fn;
 use crate::codec::data_type::*;
 use crate::Result;
 
+const SPACE: u8 = 0o40u8;
+
 #[rpn_fn]
 #[inline]
 pub fn bin(num: &Option<Int>) -> Result<Option<Bytes>> {
@@ -48,6 +50,20 @@ pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
         }
     }))
 }
+
+#[rpn_fn]
+#[inline]
+pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let pos = bytes.iter().rev().position(|&x| x != SPACE);
+        if let Some(i) = pos {
+            bytes[..bytes.len() - i].to_vec()
+        } else {
+            b"".to_vec()
+        }
+    }))
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -204,6 +220,34 @@ mod tests {
                 .evaluate(ScalarFuncSig::Ascii)
                 .unwrap();
             assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_rtrim() {
+        let test_cases = vec![
+            (None, None),
+            (Some("   bar   "), Some("   bar")),
+            (Some("bar"), Some("bar")),
+            (Some("ba  r"), Some("ba  r")),
+            (Some("    "), Some("")),
+            (Some("  bar\t  "), Some("  bar\t")),
+            (Some(" bar   \t"), Some(" bar   \t")),
+            (Some("bar   \r"), Some("bar   \r")),
+            (Some("bar   \n"), Some("bar   \n")),
+            (Some(""), Some("")),
+            (Some("  你好  "), Some("  你好")),
+            (Some("  你  好  "), Some("  你  好")),
+            (Some("  분산 데이터베이스    "), Some("  분산 데이터베이스")),
+            (Some("   あなたのことが好きです   "), Some("   あなたのことが好きです")),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::RTrim)
+                .unwrap();
+            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
         }
     }
 }
