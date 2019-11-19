@@ -14,7 +14,7 @@ pub mod config;
 mod errors;
 pub mod kv;
 pub mod lock_manager;
-pub mod metrics;
+mod metrics;
 pub mod mvcc;
 mod readpool_impl;
 pub mod txn;
