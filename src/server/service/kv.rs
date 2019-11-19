@@ -53,7 +53,7 @@ const REQUEST_LOAD_ESTIMATE_SAMPLE_WINDOW: usize = 30;
 const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 70;
 const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f64 = 0.3;
 const REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO: f64 = 0.4; // against jittering
-const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.0;
+const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.2;
 const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_PENDING_COMMANDS: usize = 300;
 
 const WRITE_BATCH_WRITE_BYTES_LIMIT: usize = 2097152; // 2MB
@@ -211,11 +211,11 @@ impl RequestLoadEstimator {
                 } else {
                     reader.consume_second() * 1000.0
                 };
-                self.latency_estimation = self.latency_estimation * 0.7 + latency * 0.3;
+                self.latency_estimation = self.latency_estimation * 0.6 + latency * 0.4;
             } else if let Some(reader) = &mut self.atomic_load_reader {
                 let atomic_load = reader.load(Ordering::Relaxed);
                 self.atomic_load_estimation =
-                    (self.atomic_load_estimation * 7 + atomic_load * 3) / 10;
+                    (self.atomic_load_estimation * 6 + atomic_load * 4) / 10;
             } else {
                 error!("missing primary load reader in RequestLoadEstimator");
             }
