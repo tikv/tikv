@@ -54,7 +54,7 @@ pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
 pub fn reverse(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|bytes| {
         let s = String::from_utf8_lossy(bytes);
-        s.chars().rev().collect::<String>().as_bytes().to_vec()
+        s.chars().rev().collect::<String>().into_bytes()
     }))
 }
 
