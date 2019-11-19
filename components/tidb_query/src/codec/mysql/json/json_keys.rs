@@ -8,18 +8,14 @@ impl Json {
     pub fn keys(&self, path_expr_list: &[PathExpression]) -> Result<Option<Json>> {
         if !path_expr_list.is_empty() {
             if path_expr_list.len() > 1 {
-                return Err(box_err!("Incorrect parameter count"));
+                return Err(box_err!("Incorrect parameter: {:?}", path_expr_list));
             }
             for expr in path_expr_list {
                 if expr.contains_any_asterisk() {
-                    return Err(box_err!("Invalid path expression"));
+                    return Err(box_err!("Invalid path expression: {:?}", path_expr_list));
                 }
             }
-            let json_option = self.extract(path_expr_list);
-            return match json_option {
-                Some(j) => Ok(json_keys(&j)),
-                None => Ok(None),
-            };
+            return Ok(self.extract(path_expr_list).and_then(|j| json_keys(&j)));
         }
         Ok(json_keys(self))
     }
@@ -27,13 +23,11 @@ impl Json {
 
 fn json_keys(j: &Json) -> Option<Json> {
     match *j {
-        Json::Object(ref map) => {
-            let mut keys: Vec<Json> = Vec::new();
-            for (key, _) in map.iter() {
-                keys.push(Json::String(key.to_string()));
-            }
-            Some(Json::Array(keys))
-        }
+        Json::Object(ref map) => Some(Json::Array(
+            map.keys()
+                .map(|key| Json::String(key.to_string()))
+                .collect(),
+        )),
         _ => None,
     }
 }
