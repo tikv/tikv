@@ -59,7 +59,7 @@ pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
         if let Some(i) = pos {
             bytes[..bytes.len() - i].to_vec()
         } else {
-            b"".to_vec()
+            Vec::new()
         }
     }))
 }
