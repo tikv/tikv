@@ -810,8 +810,9 @@ impl<E: Engine> Debugger<E> {
             Module::Server => {
                 if config_name == GC_IO_LIMITER_CONFIG_NAME {
                     if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
-                        let bps = i64::try_from(bytes_per_sec.0)
-                            .unwrap_or_else(|_| (panic!("{} > i64::max_value", GC_IO_LIMITER_CONFIG_NAME)));
+                        let bps = i64::try_from(bytes_per_sec.0).unwrap_or_else(|_| {
+                            (panic!("{} > i64::max_value", GC_IO_LIMITER_CONFIG_NAME))
+                        });
                         return self
                             .gc_worker
                             .as_ref()
