@@ -139,12 +139,11 @@ features = ["nightly", "push", "process"]
 git = "https://github.com/pingcap/rust-prometheus.git"
 rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
 
-[replace]
-# TODO: remove this when new raft-rs is published.
-"raft:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
-"raft-proto:0.6.0-alpha" = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
-"protobuf:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
-"protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
+[patch.crates-io]
+raft = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
+raft-proto = { git = "https://github.com/pingcap/raft-rs", branch = "master" }
+protobuf = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
+protobuf-codegen = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
