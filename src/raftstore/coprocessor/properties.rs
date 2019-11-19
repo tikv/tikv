@@ -6,7 +6,6 @@ use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use crate::raftstore::store::keys;
 use crate::storage::mvcc::{TimeStamp, Write, WriteType};
 use engine::rocks::{
     CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory,
@@ -672,7 +671,6 @@ mod tests {
     use test::Bencher;
 
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-    use crate::raftstore::store::keys;
     use crate::storage::mvcc::{Write, WriteType};
     use engine::rocks;
     use engine::rocks::util::CFOptions;

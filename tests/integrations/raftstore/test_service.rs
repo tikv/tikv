@@ -24,7 +24,7 @@ use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::keys;
+
 use tikv::raftstore::store::SnapManager;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
 use tikv_util::worker::FutureWorker;

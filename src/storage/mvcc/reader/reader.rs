@@ -431,7 +431,6 @@ mod tests {
     use super::*;
 
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-    use crate::raftstore::store::keys;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::lock::LockType;

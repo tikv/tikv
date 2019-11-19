@@ -22,7 +22,6 @@ use log_wrappers::DisplayValue;
 use raft::StateRole;
 
 use crate::raftstore::router::ServerRaftStoreRouter;
-use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::metrics::{

@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use crate::raftstore::store::{CasualMessage, CasualRouter};
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
 use engine::util;
@@ -215,7 +215,7 @@ mod tests {
         MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
     };
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};
-    use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
+    use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::mvcc::{TimeStamp, Write, WriteType};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};

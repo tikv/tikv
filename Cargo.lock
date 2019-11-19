@@ -396,6 +396,7 @@ dependencies = [
  "futures-cpupool",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "libc",
  "log",

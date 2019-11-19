@@ -9,12 +9,12 @@ use kvproto::raft_serverpb::RaftApplyState;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::raftstore::store::keys::DATA_PREFIX_KEY;
-use crate::raftstore::store::{keys, util, PeerStorage};
+use crate::raftstore::store::{util, PeerStorage};
 use crate::raftstore::Result;
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
+use keys::DATA_PREFIX_KEY;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -389,7 +389,6 @@ mod tests {
     use tempfile::{Builder, TempDir};
 
     use crate::config::TiKvConfig;
-    use crate::raftstore::store::keys::*;
     use crate::raftstore::store::snap::snap_io::{apply_sst_cf_file, build_sst_cf_file};
     use crate::raftstore::store::PeerStorage;
     use crate::raftstore::Result;
@@ -407,7 +406,7 @@ mod tests {
     use engine_rocks::RocksIOLimiter;
     use engine_rocks::{RocksSnapshot, RocksSstWriterBuilder};
     use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
-    use keys::Key;
+    use keys::{data_key, Key};
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;
 

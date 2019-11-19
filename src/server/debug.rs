@@ -30,11 +30,11 @@ use crate::raftstore::coprocessor::{
     get_region_approximate_keys_cf, get_region_approximate_middle,
 };
 use crate::raftstore::store::util as raftstore_util;
+use crate::raftstore::store::PeerStorage;
 use crate::raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use crate::raftstore::store::{keys, PeerStorage};
 use crate::server::gc_worker::GcWorker;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::{Engine, Iterator as EngineIterator};

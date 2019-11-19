@@ -11,8 +11,6 @@ use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
 use tikv_util::keybuilder::KeyBuilder;
 
-use crate::raftstore::store::keys;
-
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
 };
