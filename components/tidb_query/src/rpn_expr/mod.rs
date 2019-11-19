@@ -189,6 +189,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::BitXorSig => bit_xor_fn_meta(),
         ScalarFuncSig::BitNegSig => bit_neg_fn_meta(),
         ScalarFuncSig::LeftShift => left_shift_fn_meta(),
+        ScalarFuncSig::RightShift => right_shift_fn_meta(),
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
         ScalarFuncSig::PlusReal => arithmetic_fn_meta::<RealPlus>(),
         ScalarFuncSig::PlusDecimal => arithmetic_fn_meta::<DecimalPlus>(),

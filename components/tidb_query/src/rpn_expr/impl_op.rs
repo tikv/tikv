@@ -145,6 +145,21 @@ fn left_shift(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
     })
 }
 
+#[rpn_fn]
+#[inline]
+fn right_shift(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
+    Ok(match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            if *rhs as u64 >= 64 {
+                Some(0)
+            } else {
+                Some((*lhs as u64).wrapping_shr(*rhs as u32) as i64)
+            }
+        }
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,6 +497,27 @@ mod tests {
                 .push_param(lhs)
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::LeftShift)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_right_shift() {
+        let cases = vec![
+            (Some(123), Some(2), Some(30)),
+            (Some(-123), Some(-1), Some(0)),
+            (Some(123), Some(0), Some(123)),
+            (None, Some(1), None),
+            (Some(123), None, None),
+            (Some(-123), Some(2), Some(4611686018427387873)),
+            (None, None, None),
+        ];
+        for (lhs, rhs, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::RightShift)
                 .unwrap();
             assert_eq!(output, expected);
         }
