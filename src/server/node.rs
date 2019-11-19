@@ -17,7 +17,7 @@ use crate::raftstore::store::{
 };
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
-use crate::storage::{Config as StorageConfig, Storage};
+use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;

@@ -2,15 +2,11 @@
 
 //! Storage configuration.
 
-use std::error::Error;
-
-use sys_info;
-
-use tikv_util::config::{self, ReadableSize, KB};
-
 use engine::rocks::{Cache, LRUCacheOptions, MemoryAllocator};
-
 use libc::c_int;
+use std::error::Error;
+use sys_info;
+use tikv_util::config::{self, ReadableSize, KB};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";

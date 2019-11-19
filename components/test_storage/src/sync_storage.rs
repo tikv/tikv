@@ -5,11 +5,13 @@ use futures::Future;
 use keys::{Key, KvPair, TimeStamp, Value};
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::server::gc_worker::{AutoGCConfig, GCConfig, GCSafePointProvider, GCWorker};
+use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
-use tikv::storage::Config;
-use tikv::storage::{Engine, Mutation, Options, RegionInfoProvider, Result, Storage, TxnStatus};
-use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
+use tikv::storage::{
+    Engine, Mutation, Options, RegionInfoProvider, Result, Storage, TestEngineBuilder,
+    TestStorageBuilder, TxnStatus,
+};
 use tikv_util::collections::HashMap;
 
 /// A builder to build a `SyncTestStorage`.

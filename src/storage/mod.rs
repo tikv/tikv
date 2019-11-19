@@ -10,7 +10,7 @@
 //! [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
 mod commands;
-mod config;
+pub mod config;
 mod errors;
 pub mod kv;
 pub mod lock_manager;
@@ -33,6 +33,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::future_pool::FuturePool;
 
 use crate::storage::commands::{get_priority_tag, Command, CommandKind};
+use crate::storage::config::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::lock_manager::{DummyLockManager, LockManager};
 use crate::storage::metrics::*;
@@ -40,7 +41,6 @@ use crate::storage::mvcc::{Lock, TsSet};
 use crate::storage::txn::scheduler::Scheduler as TxnScheduler;
 
 pub use self::commands::{Options, PointGetCommand};
-pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::errors::{
     get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner,
 };

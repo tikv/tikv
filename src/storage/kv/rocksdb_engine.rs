@@ -22,7 +22,7 @@ use keys::{Key, Value};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 
-use crate::storage::BlockCacheConfig;
+use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
