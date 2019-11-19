@@ -277,7 +277,7 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
 #[cfg(test)]
 pub mod tests {
     use super::super::tests::*;
-    use super::super::CFStatistics;
+    use super::super::CfStatistics;
     use super::*;
 
     #[test]
@@ -311,7 +311,7 @@ pub mod tests {
             must_put(&engine, k.as_slice(), v.as_slice());
         }
         let snap = engine.snapshot(&Context::default()).unwrap();
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
 
         // lower bound > upper bound, seek() returns false.
         let mut iter_op = IterOption::default();

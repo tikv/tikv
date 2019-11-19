@@ -13,7 +13,7 @@ use self::forward::ForwardScanner;
 use crate::storage::mvcc::{default_not_found_error, Result, TimeStamp, TsSet};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
-    CFStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Scanner as StoreScanner,
+    CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Scanner as StoreScanner,
     Snapshot, Statistics,
 };
 
@@ -260,7 +260,7 @@ pub fn has_data_in_range<S: Snapshot>(
     cf: CfName,
     left: &Key,
     right: &Key,
-    statistic: &mut CFStatistics,
+    statistic: &mut CfStatistics,
 ) -> Result<bool> {
     let iter_opt = IterOption::new(None, None, true);
     let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;

@@ -493,7 +493,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GCTask>) -> Result<()> {
     match e {
         ScheduleError::Full(mut task) => {
             GC_TOO_BUSY_COUNTER.inc();
-            (task.take_callback())(Err(Error::from(ErrorInner::GCWorkerTooBusy)));
+            (task.take_callback())(Err(Error::from(ErrorInner::GcWorkerTooBusy)));
             Ok(())
         }
         _ => Err(box_err!("failed to schedule gc task: {:?}", e)),

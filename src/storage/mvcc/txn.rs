@@ -305,7 +305,7 @@ impl<S: Snapshot> MvccTxn<S> {
             // as well as commit timestamp, the lock is already rollbacked.
             if write.start_ts == self.start_ts && commit_ts == self.start_ts {
                 assert!(write.write_type == WriteType::Rollback);
-                return Err(ErrorInner::PessimisticLockRollbacked {
+                return Err(ErrorInner::PessimisticLockRolledBack {
                     start_ts: self.start_ts,
                     key: key.into_raw()?,
                 }
@@ -318,7 +318,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         assert!(
                             commit_ts == self.start_ts && write.write_type == WriteType::Rollback
                         );
-                        return Err(ErrorInner::PessimisticLockRollbacked {
+                        return Err(ErrorInner::PessimisticLockRolledBack {
                             start_ts: self.start_ts,
                             key: key.into_raw()?,
                         }
@@ -565,7 +565,7 @@ impl<S: Snapshot> MvccTxn<S> {
         {
             Some((ts, write_type)) => {
                 if write_type == WriteType::Rollback {
-                    Ok(TxnStatus::Rollbacked)
+                    Ok(TxnStatus::RolledBack)
                 } else {
                     Ok(TxnStatus::committed(ts))
                 }
@@ -629,7 +629,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                     Err(ErrorInner::Committed { commit_ts }.into())
                 }
-                TxnStatus::Rollbacked => {
+                TxnStatus::RolledBack => {
                     // Return Ok on Rollback already exist.
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
                     Ok(false)
@@ -2194,7 +2194,7 @@ mod tests {
             r,
             committed(ts(15, 0)),
         );
-        must_check_txn_status(&engine, k, ts(20, 0), ts(10, 0), ts(10, 0), r, Rollbacked);
+        must_check_txn_status(&engine, k, ts(20, 0), ts(10, 0), ts(10, 0), r, RolledBack);
 
         // Rollback expired pessimistic lock.
         must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(150, 0), ts(150, 0), 100);

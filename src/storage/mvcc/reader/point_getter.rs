@@ -274,7 +274,7 @@ mod tests {
 
     use crate::storage::mvcc::tests::*;
     use crate::storage::SHORT_VALUE_MAX_LEN;
-    use crate::storage::{CFStatistics, Engine, RocksEngine, TestEngineBuilder};
+    use crate::storage::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
@@ -310,7 +310,7 @@ mod tests {
         assert!(point_getter.get(&Key::from_raw(key)).is_err());
     }
 
-    fn assert_seek_next_prev(stat: &CFStatistics, seek: usize, next: usize, prev: usize) {
+    fn assert_seek_next_prev(stat: &CfStatistics, seek: usize, next: usize, prev: usize) {
         assert_eq!(
             stat.seek, seek,
             "expect seek to be {}, got {}",

@@ -45,7 +45,7 @@ pub use self::errors::{
     get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner,
 };
 pub use self::kv::{
-    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
+    CfStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
     ErrorInner as EngineErrorInner, FlowStatistics, FlowStatsReporter, Iterator, Modify,
     RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
 };

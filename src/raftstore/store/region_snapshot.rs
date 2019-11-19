@@ -396,7 +396,7 @@ mod tests {
     use crate::storage::mvcc::ScannerBuilder;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::txn::Scanner;
-    use crate::storage::{CFStatistics, Cursor, ScanMode};
+    use crate::storage::{CfStatistics, Cursor, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
     use engine::rocks::{IngestExternalFileOptions, Writable};
@@ -728,7 +728,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engines.clone());
 
         let snap = RegionSnapshot::new(&store);
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(!iter

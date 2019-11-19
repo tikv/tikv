@@ -123,7 +123,7 @@ quick_error! {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
         }
-        PessimisticLockRollbacked { start_ts: TimeStamp, key: Vec<u8> } {
+        PessimisticLockRolledBack { start_ts: TimeStamp, key: Vec<u8> } {
             description("pessimistic lock already rollbacked")
             display("pessimistic lock already rollbacked, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
         }
@@ -248,8 +248,8 @@ impl ErrorInner {
             ErrorInner::Committed { commit_ts } => Some(ErrorInner::Committed {
                 commit_ts: *commit_ts,
             }),
-            ErrorInner::PessimisticLockRollbacked { start_ts, key } => {
-                Some(ErrorInner::PessimisticLockRollbacked {
+            ErrorInner::PessimisticLockRolledBack { start_ts, key } => {
+                Some(ErrorInner::PessimisticLockRolledBack {
                     start_ts: *start_ts,
                     key: key.to_owned(),
                 })

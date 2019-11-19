@@ -46,7 +46,7 @@ fn test_gcworker_busy() {
         )
         .unwrap();
 
-    // Old GC commands are blocked, the new one will get GCWorkerTooBusy error.
+    // Old GC commands are blocked, the new one will get GcWorkerTooBusy error.
     let (tx2, rx2) = channel();
     gc_worker
         .async_gc(
@@ -54,7 +54,7 @@ fn test_gcworker_busy() {
             1.into(),
             Box::new(move |res: storage::Result<()>| {
                 match res {
-                    Err(storage::Error(box storage::ErrorInner::GCWorkerTooBusy)) => {}
+                    Err(storage::Error(box storage::ErrorInner::GcWorkerTooBusy)) => {}
                     res => panic!("expect too busy, got {:?}", res),
                 }
                 tx2.send(1).unwrap();

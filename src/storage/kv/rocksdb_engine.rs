@@ -424,7 +424,7 @@ impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
 mod tests {
     use super::super::perf_context::PerfStatisticsInstant;
     use super::super::tests::*;
-    use super::super::CFStatistics;
+    use super::super::CfStatistics;
     use super::*;
 
     #[test]
@@ -504,7 +504,7 @@ mod tests {
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
 
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)

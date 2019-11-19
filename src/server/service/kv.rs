@@ -2238,7 +2238,7 @@ fn future_check_txn_status<E: Engine, L: LockManager>(
         } else {
             match v {
                 Ok(txn_status) => match txn_status {
-                    TxnStatus::Rollbacked => resp.set_action(Action::NoAction),
+                    TxnStatus::RolledBack => resp.set_action(Action::NoAction),
                     TxnStatus::TtlExpire => resp.set_action(Action::TtlExpireRollback),
                     TxnStatus::LockNotExist => resp.set_action(Action::LockNotExistRollback),
                     TxnStatus::Committed { commit_ts } => {
@@ -2661,7 +2661,7 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
-        Err(Error(box ErrorInner::GCWorkerTooBusy)) => {
+        Err(Error(box ErrorInner::GcWorkerTooBusy)) => {
             let mut err = RegionError::default();
             let mut server_is_busy_err = ServerIsBusy::default();
             server_is_busy_err.set_reason(GC_WORKER_IS_BUSY.to_owned());
