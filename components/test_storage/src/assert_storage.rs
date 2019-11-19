@@ -6,7 +6,7 @@ use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
 use tikv::storage::kv::{self, RocksEngine};
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn;
-use tikv::storage::{self, Engine, Key, KvPair, Mutation, Value};
+use tikv::storage::{self, Engine, Key, KvPair, Mutation, TxnStatus, Value};
 use tikv_util::HandyRwLock;
 
 use super::*;
@@ -233,7 +233,10 @@ impl<E: Engine> AssertionStorage<E> {
         }
     }
 
-    fn expect_invalid_tso_err(&self, resp: Result<(), storage::Error>, sts: u64, cmt_ts: u64) {
+    fn expect_invalid_tso_err<T>(&self, resp: Result<T, storage::Error>, sts: u64, cmt_ts: u64)
+    where
+        T: std::fmt::Debug,
+    {
         assert!(resp.is_err());
         let err = resp.unwrap_err();
         match err {
@@ -427,11 +430,19 @@ impl<E: Engine> AssertionStorage<E> {
         }
     }
 
-    pub fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
+    pub fn commit_ok(
+        &self,
+        keys: Vec<&[u8]>,
+        start_ts: u64,
+        commit_ts: u64,
+        actual_commit_ts: u64,
+    ) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
-        self.store
+        let txn_status = self
+            .store
             .commit(self.ctx.clone(), keys, start_ts, commit_ts)
             .unwrap();
+        assert_eq!(txn_status, TxnStatus::committed(actual_commit_ts));
     }
 
     pub fn commit_with_illegal_tso(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {

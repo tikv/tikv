@@ -8,7 +8,7 @@ use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockMgr;
 use tikv::storage::{
-    Engine, Key, KvPair, Mutation, Options, RegionInfoProvider, Result, Storage, Value,
+    Engine, Key, KvPair, Mutation, Options, RegionInfoProvider, Result, Storage, TxnStatus, Value,
 };
 use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
 use tikv_util::collections::HashMap;
@@ -174,7 +174,7 @@ impl<E: Engine> SyncTestStorage<E> {
         keys: Vec<Key>,
         start_ts: u64,
         commit_ts: u64,
-    ) -> Result<()> {
+    ) -> Result<TxnStatus> {
         wait_op!(|cb| self.store.async_commit(ctx, keys, start_ts, commit_ts, cb)).unwrap()
     }
 
