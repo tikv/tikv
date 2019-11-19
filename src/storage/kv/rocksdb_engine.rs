@@ -422,11 +422,10 @@ impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
+    use super::super::perf_context::PerfStatisticsInstant;
     use super::super::tests::*;
     use super::super::CFStatistics;
     use super::*;
-    use tempfile::Builder;
 
     #[test]
     fn test_rocksdb() {
@@ -457,7 +456,10 @@ mod tests {
 
     #[test]
     fn rocksdb_reopen() {
-        let dir = Builder::new().prefix("rocksdb_test").tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("rocksdb_test")
+            .tempdir()
+            .unwrap();
         {
             let engine = TestEngineBuilder::new()
                 .path(dir.path())
@@ -485,7 +487,7 @@ mod tests {
         test_perf_statistics(&engine);
     }
 
-    pub fn test_perf_statistics<E: Engine>(engine: &E) {
+    fn test_perf_statistics<E: Engine>(engine: &E) {
         must_put(engine, b"foo", b"bar1");
         must_put(engine, b"foo2", b"bar2");
         must_put(engine, b"foo3", b"bar3"); // deleted

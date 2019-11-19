@@ -517,13 +517,9 @@ mod tests {
         Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
     };
     use crate::storage::mvcc::MvccTxn;
-    use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-    use crate::storage::{
-        CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
-        TestEngineBuilder, Value,
-    };
+    use crate::storage::{CfName, Cursor, Iterator, Mutation, Options, TestEngineBuilder};
     use engine::IterOption;
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use kvproto::kvrpcpb::Context;
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: TimeStamp = TimeStamp::new(10);
@@ -1153,13 +1149,10 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
+    use super::*;
     use crate::test;
-
     use rand::RngCore;
     use std::collections::BTreeMap;
-
-    use super::{FixtureStore, Scanner, Store};
-    use crate::storage::{Key, Statistics};
 
     fn gen_payload(n: usize) -> Vec<u8> {
         let mut data = vec![0; n];

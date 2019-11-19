@@ -310,10 +310,6 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::storage::{CfName, Key};
-    use engine::IterOption;
-    use engine::CF_DEFAULT;
-    use kvproto::kvrpcpb::Context;
     use tikv_util::codec::bytes;
 
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];

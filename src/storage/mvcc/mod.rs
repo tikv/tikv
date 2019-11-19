@@ -342,13 +342,11 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 }
 
 pub mod tests {
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
-
+    use super::*;
     use crate::storage::{Engine, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
     use engine::CF_WRITE;
     use keys::Key;
-
-    use super::*;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
         if !modifies.is_empty() {

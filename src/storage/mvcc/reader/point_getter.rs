@@ -270,11 +270,11 @@ mod tests {
     use super::*;
 
     use engine_rocks::RocksSyncSnapshot;
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use kvproto::kvrpcpb::Context;
 
     use crate::storage::mvcc::tests::*;
     use crate::storage::SHORT_VALUE_MAX_LEN;
-    use crate::storage::{CFStatistics, Engine, Key, RocksEngine, TestEngineBuilder};
+    use crate::storage::{CFStatistics, Engine, RocksEngine, TestEngineBuilder};
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(&Context::default()).unwrap();

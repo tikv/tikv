@@ -205,7 +205,6 @@ impl Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{Key, Mutation};
 
     #[test]
     fn test_lock_type() {

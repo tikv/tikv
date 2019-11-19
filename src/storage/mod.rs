@@ -1563,11 +1563,10 @@ mod tests {
     use super::*;
 
     use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-    use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
-    use tikv_util::config::ReadableSize;
-
+    use kvproto::kvrpcpb::CommandPri;
     use std::fmt::Debug;
     use std::sync::mpsc::{channel, Sender};
+    use tikv_util::config::ReadableSize;
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);

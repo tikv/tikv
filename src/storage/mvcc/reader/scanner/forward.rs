@@ -360,7 +360,7 @@ mod tests {
     use super::*;
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
-    use crate::storage::{Engine, Key, TestEngineBuilder};
+    use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 

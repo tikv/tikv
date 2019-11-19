@@ -204,7 +204,6 @@ impl WriteRef<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::LockType;
     use super::*;
 
     #[test]

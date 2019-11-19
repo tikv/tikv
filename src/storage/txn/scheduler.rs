@@ -536,9 +536,8 @@ mod tests {
     use super::*;
     use crate::storage::mvcc;
     use crate::storage::txn::latch::*;
-    use crate::storage::{Key, Mutation, Options};
+    use crate::storage::{Mutation, Options};
     use kvproto::kvrpcpb::Context;
-    use tikv_util::collections::HashMap;
 
     #[test]
     fn test_command_latches() {
