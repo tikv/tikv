@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::mpsc;
@@ -180,7 +180,7 @@ impl<E: Engine> GCRunner<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        limiter: Arc<Mutex<Option<IOLimiter>>>,
+        limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
         cfg: GCConfig,
     ) -> Self {
         Self {
@@ -1100,7 +1100,7 @@ pub struct GCWorker<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     cfg: Option<GCConfig>,
-    limiter: Arc<Mutex<Option<IOLimiter>>>,
+    limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
 
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
@@ -1160,7 +1160,9 @@ impl<E: Engine> GCWorker<E> {
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
         let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
-            Some(IOLimiter::new(cfg.max_write_bytes_per_sec.0))
+            let bps = i64::try_from(cfg.max_write_bytes_per_sec.0)
+                .expect("snap_max_write_bytes_per_sec > i64::max_value");
+            Some(IOLimiter::new(bps))
         } else {
             None
         };
@@ -1251,13 +1253,13 @@ impl<E: Engine> GCWorker<E> {
             .or_else(handle_gc_task_schedule_error)
     }
 
-    pub fn change_io_limit(&self, limit: u64) -> Result<()> {
+    pub fn change_io_limit(&self, limit: i64) -> Result<()> {
         let mut limiter = self.limiter.lock().unwrap();
         if limit == 0 {
             limiter.take();
         } else {
             limiter
-                .get_or_insert_with(|| IOLimiter::new(limit))
+                .get_or_insert_with(|| RocksIOLimiter::new(limit))
                 .set_bytes_per_second(limit as i64);
         }
         info!("GC io limit changed"; "max_write_bytes_per_sec" => limit);
