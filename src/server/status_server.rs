@@ -162,7 +162,6 @@ impl StatusServer {
             },
             None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
         };
-        drop(query);
         drop(query_pairs);
 
         let prototype_content_type: hyper::http::HeaderValue =
