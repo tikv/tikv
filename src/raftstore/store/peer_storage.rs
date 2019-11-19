@@ -9,13 +9,13 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine::rocks;
-use engine::rocks::{Cache, Snapshot as DbSnapshot, WriteBatch, DB};
+use engine::rocks::{Cache, WriteBatch, DB};
 use engine::rocks::{DBOptions, Writable};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
 use engine_traits::Peekable as PeekableTrait;
-use engine_rocks::Compat;
+use engine_rocks::RocksSnapshot;
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -684,8 +684,8 @@ impl PeerStorage {
         self.region = region;
     }
 
-    pub fn raw_snapshot(&self) -> DbSnapshot {
-        DbSnapshot::new(Arc::clone(&self.engines.kv))
+    pub fn raw_snapshot(&self) -> RocksSnapshot {
+        RocksSnapshot::new(Arc::clone(&self.engines.kv))
     }
 
     fn validate_snap(&self, snap: &Snapshot, request_index: u64) -> bool {
@@ -1346,8 +1346,8 @@ pub fn clear_meta(
 
 pub fn do_snapshot(
     mgr: SnapManager,
-    raft_snap: DbSnapshot,
-    kv_snap: DbSnapshot,
+    raft_snap: RocksSnapshot,
+    kv_snap: RocksSnapshot,
     region_id: u64,
 ) -> raft::Result<Snapshot> {
     debug!(
@@ -1355,7 +1355,7 @@ pub fn do_snapshot(
         "region_id" => region_id,
     );
 
-    let msg = kv_snap.c().get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+    let msg = kv_snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
         .map_err(into_other::<_, raft::Error>)?;
     let apply_state: RaftApplyState =
         match msg {
@@ -1372,7 +1372,7 @@ pub fn do_snapshot(
     let term = if idx == apply_state.get_truncated_state().get_index() {
         apply_state.get_truncated_state().get_term()
     } else {
-        let msg = raft_snap.c().get_msg::<Entry>(&keys::raft_log_key(region_id, idx))
+        let msg = raft_snap.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))
             .map_err(into_other::<_, raft::Error>)?;
         match msg {
             None => {
@@ -1392,7 +1392,7 @@ pub fn do_snapshot(
     mgr.register(key.clone(), SnapEntry::Generating);
     defer!(mgr.deregister(&key, &SnapEntry::Generating));
 
-    let state: RegionLocalState = kv_snap.c()
+    let state: RegionLocalState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
         .and_then(|res| match res {
             None => Err(box_err!("could not find region info")),
@@ -1421,7 +1421,7 @@ pub fn do_snapshot(
     snap_data.set_region(state.get_region().clone());
     let mut stat = SnapshotStatistics::new();
     s.build(
-        &kv_snap,
+        &kv_snap.as_raw(),
         state.get_region(),
         &mut snap_data,
         &mut stat,

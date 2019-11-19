@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Debug, Formatter};
-use std::ops::Deref;
 use std::sync::Arc;
 
 use super::{CFHandle, UnsafeSnap, DB};
@@ -29,10 +28,6 @@ impl Snapshot {
         }
     }
 
-    pub fn into_sync(self) -> SyncSnapshot {
-        SyncSnapshot(Arc::new(self))
-    }
-
     pub fn cf_names(&self) -> Vec<&str> {
         self.db.cf_names()
     }
@@ -57,28 +52,6 @@ impl Drop for Snapshot {
         unsafe {
             self.db.release_snap(&self.snap);
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-#[repr(transparent)] // Guarantee same representation as in engine_rocks
-pub struct SyncSnapshot(Arc<Snapshot>);
-
-impl Deref for SyncSnapshot {
-    type Target = Snapshot;
-
-    fn deref(&self) -> &Snapshot {
-        &self.0
-    }
-}
-
-impl SyncSnapshot {
-    pub fn new(db: Arc<DB>) -> SyncSnapshot {
-        SyncSnapshot(Arc::new(Snapshot::new(db)))
-    }
-
-    pub fn clone(&self) -> SyncSnapshot {
-        SyncSnapshot(Arc::clone(&self.0))
     }
 }
 

@@ -3,9 +3,9 @@
 use std::fmt::{self, Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
+use std::mem;
 
 use engine::rocks::Snapshot as RawSnapshot;
-use engine::rocks::SyncSnapshot as RawSyncSnapshot;
 use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot, SyncSnapshot};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
@@ -38,8 +38,16 @@ impl RocksSnapshot {
         }
     }
 
+    pub fn from_raw(raw: RawSnapshot) -> RocksSnapshot {
+        unsafe { mem::transmute(raw) }
+    }
+
     pub fn from_ref(raw: &RawSnapshot) -> &RocksSnapshot {
         unsafe { &*(raw as *const _ as *const _) }
+    }
+
+    pub fn as_raw(&self) -> &RawSnapshot {
+        unsafe { &*(self as *const _ as *const _) }
     }
 
     pub fn get_db(&self) -> &DB {
@@ -148,14 +156,6 @@ impl Deref for RocksSyncSnapshot {
 impl RocksSyncSnapshot {
     pub fn new(db: Arc<DB>) -> RocksSyncSnapshot {
         RocksSyncSnapshot(Arc::new(RocksSnapshot::new(db)))
-    }
-
-    pub fn from_ref(raw: &RawSyncSnapshot) -> &RocksSyncSnapshot {
-        unsafe { &*(raw as *const _ as *const _) }
-    }
-
-    pub fn as_raw(&self) -> &RawSyncSnapshot {
-        unsafe { &*(self as *const _ as *const _) }
     }
 }
 

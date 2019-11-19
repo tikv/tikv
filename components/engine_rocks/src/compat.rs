@@ -2,9 +2,7 @@
 
 use crate::engine::RocksEngine;
 use crate::snapshot::RocksSnapshot;
-use crate::snapshot::RocksSyncSnapshot;
 use engine::Snapshot as RawSnapshot;
-use engine::SyncSnapshot as RawSyncSnapshot;
 use engine::DB;
 use std::sync::Arc;
 
@@ -34,14 +32,5 @@ impl Compat for RawSnapshot {
     #[inline]
     fn c(&self) -> &RocksSnapshot {
         RocksSnapshot::from_ref(self)
-    }
-}
-
-impl Compat for RawSyncSnapshot {
-    type Other = RocksSyncSnapshot;
-
-    #[inline]
-    fn c(&self) -> &RocksSyncSnapshot {
-        RocksSyncSnapshot::from_ref(self)
     }
 }

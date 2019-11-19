@@ -2,9 +2,9 @@
 
 use engine::rocks::{TablePropertiesCollection, DB};
 use engine::{
-    self, IterOption, Snapshot,
+    self, IterOption,
 };
-use engine_rocks::{Compat, RocksEngineIterator, RocksDBVector, RocksSnapshot, RocksSyncSnapshot};
+use engine_rocks::{RocksEngineIterator, RocksDBVector, RocksSnapshot, RocksSyncSnapshot};
 use engine_traits::{SeekKey, Peekable, Result as EngineResult, ReadOptions, Snapshot as SnapshotTrait};
 use kvproto::metapb::Region;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ pub struct RegionSnapshot {
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync().c().clone(), ps.region().clone())
+        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
@@ -48,12 +48,12 @@ impl RegionSnapshot {
     }
 
     pub fn iter(&self, iter_opt: IterOption) -> RegionIterator {
-        RegionIterator::new(self.snap.as_raw(), Arc::clone(&self.region), iter_opt)
+        RegionIterator::new(&self.snap, Arc::clone(&self.region), iter_opt)
     }
 
     pub fn iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<RegionIterator> {
         Ok(RegionIterator::new_cf(
-            self.snap.as_raw(),
+            &self.snap,
             Arc::clone(&self.region),
             iter_opt,
             cf,
@@ -237,13 +237,12 @@ fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
-    pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
+    pub fn new(snap: &RocksSyncSnapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap
-            .c()
             .iterator_opt(iter_opt)
             .expect("creating snapshot iterator"); // FIXME error handling
         RegionIterator {
@@ -256,7 +255,7 @@ impl RegionIterator {
     }
 
     pub fn new_cf(
-        snap: &Snapshot,
+        snap: &RocksSyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOption,
         cf: &str,
@@ -266,7 +265,6 @@ impl RegionIterator {
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap
-            .c()
             .iterator_cf_opt(cf, iter_opt)
             .expect("creating snapshot iterator"); // FIXME error handling
         RegionIterator {

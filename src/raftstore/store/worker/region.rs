@@ -14,6 +14,7 @@ use engine::rocks::Writable;
 use engine::WriteBatch;
 use engine::CF_RAFT;
 use engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
+use engine_rocks::RocksSnapshot;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -224,8 +225,8 @@ impl SnapContext {
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot(
             self.mgr.clone(),
-            raft_snap,
-            kv_snap,
+            RocksSnapshot::from_raw(raft_snap),
+            RocksSnapshot::from_raw(kv_snap),
             region_id
         ));
         // Only enable the fail point when the region id is equal to 1, which is
