@@ -55,7 +55,7 @@ pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
 #[inline]
 pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|bytes| {
-        let pos = bytes.iter().rev().position(|&x| x != SPACE);
+        let pos = bytes.iter().rposition(|&x| x != SPACE);
         if let Some(i) = pos {
             bytes[..bytes.len() - i].to_vec()
         } else {
