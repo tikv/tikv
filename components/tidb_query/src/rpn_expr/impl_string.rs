@@ -259,7 +259,6 @@ mod tests {
         }
     }
 
-    
     #[test]
     fn test_hex_int_arg() {
         let test_cases = vec![
