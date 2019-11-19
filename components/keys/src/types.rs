@@ -187,6 +187,11 @@ impl Key {
     pub fn is_encoded_from(&self, raw_key: &[u8]) -> bool {
         bytes::is_encoded_from(&self.0, raw_key, false)
     }
+
+    /// TiDB uses the same hash algorithm.
+    pub fn gen_hash(&self) -> u64 {
+        farmhash::fingerprint64(&self.to_raw().unwrap())
+    }
 }
 
 impl Clone for Key {

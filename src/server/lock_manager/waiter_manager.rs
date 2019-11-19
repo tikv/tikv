@@ -409,7 +409,6 @@ fn extract_raw_key_from_process_result(pr: &ProcessResult) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::lock_manager::gen_key_hash;
     use crate::storage::Key;
     use std::time::Duration;
     use test_util::KvGenerator;
@@ -451,7 +450,7 @@ mod tests {
         let mut hashes: Vec<u64> = KvGenerator::new(64, 0)
             .generate(10)
             .into_iter()
-            .map(|(key, _)| gen_key_hash(&Key::from_raw(&key)))
+            .map(|(key, _)| Key::from_raw(&key).gen_hash())
             .collect();
 
         assert!(wait_table.take_ready_waiters(ts, hashes.clone()).is_empty());
