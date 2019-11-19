@@ -16,7 +16,7 @@ impl IterOptionsExt for IterOption {
     fn build_read_opts(self) -> ReadOptions {
         let mut opts = ReadOptions::new();
         opts.fill_cache(self.fill_cache());
-        if self.titan_key_only() {
+        if self.key_only() {
             opts.set_titan_key_only(true);
         }
         if self.total_order_seek_used() {

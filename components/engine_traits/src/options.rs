@@ -53,7 +53,7 @@ pub struct IterOptions {
     prefix_same_as_start: bool,
     fill_cache: bool,
     // only supported when Titan enabled, otherwise it doesn't take effect.
-    titan_key_only: bool,
+    key_only: bool,
     seek_mode: SeekMode,
 }
 
@@ -68,7 +68,7 @@ impl IterOptions {
             upper_bound,
             prefix_same_as_start: false,
             fill_cache,
-            titan_key_only: false,
+            key_only: false,
             seek_mode: SeekMode::TotalOrder,
         }
     }
@@ -95,13 +95,13 @@ impl IterOptions {
     }
 
     #[inline]
-    pub fn titan_key_only(&self) -> bool {
-        self.titan_key_only
+    pub fn key_only(&self) -> bool {
+        self.key_only
     }
 
     #[inline]
-    pub fn set_titan_key_only(&mut self, v: bool) {
-        self.titan_key_only = v;
+    pub fn set_key_only(&mut self, v: bool) {
+        self.key_only = v;
     }
 
     #[inline]
@@ -172,7 +172,7 @@ impl Default for IterOptions {
             upper_bound: None,
             prefix_same_as_start: false,
             fill_cache: true,
-            titan_key_only: false,
+            key_only: false,
             seek_mode: SeekMode::TotalOrder,
         }
     }
