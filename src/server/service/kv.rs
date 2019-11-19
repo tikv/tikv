@@ -249,7 +249,7 @@ impl RequestLoadEstimator {
                             < self.latency_threshold * REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO
                 {
                     self.load_estimation = RequestLoad::Light;
-                    self.thread_load_estimation = REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR;
+                    // self.thread_load_estimation = REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR;
                 }
             }
         }
