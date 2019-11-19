@@ -991,7 +991,7 @@ fn process_write_impl<S: Snapshot, L: LockMgr>(
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
-                txn_status: TxnStatus::uncommitted(lock_ttl),
+                txn_status: TxnStatus::uncommitted(lock_ttl, 0),
             };
             (pr, txn.into_modifies(), 1, ctx, None)
         }
