@@ -12,9 +12,11 @@ use crate::storage::types::{Key, Mutation};
 pub const CMD_TAG_GC: &str = "gc";
 pub const CMD_TAG_UNSAFE_DESTROY_RANGE: &str = "unsafe_destroy_range";
 
+/// Get a single value.
 pub struct PointGetCommand {
     pub(super) ctx: Context,
     pub(super) key: Key,
+    /// None if this is a raw get, Some if this is a transactional get.
     pub(super) ts: Option<u64>,
 }
 
