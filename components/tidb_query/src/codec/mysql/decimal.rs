@@ -131,9 +131,9 @@ impl<T> DerefMut for Res<T> {
 }
 
 // A `Decimal` holds 9 words.
-const WORD_BUF_LEN: u8 = 9;
+pub const WORD_BUF_LEN: u8 = 9;
 // A word holds 9 digits.
-const DIGITS_PER_WORD: u8 = 9;
+pub const DIGITS_PER_WORD: u8 = 9;
 // A word is 4 bytes i32.
 const WORD_SIZE: u8 = 4;
 const DIG_MASK: u32 = TEN_POW[8];

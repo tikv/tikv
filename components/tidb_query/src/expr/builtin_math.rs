@@ -229,11 +229,11 @@ impl ScalarFunc {
         if digits >= 0 {
             Ok(Some(number))
         } else {
-            let digits = std::cmp::max(i64::from(std::i32::MIN) + 1, digits);
-            let power = 10.0_f64.powi(-digits as i32);
-            if power.is_infinite() {
+            // The maximum number of digits for the i64 type is 19.
+            if digits <= -19 {
                 return Ok(Some(0));
             }
+            let power = 10.0_f64.powi(-digits as i32);
             let frac = number as f64 / power;
             Ok(Some((frac.round() * power) as i64))
         }
@@ -249,14 +249,11 @@ impl ScalarFunc {
         let digits = try_opt!(self.children[1].eval_int(ctx, row));
 
         let digits = if digits >= 0 {
-            std::cmp::min(i64::from(mysql::MAX_FSP), digits)
+            std::cmp::min(i64::from(std::f64::DIGITS), digits)
         } else {
-            std::cmp::max(i64::from(std::i32::MIN) + 1, digits)
+            std::cmp::max(i64::from(std::f64::MIN_10_EXP) - 1, digits)
         };
         let power = 10.0_f64.powi(-digits as i32);
-        if power.is_infinite() {
-            return Ok(Some(0.0_f64));
-        }
         let frac = number / power;
         Ok(Some(frac.round() * power))
     }
@@ -273,7 +270,10 @@ impl ScalarFunc {
         let digits = if digits >= 0 {
             std::cmp::min(i64::from(mysql::decimal::MAX_FRACTION), digits)
         } else {
-            std::cmp::max(i64::from(std::i8::MIN), digits)
+            std::cmp::max(
+                -i64::from(mysql::decimal::WORD_BUF_LEN * mysql::decimal::DIGITS_PER_WORD),
+                digits,
+            )
         };
         let result: Result<Decimal> = number
             .into_owned()
@@ -1028,39 +1028,39 @@ mod tests {
             ),
             (
                 ScalarFuncSig::RoundWithFracInt,
-                Datum::I64(1234567890),
                 Datum::I64(std::i64::MAX),
-                Datum::I64(1234567890),
+                Datum::I64(std::i64::MAX),
+                Datum::I64(std::i64::MAX),
             ),
             (
                 ScalarFuncSig::RoundWithFracInt,
-                Datum::I64(-1234567890),
+                Datum::I64(std::i64::MIN),
                 Datum::I64(std::i64::MAX),
-                Datum::I64(-1234567890),
+                Datum::I64(std::i64::MIN),
             ),
             (
                 ScalarFuncSig::RoundWithFracInt,
-                Datum::I64(1234567890),
+                Datum::I64(std::i64::MAX),
                 Datum::I64(std::i64::MIN),
                 Datum::I64(0),
             ),
             (
                 ScalarFuncSig::RoundWithFracInt,
-                Datum::I64(-1234567890),
+                Datum::I64(std::i64::MIN),
                 Datum::I64(std::i64::MIN),
                 Datum::I64(0),
             ),
             (
                 ScalarFuncSig::RoundWithFracInt,
-                Datum::I64(1234567890),
-                Datum::I64(std::i32::MIN as i64),
+                Datum::I64(std::i64::MAX),
+                Datum::I64(-19),
                 Datum::I64(0),
             ),
             (
                 ScalarFuncSig::RoundWithFracInt,
-                Datum::I64(-1234567890),
-                Datum::I64(std::i32::MIN as i64),
-                Datum::I64(0),
+                Datum::I64(std::i64::MAX),
+                Datum::I64(-18),
+                Datum::I64(9000000000000000000),
             ),
             (
                 ScalarFuncSig::RoundWithFracDec,
@@ -1082,50 +1082,26 @@ mod tests {
             ),
             (
                 ScalarFuncSig::RoundWithFracDec,
-                str2dec("1234567890.123"),
-                Datum::I64(std::i64::MAX),
-                str2dec("1234567890.123000000000000000000000000000"),
+                str2dec("1234567890.0123456"),
+                Datum::I64(i64::from(mysql::decimal::MAX_FRACTION + 1)),
+                str2dec("1234567890.012345600000000000000000000000"),
             ),
             (
                 ScalarFuncSig::RoundWithFracDec,
-                str2dec("-1234567890.123"),
-                Datum::I64(std::i64::MAX),
-                str2dec("-1234567890.123000000000000000000000000000"),
+                str2dec("-1234567890.0123456"),
+                Datum::I64(i64::from(mysql::decimal::MAX_FRACTION + 1)),
+                str2dec("-1234567890.012345600000000000000000000000"),
             ),
             (
                 ScalarFuncSig::RoundWithFracDec,
-                str2dec("1234567890.123"),
-                Datum::I64(std::i64::MIN),
-                str2dec("0"),
+                str2dec("123456789012345678901234567890123456789012345678901234567890123456789012345678901"),
+                Datum::I64(-i64::from(mysql::decimal::WORD_BUF_LEN * mysql::decimal::DIGITS_PER_WORD - 1)),
+                str2dec("100000000000000000000000000000000000000000000000000000000000000000000000000000000"),
             ),
             (
                 ScalarFuncSig::RoundWithFracDec,
-                str2dec("-1234567890.123"),
-                Datum::I64(std::i64::MIN),
-                str2dec("0"),
-            ),
-            (
-                ScalarFuncSig::RoundWithFracDec,
-                str2dec("1234567890.123"),
-                Datum::I64(mysql::decimal::MAX_FRACTION as i64 + 1),
-                str2dec("1234567890.123000000000000000000000000000"),
-            ),
-            (
-                ScalarFuncSig::RoundWithFracDec,
-                str2dec("-1234567890.123"),
-                Datum::I64(mysql::decimal::MAX_FRACTION as i64 + 1),
-                str2dec("-1234567890.123000000000000000000000000000"),
-            ),
-            (
-                ScalarFuncSig::RoundWithFracDec,
-                str2dec("1234567890.123"),
-                Datum::I64(std::i8::MIN as i64 + 1),
-                str2dec("0"),
-            ),
-            (
-                ScalarFuncSig::RoundWithFracDec,
-                str2dec("-1234567890.123"),
-                Datum::I64(std::i8::MIN as i64 + 1),
+                str2dec("123456789012345678901234567890123456789012345678901234567890123456789012345678901"),
+                Datum::I64(-i64::from(mysql::decimal::WORD_BUF_LEN * mysql::decimal::DIGITS_PER_WORD)),
                 str2dec("0"),
             ),
         ];
@@ -1136,43 +1112,23 @@ mod tests {
             (Datum::F64(23.298_f64), Datum::I64(2), 23.30_f64),
             (Datum::F64(23.298_f64), Datum::I64(-1), 20.0_f64),
             (
-                Datum::F64(1234567890.123_f64),
+                Datum::F64(1234567890.0123456789_f64),
                 Datum::I64(std::i64::MAX),
-                1234567890.123_f64,
+                1234567890.0123456789_f64,
             ),
             (
-                Datum::F64(-1234567890.123_f64),
+                Datum::F64(-1234567890.0123456789_f64),
                 Datum::I64(std::i64::MAX),
-                -1234567890.123_f64,
+                -1234567890.0123456789_f64,
             ),
             (
-                Datum::F64(1234567890.123_f64),
+                Datum::F64(1234567890.0123456789_f64),
                 Datum::I64(std::i64::MIN),
                 0.0_f64,
             ),
             (
-                Datum::F64(-1234567890.123_f64),
+                Datum::F64(-1234567890.0123456789_f64),
                 Datum::I64(std::i64::MIN),
-                0.0_f64,
-            ),
-            (
-                Datum::F64(1234567890.123_f64),
-                Datum::I64(mysql::MAX_FSP as i64 + 1),
-                1234567890.123_f64,
-            ),
-            (
-                Datum::F64(-1234567890.123_f64),
-                Datum::I64(mysql::MAX_FSP as i64 + 1),
-                -1234567890.123_f64,
-            ),
-            (
-                Datum::F64(1234567890.123_f64),
-                Datum::I64(std::i32::MIN as i64),
-                0.0_f64,
-            ),
-            (
-                Datum::F64(-1234567890.123_f64),
-                Datum::I64(std::i32::MIN as i64),
                 0.0_f64,
             ),
         ];

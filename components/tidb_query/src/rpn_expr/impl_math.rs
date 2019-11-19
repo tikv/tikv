@@ -340,11 +340,11 @@ impl Round for RoundWithFracInt {
         if digits >= 0 {
             Ok(Some(*number))
         } else {
-            let digits = std::cmp::max(i64::from(std::i32::MIN) + 1, digits);
-            let power = 10.0_f64.powi(-digits as i32);
-            if power.is_infinite() {
+            // The maximum number of digits for the i64 type is 19.
+            if digits <= -19 {
                 return Ok(Some(0));
             }
+            let power = 10.0_f64.powi(-digits as i32);
             let frac = *number as f64 / power;
             Ok(Some((frac.round() * power) as i64))
         }
@@ -363,14 +363,11 @@ impl Round for RoundWithFracReal {
         digits: Int,
     ) -> Result<Option<Self::Type>> {
         let digits = if digits >= 0 {
-            std::cmp::min(i64::from(mysql::MAX_FSP), digits)
+            std::cmp::min(i64::from(std::f64::DIGITS), digits)
         } else {
-            std::cmp::max(i64::from(std::i32::MIN) + 1, digits)
+            std::cmp::max(i64::from(std::f64::MIN_10_EXP) - 1, digits)
         };
         let power = 10.0_f64.powi(-digits as i32);
-        if power.is_infinite() {
-            return Ok(Real::new(0.0_f64).ok());
-        }
         let frac = number.into_inner() / power;
         Ok(Real::new(frac.round() * power).ok())
     }
@@ -390,7 +387,10 @@ impl Round for RoundWithFracDec {
         let digits = if digits >= 0 {
             std::cmp::min(i64::from(mysql::decimal::MAX_FRACTION), digits)
         } else {
-            std::cmp::max(i64::from(std::i8::MIN), digits)
+            std::cmp::max(
+                -i64::from(mysql::decimal::WORD_BUF_LEN * mysql::decimal::DIGITS_PER_WORD),
+                digits,
+            )
         };
         Ok(number
             .to_owned()
@@ -451,6 +451,12 @@ pub fn exp(arg: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
+fn degrees(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.and_then(|n| Real::new(n.to_degrees()).ok()))
+}
+
+#[inline]
+#[rpn_fn]
 fn sin(arg: &Option<Real>) -> Result<Option<Real>> {
     Ok(arg.map_or(None, |arg| Real::new(arg.sin()).ok()))
 }
@@ -482,12 +488,6 @@ fn cot(arg: &Option<Real>) -> Result<Option<Real>> {
         }
         None => Ok(None),
     }
-}
-
-#[inline]
-#[rpn_fn]
-fn degrees(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(arg.and_then(|n| Real::new(n.to_degrees()).ok()))
 }
 
 #[inline]
@@ -924,12 +924,12 @@ mod tests {
             (23, -1, 20),
             (-27, -1, -30),
             (-27, -2, 0),
-            (1234567890, std::i64::MAX, 1234567890),
-            (-1234567890, std::i64::MAX, -1234567890),
-            (1234567890, std::i64::MIN, 0),
-            (-1234567890, std::i64::MIN, 0),
-            (1234567890, std::i32::MIN as i64, 0),
-            (-1234567890, std::i32::MIN as i64, 0),
+            (std::i64::MAX, std::i64::MAX, std::i64::MAX),
+            (std::i64::MIN, std::i64::MAX, std::i64::MIN),
+            (std::i64::MAX, std::i64::MIN, 0),
+            (std::i64::MIN, std::i64::MIN, 0),
+            (std::i64::MAX, -19, 0),
+            (std::i64::MAX, -18, 9000000000000000000),
         ];
 
         for (arg0, arg1, expect_output) in test_cases {
@@ -952,22 +952,18 @@ mod tests {
             (23.298_f64, -1, 20.0_f64),
             (23.298_f64, -2, 0.0_f64),
             (23.298_f64, -3, 0.0_f64),
-            (1234567890.123_f64, std::i64::MAX, 1234567890.123_f64),
-            (-1234567890.123_f64, std::i64::MAX, -1234567890.123_f64),
-            (1234567890.123_f64, std::i64::MIN, 0.0_f64),
-            (-1234567890.123_f64, std::i64::MIN, 0.0_f64),
             (
-                1234567890.123_f64,
-                mysql::MAX_FSP as i64 + 1,
-                1234567890.123_f64,
+                1234567890.0123456789_f64,
+                std::i64::MAX,
+                1234567890.0123456789_f64,
             ),
             (
-                -1234567890.123_f64,
-                mysql::MAX_FSP as i64 + 1,
-                -1234567890.123_f64,
+                -1234567890.0123456789_f64,
+                std::i64::MAX,
+                -1234567890.0123456789_f64,
             ),
-            (1234567890.123_f64, std::i32::MIN as i64, 0.0_f64),
-            (-1234567890.123_f64, std::i32::MIN as i64, 0.0_f64),
+            (1234567890.0123456789_f64, std::i64::MIN, 0.0_f64),
+            (-1234567890.0123456789_f64, std::i64::MIN, 0.0_f64),
         ];
 
         for (arg0, arg1, expect_output) in test_cases {
@@ -990,29 +986,25 @@ mod tests {
             ("153.257", -2, "200"),
             ("153.257", -3, "0"),
             (
-                "1234567890.123",
-                std::i64::MAX,
-                "1234567890.123000000000000000000000000000",
+                "1234567890.0123456",
+                i64::from(mysql::decimal::MAX_FRACTION + 1),
+                "1234567890.012345600000000000000000000000",
             ),
             (
-                "-1234567890.123",
-                std::i64::MAX,
-                "-1234567890.123000000000000000000000000000",
-            ),
-            ("1234567890.123", std::i64::MIN, "0"),
-            ("-1234567890.123", std::i64::MIN, "0"),
-            (
-                "1234567890.123",
-                mysql::decimal::MAX_FRACTION as i64 + 1,
-                "1234567890.123000000000000000000000000000",
+                "-1234567890.0123456",
+                i64::from(mysql::decimal::MAX_FRACTION + 1),
+                "-1234567890.012345600000000000000000000000",
             ),
             (
-                "-1234567890.123",
-                mysql::decimal::MAX_FRACTION as i64 + 1,
-                "-1234567890.123000000000000000000000000000",
+                "123456789012345678901234567890123456789012345678901234567890123456789012345678901",
+                -i64::from(mysql::decimal::WORD_BUF_LEN * mysql::decimal::DIGITS_PER_WORD - 1),
+                "100000000000000000000000000000000000000000000000000000000000000000000000000000000",
             ),
-            ("1234567890.123", std::i8::MIN as i64 + 1, "0"),
-            ("-1234567890.123", std::i8::MIN as i64 + 1, "0"),
+            (
+                "123456789012345678901234567890123456789012345678901234567890123456789012345678901",
+                -i64::from(mysql::decimal::WORD_BUF_LEN * mysql::decimal::DIGITS_PER_WORD),
+                "0",
+            ),
         ];
 
         for (arg0, arg1, expect_output) in test_cases {
@@ -1129,7 +1121,7 @@ mod tests {
         for (input, expect) in tests_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Degrees)
+                .evaluate::<Real>(ScalarFuncSig::Degrees)
                 .unwrap();
             assert_eq!(expect, output, "{:?}", input);
         }
@@ -1148,7 +1140,7 @@ mod tests {
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(Some(Real::from(input)))
+                .push_param(input)
                 .evaluate::<Real>(ScalarFuncSig::Sin)
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
@@ -1165,7 +1157,7 @@ mod tests {
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(Some(Real::from(input)))
+                .push_param(input)
                 .evaluate::<Real>(ScalarFuncSig::Cos)
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
@@ -1186,7 +1178,7 @@ mod tests {
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(Some(Real::from(input)))
+                .push_param(input)
                 .evaluate::<Real>(ScalarFuncSig::Tan)
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
@@ -1213,7 +1205,7 @@ mod tests {
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(Some(Real::from(input)))
+                .push_param(input)
                 .evaluate::<Real>(ScalarFuncSig::Cot)
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
@@ -1227,36 +1219,30 @@ mod tests {
     #[test]
     fn test_asin() {
         let test_cases = vec![
-            (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
+            (0.0_f64, 0.0_f64),
+            (1.0_f64, std::f64::consts::PI / 2.0_f64),
+            (-1.0_f64, -std::f64::consts::PI / 2.0_f64),
             (
-                Some(Real::from(1.0_f64)),
-                Some(Real::from(std::f64::consts::PI / 2.0_f64)),
-            ),
-            (
-                Some(Real::from(-1.0_f64)),
-                Some(Real::from(-std::f64::consts::PI / 2.0_f64)),
-            ),
-            (
-                Some(Real::from(std::f64::consts::SQRT_2 / 2.0_f64)),
-                Some(Real::from(std::f64::consts::PI / 4.0_f64)),
+                std::f64::consts::SQRT_2 / 2.0_f64,
+                std::f64::consts::PI / 4.0_f64,
             ),
         ];
         for (input, expect) in test_cases {
-            let output: Option<Real> = RpnFnScalarEvaluator::new()
+            let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Asin)
+                .evaluate::<Real>(ScalarFuncSig::Asin)
                 .unwrap();
-            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+            assert!((output.unwrap() - expect).abs() < std::f64::EPSILON);
         }
         let invalid_test_cases = vec![
-            (Some(Real::from(std::f64::INFINITY)), None),
-            (Some(Real::from(2.0_f64)), None),
-            (Some(Real::from(-2.0_f64)), None),
+            (std::f64::INFINITY, None),
+            (2.0_f64, None),
+            (-2.0_f64, None),
         ];
         for (input, expect) in invalid_test_cases {
-            let output: Option<Real> = RpnFnScalarEvaluator::new()
+            let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Asin)
+                .evaluate::<Real>(ScalarFuncSig::Asin)
                 .unwrap();
             assert_eq!(expect, output);
         }
@@ -1265,36 +1251,30 @@ mod tests {
     #[test]
     fn test_acos() {
         let test_cases = vec![
+            (0.0_f64, std::f64::consts::PI / 2.0_f64),
+            (1.0_f64, 0.0_f64),
+            (-1.0_f64, std::f64::consts::PI),
             (
-                Some(Real::from(0.0_f64)),
-                Some(Real::from(std::f64::consts::PI / 2.0_f64)),
-            ),
-            (Some(Real::from(1.0_f64)), Some(Real::from(0.0_f64))),
-            (
-                Some(Real::from(-1.0_f64)),
-                Some(Real::from(std::f64::consts::PI)),
-            ),
-            (
-                Some(Real::from(std::f64::consts::SQRT_2 / 2.0_f64)),
-                Some(Real::from(std::f64::consts::PI / 4.0_f64)),
+                std::f64::consts::SQRT_2 / 2.0_f64,
+                std::f64::consts::PI / 4.0_f64,
             ),
         ];
         for (input, expect) in test_cases {
-            let output: Option<Real> = RpnFnScalarEvaluator::new()
+            let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Acos)
+                .evaluate::<Real>(ScalarFuncSig::Acos)
                 .unwrap();
-            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+            assert!((output.unwrap() - expect).abs() < std::f64::EPSILON);
         }
         let invalid_test_cases = vec![
-            (Some(Real::from(std::f64::INFINITY)), None),
-            (Some(Real::from(2.0_f64)), None),
-            (Some(Real::from(-2.0_f64)), None),
+            (std::f64::INFINITY, None),
+            (2.0_f64, None),
+            (-2.0_f64, None),
         ];
         for (input, expect) in invalid_test_cases {
-            let output: Option<Real> = RpnFnScalarEvaluator::new()
+            let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Acos)
+                .evaluate::<Real>(ScalarFuncSig::Acos)
                 .unwrap();
             assert_eq!(expect, output);
         }
@@ -1303,69 +1283,37 @@ mod tests {
     #[test]
     fn test_atan_1_arg() {
         let test_cases = vec![
-            (
-                Some(Real::from(1.0_f64)),
-                Some(Real::from(std::f64::consts::PI / 4.0_f64)),
-            ),
-            (
-                Some(Real::from(-1.0_f64)),
-                Some(Real::from(-std::f64::consts::PI / 4.0_f64)),
-            ),
-            (
-                Some(Real::from(std::f64::MAX)),
-                Some(Real::from(std::f64::consts::PI / 2.0_f64)),
-            ),
-            (
-                Some(Real::from(std::f64::MIN)),
-                Some(Real::from(-std::f64::consts::PI / 2.0_f64)),
-            ),
-            (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
+            (1.0_f64, std::f64::consts::PI / 4.0_f64),
+            (-1.0_f64, -std::f64::consts::PI / 4.0_f64),
+            (std::f64::MAX, std::f64::consts::PI / 2.0_f64),
+            (std::f64::MIN, -std::f64::consts::PI / 2.0_f64),
+            (0.0_f64, 0.0_f64),
         ];
         for (input, expect) in test_cases {
-            let output: Option<Real> = RpnFnScalarEvaluator::new()
+            let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Atan1Arg)
+                .evaluate::<Real>(ScalarFuncSig::Atan1Arg)
                 .unwrap();
-            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+            assert!((output.unwrap() - expect).abs() < std::f64::EPSILON);
         }
     }
 
     #[test]
     fn test_atan_2_args() {
         let test_cases = vec![
-            (
-                Some(Real::from(0.0_f64)),
-                Some(Real::from(0.0_f64)),
-                Some(Real::from(0.0_f64)),
-            ),
-            (
-                Some(Real::from(0.0_f64)),
-                Some(Real::from(-1.0_f64)),
-                Some(Real::from(std::f64::consts::PI)),
-            ),
-            (
-                Some(Real::from(1.0_f64)),
-                Some(Real::from(-1.0_f64)),
-                Some(Real::from(3.0_f64 * std::f64::consts::PI / 4.0_f64)),
-            ),
-            (
-                Some(Real::from(-1.0_f64)),
-                Some(Real::from(1.0_f64)),
-                Some(Real::from(-std::f64::consts::PI / 4.0_f64)),
-            ),
-            (
-                Some(Real::from(1.0_f64)),
-                Some(Real::from(0.0_f64)),
-                Some(Real::from(std::f64::consts::PI / 2.0_f64)),
-            ),
+            (0.0_f64, 0.0_f64, 0.0_f64),
+            (0.0_f64, -1.0_f64, std::f64::consts::PI),
+            (1.0_f64, -1.0_f64, 3.0_f64 * std::f64::consts::PI / 4.0_f64),
+            (-1.0_f64, 1.0_f64, -std::f64::consts::PI / 4.0_f64),
+            (1.0_f64, 0.0_f64, std::f64::consts::PI / 2.0_f64),
         ];
         for (arg0, arg1, expect) in test_cases {
             let output: Option<Real> = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .push_param(arg1)
-                .evaluate(ScalarFuncSig::Atan2Args)
+                .evaluate::<Real>(ScalarFuncSig::Atan2Args)
                 .unwrap();
-            assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+            assert!((output.unwrap() - expect).abs() < std::f64::EPSILON);
         }
     }
 }
