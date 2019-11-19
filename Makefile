@@ -153,6 +153,11 @@ test:
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
+# This is used for CI test
+ci_test:
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --all-targets --no-run --message-format=json
+	bash scripts/check-bins-for-jemalloc.sh
+
 unset-override:
 	@# unset first in case of any previous overrides
 	@if rustup override list | grep `pwd` > /dev/null; then rustup override unset; fi
