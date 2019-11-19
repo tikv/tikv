@@ -427,7 +427,7 @@ pub fn conv(
         if is_neg && should_ignore_sign {
             ret.insert(0, '-');
         }
-        ret.as_bytes().to_vec()
+        ret.into_bytes()
     }
 
     if let (Some(n), Some(from_base), Some(to_base)) = (n, from_base, to_base) {
