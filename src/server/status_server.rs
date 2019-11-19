@@ -6,6 +6,12 @@ use futures::Stream;
 use futures::{self, Future};
 use hyper::service::service_fn;
 use hyper::{self, header, Body, Method, Request, Response, Server, StatusCode};
+#[cfg(target_os = "linux")]
+use pprof;
+#[cfg(target_os = "linux")]
+use prost::Message;
+#[cfg(target_os = "linux")]
+use regex::Regex;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio_sync::oneshot::{Receiver, Sender};
@@ -150,11 +156,10 @@ impl StatusServer {
         let query = match req.uri().query() {
             Some(query) => query,
             None => {
-                let response = Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::empty())
-                    .unwrap();
-                return Box::new(ok(response));
+                return Box::new(ok(StatusServer::err_response(
+                    StatusCode::BAD_REQUEST,
+                    "request should have the query part",
+                )));
             }
         };
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
@@ -162,11 +167,10 @@ impl StatusServer {
             Some(val) => match val.parse() {
                 Ok(val) => val,
                 Err(_) => {
-                    let response = Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Body::empty())
-                        .unwrap();
-                    return Box::new(ok(response));
+                    return Box::new(ok(StatusServer::err_response(
+                        StatusCode::BAD_REQUEST,
+                        "request should have seconds argument",
+                    )));
                 }
             },
             None => 10,
@@ -185,13 +189,22 @@ impl StatusServer {
                     ok(response)
                 })
                 .or_else(|err| {
-                    let response = Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Body::from(err.to_string()))
-                        .unwrap();
-                    ok(response)
+                    ok(StatusServer::err_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        err.to_string(),
+                    ))
                 }),
         )
+    }
+
+    fn err_response<T>(status_code: StatusCode, message: T) -> Response<Body>
+    where
+        T: Into<Body>,
+    {
+        Response::builder()
+            .status(status_code)
+            .body(message.into())
+            .unwrap()
     }
 
     fn config_handler(
@@ -202,12 +215,161 @@ impl StatusServer {
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(json))
                 .unwrap(),
-            Err(_) => Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from("Internal Server Error"))
-                .unwrap(),
+            Err(_) => StatusServer::err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal Server Error",
+            ),
         };
         Box::new(ok(res))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn extract_thread_name(thread_name: &str) -> String {
+        lazy_static! {
+            static ref THREAD_NAME_RE: Regex =
+                Regex::new(r"^(?P<thread_name>[a-z-_ :]+?)(-?\d)*$").unwrap();
+            static ref THREAD_NAME_REPLACE_SEPERATOR_RE: Regex = Regex::new(r"[_ ]").unwrap();
+        }
+
+        THREAD_NAME_RE
+            .captures(thread_name)
+            .and_then(|cap| {
+                cap.name("thread_name").map(|thread_name| {
+                    THREAD_NAME_REPLACE_SEPERATOR_RE
+                        .replace_all(thread_name.as_str(), "-")
+                        .into_owned()
+                })
+            })
+            .unwrap_or_else(|| thread_name.to_owned())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn frames_post_processor() -> impl Fn(&mut pprof::Frames) {
+        move |frames| {
+            let name = Self::extract_thread_name(&frames.thread_name);
+            frames.thread_name = name;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn dump_rsprof(
+        seconds: u64,
+        frequency: i32,
+    ) -> Box<dyn Future<Item = pprof::Report, Error = pprof::Error> + Send> {
+        match pprof::ProfilerGuard::new(frequency) {
+            Ok(guard) => {
+                info!(
+                    "start profiling {} seconds with frequency {} /s",
+                    seconds, frequency
+                );
+
+                let timer = GLOBAL_TIMER_HANDLE.clone();
+                Box::new(
+                    timer
+                        .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
+                        .then(
+                            move |_| -> Box<
+                                dyn Future<Item = pprof::Report, Error = pprof::Error> + Send,
+                            > {
+                                let _ = guard;
+                                Box::new(
+                                    match guard
+                                        .report()
+                                        .frames_post_processor(Self::frames_post_processor())
+                                        .build()
+                                    {
+                                        Ok(report) => ok(report),
+                                        Err(e) => err(e),
+                                    },
+                                )
+                            },
+                        ),
+                )
+            }
+            Err(e) => Box::new(err(e)),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn dump_rsperf_to_resp(
+        req: Request<Body>,
+    ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
+        let query = match req.uri().query() {
+            Some(query) => query,
+            None => {
+                return Box::new(ok(StatusServer::err_response(StatusCode::BAD_REQUEST, "")));
+            }
+        };
+        let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
+        let seconds: u64 = match query_pairs.get("seconds") {
+            Some(val) => match val.parse() {
+                Ok(val) => val,
+                Err(err) => {
+                    return Box::new(ok(StatusServer::err_response(
+                        StatusCode::BAD_REQUEST,
+                        err.to_string(),
+                    )));
+                }
+            },
+            None => 10,
+        };
+
+        let frequency: i32 = match query_pairs.get("frequency") {
+            Some(val) => match val.parse() {
+                Ok(val) => val,
+                Err(err) => {
+                    return Box::new(ok(StatusServer::err_response(
+                        StatusCode::BAD_REQUEST,
+                        err.to_string(),
+                    )));
+                }
+            },
+            None => 99, // Default frequency of sampling. 99Hz to avoid coincide with special periods
+        };
+
+        let prototype_content_type: hyper::http::HeaderValue =
+            hyper::http::HeaderValue::from_str("application/protobuf").unwrap();
+        Box::new(
+            Self::dump_rsprof(seconds, frequency)
+                .and_then(move |report| {
+                    let mut body: Vec<u8> = Vec::new();
+                    if req.headers().get("Content-Type") == Some(&prototype_content_type) {
+                        match report.pprof() {
+                            Ok(profile) => match profile.encode(&mut body) {
+                                Ok(()) => {
+                                    info!("write report successfully");
+                                    Box::new(ok(StatusServer::err_response(StatusCode::OK, body)))
+                                }
+                                Err(err) => Box::new(ok(StatusServer::err_response(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    err.to_string(),
+                                ))),
+                            },
+                            Err(err) => Box::new(ok(StatusServer::err_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                err.to_string(),
+                            ))),
+                        }
+                    } else {
+                        match report.flamegraph(&mut body) {
+                            Ok(_) => {
+                                info!("write report successfully");
+                                Box::new(ok(StatusServer::err_response(StatusCode::OK, body)))
+                            }
+                            Err(err) => Box::new(ok(StatusServer::err_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                err.to_string(),
+                            ))),
+                        }
+                    }
+                })
+                .or_else(|err| {
+                    ok(StatusServer::err_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        err.to_string(),
+                    ))
+                }),
+        )
     }
 
     pub fn start(&mut self, status_addr: String) -> Result<()> {
@@ -238,12 +400,18 @@ impl StatusServer {
                         match (method, path.as_ref()) {
                             (Method::GET, "/metrics") => Box::new(ok(Response::new(dump().into()))),
                             (Method::GET, "/status") => Box::new(ok(Response::default())),
-                            (Method::GET, "/pprof/profile") => Self::dump_prof_to_resp(req),
+                            (Method::GET, "/debug/pprof/heap") => Self::dump_prof_to_resp(req),
                             (Method::GET, "/config") => Self::config_handler(config.clone()),
-                            _ => Box::new(ok(Response::builder()
-                                .status(StatusCode::NOT_FOUND)
-                                .body(Body::empty())
-                                .unwrap())),
+                            (Method::GET, "/debug/pprof/profile") => {
+                                #[cfg(target_os = "linux")]
+                                { Self::dump_rsperf_to_resp(req) }
+                                #[cfg(not(target_os = "linux"))]
+                                { Box::new(ok(Response::default())) }
+                            }
+                            _ => Box::new(ok(StatusServer::err_response(
+                                StatusCode::NOT_FOUND,
+                                "path not found",
+                            ))),
                         }
                     },
                 )
@@ -628,5 +796,34 @@ mod tests {
 
         handle.wait().unwrap();
         status_server.stop();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_extract_thread_name() {
+        assert_eq!(
+            &StatusServer::extract_thread_name("test-name-1"),
+            "test-name"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("grpc-server-5"),
+            "grpc-server"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("rocksdb:bg1000"),
+            "rocksdb:bg"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("raftstore-1-100"),
+            "raftstore"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("snap sender1000"),
+            "snap-sender"
+        );
+        assert_eq!(
+            &StatusServer::extract_thread_name("snap_sender1000"),
+            "snap-sender"
+        );
     }
 }
