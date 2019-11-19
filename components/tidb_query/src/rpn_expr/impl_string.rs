@@ -64,7 +64,6 @@ pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     }))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,7 +238,10 @@ mod tests {
             (Some("  你好  "), Some("  你好")),
             (Some("  你  好  "), Some("  你  好")),
             (Some("  분산 데이터베이스    "), Some("  분산 데이터베이스")),
-            (Some("   あなたのことが好きです   "), Some("   あなたのことが好きです")),
+            (
+                Some("   あなたのことが好きです   "),
+                Some("   あなたのことが好きです"),
+            ),
         ];
 
         for (arg, expect_output) in test_cases {
