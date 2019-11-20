@@ -1,6 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage;
+use crate::storage::txn::{Error as TxnError,ErrorInner as TxnErrorInner};
+use crate::storage::mvcc::{Error as MvccError,ErrorInner as MvccErrorInner};
 
 #[derive(Fail, Debug)]
 pub enum Error {
@@ -68,13 +70,13 @@ impl From<storage::kv::Error> for Error {
     }
 }
 
-impl From<storage::mvcc::Error> for Error {
-    fn from(err: storage::mvcc::Error) -> Self {
+impl From<MvccError> for Error {
+    fn from(err: MvccError) -> Self {
         match err {
-            storage::mvcc::Error(box storage::mvcc::ErrorInner::KeyIsLocked(info)) => {
+            MvccError(box MvccErrorInner::KeyIsLocked(info)) => {
                 Error::Locked(info)
             }
-            storage::mvcc::Error(box storage::mvcc::ErrorInner::Engine(engine_error)) => {
+            MvccError(box MvccErrorInner::Engine(engine_error)) => {
                 Error::from(engine_error)
             }
             e => Error::Other(e.to_string()),
@@ -82,11 +84,11 @@ impl From<storage::mvcc::Error> for Error {
     }
 }
 
-impl From<storage::txn::Error> for Error {
+impl From<TxnError> for Error {
     fn from(err: storage::txn::Error) -> Self {
         match err {
-            storage::txn::Error::Mvcc(mvcc_error) => Error::from(mvcc_error),
-            storage::txn::Error::Engine(engine_error) => Error::from(engine_error),
+            TxnError(box TxnErrorInner::Mvcc(mvcc_error)) => Error::from(mvcc_error),
+            TxnError(box TxnErrorInner::Engine(engine_error)) => Error::from(engine_error),
             e => Error::Other(e.to_string()),
         }
     }

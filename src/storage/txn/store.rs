@@ -9,7 +9,7 @@ use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TsSet};
 use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder, Write};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
-use super::{Error, Result};
+use super::{Error, ErrorInner, Result};
 
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
@@ -57,7 +57,7 @@ pub trait Scanner: Send {
                     results.push(Ok((k.to_raw()?, v)));
                 }
                 Ok(None) => break,
-                Err(e @ Error::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked { .. }))) => {
+                Err(e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked { .. })))) => {
                     results.push(Err(e));
                 }
                 Err(e) => return Err(e),
@@ -337,12 +337,12 @@ impl<S: Snapshot> SnapshotStore<S> {
             if let Some(b) = self.snapshot.lower_bound() {
                 if !b.is_empty() && l.as_encoded().as_slice() < b {
                     REQUEST_EXCEED_BOUND.inc();
-                    return Err(Error::InvalidReqRange {
+                    return Err(Error(box ErrorInner::InvalidReqRange {
                         start: Some(l.as_encoded().clone()),
                         end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
                         lower_bound: Some(b.to_vec()),
                         upper_bound: self.snapshot.upper_bound().map(|b| b.to_vec()),
-                    });
+                    }));
                 }
             }
         }
@@ -350,12 +350,12 @@ impl<S: Snapshot> SnapshotStore<S> {
             if let Some(b) = self.snapshot.upper_bound() {
                 if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
                     REQUEST_EXCEED_BOUND.inc();
-                    return Err(Error::InvalidReqRange {
+                    return Err(Error(box ErrorInner::InvalidReqRange {
                         start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
                         end: Some(u.as_encoded().clone()),
                         lower_bound: self.snapshot.lower_bound().map(|b| b.to_vec()),
                         upper_bound: Some(b.to_vec()),
-                    });
+                    }));
                 }
             }
         }

@@ -5,7 +5,7 @@ use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
 use crate::storage::lock_manager::Lock;
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use crate::storage::txn::Error as TxnError;
+use crate::storage::txn::{Error as TxnError,ErrorInner as TxnErrorInner};
 use crate::storage::txn::{execute_callback, ProcessResult};
 use crate::storage::{Error as StorageError, StorageCb};
 use futures::Future;
@@ -398,9 +398,9 @@ fn extract_raw_key_from_process_result(pr: &ProcessResult) -> &[u8] {
         ProcessResult::MultiRes { results } => {
             assert!(results.len() == 1);
             match &results[0] {
-                Err(StorageError::Txn(TxnError::Mvcc(MvccError(
+                Err(StorageError::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
                     box MvccErrorInner::KeyIsLocked(info),
-                )))) => info.get_key(),
+                ))))) => info.get_key(),
                 _ => panic!("unexpected mvcc error"),
             }
         }

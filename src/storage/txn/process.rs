@@ -15,7 +15,7 @@ use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock, MvccReader, MvccTxn, Write,
     MAX_TXN_WRITE_SIZE,
 };
-use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
+use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, ErrorInner, Result};
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
     Command, CommandKind, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
@@ -495,7 +495,8 @@ fn wake_up_waiters_if_needed<L: LockManager>(
 
 fn extract_lock_from_result(res: &StorageResult<()>) -> Lock {
     match res {
-        Err(StorageError::Txn(Error::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))))) => Lock {
+        Err(StorageError::Txn(Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info)))))) => Lock {
+//            Err(StorageError::Txn(Error::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))))) => Lock {
             ts: info.get_lock_version(),
             hash: Key::from_raw(info.get_key()).gen_hash(),
         },
@@ -612,10 +613,10 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             ..
         } => {
             if commit_ts <= lock_ts {
-                return Err(Error::InvalidTxnTso {
+                return Err(Error(box ErrorInner::InvalidTxnTso {
                     start_ts: lock_ts,
                     commit_ts,
-                });
+                }));
             }
             // Pessimistic txn needs key_hashes to wake up waiters
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
@@ -737,10 +738,10 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 };
                 if commit_ts > 0 {
                     if current_lock.ts >= commit_ts {
-                        return Err(Error::InvalidTxnTso {
+                        return Err(Error(box ErrorInner::InvalidTxnTso {
                             start_ts: current_lock.ts,
                             commit_ts,
-                        });
+                        }));
                     }
                     txn.commit(current_key.clone(), commit_ts)?;
                 } else {
