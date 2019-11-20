@@ -79,6 +79,19 @@ pub fn ltrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     }))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let pos = bytes.iter().rposition(|&x| x != SPACE);
+        if let Some(i) = pos {
+            bytes[..=i].to_vec()
+        } else {
+            Vec::new()
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +336,37 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.map(|s| s.as_bytes().to_vec()))
                 .evaluate(ScalarFuncSig::LTrim)
+                .unwrap();
+            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+    }
+
+    #[test]
+    fn test_rtrim() {
+        let test_cases = vec![
+            (None, None),
+            (Some("   bar   "), Some("   bar")),
+            (Some("bar"), Some("bar")),
+            (Some("ba  r"), Some("ba  r")),
+            (Some("    "), Some("")),
+            (Some("  bar\t  "), Some("  bar\t")),
+            (Some(" bar   \t"), Some(" bar   \t")),
+            (Some("bar   \r"), Some("bar   \r")),
+            (Some("bar   \n"), Some("bar   \n")),
+            (Some(""), Some("")),
+            (Some("  你好  "), Some("  你好")),
+            (Some("  你  好  "), Some("  你  好")),
+            (Some("  분산 데이터베이스    "), Some("  분산 데이터베이스")),
+            (
+                Some("   あなたのことが好きです   "),
+                Some("   あなたのことが好きです"),
+            ),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::RTrim)
                 .unwrap();
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
         }
