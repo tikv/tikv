@@ -27,6 +27,10 @@ toml = "0.4"
 hex = "0.3"
 tikv_util = { path = "../tikv_util" }
 
+json="0.12.0"
+rusty-machine="0.5.4"
+partial-min-max = "0.3.0"
+
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
 rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
