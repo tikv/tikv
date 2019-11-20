@@ -162,8 +162,7 @@ build_dist_release:
 	# dwz ${CARGO_TARGET_DIR}/release/tikv-server
 	# FIXME: https://sourceware.org/bugzilla/show_bug.cgi?id=24764
 	# dwz ${CARGO_TARGET_DIR}/release/tikv-ctl
-	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-server
-	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-ctl
+	bash scripts/objcopy.sh
 
 # Distributable bins with SSE4.2 optimizations
 dist_unportable_release:
