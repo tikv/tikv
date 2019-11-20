@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::str;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
@@ -79,7 +80,7 @@ pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
                 Some(Vec::new())
             } else {
                 Some(
-                    String::from_utf8((*lhs).clone())
+                    str::from_utf8(&(*lhs).clone())
                         .unwrap()
                         .chars()
                         .take(*rhs as usize)
