@@ -76,7 +76,7 @@ pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|bytes| {
         let pos = bytes.iter().rposition(|&x| x != SPACE);
         if let Some(i) = pos {
-            bytes[..bytes.len() - i].to_vec()
+            bytes[..i + 1].to_vec()
         } else {
             Vec::new()
         }
