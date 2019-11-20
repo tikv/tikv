@@ -32,8 +32,10 @@ use crate::raftstore::store::{
     write_peer_state,
 };
 use crate::raftstore::store::{keys, PeerStorage};
-use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
+use crate::server::gc_worker::GCWorker;
+use crate::storage::mvcc::{Lock, LockType, Write, WriteRef, WriteType};
 use crate::storage::types::Key;
+use crate::storage::Engine;
 use crate::storage::Iterator as EngineIterator;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
@@ -41,6 +43,8 @@ use tikv_util::config::ReadableSize;
 use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
+
+const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = RocksIterator<Arc<DB>>;
@@ -128,13 +132,14 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 }
 
 #[derive(Clone)]
-pub struct Debugger {
+pub struct Debugger<E: Engine> {
     engines: Engines,
+    gc_worker: Option<GCWorker<E>>,
 }
 
-impl Debugger {
-    pub fn new(engines: Engines) -> Debugger {
-        Debugger { engines }
+impl<E: Engine> Debugger<E> {
+    pub fn new(engines: Engines, gc_worker: Option<GCWorker<E>>) -> Debugger<E> {
+        Debugger { engines, gc_worker }
     }
 
     pub fn get_engine(&self) -> &Engines {
@@ -801,6 +806,22 @@ impl Debugger {
                 }
                 Ok(())
             }
+            Module::Server => {
+                if config_name == GC_IO_LIMITER_CONFIG_NAME {
+                    if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
+                        return self
+                            .gc_worker
+                            .as_ref()
+                            .expect("must be some")
+                            .change_io_limit(bytes_per_sec.0)
+                            .map_err(|e| Error::Other(e.into()));
+                    }
+                }
+                Err(Error::InvalidArgument(format!(
+                    "bad argument: {} {}",
+                    config_name, config_value
+                )))
+            }
             _ => Err(Error::NotFound(format!("unsupported module: {:?}", module))),
         }
     }
@@ -1142,7 +1163,7 @@ impl MvccChecker {
                 self.write_iter.key()
             ))) == key
         {
-            let write = box_try!(Write::parse(self.write_iter.value()));
+            let write = box_try!(WriteRef::parse(self.write_iter.value())).to_owned();
             let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(self.write_iter.key())));
             self.write_iter.next();
             return Ok(Some((commit_ts, write)));
@@ -1246,7 +1267,7 @@ impl MvccInfoIterator {
         if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter) {
             let mut writes = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
-                let write = box_try!(Write::parse(&value));
+                let write = box_try!(WriteRef::parse(&value)).to_owned();
                 let mut write_info = MvccWrite::default();
                 match write.write_type {
                     WriteType::Put => write_info.set_type(Op::Put),
@@ -1490,7 +1511,9 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use crate::server::gc_worker::GCConfig;
     use crate::storage::mvcc::{Lock, LockType};
+    use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::Mutable;
@@ -1591,7 +1614,7 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> Debugger {
+    fn new_debugger() -> Debugger<TestEngine> {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
@@ -1610,10 +1633,13 @@ mod tests {
 
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
-        Debugger::new(engines)
+        let test_engine = TestEngineBuilder::new().build().unwrap();
+        let mut gc_worker = GCWorker::new(test_engine, None, None, GCConfig::default());
+        gc_worker.start().unwrap();
+        Debugger::new(engines, Some(gc_worker))
     }
 
-    impl Debugger {
+    impl Debugger<TestEngine> {
         fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
             db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
@@ -1809,7 +1835,7 @@ mod tests {
             let encoded_key = Key::from_raw(prefix).append_ts(commit_ts);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
             let write = Write::new(tp, start_ts, None);
-            let value = write.to_bytes();
+            let value = write.as_ref().to_bytes();
             engine
                 .put_cf(write_cf, key.as_slice(), value.as_slice())
                 .unwrap();
@@ -2201,7 +2227,7 @@ mod tests {
             kv.push((
                 CF_WRITE,
                 Key::from_raw(key).append_ts(commit_ts),
-                write.to_bytes(),
+                write.as_ref().to_bytes(),
                 expect,
             ));
         }
@@ -2322,5 +2348,19 @@ mod tests {
             cluster_id,
             debugger.get_cluster_id().expect("get cluster id")
         );
+    }
+
+    #[test]
+    fn test_modify_gc_io_limit() {
+        let debugger = new_debugger();
+        debugger
+            .modify_tikv_config(Module::Server, "gc", "10MB")
+            .unwrap_err();
+        debugger
+            .modify_tikv_config(Module::Storage, GC_IO_LIMITER_CONFIG_NAME, "10MB")
+            .unwrap_err();
+        debugger
+            .modify_tikv_config(Module::Server, GC_IO_LIMITER_CONFIG_NAME, "10MB")
+            .unwrap();
     }
 }

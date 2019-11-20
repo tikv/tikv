@@ -6,7 +6,7 @@ use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::server::gc_worker::{AutoGCConfig, GCConfig, GCSafePointProvider, GCWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
-use tikv::storage::lock_manager::DummyLockMgr;
+use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
     Engine, Key, KvPair, Mutation, Options, RegionInfoProvider, Result, Storage, Value,
 };
@@ -73,7 +73,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
     gc_worker: GCWorker<E>,
-    store: Storage<E, DummyLockMgr>,
+    store: Storage<E, DummyLockManager>,
 }
 
 impl<E: Engine> SyncTestStorage<E> {
@@ -84,7 +84,7 @@ impl<E: Engine> SyncTestStorage<E> {
         self.gc_worker.start_auto_gc(cfg).unwrap();
     }
 
-    pub fn get_storage(&self) -> Storage<E, DummyLockMgr> {
+    pub fn get_storage(&self) -> Storage<E, DummyLockManager> {
         self.store.clone()
     }
 

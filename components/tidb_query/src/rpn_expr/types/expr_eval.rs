@@ -1164,7 +1164,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..1024).collect();
 
-        profiler::start("bench_eval_plus_1024_rows.profile");
+        profiler::start("./bench_eval_plus_1024_rows.profile");
         b.iter(|| {
             let result = black_box(&exp).eval(
                 black_box(&mut ctx),
@@ -1201,7 +1201,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..1024).collect();
 
-        profiler::start("eval_compare_1024_rows.profile");
+        profiler::start("./eval_compare_1024_rows.profile");
         b.iter(|| {
             let result = black_box(&exp).eval(
                 black_box(&mut ctx),
@@ -1238,7 +1238,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..5).collect();
 
-        profiler::start("bench_eval_compare_5_rows.profile");
+        profiler::start("./bench_eval_compare_5_rows.profile");
         b.iter(|| {
             let result = black_box(&exp).eval(
                 black_box(&mut ctx),
