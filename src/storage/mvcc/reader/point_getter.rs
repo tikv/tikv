@@ -2,7 +2,7 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use crate::storage::mvcc::write::{Write, WriteType};
+use crate::storage::mvcc::write::{WriteRef, WriteType};
 use crate::storage::mvcc::{default_not_found_error, Lock, Result, TsSet};
 use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value, CF_LOCK};
 use crate::storage::{CF_DEFAULT, CF_WRITE};
@@ -204,11 +204,23 @@ impl<S: Snapshot> PointGetter<S> {
             }
 
             self.statistics.write.processed += 1;
-            let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
 
             match write.write_type {
                 WriteType::Put => {
-                    return Ok(Some(self.load_data_by_write(write, user_key)?));
+                    if self.omit_value {
+                        return Ok(Some(vec![]));
+                    }
+                    match write.short_value {
+                        Some(value) => {
+                            // Value is carried in `write`.
+                            return Ok(Some(value.to_vec()));
+                        }
+                        None => {
+                            let start_ts = write.start_ts;
+                            return Ok(Some(self.load_data_from_default_cf(start_ts, user_key)?));
+                        }
+                    }
                 }
                 WriteType::Delete => {
                     return Ok(None);
@@ -224,33 +236,18 @@ impl<S: Snapshot> PointGetter<S> {
         }
     }
 
-    /// Load the value by the given `write`. If value is carried in `write`, it will be returned
-    /// directly. Otherwise there will be a default CF look up.
-    fn load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
-        if self.omit_value {
-            return Ok(vec![]);
-        }
-        match write.short_value {
-            Some(value) => {
-                // Value is carried in `write`.
-                Ok(value)
-            }
-            None => self.load_data_from_default_cf(write, user_key),
-        }
-    }
-
     /// Load the value from default CF.
     ///
     /// We assume that mostly the keys given to batch get keys are not very close to each other.
     /// `near_seek` will likely fall back to `seek` in such scenario, which takes 2x time
     /// compared to `get_cf`. Thus we use `get_cf` directly here.
-    fn load_data_from_default_cf(&mut self, write: Write, user_key: &Key) -> Result<Value> {
+    fn load_data_from_default_cf(&mut self, write_start_ts: u64, user_key: &Key) -> Result<Value> {
         // TODO: Not necessary to receive a `Write`.
         self.statistics.data.get += 1;
         // TODO: We can avoid this clone.
         let value = self
             .snapshot
-            .get_cf(CF_DEFAULT, &user_key.clone().append_ts(write.start_ts))?;
+            .get_cf(CF_DEFAULT, &user_key.clone().append_ts(write_start_ts))?;
 
         if let Some(value) = value {
             self.statistics.data.processed += 1;
@@ -258,7 +255,6 @@ impl<S: Snapshot> PointGetter<S> {
         } else {
             Err(default_not_found_error(
                 user_key.to_raw()?,
-                write,
                 "load_data_from_default_cf",
             ))
         }

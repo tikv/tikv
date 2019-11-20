@@ -3323,6 +3323,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
+ "codec",
  "crc",
  "criterion",
  "criterion-cpu-time",
