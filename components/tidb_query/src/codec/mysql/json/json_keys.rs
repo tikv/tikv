@@ -8,12 +8,19 @@ impl Json {
     pub fn keys(&self, path_expr_list: &[PathExpression]) -> Result<Option<Json>> {
         if !path_expr_list.is_empty() {
             if path_expr_list.len() > 1 {
-                return Err(box_err!("Incorrect parameter: {:?}", path_expr_list));
+                return Err(box_err!(
+                    "Incorrect number of parameters: expected: 0 or 1, get {:?}",
+                    path_expr_list.len()
+                ));
             }
-            for expr in path_expr_list {
-                if expr.contains_any_asterisk() {
-                    return Err(box_err!("Invalid path expression: {:?}", path_expr_list));
-                }
+            if path_expr_list
+                .iter()
+                .any(|expr| expr.contains_any_asterisk())
+            {
+                return Err(box_err!(
+                    "Invalid path expression: expected no asterisk, but {:?}",
+                    path_expr_list
+                ));
             }
             return Ok(self.extract(path_expr_list).and_then(|j| json_keys(&j)));
         }
