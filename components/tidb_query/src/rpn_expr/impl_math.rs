@@ -318,7 +318,8 @@ fn pow(ctx: &mut EvalContext, lhs: &Option<Real>, rhs: &Option<Real>) -> Result<
         (Some(lhs), Some(rhs)) => {
             let pow = (lhs.into_inner()).pow(rhs.into_inner());
             if pow.is_infinite() {
-                Ok(ctx.handle_overflow_err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)))
+                Ok(ctx
+                    .handle_overflow_err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)))
                     .map(|_| None)?)
             } else {
                 Ok(Real::new(pow).ok())
