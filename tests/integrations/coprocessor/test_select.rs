@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
 use std::i64;
 use std::thread;
 
@@ -11,6 +10,7 @@ use tipb::{Chunk, Expr, ExprType, ScalarFuncSig};
 
 use test_coprocessor::*;
 use test_storage::*;
+use tidb_query::batch::runner::BATCH_MAX_SIZE;
 use tidb_query::codec::{datum, Datum};
 use tidb_query::expr::EvalContext;
 use tikv::server::Config;
@@ -92,16 +92,15 @@ fn test_batch_row_limit() {
 
 #[test]
 fn test_stream_batch_row_limit() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:4"), 3),
-        (4, Some("name:3"), 1),
-        (5, Some("name:1"), 4),
-        (8, Some("name:2"), 4),
-    ];
+    let mut data = vec![];
+    const RECORD_LEN_EXPECTED: i64 = 8192;
+
+    for i in 0..RECORD_LEN_EXPECTED {
+        data.push((i, Some(format!("name:{}", i)), i));
+    }
 
     let product = ProductTable::new();
-    let stream_row_limit = 2;
+    let stream_row_limit = 128;
     let (_, endpoint) = {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
@@ -112,44 +111,39 @@ fn test_stream_batch_row_limit() {
     let req = DAGSelect::from(&product).build();
     assert_eq!(req.get_ranges().len(), 1);
 
-    // only ignore first 7 bytes of the row id
-    let ignored_suffix_len = tidb_query::codec::table::RECORD_ROW_KEY_LEN - 1;
-    let mut expected_ranges_last_bytes: Vec<(&[u8], &[u8])> = vec![
-        (b"\x00", b"\x02\x00"),
-        (b"\x02\x00", b"\x05\x00"),
-        (b"\x05\x00", b"\xFF"),
-    ];
-    let check_range = move |resp: &Response| {
-        let (start_last_bytes, end_last_bytes) = expected_ranges_last_bytes.remove(0);
-        let start = resp.get_range().get_start();
-        let end = resp.get_range().get_end();
-        assert_eq!(&start[ignored_suffix_len..], start_last_bytes);
-        assert_eq!(&end[ignored_suffix_len..], end_last_bytes);
-    };
+    let check_range = move |_: &Response| {};
 
     let resps = handle_streaming_select(&endpoint, req, check_range);
-    assert_eq!(resps.len(), 3);
-    let expected_output_counts = vec![vec![2 as i64], vec![2 as i64], vec![1 as i64]];
+    let length = resps.len();
+
+    let mut record_len = 0;
     for (i, resp) in resps.into_iter().enumerate() {
+        let cnt = resp.get_output_counts();
+        let current_length = cnt[0];
+        record_len += current_length;
+        if i != length - 1 {
+            assert!(
+                [stream_row_limit as i64].as_ref() <= cnt
+                    && [(stream_row_limit + BATCH_MAX_SIZE) as i64].as_ref() >= cnt
+            );
+        } else {
+            assert_eq!(record_len, RECORD_LEN_EXPECTED);
+        }
+
         let mut chunk = Chunk::default();
         chunk.merge_from_bytes(resp.get_data()).unwrap();
-        assert_eq!(
-            resp.get_output_counts(),
-            expected_output_counts[i].as_slice()
-        );
 
         let chunks = vec![chunk];
         let chunk_data_limit = stream_row_limit * 3; // we have 3 fields.
         check_chunk_datum_count(&chunks, chunk_data_limit);
 
         let spliter = DAGChunkSpliter::new(chunks, 3);
-        let j = cmp::min((i + 1) * stream_row_limit, data.len());
-        let cur_data = &data[i * stream_row_limit..j];
-        for (row, &(id, name, cnt)) in spliter.zip(cur_data) {
-            let name_datum = name.map(|s| s.as_bytes()).into();
+        let cur_data = &data[(record_len - current_length) as usize..record_len as usize];
+        for (ref row, &(id, ref name, cnt)) in spliter.zip(cur_data) {
+            let name_datum = name.as_ref().map(|s| s.as_bytes()).into();
             let expected_encoded = datum::encode_value(
                 &mut EvalContext::default(),
-                &[Datum::I64(id), name_datum, cnt.into()],
+                &[Datum::I64(id), name_datum, (cnt).into()],
             )
             .unwrap();
             let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
