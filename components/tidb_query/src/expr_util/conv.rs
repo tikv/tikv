@@ -3,10 +3,10 @@
 use crate::codec::data_type::*;
 
 #[derive(Copy, Clone)]
-pub struct IntWithSign(u64, bool);
+struct IntWithSign(u64, bool);
 
 impl IntWithSign {
-    pub fn from_int(num: Int) -> IntWithSign {
+    fn from_int(num: Int) -> IntWithSign {
         IntWithSign(num.wrapping_abs() as u64, num < 0)
     }
 
@@ -41,7 +41,7 @@ impl IntWithSign {
         r.iter().rev().collect::<String>()
     }
 
-    pub fn format_to_base(self, to_base: IntWithSign) -> String {
+    fn format_to_base(self, to_base: IntWithSign) -> String {
         let IntWithSign(value, is_neg) = self;
         let IntWithSign(to_base, should_ignore_sign) = to_base;
         let mut real_val = value as i64;
@@ -56,7 +56,7 @@ impl IntWithSign {
     }
 }
 
-pub fn is_valid_base(base: IntWithSign) -> bool {
+fn is_valid_base(base: IntWithSign) -> bool {
     let IntWithSign(num, _) = base;
     num >= 2 && num <= 36
 }
@@ -92,6 +92,18 @@ fn extract_num(num_s: &str, is_neg: bool, from_base: IntWithSign) -> IntWithSign
     }
 }
 
-pub fn extract_num_from_str(s: &str, from_base: IntWithSign) -> Option<IntWithSign> {
-    extract_num_str(s, from_base).map(|(num_s, is_neg)| extract_num(&num_s, is_neg, from_base))
+pub fn conv_internal(s: &str, from_base: Int, to_base: Int) -> Option<String> {
+    let s = s.trim();
+    let from_base = IntWithSign::from_int(from_base);
+    let to_base = IntWithSign::from_int(to_base);
+    if is_valid_base(from_base) && is_valid_base(to_base) {
+        if let Some((num_str, is_neg)) = extract_num_str(s, from_base) {
+            let num = extract_num(num_str.as_ref(), is_neg, from_base);
+            Some(num.format_to_base(to_base))
+        } else {
+            Some("0".to_string())
+        }
+    } else {
+        None
+    }
 }

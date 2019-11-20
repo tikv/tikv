@@ -350,21 +350,10 @@ pub fn conv(
     from_base: &Option<Int>,
     to_base: &Option<Int>,
 ) -> Result<Option<Bytes>> {
-    use crate::expr_util::conv::*;
+    use crate::expr_util::conv::conv_internal;
     if let (Some(n), Some(from_base), Some(to_base)) = (n, from_base, to_base) {
-        let from_base = IntWithSign::from_int(*from_base);
-        let to_base = IntWithSign::from_int(*to_base);
-        if is_valid_base(from_base) && is_valid_base(to_base) {
-            let s = String::from_utf8_lossy(n);
-            let s = s.trim();
-            Ok(
-                extract_num_from_str(s, from_base).map_or(Some(b"0".to_vec()), |num| {
-                    Some(num.format_to_base(to_base).into_bytes())
-                }),
-            )
-        } else {
-            Ok(None)
-        }
+        let s = String::from_utf8_lossy(n);
+        Ok(conv_internal(&s, *from_base, *to_base).map(|x| x.into_bytes()))
     } else {
         Ok(None)
     }
