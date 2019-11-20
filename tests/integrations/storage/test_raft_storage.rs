@@ -9,10 +9,12 @@ use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
 use tikv::server::gc_worker::{AutoGCConfig, GCConfig};
-use tikv::storage::{Engine, Key, Mutation,Error as StorageError,ErrorInner as SotrageErrorInner};
-use tikv::storage::kv::{Error as KvError,ErrorInner as KvErrorInner};
-use tikv::storage::mvcc::{Error as MvccError,ErrorInner as MvccErrorInner};
-use tikv::storage::txn::{Error as TxnError,ErrorInner as TxnErrorInner};
+use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
+use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+use tikv::storage::{
+    Engine, Error as StorageError, ErrorInner as SotrageErrorInner, Key, Mutation,
+};
 use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 
@@ -144,8 +146,9 @@ fn test_raft_storage_store_not_match() {
     ctx.set_peer(peer);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
     let res = storage.get(ctx.clone(), &key, 20);
-    if let StorageError(box SotrageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(box KvErrorInner::Request(ref e)))))) =
-        *res.as_ref().err().unwrap()
+    if let StorageError(box SotrageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+        box KvErrorInner::Request(ref e),
+    ))))) = *res.as_ref().err().unwrap()
     {
         assert!(e.has_store_not_match());
     } else {

@@ -511,6 +511,7 @@ impl Scanner for FixtureStoreScanner {
 #[cfg(test)]
 mod tests {
     use super::Error;
+    use super::ErrorInner;
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
     use crate::storage::kv::{
@@ -860,15 +861,17 @@ mod tests {
         data.insert(Key::from_raw(b"bb"), Ok(b"alphaalpha".to_vec()));
         data.insert(
             Key::from_raw(b"bba"),
-            Err(Error::Mvcc(MvccError::from(MvccErrorInner::KeyIsLocked(
-                kvproto::kvrpcpb::LockInfo::default(),
+            Err(Error(box ErrorInner::Mvcc(MvccError::from(
+                MvccErrorInner::KeyIsLocked(kvproto::kvrpcpb::LockInfo::default()),
             )))),
         );
         data.insert(Key::from_raw(b"z"), Ok(b"beta".to_vec()));
         data.insert(Key::from_raw(b"ca"), Ok(b"hello".to_vec()));
         data.insert(
             Key::from_raw(b"zz"),
-            Err(Error::Mvcc(MvccError::from(MvccErrorInner::BadFormatLock))),
+            Err(Error(box ErrorInner::Mvcc(MvccError::from(
+                MvccErrorInner::BadFormatLock,
+            )))),
         );
 
         FixtureStore::new(data)

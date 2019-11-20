@@ -260,8 +260,8 @@ mod tests {
     use crate::raftstore::coprocessor::Config as CopConfig;
     use crate::server::resolve::Callback;
     use crate::storage::{
-        mvcc::Error as MvccError, txn::Error as TxnError, Error as StorageError,
-        Result as StorageResult,
+        mvcc::Error as MvccError, mvcc::ErrorInner as MvccErrorInner, txn::Error as TxnError,
+        Error as StorageError, Result as StorageResult,
     };
     use kvproto::kvrpcpb::LockInfo;
     use kvproto::metapb::Region;
@@ -360,9 +360,9 @@ mod tests {
             40,
             storage_callback(tx.clone()),
             ProcessResult::MultiRes {
-                results: vec![Err(StorageError::from(TxnError::from(
-                    MvccError::KeyIsLocked(LockInfo::default()),
-                )))],
+                results: vec![Err(StorageError::from(TxnError::from(MvccError(
+                    box MvccErrorInner::KeyIsLocked(LockInfo::default()),
+                ))))],
             },
             Lock { ts: 30, hash: 30 },
             false,
