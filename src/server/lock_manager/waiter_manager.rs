@@ -116,6 +116,10 @@ pub enum Task {
         lock: Lock,
         deadlock_key_hash: u64,
     },
+    ChangeConfig {
+        timeout: u64,
+        delay: u64,
+    },
 }
 
 /// Debug for task.
@@ -135,6 +139,11 @@ impl Display for Task {
             Task::WakeUp { lock_ts, .. } => write!(f, "waking up txns waiting for {}", lock_ts),
             Task::Dump { .. } => write!(f, "dump"),
             Task::Deadlock { start_ts, .. } => write!(f, "txn:{} deadlock", start_ts),
+            Task::ChangeConfig { timeout, delay } => write!(
+                f,
+                "change config to default_wait_for_lock_timeout: {}, wake_up_delay_duration: {}",
+                timeout, delay
+            ),
         }
     }
 }
@@ -407,6 +416,10 @@ impl Scheduler {
             deadlock_key_hash,
         });
     }
+
+    pub fn change_config(&self, timeout: u64, delay: u64) {
+        self.notify_scheduler(Task::ChangeConfig { timeout, delay });
+    }
 }
 
 /// WaiterManager handles waiting and wake-up of pessimistic lock
@@ -555,6 +568,10 @@ impl FutureRunnable<Task> for WaiterManager {
                 deadlock_key_hash,
             } => {
                 self.handle_deadlock(start_ts, lock, deadlock_key_hash);
+            }
+            Task::ChangeConfig { timeout, delay } => {
+                self.default_wait_for_lock_timeout = timeout;
+                self.wake_up_delay_duration = delay;
             }
         }
     }

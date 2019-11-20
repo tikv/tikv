@@ -224,6 +224,11 @@ impl DetectTable {
         self.wait_for_map.clear();
     }
 
+    /// Reset the ttl
+    fn reset_ttl(&mut self, ttl: Duration) {
+        self.ttl = ttl;
+    }
+
     /// The threshold of detect table size to trigger `active_expire`.
     const ACTIVE_EXPIRE_THRESHOLD: usize = 100000;
     /// The interval between `active_expire`.
@@ -307,6 +312,8 @@ pub enum Task {
     ///
     /// It's the only way to change the node from leader to follower, and vice versa.
     ChangeRole(Role),
+    /// Change the ttl of DetectTable
+    ChangeTTL(Duration),
 }
 
 impl Display for Task {
@@ -319,6 +326,7 @@ impl Display for Task {
             ),
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
+            Task::ChangeTTL(ttl) => write!(f, "ChangeTTL {{ ttl: {:?} }}", ttl),
         }
     }
 }
@@ -367,6 +375,10 @@ impl Scheduler {
 
     fn change_role(&self, role: Role) {
         self.notify_scheduler(Task::ChangeRole(role));
+    }
+
+    pub fn change_ttl(&self, t: u64) {
+        self.notify_scheduler(Task::ChangeTTL(Duration::from_millis(t)));
     }
 }
 
@@ -774,6 +786,10 @@ where
                 self.handle_detect_rpc(handle, stream, sink);
             }
             Task::ChangeRole(role) => self.handle_change_role(role),
+            Task::ChangeTTL(ttl) => {
+                let mut inner = self.inner.borrow_mut();
+                inner.detect_table.reset_ttl(ttl);
+            }
         }
     }
 }

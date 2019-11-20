@@ -6,7 +6,7 @@ pub mod deadlock;
 mod metrics;
 pub mod waiter_manager;
 
-pub use self::config::Config;
+pub use self::config::{Config, ConfigMgr};
 pub use self::deadlock::Service as DeadlockService;
 
 use self::deadlock::{Detector, Scheduler as DetectorScheduler};
@@ -188,6 +188,13 @@ impl LockManager {
     /// Creates a `DeadlockService` to handle deadlock detect requests from other nodes.
     pub fn deadlock_service(&self) -> DeadlockService {
         DeadlockService::new(
+            self.waiter_mgr_scheduler.clone(),
+            self.detector_scheduler.clone(),
+        )
+    }
+
+    pub fn config_manager(&self) -> ConfigMgr {
+        ConfigMgr::new(
             self.waiter_mgr_scheduler.clone(),
             self.detector_scheduler.clone(),
         )
