@@ -39,6 +39,25 @@ pub fn concat(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
     Ok(Some(output))
 }
 
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn concat_ws(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+    if let (Some(sep), Some(s1)) = (args[0], args[1]) {
+        let mut output = s1.to_vec();
+        for s in &args[2..] {
+            if let Some(s) = s {
+                output.extend_from_slice(sep);
+                output.extend_from_slice(s);
+            } else {
+                return Ok(None);
+            }
+        }
+        Ok(Some(output))
+    } else {
+        Ok(None)
+    }
+}
+
 #[rpn_fn]
 #[inline]
 pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
@@ -197,6 +216,65 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
                 .evaluate(ScalarFuncSig::Concat)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_concat_ws() {
+        let cases = vec![
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"abc".to_vec()),
+                    Some(b"defg".to_vec()),
+                ],
+                Some(b"abc,defg".to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some("忠犬ハチ公".as_bytes().to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                    Some("قاعدة البيانات".as_bytes().to_vec()),
+                    Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                ],
+                Some(
+                    "忠犬ハチ公,CAFÉ,数据库,قاعدة البيانات,НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"abc".to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                ],
+                Some("abc,CAFÉ,数据库".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"abc".to_vec()),
+                    None,
+                    Some(b"defg".to_vec()),
+                ],
+                None,
+            ),
+            (
+                vec![Some(b",".to_vec()), Some(b"abc".to_vec())],
+                Some(b"abc".to_vec()),
+            ),
+            (vec![None, None], None),
+        ];
+        for (row, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::ConcatWs)
                 .unwrap();
             assert_eq!(output, exp);
         }
