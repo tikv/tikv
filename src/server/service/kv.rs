@@ -49,9 +49,10 @@ const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
-const REQUEST_LOAD_ESTIMATE_SAMPLE_WINDOW: usize = 30;
-const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 50;
-const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f64 = 0.2;
+const REQUEST_LOAD_ESTIMATE_SMALL_SAMPLE_WINDOW: usize = 30;
+const REQUEST_LOAD_ESTIMATE_LARGE_SAMPLE_WINDOW: usize = 70;
+const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 70;
+const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f64 = 0.25;
 const REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO: f64 = 0.4; // against jittering
 const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.2;
 const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_PENDING_COMMANDS: usize = 300;
@@ -195,9 +196,9 @@ impl RequestLoadEstimator {
     // Collect monitored metrics.
     // When in light load, update thread load estimation when primary load is high.
     // When in heavy load, estimate with second getter of primary load if present.
-    fn collect(&mut self) {
+    fn collect(&mut self, sample_window: usize) {
         self.sample_size += 1;
-        if self.sample_size > REQUEST_LOAD_ESTIMATE_SAMPLE_WINDOW {
+        if self.sample_size > sample_window {
             self.sample_size = 0;
             let thread_load = if let Some(reader) = &self.thread_load_reader {
                 reader.load()
@@ -338,7 +339,13 @@ impl BatchLimiter {
         if self.disabled() {
             return;
         }
-        self.estimator.collect();
+        if self.estimator.load() == RequestLoad::Light {
+            self.estimator
+                .collect(REQUEST_LOAD_ESTIMATE_SMALL_SAMPLE_WINDOW);
+        } else {
+            self.estimator
+                .collect(REQUEST_LOAD_ESTIMATE_LARGE_SAMPLE_WINDOW);
+        }
     }
 
     /// Observe the size of commands been examined by batcher.
