@@ -1,8 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage;
-use crate::storage::txn::{Error as TxnError,ErrorInner as TxnErrorInner};
-use crate::storage::mvcc::{Error as MvccError,ErrorInner as MvccErrorInner};
+use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 
 #[derive(Fail, Debug)]
 pub enum Error {
@@ -73,12 +73,8 @@ impl From<storage::kv::Error> for Error {
 impl From<MvccError> for Error {
     fn from(err: MvccError) -> Self {
         match err {
-            MvccError(box MvccErrorInner::KeyIsLocked(info)) => {
-                Error::Locked(info)
-            }
-            MvccError(box MvccErrorInner::Engine(engine_error)) => {
-                Error::from(engine_error)
-            }
+            MvccError(box MvccErrorInner::KeyIsLocked(info)) => Error::Locked(info),
+            MvccError(box MvccErrorInner::Engine(engine_error)) => Error::from(engine_error),
             e => Error::Other(e.to_string()),
         }
     }
