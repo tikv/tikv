@@ -8,6 +8,7 @@ publish = false
 byteorder = "1.2"
 derive_more = "0.15.0"
 failure = "0.1"
+farmhash = "1.1.5"
 hex = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 

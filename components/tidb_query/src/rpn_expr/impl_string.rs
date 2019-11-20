@@ -5,6 +5,8 @@ use tidb_query_codegen::rpn_fn;
 use crate::codec::data_type::*;
 use crate::Result;
 
+const SPACE: u8 = 0o40u8;
+
 #[rpn_fn]
 #[inline]
 pub fn bin(num: &Option<Int>) -> Result<Option<Bytes>> {
@@ -23,6 +25,20 @@ pub fn bit_length(arg: &Option<Bytes>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|bytes| bytes.len() as i64 * 8))
 }
 
+#[rpn_fn(varg, min_args = 1)]
+#[inline]
+pub fn concat(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+    let mut output = Bytes::new();
+    for arg in args {
+        if let Some(s) = arg {
+            output.extend_from_slice(s);
+        } else {
+            return Ok(None);
+        }
+    }
+    Ok(Some(output))
+}
+
 #[rpn_fn]
 #[inline]
 pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
@@ -31,6 +47,47 @@ pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
             0
         } else {
             i64::from(bytes[0])
+        }
+    }))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn reverse(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let s = String::from_utf8_lossy(bytes);
+        s.chars().rev().collect::<String>().into_bytes()
+    }))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn hex_int_arg(arg: &Option<Int>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|i| format!("{:X}", i).into_bytes()))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn ltrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let pos = bytes.iter().position(|&x| x != SPACE);
+        if let Some(i) = pos {
+            bytes[i..].to_vec()
+        } else {
+            b"".to_vec()
+        }
+    }))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let pos = bytes.iter().rposition(|&x| x != SPACE);
+        if let Some(i) = pos {
+            bytes[..=i].to_vec()
+        } else {
+            Vec::new()
         }
     }))
 }
@@ -102,6 +159,50 @@ mod tests {
     }
 
     #[test]
+    fn test_concat() {
+        let cases = vec![
+            (
+                vec![Some(b"abc".to_vec()), Some(b"defg".to_vec())],
+                Some(b"abcdefg".to_vec()),
+            ),
+            (
+                vec![
+                    Some("忠犬ハチ公".as_bytes().to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                    Some("قاعدة البيانات".as_bytes().to_vec()),
+                    Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                ],
+                Some(
+                    "忠犬ハチ公CAFÉ数据库قاعدة البياناتНОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                vec![
+                    Some(b"abc".to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                ],
+                Some("abcCAFÉ数据库".as_bytes().to_vec()),
+            ),
+            (
+                vec![Some(b"abc".to_vec()), None, Some(b"defg".to_vec())],
+                None,
+            ),
+            (vec![None], None),
+        ];
+        for (row, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::Concat)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
     fn test_bit_length() {
         let test_cases = vec![
             (None, None),
@@ -146,6 +247,128 @@ mod tests {
                 .evaluate(ScalarFuncSig::Ascii)
                 .unwrap();
             assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_reverse() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(b"olleh".to_vec())),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some("库据数".as_bytes().to_vec()),
+            ),
+            (
+                Some("忠犬ハチ公".as_bytes().to_vec()),
+                Some("公チハ犬忠".as_bytes().to_vec()),
+            ),
+            (
+                Some("あなたのことが好きです".as_bytes().to_vec()),
+                Some("すでき好がとこのたなあ".as_bytes().to_vec()),
+            ),
+            (
+                Some("Bayern München".as_bytes().to_vec()),
+                Some("nehcnüM nreyaB".as_bytes().to_vec()),
+            ),
+            (
+                Some("Η Αθηνά  ".as_bytes().to_vec()),
+                Some("  άνηθΑ Η".as_bytes().to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::Reverse)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_hex_int_arg() {
+        let test_cases = vec![
+            (Some(12), Some(b"C".to_vec())),
+            (Some(0x12), Some(b"12".to_vec())),
+            (Some(0b1100), Some(b"C".to_vec())),
+            (Some(0), Some(b"0".to_vec())),
+            (Some(-1), Some(b"FFFFFFFFFFFFFFFF".to_vec())),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::HexIntArg)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_ltrim() {
+        let test_cases = vec![
+            (None, None),
+            (Some("   bar   "), Some("bar   ")),
+            (Some("   b   ar   "), Some("b   ar   ")),
+            (Some("bar"), Some("bar")),
+            (Some("    "), Some("")),
+            (Some("\t  bar"), Some("\t  bar")),
+            (Some("\r  bar"), Some("\r  bar")),
+            (Some("\n  bar"), Some("\n  bar")),
+            (Some("  \tbar"), Some("\tbar")),
+            (Some(""), Some("")),
+            (Some("  你好"), Some("你好")),
+            (Some("  你  好"), Some("你  好")),
+            (
+                Some("  분산 데이터베이스    "),
+                Some("분산 데이터베이스    "),
+            ),
+            (
+                Some("   あなたのことが好きです   "),
+                Some("あなたのことが好きです   "),
+            ),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::LTrim)
+                .unwrap();
+            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+    }
+
+    #[test]
+    fn test_rtrim() {
+        let test_cases = vec![
+            (None, None),
+            (Some("   bar   "), Some("   bar")),
+            (Some("bar"), Some("bar")),
+            (Some("ba  r"), Some("ba  r")),
+            (Some("    "), Some("")),
+            (Some("  bar\t  "), Some("  bar\t")),
+            (Some(" bar   \t"), Some(" bar   \t")),
+            (Some("bar   \r"), Some("bar   \r")),
+            (Some("bar   \n"), Some("bar   \n")),
+            (Some(""), Some("")),
+            (Some("  你好  "), Some("  你好")),
+            (Some("  你  好  "), Some("  你  好")),
+            (Some("  분산 데이터베이스    "), Some("  분산 데이터베이스")),
+            (
+                Some("   あなたのことが好きです   "),
+                Some("   あなたのことが好きです"),
+            ),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::RTrim)
+                .unwrap();
+            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
         }
     }
 }
