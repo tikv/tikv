@@ -92,6 +92,18 @@ pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     }))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn locate_binary_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result<Option<Int>> {
+    if let (Some(substr), Some(s)) = (substr, s) {
+        Ok(twoway::find_bytes(s, substr)
+            .map(|i| 1 + i as i64)
+            .or(Some(0)))
+    } else {
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +381,49 @@ mod tests {
                 .evaluate(ScalarFuncSig::RTrim)
                 .unwrap();
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+    }
+
+    #[test]
+    fn test_locate_binary_2_args() {
+        let cases = vec![
+            ("", "foobArbar", 1),
+            ("", "", 1),
+            ("xxx", "", 0),
+            ("BaR", "foobArbar", 0),
+            ("bar", "foobArbar", 7),
+            (
+                "好世",
+                "你好世界",
+                1 + "你好世界".find("好世").unwrap() as i64,
+            ),
+        ];
+
+        for (substr, s, expect_output) in cases {
+            let substr = Some(substr.as_bytes().to_vec());
+            let s = Some(s.as_bytes().to_vec());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(substr)
+                .push_param(s)
+                .evaluate(ScalarFuncSig::LocateBinary2Args)
+                .unwrap();
+            assert_eq!(output, Some(expect_output));
+        }
+
+        let null_cases = vec![
+            (None, Some(b"".to_vec()), None),
+            (Some(b"".to_vec()), None, None),
+            (None, None, None),
+        ];
+
+        for (substr, s, expect_output) in null_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(substr)
+                .push_param(s)
+                .evaluate(ScalarFuncSig::LocateBinary2Args)
+                .unwrap();
+            assert_eq!(output, expect_output);
         }
     }
 }
