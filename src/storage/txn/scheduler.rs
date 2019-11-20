@@ -44,7 +44,9 @@ use crate::storage::{
     },
     Key,
 };
-use crate::storage::{Command, CommandKind, Engine, Error as StorageError, StorageCb};
+use crate::storage::{
+    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, StorageCb,
+};
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
@@ -345,7 +347,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             execute_callback(
                 callback,
                 ProcessResult::Failed {
-                    err: StorageError::SchedTooBusy,
+                    err: StorageError(box StorageErrorInner::SchedTooBusy),
                 },
             );
             return;

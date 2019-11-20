@@ -39,7 +39,9 @@ use self::txn::scheduler::Scheduler as TxnScheduler;
 
 pub use self::commands::{Options, PointGetCommand};
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-pub use self::errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind};
+pub use self::errors::{
+    get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner,
+};
 pub use self::kv::{
     CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
     ErrorInner as EngineErrorInner, FlowStatistics, FlowStatsReporter, Iterator, Modify,
@@ -288,7 +290,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error(box ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -344,7 +346,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             })
         });
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error(box ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -411,7 +413,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error(box ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -488,7 +490,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error(box ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -526,7 +528,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         for m in &mutations {
             let key_size = m.key().as_encoded().len();
             if key_size > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
+                callback(Err(Error(box ErrorInner::KeyTooLarge(
+                    key_size,
+                    self.max_key_size,
+                ))));
                 return Ok(());
             }
         }
@@ -556,14 +561,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         if !self.pessimistic_txn_enabled {
-            callback(Err(Error::PessimisticTxnNotEnabled));
+            callback(Err(Error(box ErrorInner::PessimisticTxnNotEnabled)));
             return Ok(());
         }
 
         for k in &keys {
             let key_size = k.0.as_encoded().len();
             if key_size > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
+                callback(Err(Error(box ErrorInner::KeyTooLarge(
+                    key_size,
+                    self.max_key_size,
+                ))));
                 return Ok(());
             }
         }
@@ -696,7 +704,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         if !self.pessimistic_txn_enabled {
-            callback(Err(Error::PessimisticTxnNotEnabled));
+            callback(Err(Error(box ErrorInner::PessimisticTxnNotEnabled)));
             return Ok(());
         }
 
@@ -905,7 +913,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error(box ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -945,7 +953,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             })
         });
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error(box ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -1006,7 +1014,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error(box ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -1020,7 +1028,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         if key.len() > self.max_key_size {
-            callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+            callback(Err(Error(box ErrorInner::KeyTooLarge(
+                key.len(),
+                self.max_key_size,
+            ))));
             return Ok(());
         }
         self.engine.async_write(
@@ -1047,7 +1058,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let cf = Self::rawkv_cf(&cf)?;
         for &(ref key, _) in &pairs {
             if key.len() > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+                callback(Err(Error(box ErrorInner::KeyTooLarge(
+                    key.len(),
+                    self.max_key_size,
+                ))));
                 return Ok(());
             }
         }
@@ -1073,7 +1087,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         if key.len() > self.max_key_size {
-            callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+            callback(Err(Error(box ErrorInner::KeyTooLarge(
+                key.len(),
+                self.max_key_size,
+            ))));
             return Ok(());
         }
         self.engine.async_write(
@@ -1095,10 +1112,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         if start_key.len() > self.max_key_size || end_key.len() > self.max_key_size {
-            callback(Err(Error::KeyTooLarge(
+            callback(Err(Error(box ErrorInner::KeyTooLarge(
                 cmp::max(start_key.len(), end_key.len()),
                 self.max_key_size,
-            )));
+            ))));
             return Ok(());
         }
 
@@ -1126,7 +1143,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let cf = Self::rawkv_cf(&cf)?;
         for key in &keys {
             if key.len() > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+                callback(Err(Error(box ErrorInner::KeyTooLarge(
+                    key.len(),
+                    self.max_key_size,
+                ))));
                 return Ok(());
             }
         }
@@ -1294,7 +1314,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error(box ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -1310,7 +1330,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 return Ok(c);
             }
         }
-        Err(Error::InvalidCf(cf.to_owned()))
+        Err(Error(box ErrorInner::InvalidCf(cf.to_owned())))
     }
 
     /// Check if key range is valid
@@ -1420,7 +1440,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error(box ErrorInner::SchedTooBusy))
             .flatten()
     }
 

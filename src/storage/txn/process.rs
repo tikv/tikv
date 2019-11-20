@@ -18,8 +18,8 @@ use crate::storage::mvcc::{
 use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, ErrorInner, Result};
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    Command, CommandKind, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
-    ScanMode, Snapshot, Statistics, StorageCb, TxnStatus, Value,
+    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, Key,
+    MvccInfo, Result as StorageResult, ScanMode, Snapshot, Statistics, StorageCb, TxnStatus, Value,
 };
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
@@ -495,9 +495,9 @@ fn wake_up_waiters_if_needed<L: LockManager>(
 
 fn extract_lock_from_result(res: &StorageResult<()>) -> Lock {
     match res {
-        Err(StorageError::Txn(Error(box ErrorInner::Mvcc(MvccError(
+        Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
             box MvccErrorInner::KeyIsLocked(info),
-        ))))) => Lock {
+        )))))) => Lock {
             ts: info.get_lock_version(),
             hash: Key::from_raw(info.get_key()).gen_hash(),
         },

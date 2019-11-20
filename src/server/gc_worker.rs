@@ -29,7 +29,7 @@ use crate::storage::kv::{
 };
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{MvccReader, MvccTxn};
-use crate::storage::{Callback, Error, Key, Result};
+use crate::storage::{Callback, Error, ErrorInner, Key, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
@@ -483,7 +483,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GCTask>) -> Result<()> {
     match e {
         ScheduleError::Full(mut task) => {
             GC_TOO_BUSY_COUNTER.inc();
-            (task.take_callback())(Err(Error::GCWorkerTooBusy));
+            (task.take_callback())(Err(Error(box ErrorInner::GCWorkerTooBusy)));
             Ok(())
         }
         _ => Err(box_err!("failed to schedule gc task: {:?}", e)),
