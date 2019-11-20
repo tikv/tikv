@@ -809,6 +809,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_apply_res(&mut self, res: ApplyTaskRes) {
+        fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
                 debug!(
@@ -2405,6 +2406,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.register_raft_gc_log_tick();
         }
         debug_assert!(!self.fsm.stopped);
+        fail_point!("on_raft_gc_log_tick", |_| {});
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
