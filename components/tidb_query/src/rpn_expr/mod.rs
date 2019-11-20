@@ -223,6 +223,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
+        ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
         ScalarFuncSig::AbsReal => abs_real_fn_meta(),
