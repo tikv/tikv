@@ -73,7 +73,7 @@ PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 DEPS_PATH = $(CURDIR)/tmp
 BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
-CARGO_TARGET_DIR ?= $(CURDIR)/target
+export CARGO_TARGET_DIR ?= $(CURDIR)/target
 
 # Build-time environment, captured for reporting by the application binary
 BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
@@ -151,7 +151,7 @@ dist_release:
 	make build_dist_release
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${BIN_PATH}/
-	bash scripts/check-sse4_2.sh
+	@scripts/check-sse4_2.sh
 
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
@@ -162,7 +162,10 @@ build_dist_release:
 	# dwz ${CARGO_TARGET_DIR}/release/tikv-server
 	# FIXME: https://sourceware.org/bugzilla/show_bug.cgi?id=24764
 	# dwz ${CARGO_TARGET_DIR}/release/tikv-ctl
-	bash scripts/objcopy.sh
+	#
+	# objcopy invocation is in a separate script to simplify handling across platforms, where
+	# some other tool may need to be used
+	@scripts/objcopy.sh
 
 # Distributable bins with SSE4.2 optimizations
 dist_unportable_release:
