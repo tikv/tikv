@@ -310,24 +310,6 @@ fn cot(arg: &Option<Real>) -> Result<Option<Real>> {
     }
 }
 
-// Copy from builtin_math.rs
-fn format_radix(mut x: u64, radix: u32) -> String {
-    let mut r = vec![];
-    loop {
-        let m = x % u64::from(radix);
-        x /= u64::from(radix);
-        r.push(
-            std::char::from_digit(m as u32, radix)
-                .unwrap()
-                .to_ascii_uppercase(),
-        );
-        if x == 0 {
-            break;
-        }
-    }
-    r.iter().rev().collect::<String>()
-}
-
 #[inline]
 #[rpn_fn]
 fn degrees(arg: &Option<Real>) -> Result<Option<Real>> {
@@ -368,80 +350,18 @@ pub fn conv(
     from_base: &Option<Int>,
     to_base: &Option<Int>,
 ) -> Result<Option<Bytes>> {
-    #[derive(Copy, Clone)]
-    struct IntWithSign(u64, bool);
-
-    fn sep_sign_num(num: Int) -> IntWithSign {
-        IntWithSign(num.wrapping_abs() as u64, num < 0)
-    }
-
-    // Return true if convert BASE is valid.
-    fn is_valid_base(base: IntWithSign) -> bool {
-        let IntWithSign(num, _) = base;
-        num >= 2 && num <= 36
-    }
-
-    // Extract a number string in FROM_BASE from S.
-    fn extract_num_str(s: &str, from_base: IntWithSign) -> Option<(String, bool)> {
-        let mut iter = s.chars().peekable();
-        let head = *iter.peek().unwrap();
-        let mut is_neg = false;
-        if head == '+' || head == '-' {
-            is_neg = head == '-';
-            iter.next();
-        }
-        let IntWithSign(base, _) = from_base;
-        let s = iter
-            .take_while(|x| x.is_digit(base as u32))
-            .collect::<String>();
-        if s.is_empty() {
-            None
-        } else {
-            Some((s, is_neg))
-        }
-    }
-
-    // Extract a integer from NUM_S in FROM_BASE.
-    fn extract_num(num_s: &str, is_neg: bool, from_base: IntWithSign) -> IntWithSign {
-        let IntWithSign(from_base, signed) = from_base;
-        let mut value = u64::from_str_radix(num_s, from_base as u32).unwrap();
-        if signed {
-            value = if is_neg {
-                value.min(-Int::min_value() as u64)
-            } else {
-                value.min(Int::max_value() as u64)
-            };
-        }
-        IntWithSign(value, is_neg)
-    }
-
-    // Format VALUE into a Bytes in TO_BASE.
-    fn remake_result_from_num(value: IntWithSign, to_base: IntWithSign) -> Bytes {
-        let IntWithSign(value, is_neg) = value;
-        let IntWithSign(to_base, should_ignore_sign) = to_base;
-        let mut real_val = value as i64;
-        if is_neg && !should_ignore_sign {
-            real_val = -real_val;
-        }
-        let mut ret = format_radix(real_val as u64, to_base as u32);
-        if is_neg && should_ignore_sign {
-            ret.insert(0, '-');
-        }
-        ret.into_bytes()
-    }
-
+    use crate::expr_util::conv::*;
     if let (Some(n), Some(from_base), Some(to_base)) = (n, from_base, to_base) {
-        let from_base = sep_sign_num(*from_base);
-        let to_base = sep_sign_num(*to_base);
+        let from_base = IntWithSign::from_int(*from_base);
+        let to_base = IntWithSign::from_int(*to_base);
         if is_valid_base(from_base) && is_valid_base(to_base) {
             let s = String::from_utf8_lossy(n);
             let s = s.trim();
-            if let Some((num_str, is_neg)) = extract_num_str(s, from_base) {
-                let num = extract_num(num_str.as_str(), is_neg, from_base);
-                Ok(Some(remake_result_from_num(num, to_base)))
-            } else {
-                Ok(Some(b"0".to_vec()))
-            }
+            Ok(
+                extract_num_from_str(s, from_base).map_or(Some(b"0".to_vec()), |num| {
+                    Some(num.format_to_base(to_base).into_bytes())
+                }),
+            )
         } else {
             Ok(None)
         }
