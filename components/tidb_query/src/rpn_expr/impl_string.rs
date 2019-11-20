@@ -363,7 +363,7 @@ mod tests {
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
         }
     }
-  
+
     #[test]
     fn test_rtrim() {
         let test_cases = vec![
@@ -394,7 +394,7 @@ mod tests {
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
         }
     }
-  
+
     #[test]
     fn test_left() {
         let cases = vec![
@@ -437,6 +437,6 @@ mod tests {
                 .evaluate(ScalarFuncSig::Left)
                 .unwrap();
             assert_eq!(output, expect_output);
-      }
-   }
+        }
+    }
 }
