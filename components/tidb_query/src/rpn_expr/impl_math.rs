@@ -312,20 +312,19 @@ fn cot(arg: &Option<Real>) -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn(capture=[ctx])]
-fn pow(ctx: &mut EvalContext, lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
-    Ok(match (lhs, rhs) {
+#[rpn_fn]
+fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
+    match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => {
             let pow = (lhs.into_inner()).pow(rhs.into_inner());
             if pow.is_infinite() {
-                ctx.handle_overflow_err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)))
-                    .map(|_| None)?
+                Err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)).into())
             } else {
-                Real::new(pow).ok()
+                Ok(Real::new(pow).ok())
             }
         }
-        _ => None,
-    })
+        _ => Ok(None),
+    }
 }
 
 #[inline]
@@ -939,10 +938,7 @@ mod tests {
                 Some(Real::from(std::f64::INFINITY)),
                 Some(Real::from(std::f64::INFINITY)),
             ),
-            (
-                Some(Real::from(9999999.0f64)),
-                Some(Real::from(9999999.0f64)),
-            ),
+            (Some(Real::from(0.0f64)), Some(Real::from(-9999999.0f64))),
         ];
 
         for (lhs, rhs) in invalid_cases {
