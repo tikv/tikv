@@ -495,8 +495,9 @@ fn wake_up_waiters_if_needed<L: LockManager>(
 
 fn extract_lock_from_result(res: &StorageResult<()>) -> Lock {
     match res {
-        Err(StorageError::Txn(Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info)))))) => Lock {
-//            Err(StorageError::Txn(Error::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))))) => Lock {
+        Err(StorageError::Txn(Error(box ErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::KeyIsLocked(info),
+        ))))) => Lock {
             ts: info.get_lock_version(),
             hash: Key::from_raw(info.get_key()).gen_hash(),
         },

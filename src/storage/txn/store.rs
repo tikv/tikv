@@ -57,7 +57,11 @@ pub trait Scanner: Send {
                     results.push(Ok((k.to_raw()?, v)));
                 }
                 Ok(None) => break,
-                Err(e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked { .. })))) => {
+                Err(
+                    e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
+                        ..
+                    }))),
+                ) => {
                     results.push(Err(e));
                 }
                 Err(e) => return Err(e),

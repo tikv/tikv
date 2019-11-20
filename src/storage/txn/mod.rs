@@ -8,8 +8,8 @@ pub mod sched_pool;
 pub mod scheduler;
 mod store;
 
-use std::fmt;
 use std::error;
+use std::fmt;
 use std::io::Error as IoError;
 
 pub use self::process::{execute_callback, ProcessResult, RESOLVE_LOCK_BATCH_SIZE};
