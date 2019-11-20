@@ -92,6 +92,12 @@ pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     }))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn hex_str_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|b| hex::encode_upper(b).into_bytes()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +375,26 @@ mod tests {
                 .evaluate(ScalarFuncSig::RTrim)
                 .unwrap();
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+    }
+
+    #[test]
+    fn test_hex_str_arg() {
+        let test_cases = vec![
+            (Some(b"abc".to_vec()), Some(b"616263".to_vec())),
+            (
+                Some("你好".as_bytes().to_vec()),
+                Some(b"E4BDA0E5A5BD".to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::HexStrArg)
+                .unwrap();
+            assert_eq!(output, expect_output);
         }
     }
 }
