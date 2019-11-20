@@ -35,7 +35,7 @@ use crate::raftstore::store::{
 };
 use crate::raftstore::store::{keys, PeerStorage};
 use crate::server::gc_worker::GCWorker;
-use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
+use crate::storage::mvcc::{Lock, LockType, Write, WriteRef, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Engine;
 use crate::storage::Iterator as EngineIterator;
@@ -1168,7 +1168,7 @@ impl MvccChecker {
                 self.write_iter.key()
             ))) == key
         {
-            let write = box_try!(Write::parse(self.write_iter.value()));
+            let write = box_try!(WriteRef::parse(self.write_iter.value())).to_owned();
             let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(self.write_iter.key())));
             self.write_iter.next();
             return Ok(Some((commit_ts, write)));
@@ -1272,7 +1272,7 @@ impl MvccInfoIterator {
         if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter) {
             let mut writes = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
-                let write = box_try!(Write::parse(&value));
+                let write = box_try!(WriteRef::parse(&value)).to_owned();
                 let mut write_info = MvccWrite::default();
                 match write.write_type {
                     WriteType::Put => write_info.set_type(Op::Put),
@@ -1840,7 +1840,7 @@ mod tests {
             let encoded_key = Key::from_raw(prefix).append_ts(commit_ts);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
             let write = Write::new(tp, start_ts, None);
-            let value = write.to_bytes();
+            let value = write.as_ref().to_bytes();
             engine
                 .put_cf(write_cf, key.as_slice(), value.as_slice())
                 .unwrap();
@@ -2232,7 +2232,7 @@ mod tests {
             kv.push((
                 CF_WRITE,
                 Key::from_raw(key).append_ts(commit_ts),
-                write.to_bytes(),
+                write.as_ref().to_bytes(),
                 expect,
             ));
         }

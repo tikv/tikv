@@ -917,7 +917,7 @@ mod tests {
         db.put_cf(
             &write_cf,
             &data_key(Key::from_raw(b"a").append_ts(commit_ts).as_encoded()),
-            &write.to_bytes(),
+            &write.as_ref().to_bytes(),
         )
         .unwrap();
         db.put_cf(
@@ -929,7 +929,7 @@ mod tests {
         db.put_cf(
             &write_cf,
             &data_key(Key::from_raw(b"b").append_ts(commit_ts).as_encoded()),
-            &write.to_bytes(),
+            &write.as_ref().to_bytes(),
         )
         .unwrap();
 
