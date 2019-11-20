@@ -88,6 +88,18 @@ impl Ceil for CeilDecToDec {
     }
 }
 
+pub struct CeilIntToDec;
+
+impl Ceil for CeilIntToDec {
+    type Input = Int;
+    type Output = Decimal;
+
+    #[inline]
+    fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
+        Ok(Some(Self::Output::from(*arg)))
+    }
+}
+
 pub struct CeilDecToInt;
 
 impl Ceil for CeilDecToInt {
@@ -531,6 +543,24 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate::<Decimal>(ScalarFuncSig::CeilDecToDec)
+                .unwrap();
+            assert_eq!(expected, output);
+        }
+    }
+
+    #[test]
+    fn test_ceil_int_to_dec() {
+        let cases = vec![
+            ("-9223372036854775808", std::i64::MIN),
+            ("9223372036854775807", std::i64::MAX),
+            ("123", 123),
+            ("-123", -123),
+        ];
+        for (expected, input) in cases {
+            let expected = expected.parse::<Decimal>().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate::<Decimal>(ScalarFuncSig::CeilIntToDec)
                 .unwrap();
             assert_eq!(expected, output);
         }
