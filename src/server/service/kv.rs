@@ -16,7 +16,6 @@ use crate::server::transport::RaftStoreRouter;
 use crate::server::Error;
 use crate::storage::kv::Error as EngineError;
 use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, LockType, Write as MvccWrite, WriteType,
 };

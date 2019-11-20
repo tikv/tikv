@@ -495,7 +495,7 @@ fn wake_up_waiters_if_needed<L: LockManager>(
 
 fn extract_lock_from_result(res: &StorageResult<()>) -> Lock {
     match res {
-        Err(StorageError::Txn(Error::Mvcc(MvccError::KeyIsLocked(info)))) => Lock {
+        Err(StorageError::Txn(Error::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))))) => Lock {
             ts: info.get_lock_version(),
             hash: Key::from_raw(info.get_key()).gen_hash(),
         },
@@ -922,7 +922,7 @@ mod tests {
         info.set_key(raw_key);
         info.set_lock_version(ts);
         info.set_lock_ttl(100);
-        let case = StorageError::from(Error::from(MvccError::KeyIsLocked(info)));
+        let case = StorageError::from(Error::from(box MvccErrorInner::KeyIsLocked(info)));
         let lock = extract_lock_from_result(&Err(case));
         assert_eq!(lock.ts, ts);
         assert_eq!(lock.hash, key.gen_hash());
