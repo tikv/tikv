@@ -42,7 +42,7 @@ pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<In
         return Ok(None);
     }
     let t = t.as_ref().unwrap();
-    if t.is_zero() {
+    if t.invalid_zero() {
         return ctx
             .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
             .map(|_| Ok(None))?;
@@ -191,6 +191,8 @@ mod tests {
             ("2018-12-08", Some(5i64)),
             ("2018-12-09", Some(6i64)),
             ("0000-00-00", None),
+            ("2018-12-00", None),
+            ("2018-00-03", None),
         ];
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
