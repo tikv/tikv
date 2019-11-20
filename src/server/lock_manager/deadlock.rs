@@ -5,7 +5,7 @@ use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
-use crate::pd::{RpcClient, INVALID_ID};
+use crate::pd::{PdClient, INVALID_ID};
 use crate::raftstore::coprocessor::{Coprocessor, ObserverContext, RoleObserver};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
@@ -360,7 +360,11 @@ struct Inner {
 
 /// Detector is used to detect deadlocks between transactions. There is a leader
 /// in the cluster which collects all `wait_for_entry` from other followers.
-pub struct Detector<S: StoreAddrResolver + 'static> {
+pub struct Detector<S, P>
+where
+    S: StoreAddrResolver + 'static,
+    P: PdClient + 'static,
+{
     /// The store id of the node.
     store_id: u64,
     /// Used to create clients to the leader.
@@ -370,7 +374,7 @@ pub struct Detector<S: StoreAddrResolver + 'static> {
     /// The connection to the leader.
     leader_client: Option<Client>,
     /// Used to get the leader of leader region from PD.
-    pd_client: Arc<RpcClient>,
+    pd_client: Arc<P>,
     /// Used to resolve store address.
     resolver: S,
     /// Used to connect other nodes.
@@ -381,12 +385,21 @@ pub struct Detector<S: StoreAddrResolver + 'static> {
     inner: Rc<RefCell<Inner>>,
 }
 
-unsafe impl<S: StoreAddrResolver + 'static> Send for Detector<S> {}
+unsafe impl<S, P> Send for Detector<S, P>
+where
+    S: StoreAddrResolver + 'static,
+    P: PdClient + 'static,
+{
+}
 
-impl<S: StoreAddrResolver + 'static> Detector<S> {
+impl<S, P> Detector<S, P>
+where
+    S: StoreAddrResolver + 'static,
+    P: PdClient + 'static,
+{
     pub fn new(
         store_id: u64,
-        pd_client: Arc<RpcClient>,
+        pd_client: Arc<P>,
         resolver: S,
         security_mgr: Arc<SecurityManager>,
         waiter_mgr_scheduler: WaiterMgrScheduler,
@@ -444,7 +457,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
 
     /// Gets leader info from PD.
     fn get_leader_info(&self) -> Result<Option<(u64, String)>> {
-        let (_, leader) = self.pd_client.get_region_and_leader(LEADER_KEY)?;
+        let leader = self.pd_client.get_region_info(LEADER_KEY)?.leader;
         match leader {
             Some(leader) => {
                 let leader_id = leader.get_store_id();
@@ -702,7 +715,11 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
     }
 }
 
-impl<S: StoreAddrResolver + 'static> FutureRunnable<Task> for Detector<S> {
+impl<S, P> FutureRunnable<Task> for Detector<S, P>
+where
+    S: StoreAddrResolver + 'static,
+    P: PdClient + 'static,
+{
     fn run(&mut self, task: Task, handle: &Handle) {
         match task {
             Task::Detect { tp, txn_ts, lock } => {
