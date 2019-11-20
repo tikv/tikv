@@ -418,7 +418,7 @@ mod tests {
         ];
 
         for (substr, s, expect_output) in null_cases {
-            let output = RpnFnScalarEvaluator::new()
+            let output: Option<i64> = RpnFnScalarEvaluator::new()
                 .push_param(substr)
                 .push_param(s)
                 .evaluate(ScalarFuncSig::LocateBinary2Args)
