@@ -30,6 +30,8 @@ tikv_util = { path = "../tikv_util" }
 json="0.12.0"
 rusty-machine="0.5.4"
 partial-min-max = "0.3.0"
+log = "0.4.8"
+simple-logging = "2.0.2"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
