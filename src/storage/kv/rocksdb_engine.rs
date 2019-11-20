@@ -22,8 +22,8 @@ use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
-    Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
-    ScanMode, Snapshot,
+    Callback, CbContext, Cursor, Engine, Error, ErrorInner, Iterator as EngineIterator, Modify,
+    Result, ScanMode, Snapshot,
 };
 
 pub use engine::SyncSnapshot as RocksSnapshot;
@@ -263,7 +263,7 @@ impl Engine for RocksEngine {
 
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
         if modifies.is_empty() {
-            return Err(Error::EmptyRequest);
+            return Err(Error(box ErrorInner::EmptyRequest));
         }
         box_try!(self.sched.schedule(Task::Write(modifies, cb)));
         Ok(())
@@ -283,7 +283,7 @@ impl Engine for RocksEngine {
             Err(Error::Request(not_leader))
         });
         if self.not_leader.load(Ordering::SeqCst) {
-            return Err(Error::Request(_not_leader));
+            return Err(Error(box ErrorInner::Request(_not_leader)));
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())

@@ -41,9 +41,10 @@ pub use self::commands::{Options, PointGetCommand};
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind};
 pub use self::kv::{
-    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics,
-    FlowStatsReporter, Iterator, Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot,
-    Statistics, StatisticsSummary, TestEngineBuilder,
+    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
+    ErrorInner as EngineErrorInner, FlowStatistics, FlowStatsReporter, Iterator, Modify,
+    RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
+    TestEngineBuilder,
 };
 pub use self::lock_manager::{DummyLockManager, LockManager};
 pub use self::mvcc::Scanner as StoreScanner;
@@ -207,7 +208,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let val = engine.async_snapshot(ctx, callback);
 
         future::result(val)
-            .and_then(|_| future.map_err(|cancel| EngineError::Other(box_err!(cancel))))
+            .and_then(|_| {
+                future.map_err(|cancel| EngineError(box EngineErrorInner::Other(box_err!(cancel))))
+            })
             .and_then(|(_ctx, result)| result)
             // map storage::kv::Error -> storage::txn::Error -> storage::Error
             .map_err(txn::Error::from)
@@ -1648,7 +1651,7 @@ mod tests {
                 Options::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::Engine(
-                        EngineError::Request(..),
+                        EngineError(box EngineErrorInner::Request(..)),
                     )))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
@@ -1658,7 +1661,7 @@ mod tests {
         expect_error(
             |e| match e {
                 Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::Engine(
-                    EngineError::Request(..),
+                    EngineError(box EngineErrorInner::Request(..)),
                 )))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
@@ -1669,7 +1672,7 @@ mod tests {
         expect_error(
             |e| match e {
                 Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::Engine(
-                    EngineError::Request(..),
+                    EngineError(box EngineErrorInner::Request(..)),
                 )))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
@@ -1687,7 +1690,7 @@ mod tests {
         expect_error(
             |e| match e {
                 Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::Engine(
-                    EngineError::Request(..),
+                    EngineError(box EngineErrorInner::Request(..)),
                 )))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
@@ -1710,7 +1713,7 @@ mod tests {
             expect_error(
                 |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error(box mvcc::ErrorInner::Engine(
-                        EngineError::Request(..),
+                        EngineError(box EngineErrorInner::Request(..)),
                     )))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 },

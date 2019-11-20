@@ -14,6 +14,7 @@ use tipb::{DagRequest, ExecType};
 
 use crate::server::Config;
 use crate::storage::kv::with_tls_engine;
+use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::{self, Engine, SnapshotStore};
 use tikv_util::future_pool::FuturePool;
 use tikv_util::Either;
@@ -214,7 +215,9 @@ impl<E: Engine> Endpoint<E> {
         let (callback, future) = tikv_util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         future::result(val)
-            .and_then(|_| future.map_err(|cancel| storage::kv::Error::Other(box_err!(cancel))))
+            .and_then(|_| {
+                future.map_err(|cancel| KvError(box KvErrorInner::Other(box_err!(cancel))))
+            })
             .and_then(|(_ctx, result)| result)
             // map engine::Error -> coprocessor::Error
             .map_err(Error::from)

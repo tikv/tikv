@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage;
+use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 
@@ -61,10 +62,10 @@ impl From<tidb_query::Error> for Error {
     }
 }
 
-impl From<storage::kv::Error> for Error {
-    fn from(err: storage::kv::Error) -> Self {
+impl From<KvError> for Error {
+    fn from(err: KvError) -> Self {
         match err {
-            storage::kv::Error::Request(e) => Error::Region(e),
+            KvError(box KvErrorInner::Request(e)) => Error::Region(e),
             e => Error::Other(e.to_string()),
         }
     }

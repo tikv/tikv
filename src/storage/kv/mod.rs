@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::UnsafeCell;
+use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
@@ -64,7 +65,7 @@ pub trait Engine: Send + Clone + 'static {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
             Some((_, res)) => res,
-            None => Err(Error::Timeout(timeout)),
+            None => Err(Error(box ErrorInner::Timeout(timeout))),
         }
     }
 
@@ -72,7 +73,7 @@ pub trait Engine: Send + Clone + 'static {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
             Some((_, res)) => res,
-            None => Err(Error::Timeout(timeout)),
+            None => Err(Error(box ErrorInner::Timeout(timeout))),
         }
     }
 
@@ -156,7 +157,7 @@ pub enum ScanMode {
 
 quick_error! {
     #[derive(Debug)]
-    pub enum Error {
+    pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
             description("request to underhook engine failed")
@@ -179,20 +180,65 @@ quick_error! {
     }
 }
 
-impl From<engine::Error> for Error {
-    fn from(err: engine::Error) -> Error {
-        Error::Request(err.into())
+impl From<engine::Error> for ErrorInner {
+    fn from(err: engine::Error) -> ErrorInner {
+        ErrorInner::Request(err.into())
     }
 }
 
+impl ErrorInner {
+    pub fn maybe_clone(&self) -> Option<ErrorInner> {
+        match *self {
+            ErrorInner::Request(ref e) => Some(ErrorInner::Request(e.clone())),
+            ErrorInner::Timeout(d) => Some(ErrorInner::Timeout(d)),
+            ErrorInner::EmptyRequest => Some(ErrorInner::EmptyRequest),
+            ErrorInner::Other(_) => None,
+        }
+    }
+}
+
+pub struct Error(pub Box<ErrorInner>);
+
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
-        match *self {
-            Error::Request(ref e) => Some(Error::Request(e.clone())),
-            Error::Timeout(d) => Some(Error::Timeout(d)),
-            Error::EmptyRequest => Some(Error::EmptyRequest),
-            Error::Other(_) => None,
-        }
+        self.0.maybe_clone().map(Error::from)
+    }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        std::error::Error::description(&self.0)
+    }
+
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(&self.0)
+    }
+}
+
+impl From<ErrorInner> for Error {
+    #[inline]
+    fn from(e: ErrorInner) -> Self {
+        Error(Box::new(e))
+    }
+}
+
+impl<T: Into<ErrorInner>> From<T> for Error {
+    #[inline]
+    default fn from(err: T) -> Self {
+        let err = err.into();
+        err.into()
     }
 }
 

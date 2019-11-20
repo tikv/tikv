@@ -23,7 +23,10 @@ use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
-use crate::storage::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
+use crate::storage::kv::{
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
+    Statistics,
+};
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{MvccReader, MvccTxn};
 use crate::storage::{Callback, Error, Key, Result};
@@ -201,7 +204,7 @@ impl<E: Engine> GCRunner<E> {
                 Ok(snapshot)
             }
             Some((_, Err(e))) => Err(e),
-            None => Err(EngineError::Timeout(timeout)),
+            None => Err(EngineError(box EngineErrorInner::Timeout(timeout))),
         }
         .map_err(Error::from)
     }

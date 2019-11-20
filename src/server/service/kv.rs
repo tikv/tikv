@@ -14,7 +14,7 @@ use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::transport::RaftStoreRouter;
 use crate::server::Error;
-use crate::storage::kv::Error as EngineError;
+use crate::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, LockType, Write as MvccWrite, WriteType,
@@ -2638,10 +2638,12 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
     use crate::storage::Error;
     match *res {
         // TODO: use `Error::cause` instead.
-        Err(Error::Engine(EngineError::Request(ref e)))
-        | Err(Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError::Request(ref e)))))
+        Err(Error::Engine(EngineError(box EngineErrorInner::Request(ref e))))
+        | Err(Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
+            box EngineErrorInner::Request(ref e),
+        )))))
         | Err(Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Engine(EngineError::Request(ref e)),
+            box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e))),
         ))))) => Some(e.to_owned()),
         Err(Error::SchedTooBusy) => {
             let mut err = RegionError::default();
