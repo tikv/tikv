@@ -9,8 +9,10 @@ use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
 use tikv::server::gc_worker::{AutoGCConfig, GCConfig};
-use tikv::storage::{self, Engine, Key, Mutation};
-use tikv::storage::{kv, mvcc, txn};
+use tikv::storage::{Engine, Key, Mutation,Error as StorageError,ErrorInner as SotrageErrorInner};
+use tikv::storage::kv::{Error as KvError,ErrorInner as KvErrorInner};
+use tikv::storage::mvcc::{Error as MvccError,ErrorInner as MvccErrorInner};
+use tikv::storage::txn::{Error as TxnError,ErrorInner as TxnErrorInner};
 use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 
@@ -103,9 +105,9 @@ fn test_raft_storage_rollback_before_prewrite() {
     assert!(ret.is_err());
     let err = ret.unwrap_err();
     match err {
-        storage::Error::Txn(txn::Error::Mvcc(mvcc::Error(
-            box mvcc::ErrorInner::WriteConflict { .. },
-        ))) => {}
+        StorageError(box SotrageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::WriteConflict { .. },
+        ))))) => {}
         _ => {
             panic!("expect WriteConflict error, but got {:?}", err);
         }
@@ -142,7 +144,7 @@ fn test_raft_storage_store_not_match() {
     ctx.set_peer(peer);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
     let res = storage.get(ctx.clone(), &key, 20);
-    if let storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e))) =
+    if let StorageError(box SotrageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(box KvErrorInner::Request(ref e)))))) =
         *res.as_ref().err().unwrap()
     {
         assert!(e.has_store_not_match());
@@ -188,7 +190,7 @@ fn test_engine_leader_change_twice() {
     // Term not match.
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     let res = engine.put(&ctx, Key::from_raw(b"a"), b"a".to_vec());
-    if let kv::Error::Request(ref e) = *res.as_ref().err().unwrap() {
+    if let KvError(box KvErrorInner::Request(ref e)) = *res.as_ref().err().unwrap() {
         assert!(e.has_stale_command());
     } else {
         panic!("expect stale command, but got {:?}", res);
