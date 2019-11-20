@@ -439,9 +439,11 @@ mod tests {
                 .push_param(lhs)
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::Left)
-      }
-  }
-  
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
     #[test]
     fn test_hex_str_arg() {
         let test_cases = vec![
