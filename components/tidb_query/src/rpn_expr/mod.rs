@@ -189,6 +189,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::BitXorSig => bit_xor_fn_meta(),
         ScalarFuncSig::BitNegSig => bit_neg_fn_meta(),
         ScalarFuncSig::LeftShift => left_shift_fn_meta(),
+        ScalarFuncSig::RightShift => right_shift_fn_meta(),
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
         ScalarFuncSig::PlusReal => arithmetic_fn_meta::<RealPlus>(),
         ScalarFuncSig::PlusDecimal => arithmetic_fn_meta::<DecimalPlus>(),
@@ -338,7 +339,11 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
         ScalarFuncSig::Concat => concat_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
+        ScalarFuncSig::Reverse => reverse_fn_meta(),
         ScalarFuncSig::HexIntArg => hex_int_arg_fn_meta(),
+        ScalarFuncSig::HexStrArg => hex_str_arg_fn_meta(),
+        ScalarFuncSig::LTrim => ltrim_fn_meta(),
+        ScalarFuncSig::RTrim => rtrim_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

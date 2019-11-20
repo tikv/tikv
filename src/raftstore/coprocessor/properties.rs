@@ -736,7 +736,7 @@ mod tests {
         for &(key, ts, write_type, entry_type) in &cases {
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
             let k = keys::data_key(k.as_encoded());
-            let v = Write::new(write_type, ts, None).to_bytes();
+            let v = Write::new(write_type, ts, None).as_ref().to_bytes();
             collector.add(&k, &v, entry_type, 0, 0);
         }
         let result = UserProperties(collector.finish());
@@ -760,7 +760,7 @@ mod tests {
             let k = Key::from_raw(s.as_bytes()).append_ts(ts);
             let k = keys::data_key(k.as_encoded());
             let w = Write::new(WriteType::Put, ts, Some(s.as_bytes().to_owned()));
-            entries.push((k, w.to_bytes()));
+            entries.push((k, w.as_ref().to_bytes()));
         }
 
         let mut collector = MvccPropertiesCollector::new();
