@@ -5,6 +5,8 @@ use tidb_query_codegen::rpn_fn;
 use super::super::expr::EvalContext;
 
 use crate::codec::data_type::*;
+use crate::codec::mysql::time::extension::DateTimeExtension;
+use crate::codec::mysql::time::weekmode::WeekMode;
 use crate::codec::Error;
 use crate::Result;
 
@@ -33,6 +35,22 @@ pub fn date_format(
     }
 
     Ok(Some(t.unwrap().into_bytes()))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn week_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    if t.is_none() {
+        return Ok(None);
+    }
+    let t = t.as_ref().unwrap();
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .map(|_| Ok(None))?;
+    }
+    let week = t.week(WeekMode::from_bits_truncate(3));
+    Ok(Some(Int::from(week)))
 }
 
 #[cfg(test)]
@@ -162,5 +180,37 @@ mod tests {
                 .unwrap();
             assert_eq!(output, None, "{:?} {:?}", date, format);
         }
+    }
+
+    #[test]
+    fn test_week_of_year() {
+        let cases = vec![
+            ("2018-01-01", Some(1i64)),
+            ("2018-02-28", Some(9i64)),
+            ("2018-06-01", Some(22i64)),
+            ("2018-07-31", Some(31i64)),
+            ("2018-11-01", Some(44i64)),
+            ("2018-12-30", Some(52i64)),
+            ("2018-12-31", Some(1i64)),
+            ("2017-01-01", Some(52i64)),
+            ("2017-12-31", Some(52i64)),
+            ("0000-00-00", None),
+            ("2018-12-00", None),
+            ("2018-00-03", None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(datetime.clone())
+                .evaluate(ScalarFuncSig::WeekOfYear)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<DateTime>)
+            .evaluate::<Int>(ScalarFuncSig::WeekOfYear)
+            .unwrap();
+        assert_eq!(output, None);
     }
 }
