@@ -163,7 +163,8 @@ impl<S: Snapshot> ForwardScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        result = super::super::util::check_lock(&current_user_key, ts, lock)
+                        result = lock
+                            .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
                             .map(|_| None);
                     }
                     IsolationLevel::Rc => {}
@@ -272,7 +273,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                             // Value is in the default CF.
                             let start_ts = write.start_ts;
                             self.ensure_default_cursor()?;
-                            let value = super::super::util::near_load_data_by_write(
+                            let value = super::near_load_data_by_write(
                                 &mut self.default_cursor.as_mut().unwrap(),
                                 user_key,
                                 start_ts,

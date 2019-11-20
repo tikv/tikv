@@ -1,9 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod util;
-
-pub use self::util::*;
-
 use crate::storage::txn::ProcessResult;
 use crate::storage::StorageCb;
 
@@ -13,9 +9,9 @@ pub struct Lock {
     pub hash: u64,
 }
 
-/// `LockMgr` manages transactions waiting for locks holden by other transactions.
+/// `LockManager` manages transactions waiting for locks held by other transactions.
 /// It has responsibility to handle deadlocks between transactions.
-pub trait LockMgr: Clone + Send + 'static {
+pub trait LockManager: Clone + Send + 'static {
     /// Transaction with `start_ts` waits for `lock` released.
     ///
     /// If the lock is released or waiting times out or deadlock occurs, the transaction
@@ -32,7 +28,7 @@ pub trait LockMgr: Clone + Send + 'static {
         timeout: i64,
     );
 
-    /// The locks with `lock_ts` and `hashes` are released, trys to wake up transactions.
+    /// The locks with `lock_ts` and `hashes` are released, tries to wake up transactions.
     fn wake_up(
         &self,
         lock_ts: u64,
@@ -41,7 +37,7 @@ pub trait LockMgr: Clone + Send + 'static {
         is_pessimistic_txn: bool,
     );
 
-    /// Returns true if there are waiters in the `LockMgr`.
+    /// Returns true if there are waiters in the `LockManager`.
     ///
     /// This function is used to avoid useless calculation and wake-up.
     fn has_waiter(&self) -> bool {
@@ -51,9 +47,9 @@ pub trait LockMgr: Clone + Send + 'static {
 
 // For test
 #[derive(Clone)]
-pub struct DummyLockMgr;
+pub struct DummyLockManager;
 
-impl LockMgr for DummyLockMgr {
+impl LockManager for DummyLockManager {
     fn wait_for(
         &self,
         _start_ts: u64,

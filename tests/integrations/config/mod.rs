@@ -59,6 +59,7 @@ fn test_serde_custom_tikv_config() {
         grpc_compression_type: GrpcCompressionType::Gzip,
         grpc_concurrency: 123,
         grpc_concurrent_stream: 1_234,
+        grpc_memory_pool_quota: ReadableSize(123_456),
         grpc_raft_conn_num: 123,
         grpc_stream_initial_window_size: ReadableSize(12_345),
         grpc_keepalive_time: ReadableDuration::secs(3),
@@ -166,6 +167,24 @@ fn test_serde_custom_tikv_config() {
         hibernate_regions: false,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
+    let titan_cf_config = TitanCfConfig {
+        min_blob_size: ReadableSize(2018),
+        blob_file_compression: CompressionType::Zstd,
+        blob_cache_size: ReadableSize::gb(12),
+        min_gc_batch_size: ReadableSize::kb(12),
+        max_gc_batch_size: ReadableSize::mb(12),
+        discardable_ratio: 0.00156,
+        sample_ratio: 0.982,
+        merge_small_file_threshold: ReadableSize::kb(21),
+        blob_run_mode: BlobRunMode::Fallback,
+    };
+    let titan_db_config = TitanDBConfig {
+        enabled: true,
+        dirname: "bar".to_owned(),
+        disable_gc: false,
+        max_background_gc: 9,
+        purge_obsolete_files_period: ReadableDuration::secs(1),
+    };
     value.rocksdb = DbConfig {
         wal_recovery_mode: DBRecoveryMode::AbsoluteConsistency,
         wal_dir: "/var".to_owned(),
@@ -192,6 +211,7 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
+        enable_unordered_write: true,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
@@ -231,17 +251,7 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: false,
-            titan: TitanCfConfig {
-                min_blob_size: ReadableSize(2018),
-                blob_file_compression: CompressionType::Zstd,
-                blob_cache_size: ReadableSize::gb(12),
-                min_gc_batch_size: ReadableSize::kb(12),
-                max_gc_batch_size: ReadableSize::mb(12),
-                discardable_ratio: 0.00156,
-                sample_ratio: 0.982,
-                merge_small_file_threshold: ReadableSize::kb(21),
-                blob_run_mode: BlobRunMode::Fallback,
-            },
+            titan: titan_cf_config.clone(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: false,
@@ -408,13 +418,7 @@ fn test_serde_custom_tikv_config() {
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
         },
-        titan: TitanDBConfig {
-            enabled: true,
-            dirname: "bar".to_owned(),
-            disable_gc: false,
-            max_background_gc: 9,
-            purge_obsolete_files_period: ReadableDuration::secs(1),
-        },
+        titan: titan_db_config.clone(),
     };
     value.raftdb = RaftDbConfig {
         wal_recovery_mode: DBRecoveryMode::SkipAnyCorruptedRecords,
@@ -437,6 +441,7 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
+        enable_unordered_write: false,
         allow_concurrent_memtable_write: true,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
@@ -479,17 +484,17 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: false,
-            titan: TitanCfConfig::default(),
+            titan: titan_cf_config.clone(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
         },
+        titan: titan_db_config.clone(),
     };
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),
         gc_ratio_threshold: 1.2,
         max_key_size: 8192,
-        scheduler_notify_capacity: 123,
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
