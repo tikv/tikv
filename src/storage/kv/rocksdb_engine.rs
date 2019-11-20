@@ -280,7 +280,7 @@ impl Engine for RocksEngine {
         };
         let _not_leader = not_leader.clone();
         fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            Err(Error::Request(not_leader))
+            Err(Error(box ErrorInner::Request(not_leader)))
         });
         if self.not_leader.load(Ordering::SeqCst) {
             return Err(Error(box ErrorInner::Request(_not_leader)));
