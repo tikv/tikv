@@ -8,7 +8,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::Result;
+use crate::storage::mvcc::{Result, WriteRef};
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics};
 
@@ -256,11 +256,14 @@ impl<S: Snapshot> Scanner<S> {
         // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
         // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
         loop {
-            let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
 
             match write.write_type {
-                WriteType::Put => return Ok(Some(self.load_data_and_write(write, user_key)?)),
+                WriteType::Put => {
+                    let write = write.to_owned();
+                    return Ok(Some(self.load_data_and_write(write, user_key)?));
+                }
                 // TODO: we may want to output delete later.
                 WriteType::Delete => return Ok(None),
                 WriteType::Lock | WriteType::Rollback => {
@@ -305,7 +308,7 @@ impl<S: Snapshot> Scanner<S> {
             let value = super::near_load_data_by_write(
                 default_cursor,
                 user_key,
-                write,
+                write.start_ts,
                 &mut self.statistics,
             )?;
             Ok(TxnEntry::Commit {
@@ -407,7 +410,7 @@ mod tests {
             let write_value = Write::new(wt, self.start_ts, short);
             TxnEntry::Commit {
                 default: (key, value),
-                write: (write_key.into_encoded(), write_value.to_bytes()),
+                write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
             }
         }
     }

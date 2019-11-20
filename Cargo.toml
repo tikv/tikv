@@ -126,6 +126,7 @@ keys = { path = "components/keys" }
 engine_traits = { path = "components/engine_traits" }
 sst_importer = { path = "components/sst_importer" }
 engine_rocks = { path = "components/engine_rocks" }
+codec = { path = "components/codec" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
