@@ -50,8 +50,8 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 const REQUEST_LOAD_ESTIMATE_SAMPLE_WINDOW: usize = 30;
-const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 70;
-const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f64 = 0.3;
+const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 50;
+const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f64 = 0.2;
 const REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO: f64 = 0.4; // against jittering
 const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.2;
 const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_PENDING_COMMANDS: usize = 300;
@@ -222,7 +222,7 @@ impl RequestLoadEstimator {
             // we use thread load estimation in light load to approximate thread load in heavy
             // hour without request batch, so don't sample if the value is low.
             if self.load_estimation == RequestLoad::Heavy
-                || thread_load > self.thread_load_estimation
+                || thread_load > REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR
             {
                 self.thread_load_estimation = (self.thread_load_estimation + thread_load) / 2;
             }
@@ -249,7 +249,7 @@ impl RequestLoadEstimator {
                             < self.latency_threshold * REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO
                 {
                     self.load_estimation = RequestLoad::Light;
-                    // self.thread_load_estimation = REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR;
+                    self.thread_load_estimation = REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR;
                 }
             }
         }
