@@ -54,6 +54,15 @@ pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
 
 #[rpn_fn]
 #[inline]
+pub fn reverse(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let s = String::from_utf8_lossy(bytes);
+        s.chars().rev().collect::<String>().into_bytes()
+    }))
+}
+
+#[rpn_fn]
+#[inline]
 pub fn hex_int_arg(arg: &Option<Int>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|i| format!("{:X}", i).into_bytes()))
 }
@@ -73,6 +82,19 @@ pub fn ltrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
+pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let pos = bytes.iter().rposition(|&x| x != SPACE);
+        if let Some(i) = pos {
+            bytes[..=i].to_vec()
+        } else {
+            Vec::new()
+        }
+    }))
+}
+
+#[rpn_fn]
+#[inline]
 pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
     Ok(match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => {
@@ -80,7 +102,7 @@ pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
                 Some(Vec::new())
             } else {
                 Some(
-                    str::from_utf8(&(*lhs).clone())
+                    str::from_utf8(&(*lhs))
                         .unwrap()
                         .chars()
                         .take(*rhs as usize)
@@ -252,6 +274,43 @@ mod tests {
     }
 
     #[test]
+    fn test_reverse() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(b"olleh".to_vec())),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some("库据数".as_bytes().to_vec()),
+            ),
+            (
+                Some("忠犬ハチ公".as_bytes().to_vec()),
+                Some("公チハ犬忠".as_bytes().to_vec()),
+            ),
+            (
+                Some("あなたのことが好きです".as_bytes().to_vec()),
+                Some("すでき好がとこのたなあ".as_bytes().to_vec()),
+            ),
+            (
+                Some("Bayern München".as_bytes().to_vec()),
+                Some("nehcnüM nreyaB".as_bytes().to_vec()),
+            ),
+            (
+                Some("Η Αθηνά  ".as_bytes().to_vec()),
+                Some("  άνηθΑ Η".as_bytes().to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::Reverse)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
     fn test_hex_int_arg() {
         let test_cases = vec![
             (Some(12), Some(b"C".to_vec())),
@@ -304,7 +363,38 @@ mod tests {
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
         }
     }
+  
+    #[test]
+    fn test_rtrim() {
+        let test_cases = vec![
+            (None, None),
+            (Some("   bar   "), Some("   bar")),
+            (Some("bar"), Some("bar")),
+            (Some("ba  r"), Some("ba  r")),
+            (Some("    "), Some("")),
+            (Some("  bar\t  "), Some("  bar\t")),
+            (Some(" bar   \t"), Some(" bar   \t")),
+            (Some("bar   \r"), Some("bar   \r")),
+            (Some("bar   \n"), Some("bar   \n")),
+            (Some(""), Some("")),
+            (Some("  你好  "), Some("  你好")),
+            (Some("  你  好  "), Some("  你  好")),
+            (Some("  분산 데이터베이스    "), Some("  분산 데이터베이스")),
+            (
+                Some("   あなたのことが好きです   "),
+                Some("   あなたのことが好きです"),
+            ),
+        ];
 
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
+                .evaluate(ScalarFuncSig::RTrim)
+                .unwrap();
+            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+    }
+  
     #[test]
     fn test_left() {
         let cases = vec![
@@ -347,6 +437,6 @@ mod tests {
                 .evaluate(ScalarFuncSig::Left)
                 .unwrap();
             assert_eq!(output, expect_output);
-        }
-    }
+      }
+   }
 }
