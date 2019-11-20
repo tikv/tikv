@@ -99,16 +99,14 @@ pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
     Ok(match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => {
             if *rhs <= 0 {
-                Some(Vec::new())
+                return Ok(Some(Vec::new()));
+            }
+            let s = str::from_utf8(&*lhs).unwrap();
+            let l = *rhs as usize;
+            if s.chars().count() > l {
+                return Ok(Some(s.chars().take(l).collect::<String>().into_bytes()));
             } else {
-                Some(
-                    str::from_utf8(&(*lhs))
-                        .unwrap()
-                        .chars()
-                        .take(*rhs as usize)
-                        .collect::<String>()
-                        .into_bytes(),
-                )
+                return Ok(Some(s.to_string().into_bytes()));
             }
         }
         _ => None,
