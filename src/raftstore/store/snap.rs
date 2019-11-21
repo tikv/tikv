@@ -1364,8 +1364,8 @@ pub mod tests {
     use engine::rocks::{DBOptions, Env, DB};
     use engine::{Engines, Mutable, Peekable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use engine_traits::Iterable;
     use engine_rocks::RocksSnapshot;
+    use engine_traits::Iterable;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,

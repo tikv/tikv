@@ -21,8 +21,7 @@ pub mod util;
 
 pub mod rocks;
 pub use crate::rocks::{
-    CFHandle, DBIterator, DBVector, Range, ReadOptions, WriteBatch,
-    WriteOptions, DB,
+    CFHandle, DBIterator, DBVector, Range, ReadOptions, WriteBatch, WriteOptions, DB,
 };
 mod errors;
 pub use crate::errors::*;

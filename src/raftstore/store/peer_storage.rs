@@ -14,8 +14,8 @@ use engine::rocks::{DBOptions, Writable};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
-use engine_traits::Peekable as PeekableTrait;
 use engine_rocks::RocksSnapshot;
+use engine_traits::Peekable as PeekableTrait;
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -1355,24 +1355,25 @@ pub fn do_snapshot(
         "region_id" => region_id,
     );
 
-    let msg = kv_snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+    let msg = kv_snap
+        .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
         .map_err(into_other::<_, raft::Error>)?;
-    let apply_state: RaftApplyState =
-        match msg {
-            None => {
-                return Err(storage_error(format!(
-                    "could not load raft state of region {}",
-                    region_id
-                )));
-            }
-            Some(state) => state,
-        };
+    let apply_state: RaftApplyState = match msg {
+        None => {
+            return Err(storage_error(format!(
+                "could not load raft state of region {}",
+                region_id
+            )));
+        }
+        Some(state) => state,
+    };
 
     let idx = apply_state.get_applied_index();
     let term = if idx == apply_state.get_truncated_state().get_index() {
         apply_state.get_truncated_state().get_term()
     } else {
-        let msg = raft_snap.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))
+        let msg = raft_snap
+            .get_msg::<Entry>(&keys::raft_log_key(region_id, idx))
             .map_err(into_other::<_, raft::Error>)?;
         match msg {
             None => {
@@ -1397,7 +1398,8 @@ pub fn do_snapshot(
         .and_then(|res| match res {
             None => Err(box_err!("could not find region info")),
             Some(state) => Ok(state),
-        }).map_err(into_other::<_, raft::Error>)?;
+        })
+        .map_err(into_other::<_, raft::Error>)?;
 
     if state.get_state() != PeerState::Normal {
         return Err(storage_error(format!(

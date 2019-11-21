@@ -10,8 +10,8 @@ use std::{cmp, mem, u64};
 
 use engine::rocks::{WriteBatch, WriteOptions, DB};
 use engine::Engines;
-use engine_traits::{Peekable, Snapshot};
 use engine_rocks::{RocksSnapshot, RocksSyncSnapshot};
+use engine_traits::{Peekable, Snapshot};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{

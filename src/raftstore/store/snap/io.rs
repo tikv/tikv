@@ -6,9 +6,9 @@ use std::{fs, usize};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{IngestExternalFileOptions, Writable, WriteBatch, DB};
 use engine::CfName;
-use engine_rocks::{RocksSstWriter, RocksSstWriterBuilder, RocksSnapshot};
+use engine_rocks::{RocksSnapshot, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::IOLimiter;
-use engine_traits::{SstWriter, SstWriterBuilder, Iterable, Snapshot as SnapshotTrait};
+use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
 use super::Error;

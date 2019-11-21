@@ -10,8 +10,8 @@ use std::{cmp, u64};
 
 use crate::raftstore::{Error, Result};
 use engine::Engines;
-use engine::CF_RAFT;
 use engine::Peekable;
+use engine::CF_RAFT;
 use engine_rocks::RocksSnapshot;
 use futures::Future;
 use kvproto::errorpb;

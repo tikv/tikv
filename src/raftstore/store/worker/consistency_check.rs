@@ -7,8 +7,8 @@ use kvproto::metapb::Region;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 use engine::CF_RAFT;
-use engine_traits::{Peekable, Iterable, Snapshot};
 use engine_rocks::RocksSnapshot;
+use engine_traits::{Iterable, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
@@ -147,8 +147,8 @@ mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
-    use engine_rocks::RocksSnapshot;
     use engine::{CF_DEFAULT, CF_RAFT};
+    use engine_rocks::RocksSnapshot;
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;

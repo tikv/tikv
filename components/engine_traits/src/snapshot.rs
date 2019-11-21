@@ -17,5 +17,4 @@ pub trait Snapshot: 'static + Peekable + Iterable + Send + Sync + Sized + Debug 
     fn get_db(&self) -> &Self::KvEngine;
 }
 
-pub trait SyncSnapshot<T>: Clone + Send + Sync + Sized + Deref<Target = T> {
-}
+pub trait SyncSnapshot<T>: Clone + Send + Sync + Sized + Deref<Target = T> {}

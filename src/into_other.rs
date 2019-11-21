@@ -35,7 +35,8 @@ impl IntoOther<RaftError> for EngineTraitsError {
 }
 
 pub fn into_other<F, T>(e: F) -> T
-where F: IntoOther<T>
+where
+    F: IntoOther<T>,
 {
-    e.into_other()    
+    e.into_other()
 }

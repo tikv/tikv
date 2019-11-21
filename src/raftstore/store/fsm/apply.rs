@@ -2931,10 +2931,10 @@ mod tests {
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use engine::rocks::Writable;
+    use engine::Peekable;
     use engine::{WriteBatch, DB};
     use engine_rocks::RocksEngine;
     use engine_traits::Peekable as PeekableTrait;
-    use engine::Peekable;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;

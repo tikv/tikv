@@ -4,12 +4,14 @@ use std::fmt::{self, Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot, SyncSnapshot};
+use engine_traits::{
+    self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot, SyncSnapshot,
+};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
 
-use crate::engine::RocksEngine;
 use crate::db_vector::RocksDBVector;
+use crate::engine::RocksEngine;
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
 use crate::RocksEngineIterator;
@@ -142,4 +144,4 @@ impl RocksSyncSnapshot {
     }
 }
 
-impl SyncSnapshot<RocksSnapshot> for RocksSyncSnapshot { }
+impl SyncSnapshot<RocksSnapshot> for RocksSyncSnapshot {}
