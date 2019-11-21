@@ -70,7 +70,7 @@ mod log {
         // filter conditions
         begin_time: i64,
         end_time: i64,
-        level: Option<LogLevel>,
+        level: LogLevel,
         filter: String,
     }
 
@@ -99,7 +99,7 @@ mod log {
             log_file: &str,
             begin_time: i64,
             end_time: i64,
-            level: Option<LogLevel>,
+            level: LogLevel,
             filter: String,
         ) -> Result<Self, Error> {
             let log_path: &Path = log_file.as_ref();
@@ -210,7 +210,7 @@ mod log {
                                     if meta.time < self.begin_time {
                                         continue;
                                     }
-                                    if self.level.is_some() && meta.level != self.level {
+                                    if self.level != LogLevel::All && meta.level != self.level {
                                         continue;
                                     }
                                     if self.filter.len() > 0 && !content.contains(&self.filter) {
@@ -218,8 +218,7 @@ mod log {
                                     }
                                     let mut item = LogMessage::new();
                                     item.set_time(meta.time);
-                                    // FIXME
-                                    item.set_level(meta.level.unwrap());
+                                    item.set_level(meta.level);
                                     item.set_message(content.to_owned());
                                     return Some(item);
                                 }
@@ -239,7 +238,7 @@ mod log {
 
     struct Meta {
         time: i64,
-        level: Option<LogLevel>,
+        level: LogLevel,
     }
 
     fn parse_time(input: &str) -> IResult<&str, &str> {
@@ -271,13 +270,13 @@ mod log {
                     Err(_) => -1,
                 },
                 level: match level {
-                    "trace" | "TRACE" => Some(LogLevel::Trace),
-                    "debug" | "DEBUG" => Some(LogLevel::Debug),
-                    "info" | "INFO" => Some(LogLevel::Info),
-                    "warn" | "WARN" | "warning" | "WARNING" => Some(LogLevel::Warn),
-                    "error" | "ERROR" => Some(LogLevel::Error),
-                    "critical" | "CRITICAL" => Some(LogLevel::Critical),
-                    _ => None,
+                    "trace" | "TRACE" => LogLevel::Trace,
+                    "debug" | "DEBUG" => LogLevel::Debug,
+                    "info" | "INFO" => LogLevel::Info,
+                    "warn" | "WARN" | "warning" | "WARNING" => LogLevel::Warn,
+                    "error" | "ERROR" => LogLevel::Error,
+                    "critical" | "CRITICAL" => LogLevel::Critical,
+                    _ => LogLevel::Info,
                 },
             },
         ))
@@ -324,7 +323,7 @@ mod log {
         let limit = req.get_limit();
 
         // FIXME: the level can be None
-        let iter = match LogIterator::new(log_file, begin_time, end_time, Some(level), filter) {
+        let iter = match LogIterator::new(log_file, begin_time, end_time, level, filter) {
             Ok(iter) => iter,
             Err(e) => return err(e),
         };
