@@ -6,7 +6,7 @@ use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::write::{Write, WriteType};
+use crate::storage::mvcc::write::{WriteRef, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
@@ -256,11 +256,33 @@ impl<S: Snapshot> ForwardScanner<S> {
         // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
         // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
         loop {
-            let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
 
             match write.write_type {
-                WriteType::Put => return Ok(Some(self.load_data_by_write(write, user_key)?)),
+                WriteType::Put => {
+                    if self.cfg.omit_value {
+                        return Ok(Some(vec![]));
+                    }
+                    match write.short_value {
+                        Some(value) => {
+                            // Value is carried in `write`.
+                            return Ok(Some(value.to_vec()));
+                        }
+                        None => {
+                            // Value is in the default CF.
+                            let start_ts = write.start_ts;
+                            self.ensure_default_cursor()?;
+                            let value = super::near_load_data_by_write(
+                                &mut self.default_cursor.as_mut().unwrap(),
+                                user_key,
+                                start_ts,
+                                &mut self.statistics,
+                            )?;
+                            return Ok(Some(value));
+                        }
+                    }
+                }
                 WriteType::Delete => return Ok(None),
                 WriteType::Lock | WriteType::Rollback => {
                     // Continue iterate next `write`.
@@ -278,34 +300,6 @@ impl<S: Snapshot> ForwardScanner<S> {
                 // Meet another key.
                 *met_next_user_key = true;
                 return Ok(None);
-            }
-        }
-    }
-
-    /// Load the value by the given `write`. If value is carried in `write`, it will be returned
-    /// directly. Otherwise there will be a default CF look up.
-    ///
-    /// The implementation is the same as `PointGetter::load_data_by_write`.
-    #[inline]
-    fn load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
-        if self.cfg.omit_value {
-            return Ok(vec![]);
-        }
-        match write.short_value {
-            Some(value) => {
-                // Value is carried in `write`.
-                Ok(value)
-            }
-            None => {
-                // Value is in the default CF.
-                self.ensure_default_cursor()?;
-                let value = super::near_load_data_by_write(
-                    &mut self.default_cursor.as_mut().unwrap(),
-                    user_key,
-                    write,
-                    &mut self.statistics,
-                )?;
-                Ok(value)
             }
         }
     }
