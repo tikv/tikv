@@ -325,17 +325,15 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
         panic!(
             "default value not found for key {:?} when {}",
             hex::encode_upper(&key),
-            write,
             hint,
         );
     } else {
         error!(
             "default value not found";
             "key" => log_wrappers::Key(&key),
-            "write" => ?write,
             "hint" => hint,
         );
-        Error::from(ErrorInner::DefaultNotFound { key, write })
+        Error::from(ErrorInner::DefaultNotFound { key })
     }
 }
 

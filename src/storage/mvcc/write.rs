@@ -105,8 +105,8 @@ impl Write {
 
     #[inline]
     pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
-        let write_type_bytes = b.read_u8().map_err(|_| Error::BadFormatWrite)?;
-        WriteType::from_u8(write_type_bytes).ok_or(Error::BadFormatWrite)
+        let write_type_bytes = b.read_u8().map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+        WriteType::from_u8(write_type_bytes).ok_or(Error::from(ErrorInner::BadFormatWrite))
     }
 
     #[inline]
@@ -128,9 +128,9 @@ pub struct WriteRef<'a> {
 
 impl WriteRef<'_> {
     pub fn parse(mut b: &[u8]) -> Result<WriteRef<'_>> {
-        let write_type_bytes = b.read_u8().map_err(|_| Error::BadFormatWrite)?;
-        let write_type = WriteType::from_u8(write_type_bytes).ok_or(Error::BadFormatWrite)?;
-        let start_ts = b.read_var_u64().map_err(|_| Error::BadFormatWrite)?;
+        let write_type_bytes = b.read_u8().map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+        let write_type = WriteType::from_u8(write_type_bytes).ok_or(Error::from(ErrorInner::BadFormatWrite))?;
+        let start_ts = b.read_var_u64().map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
         if b.is_empty() {
             return Ok(WriteRef {
                 write_type,
@@ -139,10 +139,10 @@ impl WriteRef<'_> {
             });
         }
 
-        let flag = b.read_u8().map_err(|_| Error::BadFormatWrite)?;
+        let flag = b.read_u8().map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
         assert_eq!(flag, SHORT_VALUE_PREFIX, "invalid flag [{}] in write", flag);
 
-        let len = b.read_u8().map_err(|_| Error::BadFormatWrite)?;
+        let len = b.read_u8().map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
         if len as usize != b.len() {
             panic!(
                 "short value len [{}] not equal to content len [{}]",
