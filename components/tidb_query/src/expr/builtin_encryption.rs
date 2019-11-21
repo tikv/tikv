@@ -4,10 +4,10 @@ use std::borrow::Cow;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::Datum;
+use crate::expr_util;
 use flate2::read::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
-use hex;
-use openssl::hash::{self, MessageDigest};
+use openssl::hash::MessageDigest;
 use std::io::prelude::*;
 
 const SHA0: i64 = 0;
@@ -23,7 +23,8 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
-        hex_digest(MessageDigest::md5(), &input).map(|digest| Some(Cow::Owned(digest)))
+        expr_util::hex_digest::hex_digest(MessageDigest::md5(), &input)
+            .map(|digest| Some(Cow::Owned(digest)))
     }
 
     pub fn sha1<'a, 'b: 'a>(
@@ -32,7 +33,8 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
-        hex_digest(MessageDigest::sha1(), &input).map(|digest| Some(Cow::Owned(digest)))
+        expr_util::hex_digest::hex_digest(MessageDigest::sha1(), &input)
+            .map(|digest| Some(Cow::Owned(digest)))
     }
 
     pub fn sha2<'a, 'b: 'a>(
@@ -54,7 +56,7 @@ impl ScalarFunc {
                 return Ok(None);
             }
         };
-        hex_digest(sha2, &input).map(|digest| Some(Cow::Owned(digest)))
+        expr_util::hex_digest::hex_digest(sha2, &input).map(|digest| Some(Cow::Owned(digest)))
     }
 
     #[inline]
@@ -137,13 +139,6 @@ impl ScalarFunc {
         }
         Ok(Some(i64::from(LittleEndian::read_u32(&input[0..4]))))
     }
-}
-
-#[inline]
-fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Vec<u8>> {
-    hash::hash(hashtype, input)
-        .map(|digest| hex::encode(digest).into_bytes())
-        .map_err(|e| Error::Other(box_err!("OpenSSL error: {:?}", e)))
 }
 
 #[cfg(test)]

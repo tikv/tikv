@@ -6,6 +6,7 @@ pub mod impl_arithmetic;
 pub mod impl_cast;
 pub mod impl_compare;
 pub mod impl_control;
+pub mod impl_encryptions;
 pub mod impl_json;
 pub mod impl_like;
 pub mod impl_math;
@@ -25,6 +26,7 @@ use self::impl_arithmetic::*;
 use self::impl_cast::*;
 use self::impl_compare::*;
 use self::impl_control::*;
+use self::impl_encryptions::*;
 use self::impl_json::*;
 use self::impl_like::*;
 use self::impl_math::*;
@@ -341,6 +343,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Reverse => reverse_fn_meta(),
         ScalarFuncSig::HexIntArg => hex_int_arg_fn_meta(),
         ScalarFuncSig::HexStrArg => hex_str_arg_fn_meta(),
+        ScalarFuncSig::Md5 => md5_fn_meta(),
         ScalarFuncSig::LTrim => ltrim_fn_meta(),
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
         _ => return Err(other_err!(
