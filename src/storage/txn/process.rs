@@ -590,7 +590,10 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 is_pessimistic_txn,
             );
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), rows, cmd.ctx, None)
+            let pr = ProcessResult::TxnStatus {
+                txn_status: TxnStatus::committed(commit_ts),
+            };
+            (pr, txn.into_modifies(), rows, cmd.ctx, None)
         }
         CommandKind::Cleanup {
             key,
