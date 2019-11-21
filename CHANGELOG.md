@@ -12,7 +12,6 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   + rocksdb: Fix OnFlushCompleted fired before flush result write to MANIFEST [pingcap/rocksdb#130](https://github.com/pingcap/rocksdb/pull/130)
   + titan: Fix status overrided by mistake [pingcap/titan#111](https://github.com/pingcap/titan/pull/111)
 + Makefile: add a new rule for CI test [#5938](https://github.com/tikv/tikv/pull/5938)
-+ Fix PointGetter performance issue when there are concurrent write [#5495](https://github.com/tikv/tikv/pull/5495)
 + Add metrics for commit log duration [#5881](https://github.com/tikv/tikv/pull/5881)
 + Pessimistic Transaction: Add support for lock wait timeout [#5848](https://github.com/tikv/tikv/pull/5848)
 + LockManager: make has_waiter accurate [#5845](https://github.com/tikv/tikv/pull/5845)
