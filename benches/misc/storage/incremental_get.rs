@@ -34,7 +34,13 @@ fn table_lookup_gen_data() -> (SnapshotStore<SyncSnapshot>, Vec<Key>) {
     db.compact_range_cf(db.cf_handle("lock").unwrap(), None, None);
 
     let snapshot = engine.snapshot(&Context::default()).unwrap();
-    let store = SnapshotStore::new(snapshot, 10, IsolationLevel::Si, true, Default::default());
+    let store = SnapshotStore::new(
+        snapshot,
+        10.into(),
+        IsolationLevel::Si,
+        true,
+        Default::default(),
+    );
 
     // Keys are given in order, and are far away from each other to simulate a normal table lookup
     // scenario.

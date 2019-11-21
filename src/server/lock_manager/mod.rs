@@ -15,8 +15,10 @@ use self::waiter_manager::{Scheduler as WaiterMgrScheduler, WaiterManager};
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
-use crate::storage::txn::{execute_callback, ProcessResult};
-use crate::storage::{lock_manager::Lock, LockManager as LockManagerTrait, StorageCb};
+use crate::storage::{
+    lock_manager::Lock, types::ProcessResult, LockManager as LockManagerTrait, StorageCallback,
+    TimeStamp,
+};
 use pd_client::PdClient;
 use spin::Mutex;
 use std::collections::hash_map::DefaultHasher;
@@ -31,7 +33,7 @@ use tikv_util::worker::FutureWorker;
 const DETECTED_SLOTS_NUM: usize = 128;
 
 #[inline]
-fn detected_slot_idx(txn_ts: u64) -> usize {
+fn detected_slot_idx(txn_ts: TimeStamp) -> usize {
     let mut s = DefaultHasher::new();
     txn_ts.hash(&mut s);
     (s.finish() as usize) & (DETECTED_SLOTS_NUM - 1)
@@ -50,7 +52,7 @@ pub struct LockManager {
     waiter_count: Arc<AtomicUsize>,
 
     /// Record transactions which have sent requests to detect deadlock.
-    detected: Arc<Vec<Mutex<HashSet<u64>>>>,
+    detected: Arc<Vec<Mutex<HashSet<TimeStamp>>>>,
 }
 
 impl Clone for LockManager {
@@ -190,12 +192,12 @@ impl LockManager {
         )
     }
 
-    fn add_to_detected(&self, txn_ts: u64) {
+    fn add_to_detected(&self, txn_ts: TimeStamp) {
         let mut detected = self.detected[detected_slot_idx(txn_ts)].lock();
         detected.insert(txn_ts);
     }
 
-    fn remove_from_detected(&self, txn_ts: u64) -> bool {
+    fn remove_from_detected(&self, txn_ts: TimeStamp) -> bool {
         let mut detected = self.detected[detected_slot_idx(txn_ts)].lock();
         detected.remove(&txn_ts)
     }
@@ -204,8 +206,8 @@ impl LockManager {
 impl LockManagerTrait for LockManager {
     fn wait_for(
         &self,
-        start_ts: u64,
-        cb: StorageCb,
+        start_ts: TimeStamp,
+        cb: StorageCallback,
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
@@ -213,7 +215,7 @@ impl LockManagerTrait for LockManager {
     ) {
         // Negative timeout means no wait.
         if timeout < 0 {
-            execute_callback(cb, pr);
+            cb.execute(pr);
             return;
         }
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
@@ -231,9 +233,9 @@ impl LockManagerTrait for LockManager {
 
     fn wake_up(
         &self,
-        lock_ts: u64,
+        lock_ts: TimeStamp,
         hashes: Option<Vec<u64>>,
-        commit_ts: u64,
+        commit_ts: TimeStamp,
         is_pessimistic_txn: bool,
     ) {
         // If `hashes` is some, there may be some waiters waiting for these locks.
@@ -260,8 +262,8 @@ mod tests {
     use crate::raftstore::coprocessor::Config as CopConfig;
     use crate::server::resolve::Callback;
     use crate::storage::{
-        mvcc::Error as MvccError, txn::Error as TxnError, Error as StorageError,
-        Result as StorageResult,
+        mvcc::Error as MvccError, mvcc::ErrorInner as MvccErrorInner, txn::Error as TxnError,
+        Error as StorageError, Result as StorageResult,
     };
     use kvproto::kvrpcpb::LockInfo;
     use kvproto::metapb::Region;
@@ -322,7 +324,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         let storage_callback = |tx: mpsc::Sender<_>| {
-            StorageCb::Boolean(Box::new(move |result| {
+            StorageCallback::Boolean(Box::new(move |result| {
                 tx.send(result).unwrap();
             }))
         };
@@ -335,83 +337,98 @@ mod tests {
         // Normal wake up
         assert_eq!(lock_mgr.has_waiter(), false);
         lock_mgr.wait_for(
-            10,
+            10.into(),
             storage_callback(tx.clone()),
             ProcessResult::Res,
-            Lock { ts: 20, hash: 20 },
+            Lock {
+                ts: 20.into(),
+                hash: 20,
+            },
             true,
             0,
         );
         assert_eq!(lock_mgr.has_waiter(), true);
-        lock_mgr.wake_up(20, Some(vec![20]), 20, false);
+        lock_mgr.wake_up(20.into(), Some(vec![20]), 20.into(), false);
         recv(&rx);
         assert_eq!(lock_mgr.has_waiter(), false);
 
         // Normal deadlock
         lock_mgr.wait_for(
-            30,
+            30.into(),
             storage_callback(tx.clone()),
             ProcessResult::Res,
-            Lock { ts: 40, hash: 40 },
+            Lock {
+                ts: 40.into(),
+                hash: 40,
+            },
             false,
             0,
         );
         lock_mgr.wait_for(
-            40,
+            40.into(),
             storage_callback(tx.clone()),
             ProcessResult::MultiRes {
-                results: vec![Err(StorageError::from(TxnError::from(
-                    MvccError::KeyIsLocked(LockInfo::default()),
-                )))],
+                results: vec![Err(StorageError::from(TxnError::from(MvccError::from(
+                    MvccErrorInner::KeyIsLocked(LockInfo::default()),
+                ))))],
             },
-            Lock { ts: 30, hash: 30 },
+            Lock {
+                ts: 30.into(),
+                hash: 30,
+            },
             false,
             0,
         );
         recv(&rx);
-        lock_mgr.wake_up(40, Some(vec![40]), 40, true);
+        lock_mgr.wake_up(40.into(), Some(vec![40]), 40.into(), true);
         recv(&rx);
         assert_eq!(lock_mgr.has_waiter(), false);
 
         // If it's the first lock, no detect
         lock_mgr.wait_for(
-            50,
+            50.into(),
             storage_callback(tx.clone()),
             ProcessResult::Res,
-            Lock { ts: 60, hash: 60 },
+            Lock {
+                ts: 60.into(),
+                hash: 60,
+            },
             true,
             0,
         );
-        assert_eq!(lock_mgr.remove_from_detected(50), false);
-        lock_mgr.wake_up(60, Some(vec![60]), 60, false);
+        assert_eq!(lock_mgr.remove_from_detected(50.into()), false);
+        lock_mgr.wake_up(60.into(), Some(vec![60]), 60.into(), false);
         recv(&rx);
 
         // If it's not the first lock, detect deadlock
         lock_mgr.wait_for(
-            50,
+            50.into(),
             storage_callback(tx.clone()),
             ProcessResult::Res,
-            Lock { ts: 60, hash: 60 },
+            Lock {
+                ts: 60.into(),
+                hash: 60,
+            },
             false,
             0,
         );
-        assert_eq!(lock_mgr.remove_from_detected(50), true);
-        lock_mgr.wake_up(60, Some(vec![60]), 60, false);
+        assert_eq!(lock_mgr.remove_from_detected(50.into()), true);
+        lock_mgr.wake_up(60.into(), Some(vec![60]), 60.into(), false);
         recv(&rx);
 
         // If key_hashes is none, no wake up
         let prev_wake_up = TASK_COUNTER_VEC.wake_up.get();
-        lock_mgr.wake_up(70, None, 70, false);
+        lock_mgr.wake_up(70.into(), None, 70.into(), false);
         assert_eq!(TASK_COUNTER_VEC.wake_up.get(), prev_wake_up);
 
         // If it's non-pessimistic-txn, no clean up
         let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
-        lock_mgr.wake_up(80, None, 80, false);
+        lock_mgr.wake_up(80.into(), None, 80.into(), false);
         assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
 
         // If the txn doesn't wait for locks, no clean up
         let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
-        lock_mgr.wake_up(80, None, 80, true);
+        lock_mgr.wake_up(80.into(), None, 80.into(), true);
         assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
     }
 
@@ -422,10 +439,10 @@ mod tests {
             .start_waiter_manager(&Config::default())
             .expect("could not start waiter manager");
         assert!(!lock_mgr.has_waiter());
-        let (lock_ts, hash) = (10, 1);
+        let (lock_ts, hash) = (10.into(), 1);
         lock_mgr.wait_for(
-            20,
-            StorageCb::Boolean(Box::new(|_| ())),
+            20.into(),
+            StorageCallback::Boolean(Box::new(|_| ())),
             ProcessResult::Res,
             Lock { ts: lock_ts, hash },
             true,
@@ -433,7 +450,7 @@ mod tests {
         );
         // new waiters should be sensed immediately
         assert!(lock_mgr.has_waiter());
-        lock_mgr.wake_up(lock_ts, Some(vec![hash]), 15, false);
+        lock_mgr.wake_up(lock_ts, Some(vec![hash]), 15.into(), false);
         thread::sleep(Duration::from_secs(1));
         assert!(!lock_mgr.has_waiter());
         lock_mgr.stop_waiter_manager();
@@ -452,8 +469,8 @@ mod tests {
         let lock_mgr = LockManager::new();
         let (tx, rx) = mpsc::channel();
         lock_mgr.wait_for(
-            10,
-            StorageCb::Boolean(Box::new(move |x| {
+            10.into(),
+            StorageCallback::Boolean(Box::new(move |x| {
                 tx.send(x).unwrap();
             })),
             ProcessResult::Res,

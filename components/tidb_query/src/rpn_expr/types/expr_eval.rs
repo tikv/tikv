@@ -1069,8 +1069,8 @@ mod tests {
             Ok(v.map(|v| v + *metadata))
         }
 
-        fn prepare_a<T: Evaluable>(_expr: &mut Expr) -> i64 {
-            42
+        fn prepare_a<T: Evaluable>(_expr: &mut Expr) -> Result<i64> {
+            Ok(42)
         }
 
         #[allow(clippy::trivially_copy_pass_by_ref, clippy::ptr_arg)]
@@ -1080,8 +1080,8 @@ mod tests {
             Ok(v[0].clone())
         }
 
-        fn prepare_b<T: Evaluable>(_expr: &mut Expr) -> String {
-            format!("{}", std::mem::size_of::<T>())
+        fn prepare_b<T: Evaluable>(_expr: &mut Expr) -> Result<String> {
+            Ok(format!("{}", std::mem::size_of::<T>()))
         }
 
         #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -1093,8 +1093,8 @@ mod tests {
             Ok(Some(args.len() as i64))
         }
 
-        fn prepare_c<T: Evaluable>(_expr: &mut Expr) -> std::marker::PhantomData<T> {
-            std::marker::PhantomData
+        fn prepare_c<T: Evaluable>(_expr: &mut Expr) -> Result<std::marker::PhantomData<T>> {
+            Ok(std::marker::PhantomData)
         }
 
         fn fn_mapper(expr: &Expr) -> Result<RpnFnMeta> {
