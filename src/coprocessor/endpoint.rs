@@ -137,7 +137,7 @@ impl<E: Engine> Endpoint<E> {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
                     let store = SnapshotStore::new(
                         snap,
-                        dag.get_start_ts(),
+                        dag.get_start_ts().into(),
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
                         req_ctx.bypass_locks.clone(),
