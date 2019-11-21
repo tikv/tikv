@@ -829,7 +829,7 @@ mod tests {
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::WriteType;
-    use crate::storage::mvcc::{Error, ErrorInner, MvccReader, MvccTxn, TimeStamp};
+    use crate::storage::mvcc::{Error, ErrorInner, MvccReader, TimeStamp};
     use crate::storage::{
         Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN,
     };
