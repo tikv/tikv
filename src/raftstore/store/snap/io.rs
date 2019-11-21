@@ -4,9 +4,9 @@ use std::io::{self, BufReader};
 use std::{fs, usize};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::{IngestExternalFileOptions, Snapshot as DbSnapshot, Writable, WriteBatch, DB};
+use engine::rocks::{IngestExternalFileOptions, Writable, WriteBatch, DB};
 use engine::CfName;
-use engine_rocks::{Compat, RocksSstWriter, RocksSstWriterBuilder};
+use engine_rocks::{RocksSstWriter, RocksSstWriterBuilder, RocksSnapshot};
 use engine_traits::IOLimiter;
 use engine_traits::{SstWriter, SstWriterBuilder, Iterable, Snapshot as SnapshotTrait};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
@@ -29,14 +29,14 @@ pub struct BuildStatistics {
 /// otherwise the file will be created and synchronized.
 pub fn build_plain_cf_file(
     path: &str,
-    snap: &DbSnapshot,
+    snap: &RocksSnapshot,
     cf: &str,
     start_key: &[u8],
     end_key: &[u8],
 ) -> Result<BuildStatistics, Error> {
     let mut file = box_try!(OpenOptions::new().write(true).create_new(true).open(path));
     let mut stats = BuildStatistics::default();
-    box_try!(snap.c().scan_cf(cf, start_key, end_key, false, |key, value| {
+    box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         stats.key_count += 1;
         stats.total_size += key.len() + value.len();
         box_try!(file.encode_compact_bytes(key));
@@ -59,7 +59,7 @@ pub fn build_plain_cf_file(
 /// otherwise the file will be created and synchronized.
 pub fn build_sst_cf_file<L: IOLimiter>(
     path: &str,
-    snap: &DbSnapshot,
+    snap: &RocksSnapshot,
     cf: CfName,
     start_key: &[u8],
     end_key: &[u8],
@@ -71,7 +71,7 @@ pub fn build_sst_cf_file<L: IOLimiter>(
         .as_ref()
         .map_or(0 as i64, |l| l.get_max_bytes_per_time());
     let mut bytes: i64 = 0;
-    box_try!(snap.c().scan_cf(cf, start_key, end_key, false, |key, value| {
+    box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         if let Some(ref io_limiter) = io_limiter {
             if bytes >= base {
@@ -137,11 +137,11 @@ pub fn apply_sst_cf_file(path: &str, db: &DB, cf: &str) -> Result<(), Error> {
 }
 
 fn create_sst_file_writer(
-    snap: &DbSnapshot,
+    snap: &RocksSnapshot,
     cf: CfName,
     path: &str,
 ) -> Result<RocksSstWriter, Error> {
-    let engine = snap.c().get_db();
+    let engine = snap.get_db();
     let builder = RocksSstWriterBuilder::new().set_db(&engine).set_cf(cf);
     let writer = box_try!(builder.build(path));
     Ok(writer)
@@ -174,7 +174,7 @@ mod tests {
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let plain_file_path = snap_cf_dir.path().join("plain");
-                let snap = DbSnapshot::new(Arc::clone(&db));
+                let snap = RocksSnapshot::new(Arc::clone(&db));
                 let stats = build_plain_cf_file(
                     &plain_file_path.to_str().unwrap(),
                     &snap,
@@ -222,7 +222,7 @@ mod tests {
                 let sst_file_path = snap_cf_dir.path().join("sst");
                 let stats = build_sst_cf_file::<RocksIOLimiter>(
                     &sst_file_path.to_str().unwrap(),
-                    &DbSnapshot::new(Arc::clone(&db)),
+                    &RocksSnapshot::new(Arc::clone(&db)),
                     CF_DEFAULT,
                     b"a",
                     b"z",

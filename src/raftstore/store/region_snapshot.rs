@@ -411,13 +411,13 @@ mod tests {
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::{IngestExternalFileOptions, Snapshot, Writable};
+    use engine::rocks::{IngestExternalFileOptions, Writable};
     use engine::util::{delete_all_files_in_range, delete_all_in_range};
     use engine::Engines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
     use engine_rocks::RocksIOLimiter;
-    use engine_rocks::RocksSstWriterBuilder;
+    use engine_rocks::{RocksSstWriterBuilder, RocksSnapshot};
     use engine_traits::{SstWriter, SstWriterBuilder, Peekable};
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;
@@ -1055,7 +1055,7 @@ mod tests {
         let write_sst_file_path = path.path().join("write.sst");
         build_sst_cf_file::<RocksIOLimiter>(
             &default_sst_file_path.to_str().unwrap(),
-            &Snapshot::new(Arc::clone(&engines.kv)),
+            &RocksSnapshot::new(Arc::clone(&engines.kv)),
             CF_DEFAULT,
             b"",
             b"{",
@@ -1064,7 +1064,7 @@ mod tests {
         .unwrap();
         build_sst_cf_file::<RocksIOLimiter>(
             &write_sst_file_path.to_str().unwrap(),
-            &Snapshot::new(Arc::clone(&engines.kv)),
+            &RocksSnapshot::new(Arc::clone(&engines.kv)),
             CF_WRITE,
             b"",
             b"{",

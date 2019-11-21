@@ -1421,7 +1421,7 @@ pub fn do_snapshot(
     snap_data.set_region(state.get_region().clone());
     let mut stat = SnapshotStatistics::new();
     s.build(
-        &kv_snap.as_raw(),
+        &kv_snap,
         state.get_region(),
         &mut snap_data,
         &mut stat,

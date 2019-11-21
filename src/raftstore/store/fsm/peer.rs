@@ -11,7 +11,8 @@ use std::{cmp, u64};
 use crate::raftstore::{Error, Result};
 use engine::Engines;
 use engine::CF_RAFT;
-use engine::{Peekable, Snapshot as EngineSnapshot};
+use engine::Peekable;
+use engine_rocks::RocksSnapshot;
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -2883,7 +2884,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: RocksSnapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!(

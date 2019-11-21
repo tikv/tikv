@@ -12,10 +12,9 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
-use engine::rocks::Snapshot as DbSnapshot;
 use engine::rocks::DB;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_rocks::{Compat, RocksEngine};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{CFHandleExt, ImportExt};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -169,7 +168,7 @@ pub struct ApplyOptions {
 pub trait Snapshot: Read + Write + Send {
     fn build(
         &mut self,
-        kv_snap: &DbSnapshot,
+        kv_snap: &RocksSnapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
@@ -613,14 +612,14 @@ impl Snap {
 
     fn do_build(
         &mut self,
-        kv_snap: &DbSnapshot,
+        kv_snap: &RocksSnapshot,
         region: &Region,
         stat: &mut SnapshotStatistics,
         deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(kv_snap.c().get_db().as_inner().clone()) {
+            match self.validate(kv_snap.get_db().as_inner().clone()) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(
@@ -705,7 +704,7 @@ impl fmt::Debug for Snap {
 impl Snapshot for Snap {
     fn build(
         &mut self,
-        kv_snap: &DbSnapshot,
+        kv_snap: &RocksSnapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
@@ -1363,10 +1362,10 @@ pub mod tests {
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{DBOptions, Env, DB};
-    use engine::{Engines, Mutable, Peekable, Snapshot as DbSnapshot};
+    use engine::{Engines, Mutable, Peekable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_traits::Iterable;
-    use engine_rocks::Compat;
+    use engine_rocks::RocksSnapshot;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
@@ -1473,10 +1472,10 @@ pub mod tests {
         })
     }
 
-    pub fn get_kv_count(snap: &DbSnapshot) -> usize {
+    pub fn get_kv_count(snap: &RocksSnapshot) -> usize {
         let mut kv_count = 0;
         for cf in SNAPSHOT_CFS {
-            snap.c().scan_cf(
+            snap.scan_cf(
                 cf,
                 &keys::data_key(b"a"),
                 &keys::data_key(b"z"),
@@ -1605,7 +1604,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = get_db(&src_db_dir.path(), db_opt.clone(), None).unwrap();
-        let snapshot = DbSnapshot::new(Arc::clone(&db));
+        let snapshot = RocksSnapshot::new(Arc::clone(&db));
 
         let src_dir = Builder::new()
             .prefix("test-snap-file-db-src")
@@ -1743,7 +1742,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = get_db(&db_dir.path(), None, None).unwrap();
-        let snapshot = DbSnapshot::new(Arc::clone(&db));
+        let snapshot = RocksSnapshot::new(Arc::clone(&db));
 
         let dir = Builder::new()
             .prefix("test-snap-validation")
@@ -1932,7 +1931,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = open_test_db(&db_dir.path(), None, None).unwrap();
-        let snapshot = DbSnapshot::new(db);
+        let snapshot = RocksSnapshot::new(db);
 
         let dir = Builder::new()
             .prefix("test-snap-corruption")
@@ -2057,7 +2056,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = open_test_db(&db_dir.path(), None, None).unwrap();
-        let snapshot = DbSnapshot::new(db);
+        let snapshot = RocksSnapshot::new(db);
 
         let dir = Builder::new()
             .prefix("test-snap-corruption-meta")
@@ -2182,7 +2181,7 @@ pub mod tests {
             .prefix("test-snap-mgr-delete-temp-files-v2-db")
             .tempdir()
             .unwrap();
-        let snapshot = DbSnapshot::new(open_test_db(&db_dir.path(), None, None).unwrap());
+        let snapshot = RocksSnapshot::new(open_test_db(&db_dir.path(), None, None).unwrap());
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(mgr.clone());
@@ -2280,7 +2279,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = open_test_db(&src_db_dir.path(), None, None).unwrap();
-        let snapshot = DbSnapshot::new(db);
+        let snapshot = RocksSnapshot::new(db);
 
         let key = SnapKey::new(1, 1, 1);
         let region = gen_test_region(1, 1, 1);
@@ -2357,7 +2356,7 @@ pub mod tests {
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
             .build(snapfiles_path.path().to_str().unwrap(), None);
-        let snapshot = DbSnapshot::new(engine.kv);
+        let snapshot = RocksSnapshot::new(engine.kv);
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);

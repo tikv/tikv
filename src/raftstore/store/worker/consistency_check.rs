@@ -7,9 +7,8 @@ use kvproto::metapb::Region;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 use engine::CF_RAFT;
-use engine::Snapshot;
-use engine_traits::{Peekable, Iterable};
-use engine_rocks::Compat;
+use engine_traits::{Peekable, Iterable, Snapshot};
+use engine_rocks::RocksSnapshot;
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
@@ -20,12 +19,12 @@ pub enum Task {
     ComputeHash {
         index: u64,
         region: Region,
-        snap: Snapshot,
+        snap: RocksSnapshot,
     },
 }
 
 impl Task {
-    pub fn compute_hash(region: Region, index: u64, snap: Snapshot) -> Task {
+    pub fn compute_hash(region: Region, index: u64, snap: RocksSnapshot) -> Task {
         Task::ComputeHash {
             region,
             index,
@@ -54,7 +53,7 @@ impl<C: CasualRouter> Runner<C> {
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash(&mut self, region: Region, index: u64, snap: Snapshot) {
+    fn compute_hash(&mut self, region: Region, index: u64, snap: RocksSnapshot) {
         let region_id = region.get_id();
         info!(
             "computing hash";
@@ -74,7 +73,7 @@ impl<C: CasualRouter> Runner<C> {
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         for cf in cf_names {
-            let res = snap.c().scan_cf(cf, &start_key, &end_key, false, |k, v| {
+            let res = snap.scan_cf(cf, &start_key, &end_key, false, |k, v| {
                 digest.update(k);
                 digest.update(v);
                 Ok(true)
@@ -95,7 +94,7 @@ impl<C: CasualRouter> Runner<C> {
         // Computes the hash from the Region state too.
         let region_state_key = keys::region_state_key(region_id);
         digest.update(&region_state_key);
-        match snap.c().get_value_cf(CF_RAFT, &region_state_key) {
+        match snap.get_value_cf(CF_RAFT, &region_state_key) {
             Err(e) => {
                 REGION_HASH_COUNTER_VEC
                     .with_label_values(&["compute", "failed"])
@@ -148,7 +147,7 @@ mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
-    use engine::Snapshot;
+    use engine_rocks::RocksSnapshot;
     use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};
@@ -189,7 +188,7 @@ mod tests {
         runner.run(Task::ComputeHash {
             index: 10,
             region: region.clone(),
-            snap: Snapshot::new(Arc::clone(&db)),
+            snap: RocksSnapshot::new(Arc::clone(&db)),
         });
         let mut checksum_bytes = vec![];
         checksum_bytes.write_u32::<BigEndian>(sum).unwrap();
