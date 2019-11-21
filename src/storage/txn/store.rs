@@ -3,12 +3,14 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
-use crate::storage::mvcc::Error as MvccError;
-use crate::storage::mvcc::{EntryScanner, Scanner as MvccScanner, ScannerBuilder, WriteRef};
+use crate::storage::mvcc::{
+    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, Scanner as MvccScanner,
+    ScannerBuilder, WriteRef,
+};
 use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TimeStamp, TsSet};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
-use super::{Error, Result};
+use super::{Error, ErrorInner, Result};
 
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
@@ -56,7 +58,11 @@ pub trait Scanner: Send {
                     results.push(Ok((k.to_raw()?, v)));
                 }
                 Ok(None) => break,
-                Err(e @ Error::Mvcc(MvccError::KeyIsLocked { .. })) => {
+                Err(
+                    e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
+                        ..
+                    }))),
+                ) => {
                     results.push(Err(e));
                 }
                 Err(e) => return Err(e),
@@ -336,12 +342,12 @@ impl<S: Snapshot> SnapshotStore<S> {
             if let Some(b) = self.snapshot.lower_bound() {
                 if !b.is_empty() && l.as_encoded().as_slice() < b {
                     REQUEST_EXCEED_BOUND.inc();
-                    return Err(Error::InvalidReqRange {
+                    return Err(Error::from(ErrorInner::InvalidReqRange {
                         start: Some(l.as_encoded().clone()),
                         end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
                         lower_bound: Some(b.to_vec()),
                         upper_bound: self.snapshot.upper_bound().map(|b| b.to_vec()),
-                    });
+                    }));
                 }
             }
         }
@@ -349,12 +355,12 @@ impl<S: Snapshot> SnapshotStore<S> {
             if let Some(b) = self.snapshot.upper_bound() {
                 if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
                     REQUEST_EXCEED_BOUND.inc();
-                    return Err(Error::InvalidReqRange {
+                    return Err(Error::from(ErrorInner::InvalidReqRange {
                         start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
                         end: Some(u.as_encoded().clone()),
                         lower_bound: self.snapshot.lower_bound().map(|b| b.to_vec()),
                         upper_bound: Some(b.to_vec()),
-                    });
+                    }));
                 }
             }
         }
@@ -509,8 +515,8 @@ mod tests {
     use crate::storage::kv::{
         Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
     };
-    use crate::storage::mvcc::Error as MvccError;
     use crate::storage::mvcc::MvccTxn;
+    use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::{
         CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
         TestEngineBuilder, Value,
@@ -865,15 +871,17 @@ mod tests {
         data.insert(Key::from_raw(b"bb"), Ok(b"alphaalpha".to_vec()));
         data.insert(
             Key::from_raw(b"bba"),
-            Err(Error::Mvcc(MvccError::KeyIsLocked(
-                kvproto::kvrpcpb::LockInfo::default(),
-            ))),
+            Err(Error::from(ErrorInner::Mvcc(MvccError::from(
+                MvccErrorInner::KeyIsLocked(kvproto::kvrpcpb::LockInfo::default()),
+            )))),
         );
         data.insert(Key::from_raw(b"z"), Ok(b"beta".to_vec()));
         data.insert(Key::from_raw(b"ca"), Ok(b"hello".to_vec()));
         data.insert(
             Key::from_raw(b"zz"),
-            Err(Error::Mvcc(MvccError::BadFormatLock)),
+            Err(Error::from(ErrorInner::Mvcc(MvccError::from(
+                MvccErrorInner::BadFormatLock,
+            )))),
         );
 
         FixtureStore::new(data)
