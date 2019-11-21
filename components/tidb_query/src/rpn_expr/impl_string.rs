@@ -4,6 +4,7 @@ use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::Result;
+use hex::FromHex;
 
 const SPACE: u8 = 0o40u8;
 
@@ -109,6 +110,22 @@ pub fn locate_binary_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result
     Ok(twoway::find_bytes(s.as_slice(), substr.as_slice())
         .map(|i| 1 + i as i64)
         .or(Some(0)))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn un_hex(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg
+        .as_ref()
+        .map(|bytes| {
+            let mut bytes = bytes.clone();
+            if bytes.len() & 1 == 1 {
+                // Add a '0' to the front, if the length is not the multiple of 2
+                bytes.insert(0, b'0')
+            }
+            bytes
+        })
+        .and_then(|hex| Vec::from_hex(hex).map(Option::Some).unwrap_or(None)))
 }
 
 #[cfg(test)]
@@ -436,6 +453,27 @@ mod tests {
                 .push_param(substr)
                 .push_param(s)
                 .evaluate(ScalarFuncSig::LocateBinary2Args)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_un_hex() {
+        let test_cases = vec![
+            (Some(b"4D7953514C".to_vec()), Some(b"MySQL".to_vec())),
+            (Some(b"1267".to_vec()), Some(vec![0x12, 0x67])),
+            (Some(b"126".to_vec()), Some(vec![0x01, 0x26])),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (Some(b"string".to_vec()), None),
+            (Some("你好".as_bytes().to_vec()), None),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::UnHex)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
