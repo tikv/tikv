@@ -201,8 +201,9 @@ impl TestSuite {
         range.set_start(start.into_bytes());
         range.set_end(end.into_bytes());
         let mut scanner = Scanner::new(&snap_store, ScanOn::Table, false, false, range).unwrap();
+        let digest = crc64fast::Digest::new();
         while let Some((k, v)) = scanner.next_row().unwrap() {
-            checksum = checksum_crc64_xor(checksum, &[], &k, &v);
+            checksum = checksum_crc64_xor(checksum, digest.clone(), &k, &v);
             total_kvs += 1;
             total_bytes += (k.len() + v.len()) as u64;
         }

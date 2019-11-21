@@ -2,8 +2,6 @@
 
 use std::u64;
 
-use crc::crc64::{self, Digest, Hasher64};
-
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
@@ -87,8 +85,9 @@ fn reversed_checksum_crc64_xor<E: Engine>(
     .unwrap();
 
     let mut checksum = 0;
+    let digest = crc64fast::Digest::new();
     while let Some((k, v)) = scanner.next_row().unwrap() {
-        let mut digest = Digest::new(crc64::ECMA);
+        let mut digest = digest.clone();
         digest.write(&k);
         digest.write(&v);
         checksum ^= digest.sum64();
