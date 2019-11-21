@@ -15,6 +15,7 @@ use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 
+use keys::UnixSecs as PdInstant;
 use pd_client::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
@@ -211,7 +212,7 @@ struct Cluster {
     region_id_keys: HashMap<u64, Key>,
     region_approximate_size: HashMap<u64, u64>,
     region_approximate_keys: HashMap<u64, u64>,
-    region_last_report_ts: HashMap<u64, u64>,
+    region_last_report_ts: HashMap<u64, PdInstant>,
     region_last_report_term: HashMap<u64, u64>,
     base_id: AtomicUsize,
 
@@ -323,7 +324,7 @@ impl Cluster {
         self.region_approximate_keys.get(&region_id).cloned()
     }
 
-    fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
+    fn get_region_last_report_ts(&self, region_id: u64) -> Option<PdInstant> {
         self.region_last_report_ts.get(&region_id).cloned()
     }
 
@@ -955,7 +956,7 @@ impl TestPdClient {
         self.cluster.rl().get_region_approximate_keys(region_id)
     }
 
-    pub fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
+    pub fn get_region_last_report_ts(&self, region_id: u64) -> Option<PdInstant> {
         self.cluster.rl().get_region_last_report_ts(region_id)
     }
 
