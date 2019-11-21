@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use keys::UnixSecs as PdInstant;
 use test_raftstore::*;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
@@ -163,7 +164,7 @@ fn test_region_heartbeat_timestamp() {
     // transfer leader to (2, 2) first to make address resolve happen early.
     cluster.must_transfer_leader(1, new_peer(2, 2));
     let reported_ts = cluster.pd_client.get_region_last_report_ts(1).unwrap();
-    assert_ne!(reported_ts, 0);
+    assert_ne!(reported_ts, PdInstant::zero());
 
     sleep(Duration::from_millis(1000));
     cluster.must_transfer_leader(1, new_peer(1, 1));
