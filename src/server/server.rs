@@ -33,7 +33,7 @@ use super::transport::{RaftStoreRouter, ServerTransport};
 use super::{Config, Result};
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
-const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
+const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(500);
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
 pub const SCHED_POOL_THREAD_PREFIX: &str = "sched-worker";
