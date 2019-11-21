@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, Builder, JoinHandle};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use time::{Duration as TimeDuration, Timespec};
 
@@ -33,15 +33,6 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() * 1_000_000_000 + nanos
-}
-
-/// Gets the current timestamp in seconds.
-#[inline]
-pub fn time_now_sec() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
 }
 
 pub struct SlowTimer {
