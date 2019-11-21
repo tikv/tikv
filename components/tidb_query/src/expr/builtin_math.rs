@@ -460,7 +460,6 @@ impl ScalarFunc {
         let from_base = try_opt!(self.children[1].eval_int(ctx, row));
         let to_base = try_opt!(self.children[2].eval_int(ctx, row));
         Ok(conv_1(n.as_ref(), from_base, to_base).map(Cow::Owned))
-
     }
 }
 
