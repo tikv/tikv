@@ -111,6 +111,20 @@ pub fn locate_binary_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result
         .or(Some(0)))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn strcmp(left: &Option<Bytes>, right: &Option<Bytes>) -> Result<Option<i64>> {
+    use std::cmp::Ordering::*;
+    Ok(match (left, right) {
+        (Some(left), Some(right)) => Some(match left.cmp(right) {
+            Less => -1,
+            Equal => 0,
+            Greater => 1,
+        }),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,6 +450,37 @@ mod tests {
                 .push_param(substr)
                 .push_param(s)
                 .evaluate(ScalarFuncSig::LocateBinary2Args)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_strcmp() {
+        let test_cases = vec![
+            (Some(b"123".to_vec()), Some(b"123".to_vec()), Some(0)),
+            (Some(b"123".to_vec()), Some(b"1".to_vec()), Some(1)),
+            (Some(b"1".to_vec()), Some(b"123".to_vec()), Some(-1)),
+            (Some(b"123".to_vec()), Some(b"45".to_vec()), Some(-1)),
+            (
+                Some("你好".as_bytes().to_vec()),
+                Some(b"hello".to_vec()),
+                Some(1),
+            ),
+            (Some(b"".to_vec()), Some(b"123".to_vec()), Some(-1)),
+            (Some(b"123".to_vec()), Some(b"".to_vec()), Some(1)),
+            (Some(b"".to_vec()), Some(b"".to_vec()), Some(0)),
+            (None, Some(b"123".to_vec()), None),
+            (Some(b"123".to_vec()), None, None),
+            (Some(b"".to_vec()), None, None),
+            (None, Some(b"".to_vec()), None),
+        ];
+
+        for (left, right, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(left)
+                .push_param(right)
+                .evaluate(ScalarFuncSig::Strcmp)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
