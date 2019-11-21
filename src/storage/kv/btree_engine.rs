@@ -77,7 +77,7 @@ impl Engine for BTreeEngine {
         cb: EngineCallback<()>,
     ) -> EngineResult<()> {
         if modifies.is_empty() {
-            return Err(EngineError(box EngineErrorInner::EmptyRequest));
+            return Err(EngineError::from(EngineErrorInner::EmptyRequest));
         }
         cb((CbContext::new(), write_modifies(&self, modifies)));
 

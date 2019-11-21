@@ -205,7 +205,7 @@ impl<E: Engine> GCRunner<E> {
                 Ok(snapshot)
             }
             Some((_, Err(e))) => Err(e),
-            None => Err(EngineError(box EngineErrorInner::Timeout(timeout))),
+            None => Err(EngineError::from(EngineErrorInner::Timeout(timeout))),
         }
         .map_err(Error::from)
     }
@@ -484,7 +484,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GCTask>) -> Result<()> {
     match e {
         ScheduleError::Full(mut task) => {
             GC_TOO_BUSY_COUNTER.inc();
-            (task.take_callback())(Err(Error(box ErrorInner::GCWorkerTooBusy)));
+            (task.take_callback())(Err(Error::from(ErrorInner::GCWorkerTooBusy)));
             Ok(())
         }
         _ => Err(box_err!("failed to schedule gc task: {:?}", e)),

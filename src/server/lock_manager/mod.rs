@@ -368,8 +368,8 @@ mod tests {
             40.into(),
             storage_callback(tx.clone()),
             ProcessResult::MultiRes {
-                results: vec![Err(StorageError::from(TxnError::from(MvccError(
-                    box MvccErrorInner::KeyIsLocked(LockInfo::default()),
+                results: vec![Err(StorageError::from(TxnError::from(MvccError::from(
+                    MvccErrorInner::KeyIsLocked(LockInfo::default()),
                 ))))],
             },
             Lock {

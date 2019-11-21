@@ -65,7 +65,7 @@ pub trait Engine: Send + Clone + 'static {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
             Some((_, res)) => res,
-            None => Err(Error(box ErrorInner::Timeout(timeout))),
+            None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }
     }
 
@@ -73,7 +73,7 @@ pub trait Engine: Send + Clone + 'static {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
             Some((_, res)) => res,
-            None => Err(Error(box ErrorInner::Timeout(timeout))),
+            None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }
     }
 

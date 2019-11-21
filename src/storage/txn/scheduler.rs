@@ -347,7 +347,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         if cmd.need_flow_control() && self.inner.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
             callback.execute(ProcessResult::Failed {
-                err: StorageError(box StorageErrorInner::SchedTooBusy),
+                err: StorageError::from(StorageErrorInner::SchedTooBusy),
             });
             return;
         }

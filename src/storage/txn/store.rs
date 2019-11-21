@@ -342,7 +342,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             if let Some(b) = self.snapshot.lower_bound() {
                 if !b.is_empty() && l.as_encoded().as_slice() < b {
                     REQUEST_EXCEED_BOUND.inc();
-                    return Err(Error(box ErrorInner::InvalidReqRange {
+                    return Err(Error::from(ErrorInner::InvalidReqRange {
                         start: Some(l.as_encoded().clone()),
                         end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
                         lower_bound: Some(b.to_vec()),
@@ -355,7 +355,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             if let Some(b) = self.snapshot.upper_bound() {
                 if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
                     REQUEST_EXCEED_BOUND.inc();
-                    return Err(Error(box ErrorInner::InvalidReqRange {
+                    return Err(Error::from(ErrorInner::InvalidReqRange {
                         start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
                         end: Some(u.as_encoded().clone()),
                         lower_bound: self.snapshot.lower_bound().map(|b| b.to_vec()),
@@ -871,7 +871,7 @@ mod tests {
         data.insert(Key::from_raw(b"bb"), Ok(b"alphaalpha".to_vec()));
         data.insert(
             Key::from_raw(b"bba"),
-            Err(Error(box ErrorInner::Mvcc(MvccError::from(
+            Err(Error::from(ErrorInner::Mvcc(MvccError::from(
                 MvccErrorInner::KeyIsLocked(kvproto::kvrpcpb::LockInfo::default()),
             )))),
         );
@@ -879,7 +879,7 @@ mod tests {
         data.insert(Key::from_raw(b"ca"), Ok(b"hello".to_vec()));
         data.insert(
             Key::from_raw(b"zz"),
-            Err(Error(box ErrorInner::Mvcc(MvccError::from(
+            Err(Error::from(ErrorInner::Mvcc(MvccError::from(
                 MvccErrorInner::BadFormatLock,
             )))),
         );

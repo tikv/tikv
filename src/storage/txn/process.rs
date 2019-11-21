@@ -567,7 +567,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             ..
         } => {
             if commit_ts <= lock_ts {
-                return Err(Error(box ErrorInner::InvalidTxnTso {
+                return Err(Error::from(ErrorInner::InvalidTxnTso {
                     start_ts: lock_ts,
                     commit_ts,
                 }));
@@ -704,7 +704,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 };
                 if !commit_ts.is_zero() {
                     if current_lock.ts >= commit_ts {
-                        return Err(Error(box ErrorInner::InvalidTxnTso {
+                        return Err(Error::from(ErrorInner::InvalidTxnTso {
                             start_ts: current_lock.ts,
                             commit_ts,
                         }));
@@ -899,8 +899,8 @@ mod tests {
         info.set_key(raw_key);
         info.set_lock_version(ts);
         info.set_lock_ttl(100);
-        let case = StorageError::from(StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(
-            MvccError(box MvccErrorInner::KeyIsLocked(info)),
+        let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
+            MvccError::from(MvccErrorInner::KeyIsLocked(info)),
         ))));
         let lock = extract_lock_from_result(&Err(case));
         assert_eq!(lock.ts, ts.into());

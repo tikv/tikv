@@ -263,7 +263,7 @@ impl Engine for RocksEngine {
 
     fn async_write(&self, _: &Context, modifies: Vec<Modify>, cb: Callback<()>) -> Result<()> {
         if modifies.is_empty() {
-            return Err(Error(box ErrorInner::EmptyRequest));
+            return Err(Error::from(ErrorInner::EmptyRequest));
         }
         box_try!(self.sched.schedule(Task::Write(modifies, cb)));
         Ok(())
@@ -280,10 +280,10 @@ impl Engine for RocksEngine {
         };
         let _not_leader = not_leader.clone();
         fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            Err(Error(box ErrorInner::Request(not_leader)))
+            Err(Error::from(ErrorInner::Request(not_leader)))
         });
         if self.not_leader.load(Ordering::SeqCst) {
-            return Err(Error(box ErrorInner::Request(_not_leader)));
+            return Err(Error::from(ErrorInner::Request(_not_leader)));
         }
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())

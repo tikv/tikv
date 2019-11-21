@@ -216,7 +216,7 @@ impl<E: Engine> Endpoint<E> {
         let val = engine.async_snapshot(ctx, callback);
         future::result(val)
             .and_then(|_| {
-                future.map_err(|cancel| KvError(box KvErrorInner::Other(box_err!(cancel))))
+                future.map_err(|cancel| KvError::from(KvErrorInner::Other(box_err!(cancel))))
             })
             .and_then(|(_ctx, result)| result)
             // map engine::Error -> coprocessor::Error

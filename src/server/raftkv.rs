@@ -89,7 +89,7 @@ pub type Result<T> = result::Result<T, Error>;
 impl From<Error> for kv::Error {
     fn from(e: Error) -> kv::Error {
         match e {
-            Error::RequestFailed(e) => KvError(box KvErrorInner::Request(e)),
+            Error::RequestFailed(e) => KvError::from(KvErrorInner::Request(e)),
             Error::Server(e) => e.into(),
             e => box_err!(e),
         }
@@ -98,7 +98,7 @@ impl From<Error> for kv::Error {
 
 impl From<RaftServerError> for KvError {
     fn from(e: RaftServerError) -> KvError {
-        KvError(box KvErrorInner::Request(e.into()))
+        KvError(Box::new(KvErrorInner::Request(e.into())))
     }
 }
 
@@ -255,7 +255,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     ) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if modifies.is_empty() {
-            return Err(KvError(box KvErrorInner::EmptyRequest));
+            return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
         let mut reqs = Vec::with_capacity(modifies.len());
