@@ -125,6 +125,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -1370,6 +1371,7 @@ dependencies = [
  "hex",
  "kvproto",
  "panic_hook",
+ "slog",
  "tikv_alloc",
  "tikv_util",
 ]
@@ -1977,6 +1979,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "lazy_static",
  "log",
@@ -3177,6 +3180,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "pd_client",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3209,6 +3213,7 @@ name = "test_storage"
 version = "0.0.1"
 dependencies = [
  "futures",
+ "keys",
  "kvproto",
  "test_raftstore",
  "tikv",
@@ -3334,6 +3339,7 @@ dependencies = [
  "criterion-cpu-time",
  "criterion-papi",
  "crossbeam",
+ "derive-new",
  "derive_more",
  "engine",
  "engine_rocks",

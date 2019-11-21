@@ -26,7 +26,7 @@ impl<S: Snapshot> ChecksumContext<S> {
     ) -> Result<Self> {
         let store = SnapshotStore::new(
             snap,
-            req.get_start_ts(),
+            req.get_start_ts().into(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),

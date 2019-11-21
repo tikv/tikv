@@ -114,6 +114,7 @@ mime = "0.3.13"
 failure = "0.1"
 prost = "0.5.0"
 regex = "1.3"
+derive-new = "0.5"
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
