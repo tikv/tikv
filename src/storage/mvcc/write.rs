@@ -108,7 +108,7 @@ impl Write {
         let write_type_bytes = b
             .read_u8()
             .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
-        WriteType::from_u8(write_type_bytes).ok_or(Error::from(ErrorInner::BadFormatWrite))
+        WriteType::from_u8(write_type_bytes).ok_or_else(|| Error::from(ErrorInner::BadFormatWrite))
     }
 
     #[inline]
@@ -133,8 +133,8 @@ impl WriteRef<'_> {
         let write_type_bytes = b
             .read_u8()
             .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
-        let write_type =
-            WriteType::from_u8(write_type_bytes).ok_or(Error::from(ErrorInner::BadFormatWrite))?;
+        let write_type = WriteType::from_u8(write_type_bytes)
+            .ok_or_else(|| Error::from(ErrorInner::BadFormatWrite))?;
         let start_ts = b
             .read_var_u64()
             .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
