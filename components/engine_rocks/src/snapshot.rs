@@ -132,7 +132,7 @@ impl Peekable for RocksSnapshot {
 }
 
 #[derive(Clone, Debug)]
-#[repr(C)] // Guarantee same representation as in engine/rocks
+#[repr(transparent)] // Guarantee same representation as in engine/rocks
 pub struct RocksSyncSnapshot(Arc<RocksSnapshot>);
 
 impl Deref for RocksSyncSnapshot {

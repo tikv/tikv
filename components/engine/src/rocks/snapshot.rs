@@ -62,6 +62,7 @@ impl Drop for Snapshot {
 }
 
 #[derive(Debug, Clone)]
+#[repr(transparent)] // Guarantee same representation as in engine_rocks
 pub struct SyncSnapshot(Arc<Snapshot>);
 
 impl Deref for SyncSnapshot {
