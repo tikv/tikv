@@ -105,14 +105,12 @@ pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
                 Ok(s) => {
                     let l = *rhs as usize;
                     if s.chars().count() > l {
-                        return Ok(Some(s.chars().take(l).collect::<String>().into_bytes()));
+                        Ok(Some(s.chars().take(l).collect::<String>().into_bytes()))
                     } else {
-                        return Ok(Some(s.to_string().into_bytes()));
+                        Ok(Some(s.to_string().into_bytes()))
                     }
                 }
-                Err(err) => {
-                    return Err(box_err!("invalid input value: {:?}", err));
-                }
+                Err(err) => Err(box_err!("invalid input value: {:?}", err)),
             }
         }
         _ => Ok(None),
