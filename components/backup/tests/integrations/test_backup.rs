@@ -211,8 +211,9 @@ impl TestSuite {
             is_key_only: false,
             is_scanned_range_aware: false,
         });
+        let digest = crc64fast::Digest::new();
         while let Some((k, v)) = scanner.next().unwrap() {
-            checksum = checksum_crc64_xor(checksum, &[], &k, &v);
+            checksum = checksum_crc64_xor(checksum, digest.clone(), &k, &v);
             total_kvs += 1;
             total_bytes += (k.len() + v.len()) as u64;
         }
