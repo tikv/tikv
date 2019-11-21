@@ -353,7 +353,7 @@ pub fn conv(
     use crate::expr_util::conv::conv_internal;
     if let (Some(n), Some(from_base), Some(to_base)) = (n, from_base, to_base) {
         let s = String::from_utf8_lossy(n);
-        Ok(conv_internal(&s, *from_base, *to_base).map(|x| x.into_bytes()))
+        Ok(conv_internal(&s, *from_base, *to_base))
     } else {
         Ok(None)
     }

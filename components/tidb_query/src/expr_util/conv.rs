@@ -92,16 +92,16 @@ fn extract_num(num_s: &str, is_neg: bool, from_base: IntWithSign) -> IntWithSign
     }
 }
 
-pub fn conv_internal(s: &str, from_base: Int, to_base: Int) -> Option<String> {
+pub fn conv_internal(s: &str, from_base: Int, to_base: Int) -> Option<Bytes> {
     let s = s.trim();
     let from_base = IntWithSign::from_int(from_base);
     let to_base = IntWithSign::from_int(to_base);
     if is_valid_base(from_base) && is_valid_base(to_base) {
         if let Some((num_str, is_neg)) = extract_num_str(s, from_base) {
             let num = extract_num(num_str.as_ref(), is_neg, from_base);
-            Some(num.format_to_base(to_base))
+            Some(num.format_to_base(to_base).into_bytes())
         } else {
-            Some("0".to_string())
+            Some(b"0".to_vec())
         }
     } else {
         None
