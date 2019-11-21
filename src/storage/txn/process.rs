@@ -12,13 +12,15 @@ use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::lock_manager::{self, Lock, LockManager};
 use crate::storage::mvcc::{
-    Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
+    Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock, MvccReader, MvccTxn,
+    TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
-use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
+use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, ErrorInner, Result};
+use crate::storage::types::ProcessResult;
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    Command, CommandKind, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
-    ScanMode, Snapshot, Statistics, StorageCb, TxnStatus, Value,
+    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, Key,
+    MvccInfo, Result as StorageResult, ScanMode, Snapshot, Statistics, TxnStatus, Value,
 };
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
@@ -27,61 +29,13 @@ use tikv_util::time::{Instant, SlowTimer};
 // The write batch will be around 32KB if we scan 256 keys each time.
 pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 
-/// Process result of a command.
-pub enum ProcessResult {
-    Res,
-    MultiRes { results: Vec<StorageResult<()>> },
-    MvccKey { mvcc: MvccInfo },
-    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
-    Locks { locks: Vec<LockInfo> },
-    TxnStatus { txn_status: TxnStatus },
-    NextCommand { cmd: Command },
-    Failed { err: StorageError },
-}
-
-/// Delivers the process result of a command to the storage callback.
-pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
-    match callback {
-        StorageCb::Boolean(cb) => match pr {
-            ProcessResult::Res => cb(Ok(())),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::Booleans(cb) => match pr {
-            ProcessResult::MultiRes { results } => cb(Ok(results)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::MvccInfoByKey(cb) => match pr {
-            ProcessResult::MvccKey { mvcc } => cb(Ok(mvcc)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::MvccInfoByStartTs(cb) => match pr {
-            ProcessResult::MvccStartTs { mvcc } => cb(Ok(mvcc)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::Locks(cb) => match pr {
-            ProcessResult::Locks { locks } => cb(Ok(locks)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::TxnStatus(cb) => match pr {
-            ProcessResult::TxnStatus { txn_status } => cb(Ok(txn_status)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-    }
-}
-
 /// Task is a running command.
 pub struct Task {
     pub cid: u64,
     pub tag: metrics::CommandKind,
 
     cmd: Command,
-    ts: u64,
+    ts: TimeStamp,
     region_id: u64,
 }
 
@@ -350,7 +304,7 @@ fn process_read_impl<E: Engine>(
                 !cmd.ctx.get_not_fill_cache(),
                 cmd.ctx.get_isolation_level(),
             );
-            let result = find_mvcc_infos_by_key(&mut reader, key, u64::MAX);
+            let result = find_mvcc_infos_by_key(&mut reader, key, TimeStamp::max());
             statistics.add(reader.get_statistics());
             let (lock, writes, values) = result?;
             Ok(ProcessResult::MvccKey {
@@ -370,7 +324,7 @@ fn process_read_impl<E: Engine>(
             );
             match reader.seek_ts(start_ts)? {
                 Some(key) => {
-                    let result = find_mvcc_infos_by_key(&mut reader, &key, u64::MAX);
+                    let result = find_mvcc_infos_by_key(&mut reader, &key, TimeStamp::max());
                     statistics.add(reader.get_statistics());
                     let (lock, writes, values) = result?;
                     Ok(ProcessResult::MvccStartTs {
@@ -407,7 +361,7 @@ fn process_read_impl<E: Engine>(
             for (key, lock) in kv_pairs {
                 let mut lock_info = LockInfo::default();
                 lock_info.set_primary_lock(lock.primary);
-                lock_info.set_lock_version(lock.ts);
+                lock_info.set_lock_version(lock.ts.into_inner());
                 lock_info.set_key(key.into_raw()?);
                 lock_info.set_lock_ttl(lock.ttl);
                 lock_info.set_txn_size(lock.txn_size);
@@ -482,9 +436,9 @@ fn gen_key_hashes_if_needed<L: LockManager, K: Borrow<Key>>(
 // Wake up pessimistic transactions that waiting for these locks
 fn wake_up_waiters_if_needed<L: LockManager>(
     lock_mgr: &Option<L>,
-    lock_ts: u64,
+    lock_ts: TimeStamp,
     key_hashes: Option<Vec<u64>>,
-    commit_ts: u64,
+    commit_ts: TimeStamp,
     is_pessimistic_txn: bool,
 ) {
     if let Some(lm) = lock_mgr {
@@ -494,8 +448,10 @@ fn wake_up_waiters_if_needed<L: LockManager>(
 
 fn extract_lock_from_result(res: &StorageResult<()>) -> Lock {
     match res {
-        Err(StorageError::Txn(Error::Mvcc(MvccError::KeyIsLocked(info)))) => Lock {
-            ts: info.get_lock_version(),
+        Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::KeyIsLocked(info),
+        )))))) => Lock {
+            ts: info.get_lock_version().into(),
             hash: Key::from_raw(info.get_key()).gen_hash(),
         },
         _ => panic!("unexpected mvcc error"),
@@ -531,11 +487,11 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
 
             // If `options.for_update_ts` is 0, the transaction is optimistic
             // or else pessimistic.
-            if options.for_update_ts == 0 {
+            if options.for_update_ts.is_zero() {
                 for m in mutations {
                     match txn.prewrite(m, &primary, &options) {
                         Ok(_) => {}
-                        e @ Err(MvccError::KeyIsLocked { .. }) => {
+                        e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                             locks.push(e.map_err(Error::from).map_err(StorageError::from));
                         }
                         Err(e) => return Err(Error::from(e)),
@@ -550,7 +506,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                         &options,
                     ) {
                         Ok(_) => {}
-                        e @ Err(MvccError::KeyIsLocked { .. }) => {
+                        e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                             locks.push(e.map_err(Error::from).map_err(StorageError::from));
                         }
                         Err(e) => return Err(Error::from(e)),
@@ -582,7 +538,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for (k, should_not_exist) in keys {
                 match txn.acquire_pessimistic_lock(k, &primary, should_not_exist, &options) {
                     Ok(_) => {}
-                    e @ Err(MvccError::KeyIsLocked { .. }) => {
+                    e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                         locks.push(e.map_err(Error::from).map_err(StorageError::from));
                         break;
                     }
@@ -611,10 +567,10 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             ..
         } => {
             if commit_ts <= lock_ts {
-                return Err(Error::InvalidTxnTso {
+                return Err(Error::from(ErrorInner::InvalidTxnTso {
                     start_ts: lock_ts,
                     commit_ts,
-                });
+                }));
             }
             // Pessimistic txn needs key_hashes to wake up waiters
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
@@ -651,7 +607,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())?;
             let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts)?;
 
-            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
+            wake_up_waiters_if_needed(
+                &lock_mgr,
+                start_ts,
+                key_hashes,
+                TimeStamp::zero(),
+                is_pessimistic_txn,
+            );
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), 1, cmd.ctx, None)
         }
@@ -665,7 +627,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 is_pessimistic_txn = txn.rollback(k)?;
             }
 
-            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, is_pessimistic_txn);
+            wake_up_waiters_if_needed(
+                &lock_mgr,
+                start_ts,
+                key_hashes,
+                TimeStamp::zero(),
+                is_pessimistic_txn,
+            );
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, cmd.ctx, None)
         }
@@ -683,7 +651,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 txn.pessimistic_rollback(k, for_update_ts)?;
             }
 
-            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, 0, true);
+            wake_up_waiters_if_needed(&lock_mgr, start_ts, key_hashes, TimeStamp::zero(), true);
             statistics.add(&txn.take_statistics());
             (
                 ProcessResult::MultiRes { results: vec![] },
@@ -712,7 +680,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for (current_key, current_lock) in key_locks {
                 if let Some(txn_to_keys) = txn_to_keys.as_mut() {
                     txn_to_keys
-                        .entry((current_lock.ts, current_lock.for_update_ts != 0))
+                        .entry((current_lock.ts, !current_lock.for_update_ts.is_zero()))
                         .and_modify(|key_hashes: &mut Option<Vec<u64>>| {
                             if let Some(key_hashes) = key_hashes {
                                 key_hashes.push(current_key.gen_hash());
@@ -737,12 +705,12 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     Some(ts) => *ts,
                     None => panic!("txn status {} not found.", current_lock.ts),
                 };
-                if commit_ts > 0 {
+                if !commit_ts.is_zero() {
                     if current_lock.ts >= commit_ts {
-                        return Err(Error::InvalidTxnTso {
+                        return Err(Error::from(ErrorInner::InvalidTxnTso {
                             start_ts: current_lock.ts,
                             commit_ts,
-                        });
+                        }));
                     }
                     txn.commit(current_key.clone(), commit_ts)?;
                 } else {
@@ -762,7 +730,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 txn_to_keys
                     .into_iter()
                     .for_each(|((ts, is_pessimistic_txn), key_hashes)| {
-                        wake_up_waiters_if_needed(&lock_mgr, ts, key_hashes, 0, is_pessimistic_txn);
+                        wake_up_waiters_if_needed(
+                            &lock_mgr,
+                            ts,
+                            key_hashes,
+                            TimeStamp::zero(),
+                            is_pessimistic_txn,
+                        );
                     });
             }
 
@@ -796,7 +770,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             // ti-client guarantees the size of resolve_keys will not too large, so no necessary
             // to control the write_size as ResolveLock.
             for key in resolve_keys {
-                if commit_ts > 0 {
+                if !commit_ts.is_zero() {
                     is_pessimistic_txn = txn.commit(key, commit_ts)?;
                 } else {
                     is_pessimistic_txn = txn.rollback(key)?;
@@ -824,7 +798,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
 
             statistics.add(&txn.take_statistics());
             let pr = ProcessResult::TxnStatus {
-                txn_status: TxnStatus::uncommitted(lock_ttl, 0),
+                txn_status: TxnStatus::uncommitted(lock_ttl, TimeStamp::zero()),
             };
             (pr, txn.into_modifies(), 1, cmd.ctx, None)
         }
@@ -852,7 +826,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                         &lock_mgr,
                         lock_ts,
                         key_hashes,
-                        0,
+                        TimeStamp::zero(),
                         is_pessimistic_txn,
                     );
                 }
@@ -885,12 +859,16 @@ pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
     scheduler.on_msg(msg);
 }
 
-type LockWritesVals = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, Value)>);
+type LockWritesVals = (
+    Option<MvccLock>,
+    Vec<(TimeStamp, Write)>,
+    Vec<(TimeStamp, Value)>,
+);
 
 fn find_mvcc_infos_by_key<S: Snapshot>(
     reader: &mut MvccReader<S>,
     key: &Key,
-    mut ts: u64,
+    mut ts: TimeStamp,
 ) -> Result<LockWritesVals> {
     let mut writes = vec![];
     let mut values = vec![];
@@ -899,7 +877,7 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
         let opt = reader.seek_write(key, ts)?;
         match opt {
             Some((commit_ts, write)) => {
-                ts = commit_ts - 1;
+                ts = commit_ts.prev();
                 writes.push((commit_ts, write));
             }
             None => break,
@@ -924,9 +902,11 @@ mod tests {
         info.set_key(raw_key);
         info.set_lock_version(ts);
         info.set_lock_ttl(100);
-        let case = StorageError::from(Error::from(MvccError::KeyIsLocked(info)));
+        let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
+            MvccError::from(MvccErrorInner::KeyIsLocked(info)),
+        ))));
         let lock = extract_lock_from_result(&Err(case));
-        assert_eq!(lock.ts, ts);
+        assert_eq!(lock.ts, ts.into());
         assert_eq!(lock.hash, key.gen_hash());
     }
 }
