@@ -1,7 +1,5 @@
 use tidb_query_codegen::rpn_fn;
 
-use crc::{crc32, Hasher32};
-
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
@@ -16,14 +14,9 @@ pub fn pi() -> Result<Option<Real>> {
 #[rpn_fn]
 #[inline]
 pub fn crc32(arg: &Option<Bytes>) -> Result<Option<Int>> {
-    Ok(match arg {
-        Some(arg) => {
-            let mut digest = crc32::Digest::new(crc32::IEEE);
-            digest.write(&arg);
-            Some(i64::from(digest.sum32()))
-        }
-        _ => None,
-    })
+    Ok(arg
+        .as_ref()
+        .map(|bytes| i64::from(tikv_util::file::calc_crc32_bytes(&bytes))))
 }
 
 #[inline]
