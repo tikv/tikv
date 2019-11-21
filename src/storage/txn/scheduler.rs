@@ -30,7 +30,7 @@ use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::{collections::HashMap, time::SlowTimer};
 
-use crate::storage::kv::{with_tls_engine, Result as EngineResult};
+use crate::storage::kv::{with_tls_engine, Error as EngineError, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockManager};
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{Executor, MsgScheduler, Task};
@@ -46,7 +46,8 @@ use crate::storage::{
     Key,
 };
 use crate::storage::{
-    Command, CommandKind, Engine, Error as StorageError, StorageCallback, TimeStamp,
+    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner,
+    StorageCallback, TimeStamp,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -374,7 +375,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                                 Some((
                                     id,
                                     ProcessResult::Failed {
-                                        err: StorageError::SchedTooBusy,
+                                        err: StorageError::from(StorageErrorInner::SchedTooBusy),
                                     },
                                 ))
                             } else {
@@ -385,7 +386,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 );
             } else {
                 callback.execute(ProcessResult::Failed {
-                    err: StorageError::SchedTooBusy,
+                    err: StorageError::from(StorageErrorInner::SchedTooBusy),
                 });
             }
             return;
@@ -421,11 +422,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         ids.into_iter()
                             .filter_map(move |id| {
                                 if let Some(id) = id {
-                                    // TODO(tabokie): unsafe unwrap
                                     Some((
                                         id,
                                         ProcessResult::Failed {
-                                            err: e.must_clone().into(),
+                                            err: EngineError::from(e.0.must_clone()).into(),
                                         },
                                     ))
                                 } else {

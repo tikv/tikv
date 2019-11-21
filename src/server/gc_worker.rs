@@ -23,10 +23,13 @@ use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
-use crate::storage::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
+use crate::storage::kv::{
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
+    Statistics,
+};
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
-use crate::storage::{Callback, Error, Key, Result};
+use crate::storage::{Callback, Error, ErrorInner, Key, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
@@ -202,7 +205,7 @@ impl<E: Engine> GCRunner<E> {
                 Ok(snapshot)
             }
             Some((_, Err(e))) => Err(e),
-            None => Err(EngineError::Timeout(timeout)),
+            None => Err(EngineError::from(EngineErrorInner::Timeout(timeout))),
         }
         .map_err(Error::from)
     }
@@ -481,7 +484,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GCTask>) -> Result<()> {
     match e {
         ScheduleError::Full(mut task) => {
             GC_TOO_BUSY_COUNTER.inc();
-            (task.take_callback())(Err(Error::GCWorkerTooBusy));
+            (task.take_callback())(Err(Error::from(ErrorInner::GCWorkerTooBusy)));
             Ok(())
         }
         _ => Err(box_err!("failed to schedule gc task: {:?}", e)),

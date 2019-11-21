@@ -54,7 +54,7 @@ fn test_gcworker_busy() {
             1.into(),
             Box::new(move |res: storage::Result<()>| {
                 match res {
-                    Err(storage::Error::GCWorkerTooBusy) => {}
+                    Err(storage::Error(box storage::ErrorInner::GCWorkerTooBusy)) => {}
                     res => panic!("expect too busy, got {:?}", res),
                 }
                 tx2.send(1).unwrap();
