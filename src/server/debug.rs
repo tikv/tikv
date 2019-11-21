@@ -884,7 +884,11 @@ impl<E: Engine> Debugger<E> {
         ));
         res.push((
             "sst_files".to_string(),
-            collection.into_iter().map(|(k, _)| k).collect::<Vec<_>>().join(", "),
+            collection
+                .into_iter()
+                .map(|(k, _)| k)
+                .collect::<Vec<_>>()
+                .join(", "),
         ));
         Ok(res)
     }
