@@ -1889,7 +1889,7 @@ mod tests {
                     Datum::Null,
                     Datum::Bytes(b"defg".to_vec()),
                 ],
-                Datum::Null,
+                Datum::Bytes(b"abc,defg".to_vec()),
             ),
             (
                 vec![Datum::Null, Datum::Bytes(b"abc".to_vec())],
@@ -1910,15 +1910,6 @@ mod tests {
                     Datum::Bytes(b"abc".to_vec()),
                 ],
                 Datum::Bytes(b",abc".to_vec()),
-            ),
-            (
-                vec![
-                    Datum::Bytes(b",".to_vec()),
-                    Datum::Bytes(b"abc".to_vec()),
-                    Datum::Null,
-                    Datum::Bytes(b"defgh".to_vec()),
-                ],
-                Datum::Bytes(b"abc,defgh".to_vec()),
             ),
             (
                 vec![
