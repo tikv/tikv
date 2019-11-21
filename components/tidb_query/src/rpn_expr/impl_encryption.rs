@@ -11,7 +11,12 @@ use crate::codec::{Error, Result};
 #[inline]
 pub fn sha1(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(match arg {
-        Some(arg) => Some(hex_digest(MessageDigest::sha1(), &arg).unwrap()),
+        Some(arg) => {
+            match hex_digest(MessageDigest::sha1(), arg) {
+                Ok(s) => return Ok(Some(s)),
+                Err(err) => return Err(err),
+            };
+        }
         _ => None,
     })
 }
