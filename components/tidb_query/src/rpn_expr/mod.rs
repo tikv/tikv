@@ -206,6 +206,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::DivideReal => arithmetic_with_ctx_fn_meta::<RealDivide>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
         ScalarFuncSig::LikeSig => like_fn_meta(),
+        ScalarFuncSig::RegexpSig => regexp_fn_meta(),
         ScalarFuncSig::IfNullInt => if_null_fn_meta::<Int>(),
         ScalarFuncSig::IfNullReal => if_null_fn_meta::<Real>(),
         ScalarFuncSig::IfNullString => if_null_fn_meta::<Bytes>(),
