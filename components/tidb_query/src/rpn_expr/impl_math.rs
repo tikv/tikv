@@ -350,10 +350,10 @@ pub fn conv(
     from_base: &Option<Int>,
     to_base: &Option<Int>,
 ) -> Result<Option<Bytes>> {
-    use crate::expr_util::conv::conv_internal;
+    use crate::expr_util::conv::conv as conv_1;
     if let (Some(n), Some(from_base), Some(to_base)) = (n, from_base, to_base) {
         let s = String::from_utf8_lossy(n);
-        Ok(conv_internal(&s, *from_base, *to_base))
+        Ok(conv_1(s.as_ref(), *from_base, *to_base))
     } else {
         Ok(None)
     }

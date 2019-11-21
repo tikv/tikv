@@ -92,7 +92,7 @@ fn extract_num(num_s: &str, is_neg: bool, from_base: IntWithSign) -> IntWithSign
     }
 }
 
-pub fn conv_internal(s: &str, from_base: Int, to_base: Int) -> Option<Bytes> {
+pub fn conv(s: &str, from_base: Int, to_base: Int) -> Option<Bytes> {
     let s = s.trim();
     let from_base = IntWithSign::from_int(from_base);
     let to_base = IntWithSign::from_int(to_base);
