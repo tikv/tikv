@@ -803,7 +803,7 @@ fn test_request_snapshot_after_propose_merge() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    cluster.run();
+    cluster.run_conf_change();
 
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
@@ -844,4 +844,193 @@ fn test_request_snapshot_after_propose_merge() {
     cluster.must_request_snapshot(2, region.get_id());
     // Leader should reject request snapshot if there is any proposed merge.
     rx.recv_timeout(Duration::from_millis(500)).unwrap_err();
+}
+
+/* 
+    store 1 A B C
+*/
+#[test]
+fn test_merge_isolation_before_merge_split_conf_change() {
+    let mut cluster = new_node_cluster(0, 4);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let first_id = cluster.run_conf_change();
+    pd_client.must_add_peer(first_id, new_peer(2, 2));
+    pd_client.must_add_peer(first_id, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_put(b"k3", b"v3");
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    region = pd_client.get_region(b"k2").unwrap();
+    cluster.must_split(&region, b"k3");
+    // now [-∞, k2) [k2, k3) [k3, +∞]
+    
+    let left_1 = pd_client.get_region(b"k1").unwrap();
+    println!("yo! k1! {:?}", left_1);
+    let left_2 = pd_client.get_region(b"k22").unwrap();
+    println!("yo! k2! {:?}", left_2);
+    let left_3 = pd_client.get_region(b"k3").unwrap();
+    println!("yo! k3! {:?}", left_3);
+    let left_1_peer1 = find_peer(&left_1, 1).cloned().unwrap();
+    let left_2_peer1 = find_peer(&left_2, 1).cloned().unwrap();
+    let left_3_peer1 = find_peer(&left_3, 1).cloned().unwrap();
+    cluster.must_transfer_leader(left_1.get_id(), left_1_peer1);
+    cluster.must_transfer_leader(left_2.get_id(), left_2_peer1);
+    cluster.must_transfer_leader(left_3.get_id(), left_3_peer1);
+
+    cluster.must_put(b"k11", b"v1");
+    cluster.must_put(b"k22", b"v2");
+    cluster.must_put(b"k33", b"v3");
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k22", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k33", b"v3");
+    // wait for leader match index to update
+    sleep_ms(100);
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    println!("{} {} {}", left_1.get_id(), left_2.get_id(), left_3.get_id());
+    pd_client.must_merge(left_2.get_id(), left_1.get_id());
+    let left_1 = pd_client.get_region(b"k1").unwrap();
+
+    pd_client.must_add_peer(left_1.get_id(), new_peer(4, 4));
+    let left_1_peer3 = find_peer(&left_1, 3).cloned().unwrap();
+    pd_client.must_remove_peer(left_1.get_id(), left_1_peer3);
+    
+    pd_client.must_add_peer(left_3.get_id(), new_peer(4, 5));
+    let left_3_peer3 = find_peer(&left_3, 3).cloned().unwrap();
+    pd_client.must_remove_peer(left_3.get_id(), left_3_peer3);
+
+    cluster.must_put(b"k111", b"v1");
+    must_get_equal(&cluster.get_engine(4), b"k111", b"v1");
+    cluster.must_put(b"k333", b"v3");
+    must_get_equal(&cluster.get_engine(4), b"k333", b"v3");
+
+    println!("merge!!"); 
+    pd_client.must_merge(left_1.get_id(), left_3.get_id());
+
+    let left_3 = pd_client.get_region(b"k3").unwrap();
+    pd_client.must_add_peer(left_3.get_id(), new_peer(3, 6));
+    let left_3_peer4 = find_peer(&left_3, 4).cloned().unwrap();
+    pd_client.must_remove_peer(left_3.get_id(), left_3_peer4);
+
+    for i in 0..200 {
+        cluster.must_put(format!("k3{}", i).as_bytes(), b"v3");
+    }
+    let left_1 = pd_client.get_region(b"k1").unwrap();
+    println!("yo! k1! {:?}", left_1);
+    let left_2 = pd_client.get_region(b"k22").unwrap();
+    println!("yo! k2! {:?}", left_2);
+    let left_3 = pd_client.get_region(b"k3").unwrap();
+    println!("yo! k3! {:?}", left_3);
+    cluster.clear_send_filters();
+
+    must_get_equal(&cluster.get_engine(3), b"k3199", b"v3");
+}
+
+// 
+#[test]
+fn test_merge_isolation_before_conf_change_merge_split_conf_change() {
+    let mut cluster = new_node_cluster(0, 4);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 12;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
+    // for origin_region -> origin_region, new_region
+    cluster.cfg.raft_store.right_derive_when_split = false;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let first_id = cluster.run_conf_change();
+    pd_client.must_add_peer(first_id, new_peer(2, 2));
+    pd_client.must_add_peer(first_id, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_put(b"k3", b"v3");
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    println!("wa! k1! {:?}", region);
+    cluster.must_split(&region, b"k2");
+    region = pd_client.get_region(b"k2").unwrap();
+    println!("wa! k2! {:?}", region);
+    cluster.must_split(&region, b"k3");
+    // now [-∞, k2) [k2, k3) [k3, +∞]
+    
+    let left_1 = pd_client.get_region(b"k1").unwrap();
+    println!("yo! k1! {:?}", left_1);
+    let left_2 = pd_client.get_region(b"k22").unwrap();
+    println!("yo! k2! {:?}", left_2);
+    let left_3 = pd_client.get_region(b"k3").unwrap();
+    println!("yo! k3! {:?}", left_3);
+    let left_1_peer1 = find_peer(&left_1, 1).cloned().unwrap();
+    let left_2_peer1 = find_peer(&left_2, 1).cloned().unwrap();
+    let left_3_peer1 = find_peer(&left_3, 1).cloned().unwrap();
+    cluster.must_transfer_leader(left_1.get_id(), left_1_peer1);
+    cluster.must_transfer_leader(left_2.get_id(), left_2_peer1);
+    cluster.must_transfer_leader(left_3.get_id(), left_3_peer1);
+
+    cluster.must_put(b"k15", b"v1");
+    cluster.must_put(b"k22", b"v2");
+    cluster.must_put(b"k33", b"v3");
+    must_get_equal(&cluster.get_engine(3), b"k15", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k22", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k33", b"v3");
+    // wait for leader match index to update
+    sleep_ms(100);
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    println!("{} {} {}", left_1.get_id(), left_2.get_id(), left_3.get_id());
+    cluster.must_split(&left_1, b"k15");
+    let (left_3, left_4) = (left_2, left_3);
+    let left_2 = pd_client.get_region(b"k15").unwrap();
+    println!("{:?}", left_2);
+    println!("{:?}", left_3);
+    println!("{:?}", left_4);
+    pd_client.must_merge(left_3.get_id(), left_2.get_id());
+    let left_2 = pd_client.get_region(b"k15").unwrap();
+    println!("left2 {:?}", left_2);
+    
+    let left_2_peer3 = find_peer(&left_2, 3).cloned().unwrap();
+    pd_client.must_remove_peer(left_2.get_id(), left_2_peer3);
+    pd_client.must_add_peer(left_2.get_id(), new_peer(4, 4));
+    
+    let left_4_peer3 = find_peer(&left_4, 3).cloned().unwrap();
+    pd_client.must_remove_peer(left_4.get_id(), left_4_peer3);
+    pd_client.must_add_peer(left_4.get_id(), new_peer(4, 5));
+
+    cluster.must_put(b"k151", b"v1");
+    must_get_equal(&cluster.get_engine(4), b"k151", b"v1");
+    cluster.must_put(b"k333", b"v3");
+    must_get_equal(&cluster.get_engine(4), b"k333", b"v3");
+
+    println!("merge!!");
+    pd_client.must_merge(left_2.get_id(), left_4.get_id());
+
+    let left_4 = pd_client.get_region(b"k3").unwrap();
+    let left_4_peer4 = find_peer(&left_4, 4).cloned().unwrap();
+    pd_client.must_remove_peer(left_4.get_id(), left_4_peer4);
+    pd_client.must_add_peer(left_4.get_id(), new_peer(3, 6));
+
+    for i in 0..200 {
+        cluster.must_put(format!("k3{}", i).as_bytes(), b"v3");
+    }
+    for i in 0..200 {
+        cluster.must_put(format!("k11{}", i).as_bytes(), b"v1");
+    }
+    let left_1 = pd_client.get_region(b"k1").unwrap();
+    println!("yo! k1! {:?}", left_1);
+    let left_2 = pd_client.get_region(b"k15").unwrap();
+    println!("yo! k1! {:?}", left_2);
+    let left_3 = pd_client.get_region(b"k2").unwrap();
+    println!("yo! k2! {:?}", left_3);
+    let left_4 = pd_client.get_region(b"k3").unwrap();
+    println!("yo! k3! {:?}", left_4);
+    cluster.clear_send_filters();
+
+    must_get_equal(&cluster.get_engine(3), b"k3199", b"v3");
+    must_get_equal(&cluster.get_engine(3), b"k11199", b"v1");
 }

@@ -1708,6 +1708,9 @@ impl Peer {
                 return self.propose_transfer_leader(ctx, req, cb);
             }
             Ok(RequestPolicy::ProposeConfChange) => {
+                if self.region_id == 1008 {
+                    println!("propose conf change store_id {} peer_id {}", ctx.store_id(), self.peer_id());
+                }
                 is_conf_change = true;
                 self.propose_conf_change(ctx, &req)
             }
@@ -1717,6 +1720,9 @@ impl Peer {
         match res {
             Err(e) => {
                 cmd_resp::bind_error(&mut err_resp, e);
+                if is_conf_change && self.region_id == 1008 {
+                    println!("propose conf change error store_id {} peer_id {}, err {:?}", ctx.store_id(), self.peer_id(), err_resp);
+                }
                 cb.invoke_with_response(err_resp);
                 false
             }
@@ -2071,6 +2077,7 @@ impl Peer {
                 if pr.state == ProgressState::Snapshot
                     || pr.pending_request_snapshot != INVALID_INDEX
                 {
+                    println!("wa? pending snapshot?");
                     return Err(box_err!(
                         "there is a pending snapshot peer {} [{:?}], skip merge",
                         id,
@@ -2083,6 +2090,7 @@ impl Peer {
                 if min.unwrap() > pr.matched {
                     min = Some(pr.matched);
                 }
+                println!("id {} match {}", id, pr.matched);
             }
         }
         Ok(min.unwrap_or(0))
@@ -2096,6 +2104,7 @@ impl Peer {
         let last_index = self.raft_group.raft.raft_log.last_index();
         let min_progress = self.get_min_progress()?;
         let min_index = min_progress + 1;
+        println!("min_progress {} last_index {}", min_progress, last_index);
         if min_progress == 0 || last_index - min_progress > ctx.cfg.merge_max_log_gap {
             return Err(box_err!(
                 "log gap ({}, {}] is too large, skip merge",

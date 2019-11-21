@@ -1128,6 +1128,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "peer_id" => self.fsm.peer_id(),
             "target_region_id" => target_region_id,
         );
+        println!("check pd, region_id {} peer_id {} target_region_id {}", self.fsm.region_id(), self.fsm.peer_id(), target_region_id);
         // We can't know whether the peer is destroyed or not for sure locally, ask
         // pd for help.
         let target_peer = merge_target

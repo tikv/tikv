@@ -649,6 +649,7 @@ impl<T: PdClient> Runner<T> {
                     Ok(None) => {
                         // splitted Region has not yet reported to PD.
                         // TODO: handle merge
+                        println!("wa? pd have no idea where is region {}", local_region.get_id());
                     }
                     Err(e) => {
                         error!("get region failed"; "err" => ?e);
