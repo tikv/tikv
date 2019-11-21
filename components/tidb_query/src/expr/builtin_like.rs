@@ -16,7 +16,7 @@ impl ScalarFunc {
         let pattern = try_opt!(self.children[1].eval_string(ctx, row));
         let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
         Ok(Some(
-            expr_util::like::like(&target, &pattern, escape, 0)? as i64
+            expr_util::like::like(&target, &pattern, escape)? as i64
         ))
     }
 
