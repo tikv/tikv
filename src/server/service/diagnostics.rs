@@ -44,17 +44,16 @@ impl Diagnostics for Service {
 
 mod log {
     use std::convert::From;
-    use std::fs::File;
+    use std::fs::{read_dir, File};
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
     use std::path::Path;
 
     use chrono::DateTime;
-    use nom::bytes::complete::{tag, take, take_until};
+    use nom::bytes::complete::{tag, take};
     use nom::character::complete::{alpha1, space0, space1};
     use nom::sequence::tuple;
     use nom::*;
     use rev_lines;
-    use walkdir::WalkDir;
 
     use futures::future::{err, ok};
     use futures::Future;
@@ -85,12 +84,6 @@ mod log {
     impl From<std::io::Error> for Error {
         fn from(err: std::io::Error) -> Self {
             Error::IOError(err)
-        }
-    }
-
-    impl From<walkdir::Error> for Error {
-        fn from(e: walkdir::Error) -> Self {
-            Error::SearchError(format!("walk directory: {:?}", e))
         }
     }
 
@@ -126,16 +119,17 @@ mod log {
             };
 
             let mut search_files = vec![];
-            for entry in WalkDir::new(log_dir) {
+            for entry in read_dir(log_dir)? {
                 let entry = entry?;
                 if !entry.path().is_file() {
                     continue;
                 }
-                let file_name = match entry.file_name().to_str() {
+                let file_name = entry.file_name();
+                let file_name = match file_name.to_str() {
                     Some(file_name) => file_name,
                     None => continue,
                 };
-                // Rorated file name have the same prefix with the original file name
+                // Rotated file name have the same prefix with the original
                 if !file_name.starts_with(log_name) {
                     continue;
                 }
@@ -160,6 +154,7 @@ mod log {
                     search_files.push((file_start_time, file));
                 }
             }
+            // Sort by start time descending
             search_files.sort_by(|a, b| b.0.cmp(&a.0));
             let current_reader = search_files.pop().map(|file| BufReader::new(file.1));
             Ok(Self {
@@ -202,23 +197,23 @@ mod log {
                                 continue;
                             }
                             match parse(&input) {
-                                Ok((content, meta)) => {
+                                Ok((content, (time, level))) => {
                                     // The remain content timestamp more the end time or this file contains inrecognation formation
-                                    if meta.time == INVALID_TIMESTAMP && meta.time > self.end_time {
+                                    if time == INVALID_TIMESTAMP && time > self.end_time {
                                         break;
                                     }
-                                    if meta.time < self.begin_time {
+                                    if time < self.begin_time {
                                         continue;
                                     }
-                                    if self.level != LogLevel::All && meta.level != self.level {
+                                    if self.level != LogLevel::All && level != self.level {
                                         continue;
                                     }
                                     if self.filter.len() > 0 && !content.contains(&self.filter) {
                                         continue;
                                     }
                                     let mut item = LogMessage::new();
-                                    item.set_time(meta.time);
-                                    item.set_level(meta.level);
+                                    item.set_time(time);
+                                    item.set_level(level);
                                     item.set_message(content.to_owned());
                                     return Some(item);
                                 }
@@ -236,11 +231,6 @@ mod log {
         }
     }
 
-    struct Meta {
-        time: i64,
-        level: LogLevel,
-    }
-
     fn parse_time(input: &str) -> IResult<&str, &str> {
         let (input, (_, _, time, _)) =
             tuple((space0, tag("["), take(TIMESTAMP_LENGTH), tag("]")))(input)?;
@@ -252,34 +242,23 @@ mod log {
         Ok((input, level))
     }
 
-    #[allow(dead_code)]
-    fn parse_file(input: &str) -> IResult<&str, &str> {
-        let (input, (_, _, level, _)) =
-            tuple((space0, tag("["), take_until("]"), tag("]")))(input)?;
-        Ok((input, level))
-    }
-
     /// Parses the single log line and retrieve the log meta and log body.
-    fn parse(input: &str) -> IResult<&str, Meta> {
+    fn parse(input: &str) -> IResult<&str, (i64, LogLevel)> {
         let (content, (time, level, _)) = tuple((parse_time, parse_level, space1))(input)?;
-        Ok((
-            content,
-            Meta {
-                time: match DateTime::parse_from_str(time, "%Y/%m/%d %H:%M:%S%.3f %z") {
-                    Ok(t) => t.timestamp_millis(),
-                    Err(_) => -1,
-                },
-                level: match level {
-                    "trace" | "TRACE" => LogLevel::Trace,
-                    "debug" | "DEBUG" => LogLevel::Debug,
-                    "info" | "INFO" => LogLevel::Info,
-                    "warn" | "WARN" | "warning" | "WARNING" => LogLevel::Warn,
-                    "error" | "ERROR" => LogLevel::Error,
-                    "critical" | "CRITICAL" => LogLevel::Critical,
-                    _ => LogLevel::Info,
-                },
-            },
-        ))
+        let timestamp = match DateTime::parse_from_str(time, "%Y/%m/%d %H:%M:%S%.3f %z") {
+            Ok(t) => t.timestamp_millis(),
+            Err(_) => INVALID_TIMESTAMP,
+        };
+        let level = match level {
+            "trace" | "TRACE" => LogLevel::Trace,
+            "debug" | "DEBUG" => LogLevel::Debug,
+            "info" | "INFO" => LogLevel::Info,
+            "warn" | "WARN" | "warning" | "WARNING" => LogLevel::Warn,
+            "error" | "ERROR" => LogLevel::Error,
+            "critical" | "CRITICAL" => LogLevel::Critical,
+            _ => LogLevel::Info,
+        };
+        Ok((content, (timestamp, level)))
     }
 
     /// Parses the start time and end time of a log file and return the maximal and minimal
@@ -288,8 +267,8 @@ mod log {
         let buffer = BufReader::new(file);
         let file_start_time = match buffer.lines().nth(0) {
             Some(Ok(line)) => {
-                let (_, meta) = parse(&line).map_err(|_| Error::ParseError)?;
-                meta.time
+                let (_, (time, _)) = parse(&line).map_err(|_| Error::ParseError)?;
+                time
             }
             Some(Err(err)) => {
                 return Err(err.into());
@@ -301,8 +280,8 @@ mod log {
         let mut rev_lines = rev_lines::RevLines::with_capacity(512, buffer)?;
         let file_end_time = match rev_lines.nth(0) {
             Some(line) => {
-                let (_, meta) = parse(&line).map_err(|_| Error::ParseError)?;
-                meta.time
+                let (_, (time, _)) = parse(&line).map_err(|_| Error::ParseError)?;
+                time
             }
             None => INVALID_TIMESTAMP,
         };
@@ -322,7 +301,6 @@ mod log {
         let filter = req.take_pattern();
         let limit = req.get_limit();
 
-        // FIXME: the level can be None
         let iter = match LogIterator::new(log_file, begin_time, end_time, level, filter) {
             Ok(iter) => iter,
             Err(e) => return err(e),
@@ -350,47 +328,142 @@ mod log {
 
         #[test]
         fn test_parse_time() {
-            assert_eq!(
-                parse_time("[2019/08/23 18:09:52.387 +08:00]"),
-                Ok(("", "2019/08/23 18:09:52.387 +08:00"))
-            );
-            assert_eq!(
-                parse_time(" [2019/08/23 18:09:52.387 +08:00] ["),
-                Ok((" [", "2019/08/23 18:09:52.387 +08:00"))
-            );
+            // (input, remain, time)
+            let cs = vec![
+                (
+                    "[2019/08/23 18:09:52.387 +08:00]",
+                    "",
+                    "2019/08/23 18:09:52.387 +08:00",
+                ),
+                (
+                    " [2019/08/23 18:09:52.387 +08:00] [",
+                    " [",
+                    "2019/08/23 18:09:52.387 +08:00",
+                ),
+            ];
+            for (input, remain, time) in cs {
+                let result = parse_time(input);
+                assert_eq!(result.unwrap(), (remain, time));
+            }
         }
 
         #[test]
         fn test_parse_level() {
-            assert_eq!(parse_level("[INFO]"), Ok(("", "INFO")));
-            assert_eq!(parse_level(" [WARN] ["), Ok((" [", "WARN")));
-        }
-
-        #[test]
-        fn test_parse_file() {
-            assert_eq!(parse_file("[foo.rs:100]"), Ok(("", "foo.rs:100")));
-            assert_eq!(parse_file(" [bar.rs:200] ["), Ok((" [", "bar.rs:200")));
+            // (input, remain, level_str)
+            let cs = vec![("[INFO]", "", "INFO"), (" [WARN] [", " [", "WARN")];
+            for (input, remain, level_str) in cs {
+                let result = parse_level(input);
+                assert_eq!(result.unwrap(), (remain, level_str));
+            }
         }
 
         #[test]
         fn test_parse() {
-            let cs: Vec<(&str, &str, &str, Option<LogLevel>)> = vec![
-                ("[2019/08/23 18:09:52.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]", "foo.rs:100", "[some message] [key=val]", Some(LogLevel::Info)),
-                ("[2019/08/23 18:09:52.387 +08:00]    [INFO] [foo.rs:100] [some message] [key=val]", "foo.rs:100", "[some message] [key=val]",Some(LogLevel::Info)),
-                ("[2019/08/23 18:09:52.387 +08:00]    [INFO]     [foo.rs:100] [some message] [key=val]", "foo.rs:100", "[some message] [key=val]",Some(LogLevel::Info)),
-                ("   [2019/08/23 18:09:52.387 +08:00]    [INFO]     [foo.rs:100]    [some message] [key=val]", "foo.rs:100", "[some message] [key=val]",Some(LogLevel::Info)),
-                ("   [2019/08/23 18:09:52.387 +08:00]    [info]     [foo.rs:100]    [some message] [key=val]", "foo.rs:100", "[some message] [key=val]",Some(LogLevel::Info)),
-                ("   [2019/08/23 18:09:52.387 +08:00]    [warning]     [foo.rs:100]    [some message] [key=val]", "foo.rs:100", "[some message] [key=val]",Some(LogLevel::Warn)),
-                ("   [2019/08/23 18:09:52.387 +08:00]    [warn]     [foo.rs:100]    [some message] [key=val]", "foo.rs:100", "[some message] [key=val]",Some(LogLevel::Warn)),
-                ("   [2019/08/23 18:09:52.387 +08:00]    [xxx]     [foo.rs:100]    [some message] [key=val]", "foo.rs:100", "[some message] [key=val]",None),
+            // (input, time, level, message)
+            let cs: Vec<(&str, &str, LogLevel, &str)> = vec![
+                (
+                    "[2019/08/23 18:09:52.387 +08:00] [INFO] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Info,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00]           [INFO] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Info,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00]           [info] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Info,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00] [WARN] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Warn,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00] [WARNING] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Warn,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00] [warn] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Warn,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00] [warning] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Warn,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00] [DEBUG] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Debug,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00]    [debug] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Debug,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00]    [ERROR] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Error,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00] [error] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Error,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00] [CRITICAL] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Critical,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00] [critical] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Critical,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+
+                (
+                    "[2019/08/23 18:09:52.387 +08:00] [TRACE] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Trace,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
+                (
+                    "[2019/08/23 18:09:52.387 +08:00] [trace] [foo.rs:100] [some message] [key=val]",
+                    "2019/08/23 18:09:52.387 +08:00",
+                    LogLevel::Trace,
+                    "[foo.rs:100] [some message] [key=val]",
+                ),
             ];
-            for (input, file, content, level) in cs.into_iter() {
-                let r = parse(input);
-                assert!(r.is_ok());
-                let log = r.unwrap();
+            for (input, time, level, content) in cs.into_iter() {
+                let result = parse(input);
+                assert!(result.is_ok(), "expected OK, but got: {:?}", result);
+                let timestamp = match DateTime::parse_from_str(time, "%Y/%m/%d %H:%M:%S%.3f %z") {
+                    Ok(t) => t.timestamp_millis(),
+                    Err(_) => INVALID_TIMESTAMP,
+                };
+                let log = result.unwrap();
                 assert_eq!(log.0, content);
-                assert_eq!(log.1.level, level);
-                assert_eq!(log.1.file, file);
+                assert_eq!((log.1).0, timestamp);
+                assert_eq!((log.1).1, level);
             }
         }
     }

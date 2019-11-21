@@ -1372,7 +1372,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#d5da824ad8b146c5d22babde6228aea019da7a0c"
+source = "git+https://github.com/pingcap/kvproto.git#4c654046831d1f4d7db8e4d44f7a6d0b35c33168"
 dependencies = [
  "futures",
  "grpcio",
@@ -3410,7 +3410,6 @@ dependencies = [
  "utime",
  "uuid",
  "vlog",
- "walkdir",
  "zipf",
 ]
 
