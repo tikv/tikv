@@ -116,6 +116,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "crc64fast",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -492,6 +493,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc64fast"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a82510de0a7cadd51dc68ff17da70aea0c80157f902230f9b157cecc2566318"
+
+[[package]]
 name = "criterion"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -720,7 +727,6 @@ dependencies = [
 name = "engine"
 version = "0.0.1"
 dependencies = [
- "crc",
  "hex",
  "kvproto",
  "lazy_static",
@@ -745,7 +751,6 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
- "crc",
  "engine",
  "engine_traits",
  "hex",
@@ -2932,7 +2937,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sst_importer"
 version = "0.1.0"
 dependencies = [
- "crc",
+ "crc32fast",
  "engine",
  "engine_traits",
  "external_storage",
@@ -3194,7 +3199,7 @@ dependencies = [
 name = "test_sst_importer"
 version = "0.1.0"
 dependencies = [
- "crc",
+ "crc32fast",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -3257,7 +3262,6 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "codec",
- "crc",
  "derive_more",
  "failure",
  "flate2",
@@ -3329,7 +3333,8 @@ dependencies = [
  "bytes",
  "chrono",
  "codec",
- "crc",
+ "crc32fast",
+ "crc64fast",
  "criterion",
  "criterion-cpu-time",
  "criterion-papi",
@@ -3433,7 +3438,7 @@ dependencies = [
  "backtrace",
  "byteorder",
  "chrono",
- "crc",
+ "crc32fast",
  "crossbeam",
  "fail",
  "futures",
