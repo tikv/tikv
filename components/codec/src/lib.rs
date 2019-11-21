@@ -3,6 +3,7 @@
 #![cfg_attr(test, feature(test))]
 #![feature(core_intrinsics)]
 #![feature(ptr_offset_from)]
+#![feature(specialization)]
 
 #[macro_use]
 extern crate static_assertions;
@@ -26,4 +27,4 @@ pub mod prelude {
     pub use super::number::{NumberDecoder, NumberEncoder};
 }
 
-pub use self::error::{Error, Result};
+pub use self::error::{Error, ErrorInner, Result};
