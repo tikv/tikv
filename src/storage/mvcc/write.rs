@@ -2,8 +2,7 @@
 
 use super::super::types::Value;
 use super::lock::LockType;
-use super::{Error, Result, TimeStamp};
-use super::{Error, ErrorInner, Result};
+use super::{Error, ErrorInner, Result, TimeStamp};
 use crate::storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use codec::prelude::NumberDecoder;
 use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
@@ -138,7 +137,8 @@ impl WriteRef<'_> {
             .ok_or_else(|| Error::from(ErrorInner::BadFormatWrite))?;
         let start_ts = b
             .read_var_u64()
-            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?.into();
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?
+            .into();
         if b.is_empty() {
             return Ok(WriteRef {
                 write_type,

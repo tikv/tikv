@@ -46,7 +46,7 @@ use crate::storage::{
     Key,
 };
 use crate::storage::{
-    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, StorageCb,
+    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner,
     StorageCallback, TimeStamp,
 };
 

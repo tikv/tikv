@@ -4,8 +4,7 @@ use super::lock::{Lock, LockType};
 use super::metrics::*;
 use super::reader::MvccReader;
 use super::write::{Write, WriteType};
-use super::{extract_physical, ErrorInner, Result};
-use super::{Error, Result, TimeStamp};
+use super::{ErrorInner, Result, TimeStamp};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, TxnStatus, Value, CF_DEFAULT, CF_LOCK,
@@ -830,7 +829,7 @@ mod tests {
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::WriteType;
-    use crate::storage::mvcc::{Error, ErrorInner, MvccReader, MvccTxn,TimeStamp};
+    use crate::storage::mvcc::{Error, ErrorInner, MvccReader, MvccTxn, TimeStamp};
     use crate::storage::{
         Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN,
     };

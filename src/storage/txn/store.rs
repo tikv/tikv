@@ -3,12 +3,10 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
-use crate::storage::mvcc::EntryScanner;
-use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
-use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TsSet};
-use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder, WriteRef};
-use crate::storage::mvcc::Error as MvccError;
-use crate::storage::mvcc::{EntryScanner, Scanner as MvccScanner, ScannerBuilder, WriteRef};
+use crate::storage::mvcc::{
+    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, Scanner as MvccScanner,
+    ScannerBuilder, WriteRef,
+};
 use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TimeStamp, TsSet};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 

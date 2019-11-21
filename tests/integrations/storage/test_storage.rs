@@ -18,6 +18,14 @@ use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use tikv::storage::{Engine, Key, Mutation, TimeStamp};
 
 #[test]
+fn test_enum_should_not_be_too_large() {
+    let storage_error_size = std::mem::size_of::<tikv::storage::Error>();
+    let mvcc_error_size = std::mem::size_of::<tikv::storage::mvcc::Error>();
+    println!("size: {}", storage_error_size);
+    println!("size: {}", mvcc_error_size);
+}
+
+#[test]
 fn test_txn_store_get() {
     let store = AssertionStorage::default();
     // not exist

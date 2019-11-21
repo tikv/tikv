@@ -17,7 +17,8 @@ use crate::server::Error;
 use crate::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{
-    Error as MvccError, ErrorInner as MvccErrorInner, LockType, TimeStamp, Write as MvccWrite, WriteType,
+    Error as MvccError, ErrorInner as MvccErrorInner, LockType, TimeStamp, Write as MvccWrite,
+    WriteType,
 };
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
