@@ -882,6 +882,10 @@ impl<E: Engine> Debugger<E> {
             "middle_key_by_approximate_size".to_string(),
             escape(&middle_key),
         ));
+        res.push((
+            "sst_files".to_string(),
+            collection.into_iter().map(|(k, _)| k).collect::<Vec<_>>().join(", "),
+        ));
         Ok(res)
     }
 }
