@@ -1,7 +1,8 @@
 use tidb_query_codegen::rpn_fn;
 
-use crate::codec::{data_type::*, Result};
+use crate::codec::data_type::*;
 use crate::expr_util;
+use crate::Result;
 use openssl::hash::MessageDigest;
 
 #[rpn_fn]
