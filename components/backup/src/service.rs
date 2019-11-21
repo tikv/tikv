@@ -85,6 +85,7 @@ mod tests {
 
     use super::*;
     use crate::endpoint::tests::*;
+    use keys::TimeStamp;
     use tikv::storage::mvcc::tests::*;
     use tikv_util::mpsc::Receiver;
 
@@ -114,11 +115,8 @@ mod tests {
             (b"2".to_vec(), b"5".to_vec(), 2),
         ]);
 
-        let mut ts = 1;
-        let mut alloc_ts = || {
-            ts += 1;
-            ts
-        };
+        let mut ts: TimeStamp = 1.into();
+        let mut alloc_ts = || *ts.incr();
         for i in 0..5 {
             let start = alloc_ts();
             let key = format!("{}", i);
@@ -137,8 +135,8 @@ mod tests {
         let mut req = BackupRequest::new();
         req.set_start_key(vec![]);
         req.set_end_key(vec![b'5']);
-        req.set_start_version(now);
-        req.set_end_version(now);
+        req.set_start_version(now.into_inner());
+        req.set_end_version(now.into_inner());
         // Set an unique path to avoid AlreadyExists error.
         req.set_path(format!(
             "local://{}",
