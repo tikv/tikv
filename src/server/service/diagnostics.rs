@@ -175,61 +175,56 @@ mod log {
     impl Iterator for LogIterator {
         type Item = LogMessage;
         fn next(&mut self) -> Option<Self::Item> {
-            loop {
-                match &mut self.currrent_lines {
-                    Some(lines) => {
-                        loop {
-                            let line = match lines.next() {
-                                Some(line) => line,
-                                None => {
-                                    self.currrent_lines = self
-                                        .search_files
-                                        .pop()
-                                        .map(|file| BufReader::new(file.1))
-                                        .map(|reader| reader.lines());
-                                    break;
-                                }
-                            };
-                            let input = match line {
-                                Ok(input) => input,
-                                Err(err) => {
-                                    warn!("read line failed: {:?}", err);
-                                    continue;
-                                }
-                            };
-                            if input.len() < TIMESTAMP_LENGTH {
+            while let Some(lines) = &mut self.currrent_lines {
+                loop {
+                    let line = match lines.next() {
+                        Some(line) => line,
+                        None => {
+                            self.currrent_lines = self
+                                .search_files
+                                .pop()
+                                .map(|file| BufReader::new(file.1))
+                                .map(|reader| reader.lines());
+                            break;
+                        }
+                    };
+                    let input = match line {
+                        Ok(input) => input,
+                        Err(err) => {
+                            warn!("read line failed: {:?}", err);
+                            continue;
+                        }
+                    };
+                    if input.len() < TIMESTAMP_LENGTH {
+                        continue;
+                    }
+                    match parse(&input) {
+                        Ok((content, (time, level))) => {
+                            // The remain content timestamp more the end time or this file contains inrecognation formation
+                            if time == INVALID_TIMESTAMP || time > self.end_time {
+                                break;
+                            }
+                            if time < self.begin_time {
                                 continue;
                             }
-                            match parse(&input) {
-                                Ok((content, (time, level))) => {
-                                    // The remain content timestamp more the end time or this file contains inrecognation formation
-                                    if time == INVALID_TIMESTAMP || time > self.end_time {
-                                        break;
-                                    }
-                                    if time < self.begin_time {
-                                        continue;
-                                    }
-                                    if self.level != LogLevel::All && level != self.level {
-                                        continue;
-                                    }
-                                    // TODO: do we need to support regular expression search
-                                    if self.filter.len() > 0 && !content.contains(&self.filter) {
-                                        continue;
-                                    }
-                                    let mut item = LogMessage::new();
-                                    item.set_time(time);
-                                    item.set_level(level);
-                                    item.set_message(content.to_owned());
-                                    return Some(item);
-                                }
-                                Err(err) => {
-                                    warn!("parse line failed: {:?}", err);
-                                    continue;
-                                }
+                            if self.level != LogLevel::All && level != self.level {
+                                continue;
                             }
+                            // TODO: do we need to support regular expression search
+                            if !self.filter.is_empty() && !content.contains(&self.filter) {
+                                continue;
+                            }
+                            let mut item = LogMessage::new();
+                            item.set_time(time);
+                            item.set_level(level);
+                            item.set_message(content.to_owned());
+                            return Some(item);
+                        }
+                        Err(err) => {
+                            warn!("parse line failed: {:?}", err);
+                            continue;
                         }
                     }
-                    None => break,
                 }
             }
             None
@@ -303,27 +298,24 @@ mod log {
         let end_time = req.get_end_time();
         let level = req.get_level();
         let filter = req.take_pattern();
-        let limit = req.get_limit();
+        let mut limit = req.get_limit();
+        // Default limit to 64k if there is no limit
+        if limit == 0 {
+            limit = 64 * 1000
+        }
 
         let iter = match LogIterator::new(log_file, begin_time, end_time, level, filter) {
             Ok(iter) => iter,
             Err(e) => return err(e),
         };
 
-        // FIXME: refactor to use future::Stream
-        let mut counter = 0;
-        let mut results = vec![];
-        for line in iter {
-            results.push(line);
-            counter += 1;
-            if counter >= limit {
-                break;
-            }
-        }
-
         let mut resp = SearchLogResponse::new();
-        resp.set_messages(results.into());
-        return ok(resp);
+        resp.set_messages(
+            iter.take(limit as usize)
+                .collect::<Vec<LogMessage>>()
+                .into(),
+        );
+        ok(resp)
     }
 
     #[cfg(test)]
