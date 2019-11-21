@@ -5,7 +5,7 @@ use std::io::Read;
 
 use crate::buffer::BufferReader;
 use crate::number::{self, NumberCodec, NumberDecoder, NumberEncoder};
-use crate::{Error, Result};
+use crate::{ErrorInner, Result};
 
 const MEMCMP_GROUP_SIZE: usize = 8;
 const MEMCMP_PAD_BYTE: u8 = 0;
@@ -291,7 +291,7 @@ impl MemComparableByteCodec {
             loop {
                 let src_ptr_next = src_ptr.add(MEMCMP_GROUP_SIZE + 1);
                 if std::intrinsics::unlikely(src_ptr_next > src_ptr_end) {
-                    return Err(Error::eof());
+                    return Err(ErrorInner::eof().into());
                 }
 
                 // Copy `MEMCMP_GROUP_SIZE` bytes any way. However we will truncate the returned
@@ -306,7 +306,7 @@ impl MemComparableByteCodec {
                 if std::intrinsics::unlikely(padding_size > 0) {
                     // First check padding size.
                     if std::intrinsics::unlikely(padding_size > MEMCMP_GROUP_SIZE) {
-                        return Err(Error::bad_padding());
+                        return Err(ErrorInner::bad_padding().into());
                     }
 
                     // Then check padding content. Use `libc::memcmp` to compare two memory blocks
@@ -320,7 +320,7 @@ impl MemComparableByteCodec {
                         padding_size,
                     );
                     if std::intrinsics::unlikely(cmp_result != 0) {
-                        return Err(Error::bad_padding());
+                        return Err(ErrorInner::bad_padding().into());
                     }
 
                     let read_bytes = src_ptr.offset_from(src_ptr_untouched) as usize;
@@ -386,7 +386,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
         if unsafe { unlikely(buf.len() < len) } {
-            return Err(Error::eof());
+            return Err(ErrorInner::eof().into());
         }
         MemComparableByteCodec::encode_all(bs, buf);
         unsafe {
@@ -404,7 +404,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
         if unsafe { unlikely(buf.len() < len) } {
-            return Err(Error::eof());
+            return Err(ErrorInner::eof().into());
         }
         MemComparableByteCodec::encode_all_desc(bs, buf);
         unsafe {
@@ -482,7 +482,7 @@ impl<T: NumberDecoder> CompactByteDecoder for T {
         let vn = self.read_var_i64()? as usize;
         let data = self.bytes();
         if unsafe { unlikely(data.len() < vn) } {
-            return Err(Error::eof());
+            return Err(ErrorInner::eof().into());
         }
         let bs = data[0..vn].to_vec();
         self.advance(vn);
@@ -1132,7 +1132,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use crate::Error;
+    use crate::ErrorInner;
 
     /// A naive implementation of encoding in mem-comparable format.
     /// It does not process non zero-padding groups separately.
@@ -1243,7 +1243,7 @@ mod benches {
             let chunk = if next_offset <= data.len() {
                 &data[offset..next_offset]
             } else {
-                return Err(Error::eof());
+                return Err(ErrorInner::eof().into());
             };
             offset = next_offset;
             // the last byte in decode unit is for marker which indicates pad size
@@ -1259,7 +1259,7 @@ mod benches {
                 continue;
             }
             if pad_size > ENC_GROUP_SIZE {
-                return Err(Error::bad_padding());
+                return Err(ErrorInner::bad_padding().into());
             }
             // if has padding, split the padding pattern and push rest bytes
             let (bytes, padding) = bytes.split_at(ENC_GROUP_SIZE - pad_size);
@@ -1267,7 +1267,7 @@ mod benches {
             let pad_byte = if desc { !0 } else { 0 };
             // check the padding pattern whether validate or not
             if padding.iter().any(|x| *x != pad_byte) {
-                return Err(Error::bad_padding());
+                return Err(ErrorInner::bad_padding().into());
             }
 
             if desc {
@@ -1288,7 +1288,7 @@ mod benches {
         loop {
             let marker_offset = read_offset + ENC_GROUP_SIZE;
             if marker_offset >= data.len() {
-                return Err(Error::eof());
+                return Err(ErrorInner::eof().into());
             };
 
             unsafe {
@@ -1315,7 +1315,7 @@ mod benches {
 
             if pad_size > 0 {
                 if pad_size > ENC_GROUP_SIZE {
-                    return Err(Error::bad_padding());
+                    return Err(ErrorInner::bad_padding().into());
                 }
 
                 // check the padding pattern whether validate or not
@@ -1325,7 +1325,7 @@ mod benches {
                     &ENC_ASC_PADDING[..pad_size]
                 };
                 if &data[write_offset - pad_size..write_offset] != padding_slice {
-                    return Err(Error::bad_padding());
+                    return Err(ErrorInner::bad_padding().into());
                 }
                 unsafe {
                     data.set_len(write_offset - pad_size);

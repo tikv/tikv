@@ -2,10 +2,12 @@
 
 //! Interact with persistent storage.
 //!
-//! The [`Storage`](storage::Storage) structure provides KV APIs on a given [`Engine`](storage::kv::Engine).
+//! The [`Storage`](storage::Storage) structure provides raw and transactional APIs on top of
+//! a lower-level [`Engine`](storage::kv::Engine).
 //!
 //! There are multiple [`Engine`](storage::kv::Engine) implementations, [`RaftKv`](server::raftkv::RaftKv)
-//! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and [`RocksEngine`](storage::RocksEngine) are used for testing only.
+//! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and
+//! [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
 pub mod commands;
 pub mod config;
@@ -35,7 +37,7 @@ use self::metrics::*;
 use self::mvcc::{Lock, TsSet};
 use self::txn::scheduler::Scheduler as TxnScheduler;
 
-pub use self::commands::{is_normal_priority, Command, Options, PointGetCommand};
+pub use self::commands::{Command, CommandKind, Options, PointGetCommand};
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind};
 pub use self::kv::{
@@ -43,7 +45,7 @@ pub use self::kv::{
     FlowStatsReporter, Iterator, Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot,
     Statistics, StatisticsSummary, TestEngineBuilder,
 };
-pub use self::lock_manager::{DummyLockMgr, LockMgr};
+pub use self::lock_manager::{DummyLockManager, LockManager};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
@@ -86,7 +88,7 @@ pub fn is_short_value(value: &[u8]) -> bool {
 /// to it, so that multiple versions can be saved at the same time.
 /// Raw operations use raw keys, which are saved directly to the engine without memcomparable-
 /// encoding and appending timestamp.
-pub struct Storage<E: Engine, L: LockMgr> {
+pub struct Storage<E: Engine, L: LockManager> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
@@ -108,7 +110,7 @@ pub struct Storage<E: Engine, L: LockMgr> {
     pessimistic_txn_enabled: bool,
 }
 
-impl<E: Engine, L: LockMgr> Clone for Storage<E, L> {
+impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
     #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -130,7 +132,7 @@ impl<E: Engine, L: LockMgr> Clone for Storage<E, L> {
     }
 }
 
-impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
+impl<E: Engine, L: LockManager> Drop for Storage<E, L> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -147,7 +149,7 @@ impl<E: Engine, L: LockMgr> Drop for Storage<E, L> {
     }
 }
 
-impl<E: Engine, L: LockMgr> Storage<E, L> {
+impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get concurrency of normal readpool.
     pub fn readpool_normal_concurrency(&self) -> usize {
         self.read_pool_normal.get_pool_size()
@@ -512,10 +514,9 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         duration: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Pause {
+        let cmd = Command {
             ctx,
-            keys,
-            duration,
+            kind: CommandKind::Pause { keys, duration },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.pause.inc();
@@ -524,7 +525,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// The prewrite phase of a transaction. The first phase of 2PC.
     ///
-    /// Schedules a [`Command::Prewrite`].
+    /// Schedules a [`CommandKind::Prewrite`].
     pub fn async_prewrite(
         &self,
         ctx: Context,
@@ -541,12 +542,14 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 return Ok(());
             }
         }
-        let cmd = Command::Prewrite {
+        let cmd = Command {
             ctx,
-            mutations,
-            primary,
-            start_ts,
-            options,
+            kind: CommandKind::Prewrite {
+                mutations,
+                primary,
+                start_ts,
+                options,
+            },
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
@@ -561,17 +564,17 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         mut command: Command,
         callback: BatchCallback<Vec<Result<()>>>,
     ) -> Result<()> {
-        if let Command::Batch {
+        if let CommandKind::Batch {
             ref mut ids,
             ref commands,
-        } = command
+        } = command.kind
         {
             let results: Vec<(u64, _)> = ids
                 .iter_mut()
                 .zip(commands.iter())
                 .filter_map(|(id, command)| {
                     if id.is_some() {
-                        if let Command::Prewrite { ref mutations, .. } = command {
+                        if let CommandKind::Prewrite { ref mutations, .. } = command.kind {
                             for m in mutations {
                                 let key_size = m.key().as_encoded().len();
                                 if key_size > self.max_key_size {
@@ -600,7 +603,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     }
 
     /// Acquire a Pessimistic lock on the keys.
-    /// Schedules a [`Command::AcquirePessimisticLock`].
+    /// Schedules a [`CommandKind::AcquirePessimisticLock`].
     pub fn async_acquire_pessimistic_lock(
         &self,
         ctx: Context,
@@ -622,12 +625,14 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                 return Ok(());
             }
         }
-        let cmd = Command::AcquirePessimisticLock {
+        let cmd = Command {
             ctx,
-            keys,
-            primary,
-            start_ts,
-            options,
+            kind: CommandKind::AcquirePessimisticLock {
+                keys,
+                primary,
+                start_ts,
+                options,
+            },
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.acquire_pessimistic_lock.inc();
@@ -636,7 +641,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Commit the transaction that started at `lock_ts`.
     ///
-    /// Schedules a [`Command::Commit`].
+    /// Schedules a [`CommandKind::Commit`].
     pub fn async_commit(
         &self,
         ctx: Context,
@@ -645,11 +650,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         commit_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Commit {
+        let cmd = Command {
             ctx,
-            keys,
-            lock_ts,
-            commit_ts,
+            kind: CommandKind::Commit {
+                keys,
+                lock_ts,
+                commit_ts,
+            },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
@@ -677,7 +684,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// still be replicated via Raft. This is used to notify that the data will be deleted by
     /// `unsafe_destroy_range` soon.
     ///
-    /// Schedules a [`Command::DeleteRange`].
+    /// Schedules a [`CommandKind::DeleteRange`].
     pub fn async_delete_range(
         &self,
         ctx: Context,
@@ -707,7 +714,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Rollback mutations on a single key.
     ///
-    /// Schedules a [`Command::Cleanup`].
+    /// Schedules a [`CommandKind::Cleanup`].
     pub fn async_cleanup(
         &self,
         ctx: Context,
@@ -716,11 +723,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         current_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Cleanup {
+        let cmd = Command {
             ctx,
-            key,
-            start_ts,
-            current_ts,
+            kind: CommandKind::Cleanup {
+                key,
+                start_ts,
+                current_ts,
+            },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
@@ -729,7 +738,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Rollback from the transaction that was started at `start_ts`.
     ///
-    /// Schedules a [`Command::Rollback`].
+    /// Schedules a [`CommandKind::Rollback`].
     pub fn async_rollback(
         &self,
         ctx: Context,
@@ -737,10 +746,9 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         start_ts: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::Rollback {
+        let cmd = Command {
             ctx,
-            keys,
-            start_ts,
+            kind: CommandKind::Rollback { keys, start_ts },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc();
@@ -749,7 +757,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
     ///
-    /// Schedules a [`Command::PessimisticRollback`].
+    /// Schedules a [`CommandKind::PessimisticRollback`].
     pub fn async_pessimistic_rollback(
         &self,
         ctx: Context,
@@ -763,11 +771,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
             return Ok(());
         }
 
-        let cmd = Command::PessimisticRollback {
+        let cmd = Command {
             ctx,
-            keys,
-            start_ts,
-            for_update_ts,
+            kind: CommandKind::PessimisticRollback {
+                keys,
+                start_ts,
+                for_update_ts,
+            },
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
@@ -776,7 +786,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Check the specified primary key and enlarge it's TTL if necessary. Returns the new TTL.
     ///
-    /// Schedules a [`Command::TxnHeartBeat`].
+    /// Schedules a [`CommandKind::TxnHeartBeat`].
     pub fn async_txn_heart_beat(
         &self,
         ctx: Context,
@@ -785,11 +795,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         advise_ttl: u64,
         callback: Callback<TxnStatus>,
     ) -> Result<()> {
-        let cmd = Command::TxnHeartBeat {
+        let cmd = Command {
             ctx,
-            primary_key,
-            start_ts,
-            advise_ttl,
+            kind: CommandKind::TxnHeartBeat {
+                primary_key,
+                start_ts,
+                advise_ttl,
+            },
         };
         self.schedule(cmd, StorageCb::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.txn_heart_beat.inc();
@@ -805,7 +817,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
     /// no information about the transaction, results will be both 0.
     ///
-    /// Schedules a [`Command::CheckTxnStatus`].
+    /// Schedules a [`CommandKind::CheckTxnStatus`].
     pub fn async_check_txn_status(
         &self,
         ctx: Context,
@@ -816,13 +828,15 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         rollback_if_not_exist: bool,
         callback: Callback<TxnStatus>,
     ) -> Result<()> {
-        let cmd = Command::CheckTxnStatus {
+        let cmd = Command {
             ctx,
-            primary_key,
-            lock_ts,
-            caller_start_ts,
-            current_ts,
-            rollback_if_not_exist,
+            kind: CommandKind::CheckTxnStatus {
+                primary_key,
+                lock_ts,
+                caller_start_ts,
+                current_ts,
+                rollback_if_not_exist,
+            },
         };
         self.schedule(cmd, StorageCb::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.check_txn_status.inc();
@@ -831,7 +845,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
 
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     ///
-    /// Schedules a [`Command::ScanLock`].
+    /// Schedules a [`CommandKind::ScanLock`].
     pub fn async_scan_locks(
         &self,
         ctx: Context,
@@ -840,15 +854,17 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         limit: usize,
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
-        let cmd = Command::ScanLock {
+        let cmd = Command {
             ctx,
-            max_ts,
-            start_key: if start_key.is_empty() {
-                None
-            } else {
-                Some(Key::from_raw(&start_key))
+            kind: CommandKind::ScanLock {
+                max_ts,
+                start_key: if start_key.is_empty() {
+                    None
+                } else {
+                    Some(Key::from_raw(&start_key))
+                },
+                limit,
             },
-            limit,
         };
         self.schedule(cmd, StorageCb::Locks(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.scan_lock.inc();
@@ -861,20 +877,22 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// before the safe point.
     ///
     /// `txn_status` maps lock_ts to commit_ts. If a transaction is rolled back, it is mapped to 0.
-    /// For an example, check the [`Command::ResolveLock`] docs.
+    /// For an example, check the [`CommandKind::ResolveLock`] docs.
     ///
-    /// Schedules a [`Command::ResolveLock`].
+    /// Schedules a [`CommandKind::ResolveLock`].
     pub fn async_resolve_lock(
         &self,
         ctx: Context,
         txn_status: HashMap<u64, u64>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::ResolveLock {
+        let cmd = Command {
             ctx,
-            txn_status,
-            scan_key: None,
-            key_locks: vec![],
+            kind: CommandKind::ResolveLock {
+                txn_status,
+                scan_key: None,
+                key_locks: vec![],
+            },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock.inc();
@@ -886,7 +904,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
     /// During the GC operation, this should be called to clean up stale locks whose timestamp is
     /// before the safe point.
     ///
-    /// Schedules a [`Command::ResolveLockLite`].
+    /// Schedules a [`CommandKind::ResolveLockLite`].
     pub fn async_resolve_lock_lite(
         &self,
         ctx: Context,
@@ -895,11 +913,13 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         resolve_keys: Vec<Key>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command::ResolveLockLite {
+        let cmd = Command {
             ctx,
-            start_ts,
-            commit_ts,
-            resolve_keys,
+            kind: CommandKind::ResolveLockLite {
+                start_ts,
+                commit_ts,
+                resolve_keys,
+            },
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc();
@@ -1482,7 +1502,10 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         key: Key,
         callback: Callback<MvccInfo>,
     ) -> Result<()> {
-        let cmd = Command::MvccByKey { ctx, key };
+        let cmd = Command {
+            ctx,
+            kind: CommandKind::MvccByKey { key },
+        };
         self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.key_mvcc.inc();
 
@@ -1497,7 +1520,10 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
         start_ts: u64,
         callback: Callback<Option<(Key, MvccInfo)>>,
     ) -> Result<()> {
-        let cmd = Command::MvccByStartTs { ctx, start_ts };
+        let cmd = Command {
+            ctx,
+            kind: CommandKind::MvccByStartTs { start_ts },
+        };
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
         Ok(())
@@ -1540,7 +1566,7 @@ impl<E: Engine> TestStorageBuilder<E> {
     }
 
     /// Build a `Storage<E>`.
-    pub fn build(self) -> Result<Storage<E, DummyLockMgr>> {
+    pub fn build(self) -> Result<Storage<E, DummyLockManager>> {
         let read_pool = self::readpool_impl::build_read_pool_for_test(
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
@@ -1551,7 +1577,6 @@ impl<E: Engine> TestStorageBuilder<E> {
 
 #[cfg(test)]
 mod tests {
-    use super::lock_manager::DummyLockMgr;
     use super::*;
 
     use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
@@ -1764,15 +1789,23 @@ mod tests {
         assert_eq!(x, vec![None]);
         storage
             .async_batch_prewrite_command(
-                Command::Batch {
-                    ids: vec![Some(1)],
-                    commands: vec![Command::Prewrite {
-                        ctx: Context::default(),
-                        mutations: vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                        primary: b"x".to_vec(),
-                        start_ts: 100,
-                        options: Options::default(),
-                    }],
+                Command {
+                    ctx: Context::default(),
+                    kind: CommandKind::Batch {
+                        ids: vec![Some(1)],
+                        commands: vec![Command {
+                            ctx: Context::default(),
+                            kind: CommandKind::Prewrite {
+                                mutations: vec![Mutation::Put((
+                                    Key::from_raw(b"x"),
+                                    b"100".to_vec(),
+                                ))],
+                                primary: b"x".to_vec(),
+                                start_ts: 100,
+                                options: Options::default(),
+                            },
+                        }],
+                    },
                 },
                 expect_ok_batch_callback(tx.clone(), 0, 1),
             )
@@ -1794,14 +1827,19 @@ mod tests {
         );
         storage
             .async_batch_commit_command(
-                Command::Batch {
-                    ids: vec![Some(1)],
-                    commands: vec![Command::Commit {
-                        ctx: Context::default(),
-                        keys: vec![Key::from_raw(b"x")],
-                        lock_ts: 100,
-                        commit_ts: 101,
-                    }],
+                Command {
+                    ctx: Context::default(),
+                    kind: CommandKind::Batch {
+                        ids: vec![Some(1)],
+                        commands: vec![Command {
+                            ctx: Context::default(),
+                            kind: CommandKind::Commit {
+                                keys: vec![Key::from_raw(b"x")],
+                                lock_ts: 100,
+                                commit_ts: 101,
+                            },
+                        }],
+                    },
                 },
                 expect_ok_batch_callback(tx.clone(), 2, 1),
             )
@@ -1847,19 +1885,24 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_batch_prewrite_command(
-                Command::Batch {
-                    ids: vec![Some(1)],
-                    commands: vec![Command::Prewrite {
-                        ctx: Context::default(),
-                        mutations: vec![
-                            Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
-                            Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
-                            Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
-                        ],
-                        primary: b"a".to_vec(),
-                        start_ts: 1,
-                        options: Options::default(),
-                    }],
+                Command {
+                    ctx: Context::default(),
+                    kind: CommandKind::Batch {
+                        ids: vec![Some(1)],
+                        commands: vec![Command {
+                            ctx: Context::default(),
+                            kind: CommandKind::Prewrite {
+                                mutations: vec![
+                                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
+                                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
+                                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                                ],
+                                primary: b"a".to_vec(),
+                                start_ts: 1,
+                                options: Options::default(),
+                            },
+                        }],
+                    },
                 },
                 expect_fail_batch_callback(tx.clone(), 1, 1, |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
@@ -2366,24 +2409,37 @@ mod tests {
         let (tx, rx) = channel();
         storage
             .async_batch_prewrite_command(
-                Command::Batch {
-                    ids: vec![Some(1), Some(2)],
-                    commands: vec![
-                        Command::Prewrite {
-                            ctx: Context::default(),
-                            mutations: vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
-                            primary: b"x".to_vec(),
-                            start_ts: 100,
-                            options: Options::default(),
-                        },
-                        Command::Prewrite {
-                            ctx: Context::default(),
-                            mutations: vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
-                            primary: b"y".to_vec(),
-                            start_ts: 101,
-                            options: Options::default(),
-                        },
-                    ],
+                Command {
+                    ctx: Context::default(),
+                    kind: CommandKind::Batch {
+                        ids: vec![Some(1), Some(2)],
+                        commands: vec![
+                            Command {
+                                ctx: Context::default(),
+                                kind: CommandKind::Prewrite {
+                                    mutations: vec![Mutation::Put((
+                                        Key::from_raw(b"x"),
+                                        b"100".to_vec(),
+                                    ))],
+                                    primary: b"x".to_vec(),
+                                    start_ts: 100,
+                                    options: Options::default(),
+                                },
+                            },
+                            Command {
+                                ctx: Context::default(),
+                                kind: CommandKind::Prewrite {
+                                    mutations: vec![Mutation::Put((
+                                        Key::from_raw(b"y"),
+                                        b"101".to_vec(),
+                                    ))],
+                                    primary: b"y".to_vec(),
+                                    start_ts: 101,
+                                    options: Options::default(),
+                                },
+                            },
+                        ],
+                    },
                 },
                 expect_ok_batch_callback(tx.clone(), 0, 2),
             )
@@ -2391,22 +2447,29 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_batch_commit_command(
-                Command::Batch {
-                    ids: vec![Some(1), Some(2)],
-                    commands: vec![
-                        Command::Commit {
-                            ctx: Context::default(),
-                            keys: vec![Key::from_raw(b"x")],
-                            lock_ts: 100,
-                            commit_ts: 110,
-                        },
-                        Command::Commit {
-                            ctx: Context::default(),
-                            keys: vec![Key::from_raw(b"y")],
-                            lock_ts: 101,
-                            commit_ts: 111,
-                        },
-                    ],
+                Command {
+                    ctx: Context::default(),
+                    kind: CommandKind::Batch {
+                        ids: vec![Some(1), Some(2)],
+                        commands: vec![
+                            Command {
+                                ctx: Context::default(),
+                                kind: CommandKind::Commit {
+                                    keys: vec![Key::from_raw(b"x")],
+                                    lock_ts: 100,
+                                    commit_ts: 110,
+                                },
+                            },
+                            Command {
+                                ctx: Context::default(),
+                                kind: CommandKind::Commit {
+                                    keys: vec![Key::from_raw(b"y")],
+                                    lock_ts: 101,
+                                    commit_ts: 111,
+                                },
+                            },
+                        ],
+                    },
                 },
                 expect_ok_batch_callback(tx.clone(), 1, 2),
             )
@@ -2425,15 +2488,23 @@ mod tests {
         assert_eq!(x, vec![Some(b"100".to_vec()), Some(b"101".to_vec())]);
         storage
             .async_batch_prewrite_command(
-                Command::Batch {
-                    ids: vec![Some(1)],
-                    commands: vec![Command::Prewrite {
-                        ctx: Context::default(),
-                        mutations: vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec()))],
-                        primary: b"x".to_vec(),
-                        start_ts: 105,
-                        options: Options::default(),
-                    }],
+                Command {
+                    ctx: Context::default(),
+                    kind: CommandKind::Batch {
+                        ids: vec![Some(1)],
+                        commands: vec![Command {
+                            ctx: Context::default(),
+                            kind: CommandKind::Prewrite {
+                                mutations: vec![Mutation::Put((
+                                    Key::from_raw(b"x"),
+                                    b"105".to_vec(),
+                                ))],
+                                primary: b"x".to_vec(),
+                                start_ts: 105,
+                                options: Options::default(),
+                            },
+                        }],
+                    },
                 },
                 expect_fail_batch_callback(tx.clone(), 2, 1, |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => (),
@@ -2515,15 +2586,23 @@ mod tests {
             .unwrap();
         storage
             .async_batch_prewrite_command(
-                Command::Batch {
-                    ids: vec![Some(1)],
-                    commands: vec![Command::Prewrite {
-                        ctx: Context::default(),
-                        mutations: vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
-                        primary: b"y".to_vec(),
-                        start_ts: 101,
-                        options: Options::default(),
-                    }],
+                Command {
+                    ctx: Context::default(),
+                    kind: CommandKind::Batch {
+                        ids: vec![Some(1)],
+                        commands: vec![Command {
+                            ctx: Context::default(),
+                            kind: CommandKind::Prewrite {
+                                mutations: vec![Mutation::Put((
+                                    Key::from_raw(b"y"),
+                                    b"101".to_vec(),
+                                ))],
+                                primary: b"y".to_vec(),
+                                start_ts: 101,
+                                options: Options::default(),
+                            },
+                        }],
+                    },
                 },
                 expect_too_busy_batch_callback(tx.clone(), 2, 1),
             )
@@ -2532,15 +2611,23 @@ mod tests {
         rx.recv().unwrap();
         storage
             .async_batch_prewrite_command(
-                Command::Batch {
-                    ids: vec![Some(1)],
-                    commands: vec![Command::Prewrite {
-                        ctx: Context::default(),
-                        mutations: vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec()))],
-                        primary: b"y".to_vec(),
-                        start_ts: 102,
-                        options: Options::default(),
-                    }],
+                Command {
+                    ctx: Context::default(),
+                    kind: CommandKind::Batch {
+                        ids: vec![Some(1)],
+                        commands: vec![Command {
+                            ctx: Context::default(),
+                            kind: CommandKind::Prewrite {
+                                mutations: vec![Mutation::Put((
+                                    Key::from_raw(b"z"),
+                                    b"102".to_vec(),
+                                ))],
+                                primary: b"y".to_vec(),
+                                start_ts: 102,
+                                options: Options::default(),
+                            },
+                        }],
+                    },
                 },
                 expect_ok_batch_callback(tx.clone(), 3, 1),
             )
@@ -3407,9 +3494,9 @@ mod tests {
         let engine = storage.get_engine();
         expect_multi_values(
             results.clone().collect(),
-            <Storage<RocksEngine, DummyLockMgr>>::async_snapshot(&engine, &ctx)
+            <Storage<RocksEngine, DummyLockManager>>::async_snapshot(&engine, &ctx)
                 .and_then(move |snapshot| {
-                    <Storage<RocksEngine, DummyLockMgr>>::raw_scan(
+                    <Storage<RocksEngine, DummyLockManager>>::raw_scan(
                         &snapshot,
                         &"".to_string(),
                         &Key::from_encoded(b"c1".to_vec()),
@@ -3423,9 +3510,9 @@ mod tests {
         );
         expect_multi_values(
             results.rev().collect(),
-            <Storage<RocksEngine, DummyLockMgr>>::async_snapshot(&engine, &ctx)
+            <Storage<RocksEngine, DummyLockManager>>::async_snapshot(&engine, &ctx)
                 .and_then(move |snapshot| {
-                    <Storage<RocksEngine, DummyLockMgr>>::reverse_raw_scan(
+                    <Storage<RocksEngine, DummyLockManager>>::reverse_raw_scan(
                         &snapshot,
                         &"".to_string(),
                         &Key::from_encoded(b"d3".to_vec()),
@@ -3461,7 +3548,7 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
             true
         );
 
@@ -3471,7 +3558,7 @@ mod tests {
             (b"c".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
             true
         );
 
@@ -3481,7 +3568,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
             false
         );
 
@@ -3492,7 +3579,7 @@ mod tests {
             (b"a".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, false),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, false),
             false
         );
 
@@ -3502,7 +3589,7 @@ mod tests {
             (b"c3".to_vec(), b"c".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
             true
         );
 
@@ -3512,7 +3599,7 @@ mod tests {
             (b"a3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
             true
         );
 
@@ -3522,7 +3609,7 @@ mod tests {
             (b"c".to_vec(), b"c3".to_vec()),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
             false
         );
 
@@ -3532,7 +3619,7 @@ mod tests {
             (b"c3".to_vec(), vec![]),
         ]);
         assert_eq!(
-            <Storage<RocksEngine, DummyLockMgr>>::check_key_ranges(&ranges, true),
+            <Storage<RocksEngine, DummyLockManager>>::check_key_ranges(&ranges, true),
             false
         );
     }

@@ -31,15 +31,22 @@ use prometheus::HistogramTimer;
 use tikv_util::{collections::HashMap, time::SlowTimer};
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
-use crate::storage::lock_manager::{self, LockMgr};
+use crate::storage::lock_manager::{self, LockManager};
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{
     execute_batch_callback, execute_callback, Executor, MsgScheduler, ProcessResult, Task,
 };
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
-use crate::storage::{metrics::*, Key};
-use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
+use crate::storage::{
+    metrics::{
+        self, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC, SCHED_CONTEX_GAUGE,
+        SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC,
+        SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
+    },
+    Key,
+};
+use crate::storage::{Command, CommandKind, Engine, Error as StorageError, StorageCb};
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
@@ -52,18 +59,18 @@ pub enum Msg {
     ReadFinished {
         cid: u64,
         pr: ProcessResult,
-        tag: CommandKind,
+        tag: metrics::CommandKind,
     },
     WriteFinished {
         cid: u64,
         pr: ProcessResult,
         result: EngineResult<()>,
-        tag: CommandKind,
+        tag: metrics::CommandKind,
     },
     FinishedWithErr {
         cid: u64,
         err: Error,
-        tag: CommandKind,
+        tag: metrics::CommandKind,
     },
     WaitForLock {
         cid: u64,
@@ -102,7 +109,7 @@ struct TaskContext {
     lock: Lock,
     cb: StorageCb,
     write_bytes: usize,
-    tag: CommandKind,
+    tag: metrics::CommandKind,
     // How long it waits on latches.
     latch_timer: Option<HistogramTimer>,
     // Total duration of a command.
@@ -139,7 +146,7 @@ impl TaskContext {
     }
 }
 
-struct SchedulerInner<L: LockMgr> {
+struct SchedulerInner<L: LockManager> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
 
@@ -170,7 +177,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl<L: LockMgr> SchedulerInner<L> {
+impl<L: LockManager> SchedulerInner<L> {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -243,15 +250,15 @@ impl<L: LockMgr> SchedulerInner<L> {
 
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
-pub struct Scheduler<E: Engine, L: LockMgr> {
+pub struct Scheduler<E: Engine, L: LockManager> {
     // `engine` is `None` means currently the program is in scheduler worker threads.
     engine: Option<E>,
     inner: Arc<SchedulerInner<L>>,
 }
 
-unsafe impl<E: Engine, L: LockMgr> Send for Scheduler<E, L> {}
+unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
 
-impl<E: Engine, L: LockMgr> Scheduler<E, L> {
+impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Creates a scheduler.
     pub fn new(
         engine: E,
@@ -308,7 +315,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
     }
 }
 
-impl<E: Engine, L: LockMgr> Scheduler<E, L> {
+impl<E: Engine, L: LockManager> Scheduler<E, L> {
     fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, Self, L> {
         let pool = if priority == CommandPri::High || is_sys_cmd {
             self.inner.high_priority_pool.clone()
@@ -358,7 +365,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
-            if let Command::Batch { ids, .. } = cmd {
+            if let CommandKind::Batch { ids, .. } = cmd.kind {
                 execute_batch_callback(
                     &mut callback,
                     ids.into_iter()
@@ -396,7 +403,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         let tag = task.tag;
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
-        let ids = if let Command::Batch { ids, .. } = task.cmd() {
+        let ids = if let CommandKind::Batch { ids, .. } = &task.cmd().kind {
             Some(ids.clone())
         } else {
             None
@@ -467,7 +474,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
     ///
     /// If a next command is present, continues to execute; otherwise, delivers the result to the
     /// callback.
-    fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: CommandKind) {
+    fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: metrics::CommandKind) {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
         debug!("read command finished"; "cid" => cid);
@@ -488,7 +495,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         cid: u64,
         pr: ProcessResult,
         result: EngineResult<()>,
-        tag: CommandKind,
+        tag: metrics::CommandKind,
     ) {
         SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
 
@@ -547,7 +554,7 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
     }
 }
 
-impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
+impl<E: Engine, L: LockManager> MsgScheduler for Scheduler<E, L> {
     fn on_msg(&self, task: Msg) {
         match task {
             Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),
@@ -612,45 +619,45 @@ impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
 }
 
 fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
-    match *cmd {
-        Command::Prewrite { ref mutations, .. } => {
+    match cmd.kind {
+        CommandKind::Prewrite { ref mutations, .. } => {
             let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
             latches.gen_lock(&keys)
         }
-        Command::ResolveLock { ref key_locks, .. } => {
+        CommandKind::ResolveLock { ref key_locks, .. } => {
             let keys: Vec<&Key> = key_locks.iter().map(|x| &x.0).collect();
             latches.gen_lock(&keys)
         }
-        Command::AcquirePessimisticLock { ref keys, .. } => {
+        CommandKind::AcquirePessimisticLock { ref keys, .. } => {
             let keys: Vec<&Key> = keys.iter().map(|x| &x.0).collect();
             latches.gen_lock(&keys)
         }
-        Command::ResolveLockLite {
+        CommandKind::ResolveLockLite {
             ref resolve_keys, ..
         } => latches.gen_lock(resolve_keys),
-        Command::Commit { ref keys, .. }
-        | Command::Rollback { ref keys, .. }
-        | Command::PessimisticRollback { ref keys, .. } => latches.gen_lock(keys),
-        Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
-        Command::Pause { ref keys, .. } => latches.gen_lock(keys),
-        Command::TxnHeartBeat {
+        CommandKind::Commit { ref keys, .. }
+        | CommandKind::Rollback { ref keys, .. }
+        | CommandKind::PessimisticRollback { ref keys, .. } => latches.gen_lock(keys),
+        CommandKind::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
+        CommandKind::Pause { ref keys, .. } => latches.gen_lock(keys),
+        CommandKind::TxnHeartBeat {
             ref primary_key, ..
         } => latches.gen_lock(&[primary_key]),
-        Command::CheckTxnStatus {
+        CommandKind::CheckTxnStatus {
             ref primary_key, ..
         } => latches.gen_lock(&[primary_key]),
 
         // Avoid using wildcard _ here to avoid forgetting add new commands here.
-        Command::ScanLock { .. }
-        | Command::DeleteRange { .. }
-        | Command::MvccByKey { .. }
-        | Command::MvccByStartTs { .. } => Lock::new(vec![]),
-        Command::Batch { ref commands, .. } => {
+        CommandKind::ScanLock { .. }
+        | CommandKind::DeleteRange { .. }
+        | CommandKind::MvccByKey { .. }
+        | CommandKind::MvccByStartTs { .. } => Lock::new(vec![]),
+        CommandKind::Batch { ref commands, .. } => {
             let mut k: Vec<&Key> = Vec::new();
             for cmd in commands {
-                if let Command::Prewrite { ref mutations, .. } = cmd {
+                if let CommandKind::Prewrite { ref mutations, .. } = cmd.kind {
                     k.extend(mutations.iter().map(|x| x.key()));
-                } else if let Command::Commit { ref keys, .. } = cmd {
+                } else if let CommandKind::Commit { ref keys, .. } = cmd.kind {
                     k.extend(keys.iter())
                 }
             }
@@ -664,7 +671,7 @@ mod tests {
     use super::*;
     use crate::storage::mvcc;
     use crate::storage::txn::latch::*;
-    use crate::storage::{Command, Key, Mutation, Options};
+    use crate::storage::{Key, Mutation, Options};
     use kvproto::kvrpcpb::Context;
     use tikv_util::collections::HashMap;
 
@@ -673,85 +680,109 @@ mod tests {
         let mut temp_map = HashMap::default();
         temp_map.insert(10, 20);
         let readonly_cmds = vec![
-            Command::ScanLock {
+            Command {
                 ctx: Context::default(),
-                max_ts: 5,
-                start_key: None,
-                limit: 0,
+                kind: CommandKind::ScanLock {
+                    max_ts: 5,
+                    start_key: None,
+                    limit: 0,
+                },
             },
-            Command::ResolveLock {
+            Command {
                 ctx: Context::default(),
-                txn_status: temp_map.clone(),
-                scan_key: None,
-                key_locks: vec![],
+                kind: CommandKind::ResolveLock {
+                    txn_status: temp_map.clone(),
+                    scan_key: None,
+                    key_locks: vec![],
+                },
             },
-            Command::MvccByKey {
+            Command {
                 ctx: Context::default(),
-                key: Key::from_raw(b"k"),
+                kind: CommandKind::MvccByKey {
+                    key: Key::from_raw(b"k"),
+                },
             },
-            Command::MvccByStartTs {
+            Command {
                 ctx: Context::default(),
-                start_ts: 25,
+                kind: CommandKind::MvccByStartTs { start_ts: 25 },
             },
         ];
         let write_cmds = vec![
-            Command::Prewrite {
+            Command {
                 ctx: Context::default(),
-                mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
-                primary: b"k".to_vec(),
-                start_ts: 10,
-                options: Options::default(),
+                kind: CommandKind::Prewrite {
+                    mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                    primary: b"k".to_vec(),
+                    start_ts: 10,
+                    options: Options::default(),
+                },
             },
-            Command::AcquirePessimisticLock {
+            Command {
                 ctx: Context::default(),
-                keys: vec![(Key::from_raw(b"k"), false)],
-                primary: b"k".to_vec(),
-                start_ts: 10,
-                options: Options::default(),
+                kind: CommandKind::AcquirePessimisticLock {
+                    keys: vec![(Key::from_raw(b"k"), false)],
+                    primary: b"k".to_vec(),
+                    start_ts: 10,
+                    options: Options::default(),
+                },
             },
-            Command::Commit {
+            Command {
                 ctx: Context::default(),
-                keys: vec![Key::from_raw(b"k")],
-                lock_ts: 10,
-                commit_ts: 20,
+                kind: CommandKind::Commit {
+                    keys: vec![Key::from_raw(b"k")],
+                    lock_ts: 10,
+                    commit_ts: 20,
+                },
             },
-            Command::Cleanup {
+            Command {
                 ctx: Context::default(),
-                key: Key::from_raw(b"k"),
-                start_ts: 10,
-                current_ts: 20,
+                kind: CommandKind::Cleanup {
+                    key: Key::from_raw(b"k"),
+                    start_ts: 10,
+                    current_ts: 20,
+                },
             },
-            Command::Rollback {
+            Command {
                 ctx: Context::default(),
-                keys: vec![Key::from_raw(b"k")],
-                start_ts: 10,
+                kind: CommandKind::Rollback {
+                    keys: vec![Key::from_raw(b"k")],
+                    start_ts: 10,
+                },
             },
-            Command::PessimisticRollback {
+            Command {
                 ctx: Context::default(),
-                keys: vec![Key::from_raw(b"k")],
-                start_ts: 10,
-                for_update_ts: 20,
+                kind: CommandKind::PessimisticRollback {
+                    keys: vec![Key::from_raw(b"k")],
+                    start_ts: 10,
+                    for_update_ts: 20,
+                },
             },
-            Command::ResolveLock {
+            Command {
                 ctx: Context::default(),
-                txn_status: temp_map.clone(),
-                scan_key: None,
-                key_locks: vec![(
-                    Key::from_raw(b"k"),
-                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, 0, 0, 0),
-                )],
+                kind: CommandKind::ResolveLock {
+                    txn_status: temp_map.clone(),
+                    scan_key: None,
+                    key_locks: vec![(
+                        Key::from_raw(b"k"),
+                        mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, 0, 0, 0),
+                    )],
+                },
             },
-            Command::ResolveLockLite {
+            Command {
                 ctx: Context::default(),
-                start_ts: 10,
-                commit_ts: 0,
-                resolve_keys: vec![Key::from_raw(b"k")],
+                kind: CommandKind::ResolveLockLite {
+                    start_ts: 10,
+                    commit_ts: 0,
+                    resolve_keys: vec![Key::from_raw(b"k")],
+                },
             },
-            Command::TxnHeartBeat {
+            Command {
                 ctx: Context::default(),
-                primary_key: Key::from_raw(b"k"),
-                start_ts: 10,
-                advise_ttl: 100,
+                kind: CommandKind::TxnHeartBeat {
+                    primary_key: Key::from_raw(b"k"),
+                    start_ts: 10,
+                    advise_ttl: 100,
+                },
             },
         ];
 
