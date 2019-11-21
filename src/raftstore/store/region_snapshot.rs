@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
+use engine::rocks::{DBIterator, DBVector, TablePropertiesCollection, DB};
 use engine::{
     self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
     SyncSnapshot,
@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
+use crate::storage::Iterator;
 use engine_traits::util::check_key_in_range;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
@@ -201,10 +202,7 @@ impl Peekable for RegionSnapshot {
 /// db only contains one region.
 pub struct RegionIterator {
     iter: DBIterator<Arc<DB>>,
-    valid: bool,
     region: Arc<Region>,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
 }
 
 fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
@@ -236,16 +234,8 @@ impl RegionIterator {
     pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
-        let start_key = iter_opt.lower_bound().unwrap().to_vec();
-        let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator(iter_opt);
-        RegionIterator {
-            iter,
-            valid: false,
-            start_key,
-            end_key,
-            region,
-        }
+        RegionIterator { iter, region }
     }
 
     pub fn new_cf(
@@ -256,108 +246,60 @@ impl RegionIterator {
     ) -> RegionIterator {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
-        let start_key = iter_opt.lower_bound().unwrap().to_vec();
-        let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
-        RegionIterator {
-            iter,
-            valid: false,
-            start_key,
-            end_key,
-            region,
-        }
+        RegionIterator { iter, region }
     }
 
     pub fn seek_to_first(&mut self) -> bool {
-        self.valid = self.iter.seek(self.start_key.as_slice().into());
-
-        self.update_valid(true)
-    }
-
-    #[inline]
-    fn update_valid(&mut self, forward: bool) -> bool {
-        if self.valid {
-            let key = self.iter.key();
-            self.valid = if forward {
-                key < self.end_key.as_slice()
-            } else {
-                key >= self.start_key.as_slice()
-            };
-        }
-        self.valid
+        self.iter.seek_to_first()
     }
 
     pub fn seek_to_last(&mut self) -> bool {
-        if !self.iter.seek(self.end_key.as_slice().into()) && !self.iter.seek(SeekKey::End) {
-            self.valid = false;
-            return self.valid;
-        }
-
-        while self.iter.key() >= self.end_key.as_slice() && self.iter.prev() {}
-
-        self.valid = self.iter.valid();
-        self.update_valid(false)
+        self.iter.seek_to_last()
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
         fail_point!("region_snapshot_seek", |_| {
             return Err(box_err!("region seek error"));
         });
-
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        if key == self.end_key {
-            self.valid = false;
-        } else {
-            self.valid = self.iter.seek(key.as_slice().into());
-        }
-
-        Ok(self.update_valid(true))
+        Ok(self.iter.seek(key.as_slice().into()))
     }
 
     pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        self.valid = self.iter.seek_for_prev(key.as_slice().into());
-        if self.valid && self.iter.key() == self.end_key.as_slice() {
-            self.valid = self.iter.prev();
-        }
-        Ok(self.update_valid(false))
+        Ok(self.iter.seek_for_prev(key.as_slice().into()))
     }
 
     pub fn prev(&mut self) -> bool {
-        if !self.valid {
+        if !self.valid() {
             return false;
         }
-        self.valid = self.iter.prev();
-
-        self.update_valid(false)
+        self.iter.prev()
     }
 
     pub fn next(&mut self) -> bool {
-        if !self.valid {
+        if !self.valid() {
             return false;
         }
-        self.valid = self.iter.next();
-
-        self.update_valid(true)
+        self.iter.next()
     }
 
     #[inline]
     pub fn key(&self) -> &[u8] {
-        assert!(self.valid);
         keys::origin_key(self.iter.key())
     }
 
     #[inline]
     pub fn value(&self) -> &[u8] {
-        assert!(self.valid);
         self.iter.value()
     }
 
     #[inline]
     pub fn valid(&self) -> bool {
-        self.valid
+        self.iter.valid()
     }
 
     #[inline]
@@ -371,17 +313,22 @@ impl RegionIterator {
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
-            CRITICAL_ERROR
-                .with_label_values(&["key not in region"])
-                .inc();
-            if panic_when_unexpected_key_or_data() {
-                set_panic_mark();
-                panic!("key exceed bound: {:?}", e);
-            } else {
-                return Err(e);
-            }
+            return handle_check_key_in_region_error(e);
         }
         Ok(())
+    }
+}
+
+fn handle_check_key_in_region_error(e: crate::raftstore::Error) -> Result<()> {
+    // Split out the error case to reduce hot-path code size.
+    CRITICAL_ERROR
+        .with_label_values(&["key not in region"])
+        .inc();
+    if panic_when_unexpected_key_or_data() {
+        set_panic_mark();
+        panic!("key exceed bound: {:?}", e);
+    } else {
+        Err(e)
     }
 }
 
