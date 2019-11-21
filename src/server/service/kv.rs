@@ -1074,6 +1074,42 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         ctx.spawn(future);
     }
 
+    fn register_lock_observer(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        mut _req: RegisterLockObserverRequest,
+        _sink: UnarySink<RegisterLockObserverResponse>,
+    ) {
+        unimplemented!();
+    }
+
+    fn check_lock_observer(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        mut _req: CheckLockObserverRequest,
+        _sink: UnarySink<CheckLockObserverResponse>,
+    ) {
+        unimplemented!();
+    }
+
+    fn remove_lock_observer(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        mut _req: RemoveLockObserverRequest,
+        _sink: UnarySink<RemoveLockObserverResponse>,
+    ) {
+        unimplemented!();
+    }
+
+    fn physical_scan_lock(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        mut _req: PhysicalScanLockRequest,
+        _sink: ServerStreamingSink<PhysicalScanLockResponse>,
+    ) {
+        unimplemented!();
+    }
+
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
         let future = future_cop(&self.cop, req, Some(ctx.peer()))
