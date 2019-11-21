@@ -96,21 +96,27 @@ pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 #[rpn_fn]
 #[inline]
 pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
-    Ok(match (lhs, rhs) {
+    match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => {
             if *rhs <= 0 {
                 return Ok(Some(Vec::new()));
             }
-            let s = str::from_utf8(&*lhs).unwrap();
-            let l = *rhs as usize;
-            if s.chars().count() > l {
-                return Ok(Some(s.chars().take(l).collect::<String>().into_bytes()));
-            } else {
-                return Ok(Some(s.to_string().into_bytes()));
+            match str::from_utf8(&*lhs) {
+                Ok(s) => {
+                    let l = *rhs as usize;
+                    if s.chars().count() > l {
+                        return Ok(Some(s.chars().take(l).collect::<String>().into_bytes()));
+                    } else {
+                        return Ok(Some(s.to_string().into_bytes()));
+                    }
+                }
+                Err(err) => {
+                    return Err(box_err!("invalid input value: {:?}", err));
+                }
             }
         }
-        _ => None,
-    })
+        _ => Ok(None),
+    }
 }
 
 #[rpn_fn]
