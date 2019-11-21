@@ -223,16 +223,13 @@ impl Simulator for ServerCluster {
             }
         }
         let mut server = server.unwrap();
-        let addr = server.listening_addr();
-        cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans.clone());
-        let server_cfg = Arc::new(cfg.server.clone());
 
         // Create node.
         let mut node = Node::new(
             system,
-            &cfg.server,
+            &server.cfg,
             &cfg.raft_store,
             Arc::clone(&self.pd_client),
         );
@@ -278,6 +275,7 @@ impl Simulator for ServerCluster {
 
         server.start(server_cfg, security_mgr).unwrap();
 
+        self.addrs.insert(node_id, server.cfg.addr.clone());
         self.metas.insert(
             node_id,
             ServerMeta {
@@ -289,7 +287,6 @@ impl Simulator for ServerCluster {
                 worker,
             },
         );
-        self.addrs.insert(node_id, format!("{}", addr));
 
         Ok(node_id)
     }
