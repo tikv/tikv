@@ -11,7 +11,7 @@ mod write;
 pub use self::lock::{Lock, LockType};
 pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
-pub use self::write::{Write, WriteType};
+pub use self::write::{Write, WriteRef, WriteType};
 
 use std::error;
 use std::fmt;
@@ -150,9 +150,9 @@ quick_error! {
             description("already exists")
             display("key {} already exists", hex::encode_upper(key))
         }
-        DefaultNotFound { key: Vec<u8>, write: Write } {
+        DefaultNotFound { key: Vec<u8> } {
             description("write cf corresponding value not found in default cf")
-            display("default not found: key:{}, write:{:?}, maybe read truncated/dropped table data?", hex::encode_upper(key), write)
+            display("default not found: key:{}, maybe read truncated/dropped table data?", hex::encode_upper(key))
         }
         CommitTsExpired { start_ts: u64, commit_ts: u64, key: Vec<u8>, min_commit_ts: u64 } {
             description("commit_ts less than lock's min_commit_ts")
@@ -227,9 +227,8 @@ impl ErrorInner {
                 deadlock_key_hash: *deadlock_key_hash,
             }),
             ErrorInner::AlreadyExist { key } => Some(ErrorInner::AlreadyExist { key: key.clone() }),
-            ErrorInner::DefaultNotFound { key, write } => Some(ErrorInner::DefaultNotFound {
+            ErrorInner::DefaultNotFound { key } => Some(ErrorInner::DefaultNotFound {
                 key: key.to_owned(),
-                write: write.clone(),
             }),
             ErrorInner::CommitTsExpired {
                 start_ts,
@@ -308,17 +307,23 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     }
 }
 
+impl From<codec::Error> for ErrorInner {
+    fn from(err: codec::Error) -> Self {
+        box_err!("{}", err)
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Generates `DefaultNotFound` error or panic directly based on config.
-pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error {
+pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
     CRITICAL_ERROR
         .with_label_values(&["default value not found"])
         .inc();
     if panic_when_unexpected_key_or_data() {
         set_panic_mark();
         panic!(
-            "default value not found for key {:?}, write: {:?} when {}",
+            "default value not found for key {:?} when {}",
             hex::encode_upper(&key),
             write,
             hint,
@@ -905,7 +910,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let k = Key::from_raw(key).append_ts(commit_ts);
         let v = snapshot.get_cf(CF_WRITE, &k).unwrap().unwrap();
-        let write = Write::parse(&v).unwrap();
+        let write = WriteRef::parse(&v).unwrap();
         assert_eq!(write.start_ts, start_ts);
         assert_eq!(write.write_type, tp);
     }
@@ -997,7 +1002,7 @@ pub mod tests {
             .unwrap();
         assert_eq!(ts, start_ts);
         assert_eq!(write.write_type, WriteType::Rollback);
-        assert_eq!(write.is_protected(), protected);
+        assert_eq!(write.as_ref().is_protected(), protected);
     }
 
     pub fn must_scan_keys<E: Engine>(

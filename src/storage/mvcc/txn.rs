@@ -173,7 +173,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // Only the primary key of a pessimistic transaction needs to be protected.
         let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
         let write = Write::new_rollback(self.start_ts, protected);
-        self.put_write(key.clone(), self.start_ts, write.to_bytes());
+        self.put_write(key.clone(), self.start_ts, write.as_ref().to_bytes());
         self.unlock_key(key.clone());
         if self.collapse_rollback {
             self.collapse_prev_rollback(key)?;
@@ -532,7 +532,7 @@ impl<S: Snapshot> MvccTxn<S> {
             self.start_ts,
             short_value,
         );
-        self.put_write(key.clone(), commit_ts, write.to_bytes());
+        self.put_write(key.clone(), commit_ts, write.as_ref().to_bytes());
         self.unlock_key(key);
         Ok(is_pessimistic_txn)
     }
@@ -575,7 +575,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     // it is impossible that neither a lock nor a write record is found.
                     // Therefore, we don't need to protect the rollback here.
                     let write = Write::new_rollback(ts, false);
-                    self.put_write(primary_key, ts, write.to_bytes());
+                    self.put_write(primary_key, ts, write.as_ref().to_bytes());
                     MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
 
                     Ok(TxnStatus::LockNotExist)
@@ -645,7 +645,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
     fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
-            if write.write_type == WriteType::Rollback && !write.is_protected() {
+            if write.write_type == WriteType::Rollback && !write.as_ref().is_protected() {
                 self.delete_write(key, commit_ts);
             }
         }

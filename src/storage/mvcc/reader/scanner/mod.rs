@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
-use crate::storage::mvcc::{default_not_found_error, Result, TsSet, Write};
+use crate::storage::mvcc::{default_not_found_error, Result, TsSet};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
     Cursor, CursorBuilder, Iterator, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics,
@@ -209,21 +209,19 @@ impl<S: Snapshot> ScannerConfig<S> {
 fn near_load_data_by_write<I>(
     default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     user_key: &Key,
-    write: Write,
+    write_start_ts: u64,
     statistics: &mut Statistics,
 ) -> Result<Value>
 where
     I: Iterator,
 {
-    assert!(write.short_value.is_none());
-    let seek_key = user_key.clone().append_ts(write.start_ts);
+    let seek_key = user_key.clone().append_ts(write_start_ts);
     default_cursor.near_seek(&seek_key, &mut statistics.data)?;
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
             user_key.to_raw()?,
-            write,
             "near_load_data_by_write",
         ));
     }
@@ -236,21 +234,19 @@ where
 fn near_reverse_load_data_by_write<I>(
     default_cursor: &mut Cursor<I>, // TODO: make it `BackwardCursor`.
     user_key: &Key,
-    write: Write,
+    write_start_ts: u64,
     statistics: &mut Statistics,
 ) -> Result<Value>
 where
     I: Iterator,
 {
-    assert!(write.short_value.is_none());
-    let seek_key = user_key.clone().append_ts(write.start_ts);
+    let seek_key = user_key.clone().append_ts(write_start_ts);
     default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
             user_key.to_raw()?,
-            write,
             "near_reverse_load_data_by_write",
         ));
     }

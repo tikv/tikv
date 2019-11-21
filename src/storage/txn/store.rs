@@ -6,7 +6,7 @@ use crate::storage::metrics::*;
 use crate::storage::mvcc::EntryScanner;
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TsSet};
-use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder, Write};
+use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder, WriteRef};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, ErrorInner, Result};
@@ -132,7 +132,7 @@ impl TxnEntry {
                 } else {
                     let k = Key::from_encoded(write.0).truncate_ts()?;
                     let k = k.into_raw()?;
-                    let v = Write::parse(&write.1)?;
+                    let v = WriteRef::parse(&write.1)?.to_owned();
                     let v = v.short_value.unwrap();
                     Ok((k, v))
                 }
