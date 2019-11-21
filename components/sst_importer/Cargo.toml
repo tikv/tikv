@@ -5,7 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-crc = "1.8"
+crc32fast = "1.2"
 futures = "0.1"
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ] }
 lazy_static = "1.3"

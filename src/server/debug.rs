@@ -34,7 +34,7 @@ use crate::raftstore::store::{
 };
 use crate::raftstore::store::{keys, PeerStorage};
 use crate::server::gc_worker::GCWorker;
-use crate::storage::mvcc::{Lock, LockType, Write, WriteRef, WriteType};
+use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Engine;
 use crate::storage::Iterator as EngineIterator;
@@ -872,8 +872,8 @@ impl<E: Engine> Debugger<E> {
             ("num_files", collection.len() as u64),
             ("num_entries", num_entries),
             ("num_deletes", num_entries - mvcc_properties.num_versions),
-            ("mvcc.min_ts", mvcc_properties.min_ts),
-            ("mvcc.max_ts", mvcc_properties.max_ts),
+            ("mvcc.min_ts", mvcc_properties.min_ts.into_inner()),
+            ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
             ("mvcc.num_rows", mvcc_properties.num_rows),
             ("mvcc.num_puts", mvcc_properties.num_puts),
             ("mvcc.num_versions", mvcc_properties.num_versions),
@@ -1146,7 +1146,7 @@ impl MvccChecker {
         Ok(None)
     }
 
-    fn next_default(&mut self, key: &[u8]) -> Result<Option<u64>> {
+    fn next_default(&mut self, key: &[u8]) -> Result<Option<TimeStamp>> {
         if self.default_iter.valid()
             && box_try!(Key::truncate_ts_for(keys::origin_key(
                 self.default_iter.key()
@@ -1161,7 +1161,7 @@ impl MvccChecker {
         Ok(None)
     }
 
-    fn next_write(&mut self, key: &[u8]) -> Result<Option<(u64, Write)>> {
+    fn next_write(&mut self, key: &[u8]) -> Result<Option<(TimeStamp, Write)>> {
         if self.write_iter.valid()
             && box_try!(Key::truncate_ts_for(keys::origin_key(
                 self.write_iter.key()
@@ -1175,7 +1175,13 @@ impl MvccChecker {
         Ok(None)
     }
 
-    fn delete(&mut self, wb: &WriteBatch, cf: &str, key: &[u8], ts: Option<u64>) -> Result<()> {
+    fn delete(
+        &mut self,
+        wb: &WriteBatch,
+        cf: &str,
+        key: &[u8],
+        ts: Option<TimeStamp>,
+    ) -> Result<()> {
         let handle = box_try!(get_cf_handle(self.db.as_ref(), cf));
         match ts {
             Some(ts) => {
@@ -1244,7 +1250,7 @@ impl MvccInfoIterator {
                 LockType::Lock => lock_info.set_type(Op::Lock),
                 LockType::Pessimistic => lock_info.set_type(Op::PessimisticLock),
             }
-            lock_info.set_start_ts(lock.ts);
+            lock_info.set_start_ts(lock.ts.into_inner());
             lock_info.set_primary(lock.primary);
             lock_info.set_short_value(lock.short_value.unwrap_or_default());
             return Ok(Some((key, lock_info)));
@@ -1258,7 +1264,7 @@ impl MvccInfoIterator {
             for (key, value) in vec_kv {
                 let mut value_info = MvccValue::default();
                 let start_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
-                value_info.set_start_ts(start_ts);
+                value_info.set_start_ts(start_ts.into_inner());
                 value_info.set_value(value);
                 values.push(value_info);
             }
@@ -1279,9 +1285,9 @@ impl MvccInfoIterator {
                     WriteType::Lock => write_info.set_type(Op::Lock),
                     WriteType::Rollback => write_info.set_type(Op::Rollback),
                 }
-                write_info.set_start_ts(write.start_ts);
+                write_info.set_start_ts(write.start_ts.into_inner());
                 let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
-                write_info.set_commit_ts(commit_ts);
+                write_info.set_commit_ts(commit_ts.into_inner());
                 write_info.set_short_value(write.short_value.unwrap_or_default());
                 writes.push(write_info);
             }
@@ -1805,7 +1811,11 @@ mod tests {
         let debugger = new_debugger();
         let engine = &debugger.engines.kv;
 
-        let cf_default_data = vec![(b"k1", b"v", 5), (b"k2", b"x", 10), (b"k3", b"y", 15)];
+        let cf_default_data = vec![
+            (b"k1", b"v", 5.into()),
+            (b"k2", b"x", 10.into()),
+            (b"k3", b"y", 15.into()),
+        ];
         for &(prefix, value, ts) in &cf_default_data {
             let encoded_key = Key::from_raw(prefix).append_ts(ts);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
@@ -1814,14 +1824,23 @@ mod tests {
 
         let lock_cf = engine.cf_handle(CF_LOCK).unwrap();
         let cf_lock_data = vec![
-            (b"k1", LockType::Put, b"v", 5),
-            (b"k4", LockType::Lock, b"x", 10),
-            (b"k5", LockType::Delete, b"y", 15),
+            (b"k1", LockType::Put, b"v", 5.into()),
+            (b"k4", LockType::Lock, b"x", 10.into()),
+            (b"k5", LockType::Delete, b"y", 15.into()),
         ];
         for &(prefix, tp, value, version) in &cf_lock_data {
             let encoded_key = Key::from_raw(prefix);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            let lock = Lock::new(tp, value.to_vec(), version, 0, None, 0, 0, 0);
+            let lock = Lock::new(
+                tp,
+                value.to_vec(),
+                version,
+                0,
+                None,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+            );
             let value = lock.to_bytes();
             engine
                 .put_cf(lock_cf, key.as_slice(), value.as_slice())
@@ -1830,10 +1849,10 @@ mod tests {
 
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
         let cf_write_data = vec![
-            (b"k2", WriteType::Put, 5, 10),
-            (b"k3", WriteType::Put, 15, 20),
-            (b"k6", WriteType::Lock, 25, 30),
-            (b"k7", WriteType::Rollback, 35, 40),
+            (b"k2", WriteType::Put, 5.into(), 10.into()),
+            (b"k3", WriteType::Put, 15.into(), 20.into()),
+            (b"k6", WriteType::Lock, 25.into(), 30.into()),
+            (b"k7", WriteType::Rollback, 35.into(), 40.into()),
         ];
         for &(prefix, tp, start_ts, commit_ts) in &cf_write_data {
             let encoded_key = Key::from_raw(prefix).append_ts(commit_ts);
@@ -2207,7 +2226,7 @@ mod tests {
         for (key, ts, expect) in default {
             kv.push((
                 CF_DEFAULT,
-                Key::from_raw(key).append_ts(ts),
+                Key::from_raw(key).append_ts(ts.into()),
                 b"v".to_vec(),
                 expect,
             ));
@@ -2218,7 +2237,16 @@ mod tests {
             } else {
                 None
             };
-            let lock = Lock::new(tp, vec![], ts, 0, v, 0, 0, 0);
+            let lock = Lock::new(
+                tp,
+                vec![],
+                ts.into(),
+                0,
+                v,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+            );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
         }
         for (key, start_ts, commit_ts, tp, short_value, expect) in write {
@@ -2227,10 +2255,10 @@ mod tests {
             } else {
                 None
             };
-            let write = Write::new(tp, start_ts, v);
+            let write = Write::new(tp, start_ts.into(), v);
             kv.push((
                 CF_WRITE,
-                Key::from_raw(key).append_ts(commit_ts),
+                Key::from_raw(key).append_ts(commit_ts.into()),
                 write.as_ref().to_bytes(),
                 expect,
             ));
