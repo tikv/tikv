@@ -282,3 +282,52 @@ fn test_node_request_snapshot_on_split() {
         committed_index
     );
 }
+
+#[test]
+fn test_destroy_peer_on_pending_snapshot() {
+    let _guard = crate::setup();
+
+    let mut cluster = new_server_cluster(0, 4);
+    configure_for_snapshot(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    for i in 0..10 {
+        cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
+    }
+
+    let apply_snapshot_fp = "apply_pending_snapshot";
+    fail::cfg(apply_snapshot_fp, "return()").unwrap();
+
+    cluster.clear_send_filters();
+    // wait for leader send snapshot
+    sleep_ms(100);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+
+    pd_client.must_remove_peer(r1, new_peer(3, 3));
+    pd_client.must_add_peer(r1, new_peer(4, 4));
+
+    pd_client.must_remove_peer(r1, new_peer(4, 4));
+    pd_client.must_add_peer(r1, new_peer(3, 5));
+
+    let destroy_peer_fp = "destroy_peer";
+    fail::cfg(destroy_peer_fp, "sleep(100)").unwrap();
+    cluster.clear_send_filters();
+
+    sleep_ms(200);
+
+    fail::remove(apply_snapshot_fp);
+
+    must_get_equal(&cluster.get_engine(3), b"k19", b"v1");
+}
