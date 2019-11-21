@@ -66,7 +66,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
                 None,
                 1,
                 false,
-                ts_generator.next().unwrap()
+                ts_generator.next().unwrap(),
             )
             .unwrap()
             .is_empty())

@@ -23,6 +23,7 @@ struct Writer {
     total_kvs: u64,
     total_bytes: u64,
     checksum: u64,
+    digest: crc64fast::Digest,
 }
 
 impl Writer {
@@ -32,6 +33,7 @@ impl Writer {
             total_kvs: 0,
             total_bytes: 0,
             checksum: 0,
+            digest: crc64fast::Digest::new(),
         }
     }
 
@@ -51,7 +53,7 @@ impl Writer {
                 .into_kvpair()
                 .map_err(|err| Error::Other(box_err!("Decode error: {:?}", err)))?;
             self.total_bytes += (k.len() + v.len()) as u64;
-            self.checksum = checksum_crc64_xor(self.checksum, &[], &k, &v);
+            self.checksum = checksum_crc64_xor(self.checksum, self.digest.clone(), &k, &v);
         }
         Ok(())
     }

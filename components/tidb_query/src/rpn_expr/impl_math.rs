@@ -11,6 +11,14 @@ pub fn pi() -> Result<Option<Real>> {
     Ok(Some(Real::from(std::f64::consts::PI)))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn crc32(arg: &Option<Bytes>) -> Result<Option<Int>> {
+    Ok(arg
+        .as_ref()
+        .map(|bytes| i64::from(tikv_util::file::calc_crc32_bytes(&bytes))))
+}
+
 #[inline]
 #[rpn_fn]
 pub fn log_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
@@ -356,6 +364,28 @@ mod tests {
             .evaluate(ScalarFuncSig::Pi)
             .unwrap();
         assert_eq!(output, Some(Real::from(std::f64::consts::PI)));
+    }
+
+    #[test]
+    fn test_crc32() {
+        let cases = vec![
+            (Some(""), Some(0)),
+            (Some("-1"), Some(808273962)),
+            (Some("mysql"), Some(2501908538)),
+            (Some("MySQL"), Some(3259397556)),
+            (Some("hello"), Some(907060870)),
+            (Some("❤️"), Some(4067711813)),
+            (None, None),
+        ];
+
+        for (input, expect) in cases {
+            let input = input.map(|s| s.as_bytes().to_vec());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Crc32)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
     }
 
     #[test]

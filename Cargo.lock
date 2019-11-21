@@ -116,6 +116,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "crc64fast",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -124,6 +125,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -491,6 +493,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc64fast"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a82510de0a7cadd51dc68ff17da70aea0c80157f902230f9b157cecc2566318"
+
+[[package]]
 name = "criterion"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -719,7 +727,6 @@ dependencies = [
 name = "engine"
 version = "0.0.1"
 dependencies = [
- "crc",
  "engine_traits",
  "hex",
  "kvproto",
@@ -745,7 +752,6 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
- "crc",
  "engine",
  "engine_traits",
  "hex",
@@ -1367,6 +1373,7 @@ dependencies = [
  "hex",
  "kvproto",
  "panic_hook",
+ "slog",
  "tikv_alloc",
  "tikv_util",
 ]
@@ -1440,7 +1447,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#2824667e40fbc1918eb7590fe1e2f0f678458789"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3c11d292d545c5a028d621507d8479dbb4ef2945"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1457,7 +1464,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#2824667e40fbc1918eb7590fe1e2f0f678458789"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3c11d292d545c5a028d621507d8479dbb4ef2945"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1974,6 +1981,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "lazy_static",
  "log",
@@ -2626,7 +2634,7 @@ checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#2824667e40fbc1918eb7590fe1e2f0f678458789"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3c11d292d545c5a028d621507d8479dbb4ef2945"
 dependencies = [
  "crc",
  "libc",
@@ -2931,7 +2939,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sst_importer"
 version = "0.1.0"
 dependencies = [
- "crc",
+ "crc32fast",
  "engine_traits",
  "external_storage",
  "futures",
@@ -3173,6 +3181,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "pd_client",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3191,7 +3200,7 @@ dependencies = [
 name = "test_sst_importer"
 version = "0.1.0"
 dependencies = [
- "crc",
+ "crc32fast",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -3205,6 +3214,7 @@ name = "test_storage"
 version = "0.0.1"
 dependencies = [
  "futures",
+ "keys",
  "kvproto",
  "test_raftstore",
  "tikv",
@@ -3253,7 +3263,6 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "codec",
- "crc",
  "derive_more",
  "failure",
  "flate2",
@@ -3325,11 +3334,13 @@ dependencies = [
  "bytes",
  "chrono",
  "codec",
- "crc",
+ "crc32fast",
+ "crc64fast",
  "criterion",
  "criterion-cpu-time",
  "criterion-papi",
  "crossbeam",
+ "derive-new",
  "derive_more",
  "engine",
  "engine_rocks",
@@ -3428,7 +3439,7 @@ dependencies = [
  "backtrace",
  "byteorder",
  "chrono",
- "crc",
+ "crc32fast",
  "crossbeam",
  "fail",
  "futures",
