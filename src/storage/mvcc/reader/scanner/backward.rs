@@ -7,7 +7,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::Result;
+use crate::storage::mvcc::{Result, WriteRef};
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
 use super::ScannerConfig;
@@ -211,11 +211,11 @@ impl<S: Snapshot> BackwardScanner<S> {
                 return Ok(self.handle_last_version(last_version, user_key)?);
             }
 
-            let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
 
             match write.write_type {
-                WriteType::Put | WriteType::Delete => last_version = Some(write),
+                WriteType::Put | WriteType::Delete => last_version = Some(write.to_owned()),
                 WriteType::Lock | WriteType::Rollback => {}
             }
         }
@@ -256,11 +256,12 @@ impl<S: Snapshot> BackwardScanner<S> {
                 return Ok(self.handle_last_version(last_version, user_key)?);
             }
 
-            let write = Write::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
 
             match write.write_type {
                 WriteType::Put => {
+                    let write = write.to_owned();
                     return Ok(Some(self.reverse_load_data_by_write(write, user_key)?));
                 }
                 WriteType::Delete => return Ok(None),
@@ -311,7 +312,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                 let value = super::near_reverse_load_data_by_write(
                     &mut self.default_cursor.as_mut().unwrap(),
                     user_key,
-                    write,
+                    write.start_ts,
                     &mut self.statistics,
                 )?;
                 Ok(value)
