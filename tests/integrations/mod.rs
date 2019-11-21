@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(test)]
+#![feature(box_patterns)]
 
 extern crate test;
 
