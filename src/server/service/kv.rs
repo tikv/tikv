@@ -60,9 +60,9 @@ const REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO: f64 = 0.4; // against latenc
 const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.2; // ms
 const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_PENDING_COMMANDS: usize = 300;
 
-// Total bytes of a write batch will be limited below this value.
-const WRITE_BATCH_WRITE_BYTES_LIMIT: usize = 2097152; // 2MB
-                                                      // Only batch write request with key count smaller than this value.
+// Total bytes of a write batch will be limited below this value (2MB).
+const WRITE_BATCH_WRITE_BYTES_LIMIT: usize = 2097152;
+// Only batch write request with key count smaller than this value.
 const WRITE_BATCH_SINGLE_REQUEST_SIZE_LIMIT: usize = 16;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
