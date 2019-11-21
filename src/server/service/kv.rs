@@ -54,11 +54,14 @@ const REQUEST_LOAD_ESTIMATE_SMALL_SAMPLE_WINDOW: usize = 30;
 const REQUEST_LOAD_ESTIMATE_LARGE_SAMPLE_WINDOW: usize = 70;
 const REQUEST_LOAD_ESTIMATE_THREAD_LOAD_SAMPLE_BAR: usize = 70;
 const REQUEST_LOAD_ESTIMATE_LOW_THREAD_LOAD_RATIO: f64 = 0.25;
-const REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO: f64 = 0.4; // against jittering
-const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.2;
+const REQUEST_LOAD_ESTIMATE_LOW_PRIMARY_LOAD_RATIO: f64 = 0.4; // against latency jittering
+const REQUEST_LOAD_ESTIMATE_READ_HIGH_LATENCY: f64 = 2.2; // ms
 const REQUEST_LOAD_ESTIMATE_WRITE_HIGH_PENDING_COMMANDS: usize = 300;
 
+// Total bytes of a write batch will be limited below this value.
 const WRITE_BATCH_WRITE_BYTES_LIMIT: usize = 2097152; // 2MB
+                                                      // Only batch write request with key count smaller than this value.
+const WRITE_BATCH_SINGLE_REQUEST_SIZE_LIMIT: usize = 16;
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 struct RegionVerId {
@@ -546,22 +549,6 @@ impl WriteBatch {
     }
 }
 
-impl Default for WriteBatch {
-    fn default() -> Self {
-        WriteBatch {
-            command: Command {
-                ctx: Context::default(),
-                kind: CommandKind::Batch {
-                    ids: Vec::new(),
-                    commands: Vec::new(),
-                },
-            },
-            key_set: HashSet::default(),
-            write_bytes: 0,
-        }
-    }
-}
-
 struct WriteBatcher {
     cmd: BatchableRequestKind,
     router: HashMap<WriteId, WriteBatch>,
@@ -581,7 +568,14 @@ impl WriteBatcher {
 
     fn is_batchable_prewrite(req: &PrewriteRequest) -> bool {
         // only batch optimistic prewrite
-        req.get_for_update_ts() == 0 && Self::is_batchable_context(req.get_context())
+        req.get_for_update_ts() == 0
+            && req.get_mutations().len() < WRITE_BATCH_SINGLE_REQUEST_SIZE_LIMIT
+            && Self::is_batchable_context(req.get_context())
+    }
+
+    fn is_batchable_commit(req: &CommitRequest) -> bool {
+        req.get_keys().len() < WRITE_BATCH_SINGLE_REQUEST_SIZE_LIMIT
+            && Self::is_batchable_context(req.get_context())
     }
 }
 
@@ -607,8 +601,7 @@ impl<E: Engine, L: LockManager> Batcher<E, L> for WriteBatcher {
                 )
             }
             batch_commands_request::request::Cmd::Commit(req)
-                if self.cmd == BatchableRequestKind::Commit
-                    && Self::is_batchable_context(req.get_context()) =>
+                if self.cmd == BatchableRequestKind::Commit && Self::is_batchable_commit(req) =>
             {
                 (
                     req.get_context().clone(),
