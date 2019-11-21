@@ -23,7 +23,7 @@ fn test_gcworker_busy() {
         gc_worker
             .async_gc(
                 ctx.clone(),
-                1,
+                1.into(),
                 Box::new(move |res: storage::Result<()>| {
                     assert!(res.is_ok());
                     tx1.send(1).unwrap();
@@ -38,7 +38,7 @@ fn test_gcworker_busy() {
     gc_worker
         .async_gc(
             ctx.clone(),
-            1,
+            1.into(),
             Box::new(move |res: storage::Result<()>| {
                 assert!(res.is_ok());
                 tx1.send(1).unwrap();
@@ -51,10 +51,10 @@ fn test_gcworker_busy() {
     gc_worker
         .async_gc(
             Context::default(),
-            1,
+            1.into(),
             Box::new(move |res: storage::Result<()>| {
                 match res {
-                    Err(storage::Error::GCWorkerTooBusy) => {}
+                    Err(storage::Error(box storage::ErrorInner::GCWorkerTooBusy)) => {}
                     res => panic!("expect too busy, got {:?}", res),
                 }
                 tx2.send(1).unwrap();

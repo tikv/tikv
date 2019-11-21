@@ -895,8 +895,8 @@ mod tests {
         // Write some mvcc keys and values into db
         // default_cf : a_7, b_7
         // write_cf : a_8, b_8
-        let start_ts = 7;
-        let commit_ts = 8;
+        let start_ts = 7.into();
+        let commit_ts = 8.into();
         let write = Write::new(WriteType::Put, start_ts, None);
         let db = &engines.kv;
         let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
@@ -910,7 +910,7 @@ mod tests {
         db.put_cf(
             &write_cf,
             &data_key(Key::from_raw(b"a").append_ts(commit_ts).as_encoded()),
-            &write.to_bytes(),
+            &write.as_ref().to_bytes(),
         )
         .unwrap();
         db.put_cf(
@@ -922,7 +922,7 @@ mod tests {
         db.put_cf(
             &write_cf,
             &data_key(Key::from_raw(b"b").append_ts(commit_ts).as_encoded()),
-            &write.to_bytes(),
+            &write.as_ref().to_bytes(),
         )
         .unwrap();
 
@@ -1091,7 +1091,7 @@ mod tests {
         r.set_start_key(b"a".to_vec());
         r.set_end_key(b"z".to_vec());
         let snapshot = RegionSnapshot::from_raw(Arc::clone(&engines1.kv), r);
-        let mut scanner = ScannerBuilder::new(snapshot, 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(Some(Key::from_raw(b"a")), None)
             .build()
             .unwrap();
