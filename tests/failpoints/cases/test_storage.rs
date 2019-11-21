@@ -41,7 +41,7 @@ fn test_scheduler_leader_change_twice() {
             ctx0,
             vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
             b"k".to_vec(),
-            10,
+            10.into(),
             Options::default(),
             Box::new(move |res: storage::Result<_>| {
                 prewrite_tx.send(res).unwrap();

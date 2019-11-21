@@ -15,6 +15,7 @@ use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{
     Engine, Error as StorageError, ErrorInner as SotrageErrorInner, Key, Mutation,
 };
+use tikv::storage::{self, kv, mvcc, txn, Engine, Key, Mutation, TimeStamp};
 use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 
@@ -204,8 +205,9 @@ fn write_test_data<E: Engine>(
     storage: &SyncTestStorage<E>,
     ctx: &Context,
     data: &[(Vec<u8>, Vec<u8>)],
-    mut ts: u64,
+    ts: impl Into<TimeStamp>,
 ) {
+    let mut ts = ts.into();
     for (k, v) in data {
         storage
             .prewrite(
@@ -218,9 +220,9 @@ fn write_test_data<E: Engine>(
             .into_iter()
             .for_each(|res| res.unwrap());
         storage
-            .commit(ctx.clone(), vec![Key::from_raw(k)], ts, ts + 1)
+            .commit(ctx.clone(), vec![Key::from_raw(k)], ts, ts.next())
             .unwrap();
-        ts += 2;
+        ts.incr().incr();
     }
 }
 
@@ -228,9 +230,10 @@ fn check_data<E: Engine>(
     cluster: &mut Cluster<ServerCluster>,
     storages: &HashMap<u64, SyncTestStorage<E>>,
     test_data: &[(Vec<u8>, Vec<u8>)],
-    ts: u64,
+    ts: impl Into<TimeStamp>,
     expect_success: bool,
 ) {
+    let ts = ts.into();
     for (k, v) in test_data {
         let mut region = cluster.get_region(k);
         let leader = cluster.leader_of_region(region.get_id()).unwrap();

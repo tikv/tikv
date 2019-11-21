@@ -2,6 +2,7 @@
 
 use super::super::types::Value;
 use super::lock::LockType;
+use super::{Error, Result, TimeStamp};
 use super::{Error, ErrorInner, Result};
 use crate::storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use codec::prelude::NumberDecoder;
@@ -56,7 +57,7 @@ impl WriteType {
 #[derive(PartialEq, Clone)]
 pub struct Write {
     pub write_type: WriteType,
-    pub start_ts: u64,
+    pub start_ts: TimeStamp,
     pub short_value: Option<Value>,
 }
 
@@ -80,7 +81,7 @@ impl std::fmt::Debug for Write {
 impl Write {
     /// Creates a new `Write` record.
     #[inline]
-    pub fn new(write_type: WriteType, start_ts: u64, short_value: Option<Value>) -> Write {
+    pub fn new(write_type: WriteType, start_ts: TimeStamp, short_value: Option<Value>) -> Write {
         Write {
             write_type,
             start_ts,
@@ -89,7 +90,7 @@ impl Write {
     }
 
     #[inline]
-    pub fn new_rollback(start_ts: u64, protected: bool) -> Write {
+    pub fn new_rollback(start_ts: TimeStamp, protected: bool) -> Write {
         let short_value = if protected {
             Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec())
         } else {
@@ -124,7 +125,7 @@ impl Write {
 #[derive(PartialEq, Clone)]
 pub struct WriteRef<'a> {
     pub write_type: WriteType,
-    pub start_ts: u64,
+    pub start_ts: TimeStamp,
     pub short_value: Option<&'a [u8]>,
 }
 
@@ -137,7 +138,7 @@ impl WriteRef<'_> {
             .ok_or_else(|| Error::from(ErrorInner::BadFormatWrite))?;
         let start_ts = b
             .read_var_u64()
-            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?.into();
         if b.is_empty() {
             return Ok(WriteRef {
                 write_type,
@@ -172,7 +173,7 @@ impl WriteRef<'_> {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2);
         b.push(self.write_type.to_u8());
-        b.encode_var_u64(self.start_ts).unwrap();
+        b.encode_var_u64(self.start_ts.into_inner()).unwrap();
         if let Some(v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
             b.push(v.len() as u8);
@@ -242,10 +243,10 @@ mod tests {
     fn test_write() {
         // Test `Write::to_bytes()` and `Write::parse()` works as a pair.
         let mut writes = vec![
-            Write::new(WriteType::Put, 0, Some(b"short_value".to_vec())),
-            Write::new(WriteType::Delete, 1 << 20, None),
-            Write::new_rollback(1 << 40, true),
-            Write::new(WriteType::Rollback, 1 << 41, None),
+            Write::new(WriteType::Put, 0.into(), Some(b"short_value".to_vec())),
+            Write::new(WriteType::Delete, (1 << 20).into(), None),
+            Write::new_rollback((1 << 40).into(), true),
+            Write::new(WriteType::Rollback, (1 << 41).into(), None),
         ];
         for (i, write) in writes.drain(..).enumerate() {
             let v = write.as_ref().to_bytes();
@@ -259,7 +260,7 @@ mod tests {
         // Test `Write::parse()` handles incorrect input.
         assert!(WriteRef::parse(b"").is_err());
 
-        let lock = Write::new(WriteType::Lock, 1, Some(b"short_value".to_vec()));
+        let lock = Write::new(WriteType::Lock, 1.into(), Some(b"short_value".to_vec()));
         let v = lock.as_ref().to_bytes();
         assert!(WriteRef::parse(&v[..1]).is_err());
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
@@ -267,11 +268,11 @@ mod tests {
 
     #[test]
     fn test_is_protected() {
-        assert!(Write::new_rollback(1, true).as_ref().is_protected());
-        assert!(!Write::new_rollback(2, false).as_ref().is_protected());
+        assert!(Write::new_rollback(1.into(), true).as_ref().is_protected());
+        assert!(!Write::new_rollback(2.into(), false).as_ref().is_protected());
         assert!(!Write::new(
             WriteType::Put,
-            3,
+            3.into(),
             Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec())
         )
         .as_ref()
