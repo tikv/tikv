@@ -3,9 +3,7 @@
 use std::fmt::{self, Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
-use std::mem;
 
-use engine::rocks::Snapshot as RawSnapshot;
 use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot, SyncSnapshot};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
@@ -16,15 +14,10 @@ use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
 use crate::RocksEngineIterator;
 
-#[repr(C)] // Guarantee same representation as in engine/rocks
 pub struct RocksSnapshot {
-    // TODO: use &DB.
     db: Arc<DB>,
     snap: UnsafeSnap,
 }
-
-static_assertions::assert_eq_size!(RocksSnapshot, RawSnapshot);
-static_assertions::assert_eq_align!(RocksSnapshot, RawSnapshot);
 
 unsafe impl Send for RocksSnapshot {}
 unsafe impl Sync for RocksSnapshot {}
@@ -37,18 +30,6 @@ impl RocksSnapshot {
                 db,
             }
         }
-    }
-
-    pub fn from_raw(raw: RawSnapshot) -> RocksSnapshot {
-        unsafe { mem::transmute(raw) }
-    }
-
-    pub fn from_ref(raw: &RawSnapshot) -> &RocksSnapshot {
-        unsafe { &*(raw as *const _ as *const _) }
-    }
-
-    pub fn as_raw(&self) -> &RawSnapshot {
-        unsafe { &*(self as *const _ as *const _) }
     }
 }
 

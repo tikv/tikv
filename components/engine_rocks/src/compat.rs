@@ -1,8 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::engine::RocksEngine;
-use crate::snapshot::RocksSnapshot;
-use engine::Snapshot as RawSnapshot;
 use engine::DB;
 use std::sync::Arc;
 
@@ -23,14 +21,5 @@ impl Compat for Arc<DB> {
     #[inline]
     fn c(&self) -> &RocksEngine {
         RocksEngine::from_ref(self)
-    }
-}
-
-impl Compat for RawSnapshot {
-    type Other = RocksSnapshot;
-
-    #[inline]
-    fn c(&self) -> &RocksSnapshot {
-        RocksSnapshot::from_ref(self)
     }
 }

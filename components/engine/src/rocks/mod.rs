@@ -4,9 +4,6 @@ mod db;
 
 pub mod util;
 
-mod snapshot;
-pub use self::snapshot::*;
-
 pub use rocksdb::rocksdb_options::UnsafeSnap;
 pub use rocksdb::{
     load_latest_options, rocksdb::supported_compression, run_ldb_tool,
