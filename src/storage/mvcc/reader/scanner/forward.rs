@@ -7,7 +7,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{WriteRef, WriteType};
-use crate::storage::mvcc::Result;
+use crate::storage::mvcc::{Result, TimeStamp};
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
 use super::ScannerConfig;
@@ -200,7 +200,7 @@ impl<S: Snapshot> ForwardScanner<S> {
     fn get(
         &mut self,
         user_key: &Key,
-        ts: u64,
+        ts: TimeStamp,
         met_next_user_key: &mut bool,
     ) -> Result<Option<Value>> {
         assert!(self.write_cursor.valid()?);
@@ -335,7 +335,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         // `current_user_key` must have reserved space here, so its clone has reserved space too.
         // So no reallocation happens in `append_ts`.
         self.write_cursor.internal_seek(
-            &current_user_key.clone().append_ts(0),
+            &current_user_key.clone().append_ts(TimeStamp::zero()),
             &mut self.statistics.write,
         )?;
 
@@ -378,7 +378,7 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
             .build()
             .unwrap();
@@ -432,7 +432,7 @@ mod tests {
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2, false)
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
             .build()
             .unwrap();
@@ -495,7 +495,7 @@ mod tests {
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2, false)
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
             .build()
             .unwrap();
@@ -564,7 +564,7 @@ mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build()
             .unwrap();
@@ -579,7 +579,7 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test left bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(None, Some(Key::from_raw(&[3u8])))
             .build()
             .unwrap();
@@ -594,7 +594,7 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test right bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(Some(Key::from_raw(&[5u8])), None)
             .build()
             .unwrap();
@@ -609,7 +609,7 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(None, None)
             .build()
             .unwrap();
