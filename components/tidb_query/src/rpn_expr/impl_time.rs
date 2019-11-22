@@ -5,6 +5,7 @@ use tidb_query_codegen::rpn_fn;
 use super::super::expr::EvalContext;
 
 use crate::codec::data_type::*;
+use crate::codec::mysql::time::extension::DateTimeExtension;
 use crate::codec::Error;
 use crate::Result;
 
@@ -51,12 +52,28 @@ pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<In
     Ok(Some(i64::from(day)))
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn to_days(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    if t.is_none() {
+        return Ok(None);
+    }
+    let t = t.as_ref().unwrap();
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .map(|_| Ok(None))?;
+    }
+    Ok(Some(i64::from(t.day_number())))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use tipb::ScalarFuncSig;
 
+    use crate::codec::mysql::Time;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
@@ -206,6 +223,42 @@ mod tests {
         let output = RpnFnScalarEvaluator::new()
             .push_param(None::<DateTime>)
             .evaluate::<Int>(ScalarFuncSig::WeekDay)
+            .unwrap();
+        assert_eq!(output, None);
+    }
+
+    #[test]
+    fn test_to_days() {
+        let cases = vec![
+            ("950501", Some(728779)),
+            ("2007-10-07", Some(733321)),
+            ("2008-10-07", Some(733687)),
+            ("08-10-07", Some(733687)),
+            ("0000-01-01", Some(1)),
+            ("2007-10-07 00:00:59", Some(733321)),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let time = Some(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(time.clone())
+                .evaluate(ScalarFuncSig::ToDays)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+
+        // test NULL case
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<Time>)
+            .evaluate::<Int>(ScalarFuncSig::ToDays)
+            .unwrap();
+        assert_eq!(output, None);
+
+        // test ZERO case
+        let time = Some(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 6, true).unwrap());
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(time)
+            .evaluate::<Int>(ScalarFuncSig::ToDays)
             .unwrap();
         assert_eq!(output, None);
     }
