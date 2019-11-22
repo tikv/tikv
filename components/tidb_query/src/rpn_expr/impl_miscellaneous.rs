@@ -65,6 +65,7 @@ pub fn is_ipv6(addr: &Option<Bytes>) -> Result<Option<Int>> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
@@ -81,6 +82,12 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect);
         }
+
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<Bytes>)
+            .evaluate(ScalarFuncSig::IsIPv4)
+            .unwrap();
+        assert_eq!(output, Some(0));
     }
 
     #[test]
@@ -133,5 +140,11 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect);
         }
+
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<Bytes>)
+            .evaluate(ScalarFuncSig::IsIPv6)
+            .unwrap();
+        assert_eq!(output, Some(0));
     }
 }
