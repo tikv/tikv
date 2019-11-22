@@ -609,8 +609,8 @@ fn test_read_with_applied_index() {
     // Drop all append messages to peer 3, so that it will receives a snapshot later.
     let filter = Box::new(
         RegionPacketFilter::new(r1.get_id(), 3)
-        .direction(Direction::Recv)
-        .msg_type(MessageType::MsgAppend)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
     );
     cluster.sim.wl().add_recv_filter(3, filter);
 
