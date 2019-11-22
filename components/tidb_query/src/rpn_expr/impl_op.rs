@@ -3,6 +3,7 @@
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::codec::Error;
 use crate::Result;
 
 #[rpn_fn]
@@ -39,7 +40,7 @@ pub fn logical_xor(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>
 
 #[rpn_fn]
 #[inline]
-pub fn unary_not_int(arg: &Option<i64>) -> Result<Option<i64>> {
+pub fn unary_not_int(arg: &Option<Int>) -> Result<Option<i64>> {
     Ok(arg.map(|v| (v == 0) as i64))
 }
 
@@ -53,6 +54,33 @@ pub fn unary_not_real(arg: &Option<Real>) -> Result<Option<i64>> {
 #[inline]
 pub fn unary_not_decimal(arg: &Option<Decimal>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|v| v.is_zero() as i64))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_minus_int(arg: &Option<Int>) -> Result<Option<Int>> {
+    match arg {
+        Some(v) => {
+            if *v == std::i64::MIN {
+                Err(Error::overflow("BIGINT", &format!("-{}", v)).into())
+            } else {
+                Ok(Some(-*v))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_minus_real(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map(|v| -v))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_minus_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
+    Ok(arg.as_ref().map(|v| -v.clone()))
 }
 
 #[rpn_fn]
@@ -162,9 +190,9 @@ fn right_shift(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::codec::mysql::TimeType;
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
 
@@ -275,6 +303,72 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.clone())
                 .evaluate(ScalarFuncSig::UnaryNotDecimal)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
+    fn test_unary_minus_int() {
+        let test_cases = vec![
+            (None, None),
+            (Some(std::i64::MAX), Some(-std::i64::MAX)),
+            (Some(-std::i64::MAX), Some(std::i64::MAX)),
+            (Some(std::i64::MIN + 1), Some(std::i64::MAX)),
+            (Some(0), Some(0)),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+        assert!(RpnFnScalarEvaluator::new()
+            .push_param(std::i64::MIN)
+            .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+            .is_err());
+    }
+
+    #[test]
+    fn test_unary_minus_real() {
+        let test_cases = vec![
+            (None, None),
+            (Some(Real::from(0.123_f64)), Some(Real::from(-0.123_f64))),
+            (Some(Real::from(-0.123_f64)), Some(Real::from(0.123_f64))),
+            (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
+            (
+                Some(Real::from(std::f64::INFINITY)),
+                Some(Real::from(std::f64::NEG_INFINITY)),
+            ),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Real>(ScalarFuncSig::UnaryMinusReal)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
+    fn test_unary_minus_decimal() {
+        let test_cases = vec![
+            (None, None),
+            (Some(Decimal::zero()), Some(Decimal::zero())),
+            (
+                "0.123".parse::<Decimal>().ok(),
+                "-0.123".parse::<Decimal>().ok(),
+            ),
+            (
+                "-0.123".parse::<Decimal>().ok(),
+                "0.123".parse::<Decimal>().ok(),
+            ),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate::<Decimal>(ScalarFuncSig::UnaryMinusDecimal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
