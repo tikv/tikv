@@ -93,6 +93,23 @@ pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     }))
 }
 
+#[rpn_fn(varg, min_args = 3)]
+#[inline]
+pub fn replace(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+    if args.iter().any(|arg| arg.is_none()) {
+        return Ok(None);
+    }
+    let s = String::from_utf8_lossy(args[0].as_ref().unwrap());
+    let from_str = String::from_utf8_lossy(args[1].as_ref().unwrap());
+    let to_str = String::from_utf8_lossy(args[2].as_ref().unwrap());
+    if from_str.is_empty() {
+        return Ok(Some(s.into_owned().into_bytes()));
+    }
+    Ok(Some(
+        s.replace(from_str.as_ref(), to_str.as_ref()).into_bytes(),
+    ))
+}
+
 #[rpn_fn]
 #[inline]
 pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
@@ -413,6 +430,50 @@ mod tests {
                 .evaluate(ScalarFuncSig::RTrim)
                 .unwrap();
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+    }
+
+    #[test]
+    fn test_replace() {
+        let cases = vec![
+            (vec![None, Some("a"), Some("b")], None),
+            (vec![Some("a"), None, Some("b")], None),
+            (vec![Some("a"), Some("b"), None], None),
+            (
+                vec![Some("www.mysql.com"), Some("mysql"), Some("pingcap")],
+                Some("www.pingcap.com"),
+            ),
+            (
+                vec![Some("www.mysql.com"), Some("w"), Some("1")],
+                Some("111.mysql.com"),
+            ),
+            (vec![Some("1234"), Some("2"), Some("55")], Some("15534")),
+            (vec![Some(""), Some("a"), Some("b")], Some("")),
+            (vec![Some("abc"), Some(""), Some("d")], Some("abc")),
+            (vec![Some("aaa"), Some("a"), Some("")], Some("")),
+            (vec![Some("aaa"), Some("a"), Some("")], Some("")),
+            (
+                vec![Some("新年快乐"), Some("年"), Some("春")],
+                Some("新春快乐"),
+            ),
+            (
+                vec![Some("心想事成"), Some("心"), Some("❤️")],
+                Some("❤️想事成"),
+            ),
+        ];
+
+        for (args, expect_output) in cases {
+            let params = args.iter().map(|arg| arg.map(|s| s.as_bytes().to_vec()));
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(params)
+                .evaluate(ScalarFuncSig::Replace)
+                .unwrap();
+            assert_eq!(
+                output,
+                expect_output.map(|s| s.as_bytes().to_vec()),
+                "args: {:?}",
+                args
+            );
         }
     }
 
