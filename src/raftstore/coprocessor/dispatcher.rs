@@ -380,6 +380,18 @@ mod tests {
         }
     }
 
+    impl ApplySnapshotObserver for TestCoprocessor {
+        fn pre_apply_plain_key(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &[u8]) {
+            self.called.fetch_add(9, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn pre_apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName) {
+            self.called.fetch_add(10, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+    }
+
     macro_rules! assert_all {
         ($target:expr, $expect:expr) => {{
             for (c, e) in ($target).iter().zip($expect) {
@@ -404,6 +416,8 @@ mod tests {
             .register_admin_observer(1, Box::new(ob.clone()));
         host.registry
             .register_query_observer(1, Box::new(ob.clone()));
+        host.registry
+            .register_apply_snapshot_observer(1, Box::new(ob.clone()));
         host.registry
             .register_role_observer(1, Box::new(ob.clone()));
         host.registry
@@ -434,6 +448,11 @@ mod tests {
 
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!(&[&ob.called], &[36]);
+
+        host.pre_apply_plain_key_from_snapshot(&region, "default", &[]);
+        assert_all!(&[&ob.called], &[45]);
+        host.pre_apply_sst_from_snapshot(&region, "default");
+        assert_all!(&[&ob.called], &[55]);
     }
 
     #[test]
