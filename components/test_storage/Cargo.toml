@@ -5,6 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
+keys = { path = "../keys" }
 tikv_util = { path = "../tikv_util" }
 tikv = { path = "../../", default-features = false }
 test_raftstore = { path = "../test_raftstore" }
