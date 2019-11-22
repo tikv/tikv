@@ -9,6 +9,7 @@ pub mod impl_control;
 pub mod impl_json;
 pub mod impl_like;
 pub mod impl_math;
+pub mod impl_miscellaneous;
 pub mod impl_op;
 pub mod impl_string;
 pub mod impl_time;
@@ -28,6 +29,7 @@ use self::impl_control::*;
 use self::impl_json::*;
 use self::impl_like::*;
 use self::impl_math::*;
+use self::impl_miscellaneous::*;
 use self::impl_op::*;
 use self::impl_string::*;
 use self::impl_time::*;
@@ -223,6 +225,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
+        ScalarFuncSig::WeekDay => week_day_fn_meta(),
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
         ScalarFuncSig::AbsReal => abs_real_fn_meta(),
@@ -236,6 +239,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::FloorDecToDec => floor_fn_meta::<FloorDecToDec>(),
         ScalarFuncSig::FloorIntToInt => floor_fn_meta::<FloorIntToInt>(),
         ScalarFuncSig::Pi => pi_fn_meta(),
+        ScalarFuncSig::Crc32 => crc32_fn_meta(),
         ScalarFuncSig::Log1Arg => log_1_arg_fn_meta(),
         ScalarFuncSig::Log2Args => log_2_arg_fn_meta(),
         ScalarFuncSig::Log2 => log2_fn_meta(),
@@ -285,6 +289,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonExtractSig => json_extract_fn_meta(),
         ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
         ScalarFuncSig::Bin => bin_fn_meta(),
+        ScalarFuncSig::IsIPv4Compat => is_ipv4_compat_fn_meta(),
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
         ScalarFuncSig::CastIntAsString |

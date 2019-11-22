@@ -3,7 +3,6 @@
 pub mod config;
 pub mod engine_metrics;
 mod event_listener;
-pub mod io_limiter;
 pub mod metrics_flusher;
 pub mod security;
 pub mod stats;
