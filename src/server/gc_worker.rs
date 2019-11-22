@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::mpsc;
@@ -9,10 +10,11 @@ use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::util::io_limiter::IOLimiter;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_rocks::RocksIOLimiter;
+use engine_traits::IOLimiter;
 use futures::Future;
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
@@ -23,10 +25,13 @@ use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
-use crate::storage::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
+use crate::storage::kv::{
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
+    Statistics,
+};
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
-use crate::storage::{Callback, Error, Key, Result};
+use crate::storage::{Callback, Error, ErrorInner, Key, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
@@ -167,7 +172,7 @@ struct GCRunner<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     /// Used to limit the write flow of GC.
-    limiter: Arc<Mutex<Option<IOLimiter>>>,
+    limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
 
     cfg: GCConfig,
 
@@ -179,7 +184,7 @@ impl<E: Engine> GCRunner<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        limiter: Arc<Mutex<Option<IOLimiter>>>,
+        limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
         cfg: GCConfig,
     ) -> Self {
         Self {
@@ -202,7 +207,7 @@ impl<E: Engine> GCRunner<E> {
                 Ok(snapshot)
             }
             Some((_, Err(e))) => Err(e),
-            None => Err(EngineError::Timeout(timeout)),
+            None => Err(EngineError::from(EngineErrorInner::Timeout(timeout))),
         }
         .map_err(Error::from)
     }
@@ -481,7 +486,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GCTask>) -> Result<()> {
     match e {
         ScheduleError::Full(mut task) => {
             GC_TOO_BUSY_COUNTER.inc();
-            (task.take_callback())(Err(Error::GCWorkerTooBusy));
+            (task.take_callback())(Err(Error::from(ErrorInner::GCWorkerTooBusy)));
             Ok(())
         }
         _ => Err(box_err!("failed to schedule gc task: {:?}", e)),
@@ -1099,7 +1104,7 @@ pub struct GCWorker<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     cfg: Option<GCConfig>,
-    limiter: Arc<Mutex<Option<IOLimiter>>>,
+    limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
 
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
@@ -1159,7 +1164,9 @@ impl<E: Engine> GCWorker<E> {
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
         let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
-            Some(IOLimiter::new(cfg.max_write_bytes_per_sec.0))
+            let bps = i64::try_from(cfg.max_write_bytes_per_sec.0)
+                .expect("snap_max_write_bytes_per_sec > i64::max_value");
+            Some(IOLimiter::new(bps))
         } else {
             None
         };
@@ -1255,13 +1262,13 @@ impl<E: Engine> GCWorker<E> {
             .or_else(handle_gc_task_schedule_error)
     }
 
-    pub fn change_io_limit(&self, limit: u64) -> Result<()> {
+    pub fn change_io_limit(&self, limit: i64) -> Result<()> {
         let mut limiter = self.limiter.lock().unwrap();
         if limit == 0 {
             limiter.take();
         } else {
             limiter
-                .get_or_insert_with(|| IOLimiter::new(limit))
+                .get_or_insert_with(|| RocksIOLimiter::new(limit))
                 .set_bytes_per_second(limit as i64);
         }
         info!("GC io limit changed"; "max_write_bytes_per_sec" => limit);

@@ -12,14 +12,15 @@ use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::lock_manager::{self, Lock, LockManager};
 use crate::storage::mvcc::{
-    Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
+    Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock, MvccReader, MvccTxn,
+    TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
-use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
+use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, ErrorInner, Result};
 use crate::storage::types::ProcessResult;
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    Command, CommandKind, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
-    ScanMode, Snapshot, Statistics, TxnStatus, Value,
+    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, Key,
+    MvccInfo, Result as StorageResult, ScanMode, Snapshot, Statistics, TxnStatus, Value,
 };
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
@@ -447,7 +448,9 @@ fn wake_up_waiters_if_needed<L: LockManager>(
 
 fn extract_lock_from_result(res: &StorageResult<()>) -> Lock {
     match res {
-        Err(StorageError::Txn(Error::Mvcc(MvccError::KeyIsLocked(info)))) => Lock {
+        Err(StorageError(box StorageErrorInner::Txn(Error(box ErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::KeyIsLocked(info),
+        )))))) => Lock {
             ts: info.get_lock_version().into(),
             hash: Key::from_raw(info.get_key()).gen_hash(),
         },
@@ -488,7 +491,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 for m in mutations {
                     match txn.prewrite(m, &primary, &options) {
                         Ok(_) => {}
-                        e @ Err(MvccError::KeyIsLocked { .. }) => {
+                        e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                             locks.push(e.map_err(Error::from).map_err(StorageError::from));
                         }
                         Err(e) => return Err(Error::from(e)),
@@ -503,7 +506,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                         &options,
                     ) {
                         Ok(_) => {}
-                        e @ Err(MvccError::KeyIsLocked { .. }) => {
+                        e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                             locks.push(e.map_err(Error::from).map_err(StorageError::from));
                         }
                         Err(e) => return Err(Error::from(e)),
@@ -535,7 +538,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for (k, should_not_exist) in keys {
                 match txn.acquire_pessimistic_lock(k, &primary, should_not_exist, &options) {
                     Ok(_) => {}
-                    e @ Err(MvccError::KeyIsLocked { .. }) => {
+                    e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                         locks.push(e.map_err(Error::from).map_err(StorageError::from));
                         break;
                     }
@@ -564,10 +567,10 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             ..
         } => {
             if commit_ts <= lock_ts {
-                return Err(Error::InvalidTxnTso {
+                return Err(Error::from(ErrorInner::InvalidTxnTso {
                     start_ts: lock_ts,
                     commit_ts,
-                });
+                }));
             }
             // Pessimistic txn needs key_hashes to wake up waiters
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
@@ -587,7 +590,10 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 is_pessimistic_txn,
             );
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), rows, cmd.ctx, None)
+            let pr = ProcessResult::TxnStatus {
+                txn_status: TxnStatus::committed(commit_ts),
+            };
+            (pr, txn.into_modifies(), rows, cmd.ctx, None)
         }
         CommandKind::Cleanup {
             key,
@@ -701,10 +707,10 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 };
                 if !commit_ts.is_zero() {
                     if current_lock.ts >= commit_ts {
-                        return Err(Error::InvalidTxnTso {
+                        return Err(Error::from(ErrorInner::InvalidTxnTso {
                             start_ts: current_lock.ts,
                             commit_ts,
-                        });
+                        }));
                     }
                     txn.commit(current_key.clone(), commit_ts)?;
                 } else {
@@ -896,7 +902,9 @@ mod tests {
         info.set_key(raw_key);
         info.set_lock_version(ts);
         info.set_lock_ttl(100);
-        let case = StorageError::from(Error::from(MvccError::KeyIsLocked(info)));
+        let case = StorageError::from(StorageErrorInner::Txn(Error::from(ErrorInner::Mvcc(
+            MvccError::from(MvccErrorInner::KeyIsLocked(info)),
+        ))));
         let lock = extract_lock_from_result(&Err(case));
         assert_eq!(lock.ts, ts.into());
         assert_eq!(lock.hash, key.gen_hash());

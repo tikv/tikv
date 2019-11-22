@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::str;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
@@ -90,6 +91,30 @@ pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
             Vec::new()
         }
     }))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            if *rhs <= 0 {
+                return Ok(Some(Vec::new()));
+            }
+            match str::from_utf8(&*lhs) {
+                Ok(s) => {
+                    let l = *rhs as usize;
+                    if s.chars().count() > l {
+                        Ok(Some(s.chars().take(l).collect::<String>().into_bytes()))
+                    } else {
+                        Ok(Some(s.to_string().into_bytes()))
+                    }
+                }
+                Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+            }
+        }
+        _ => Ok(None),
+    }
 }
 
 #[rpn_fn]
@@ -388,6 +413,51 @@ mod tests {
                 .evaluate(ScalarFuncSig::RTrim)
                 .unwrap();
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+    }
+
+    #[test]
+    fn test_left() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(0i64), Some(b"".to_vec())),
+            (Some(b"hello".to_vec()), Some(1i64), Some(b"h".to_vec())),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(2i64),
+                Some("数据".as_bytes().to_vec()),
+            ),
+            (
+                Some("忠犬ハチ公".as_bytes().to_vec()),
+                Some(3i64),
+                Some("忠犬ハ".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(100i64),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(-1i64),
+                Some(b"".to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(i64::max_value()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (None, Some(-1), None),
+            (Some(b"hello".to_vec()), None, None),
+            (None, None, None),
+        ];
+
+        for (lhs, rhs, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::Left)
+                .unwrap();
+            assert_eq!(output, expect_output);
         }
     }
 

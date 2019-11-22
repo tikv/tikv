@@ -4,10 +4,13 @@ use kvproto::kvrpcpb::{Context, LockInfo};
 
 use keys::TimeStamp;
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
-use tikv::storage::kv::{self, RocksEngine};
-use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
-use tikv::storage::txn;
-use tikv::storage::{self, Engine, Key, KvPair, Mutation, Value};
+use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine};
+use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE};
+use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+use tikv::storage::{
+    self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, Key, KvPair, Mutation,
+    TxnStatus, Value,
+};
 use tikv_util::HandyRwLock;
 
 use super::*;
@@ -231,11 +234,15 @@ impl<E: Engine> AssertionStorage<E> {
 
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
-            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(kv::Error::Request(
-                ref e,
+            StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                MvccError(box MvccErrorInner::Engine(KvError(box KvErrorInner::Request(ref e)))),
             ))))
-            | storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e)))
-            | storage::Error::Engine(kv::Error::Request(ref e)) => {
+            | StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(
+                KvError(box KvErrorInner::Request(ref e)),
+            ))))
+            | StorageError(box StorageErrorInner::Engine(KvError(box KvErrorInner::Request(
+                ref e,
+            )))) => {
                 assert!(
                     e.has_not_leader() | e.has_stale_command(),
                     "invalid error {:?}",
@@ -251,19 +258,23 @@ impl<E: Engine> AssertionStorage<E> {
         }
     }
 
-    fn expect_invalid_tso_err(
+    fn expect_invalid_tso_err<T>(
         &self,
-        resp: Result<(), storage::Error>,
+        resp: Result<T, storage::Error>,
         sts: impl Into<TimeStamp>,
         cmt_ts: impl Into<TimeStamp>,
-    ) {
+    ) where
+        T: std::fmt::Debug,
+    {
         assert!(resp.is_err());
         let err = resp.unwrap_err();
         match err {
-            storage::Error::Txn(txn::Error::InvalidTxnTso {
-                start_ts,
-                commit_ts,
-            }) => {
+            StorageError(box StorageErrorInner::Txn(TxnError(
+                box TxnErrorInner::InvalidTxnTso {
+                    start_ts,
+                    commit_ts,
+                },
+            ))) => {
                 assert_eq!(sts.into(), start_ts);
                 assert_eq!(cmt_ts.into(), commit_ts);
             }
@@ -435,8 +446,9 @@ impl<E: Engine> AssertionStorage<E> {
         let locks: Vec<(&[u8], &[u8], TimeStamp)> = res
             .iter()
             .filter_map(|x| {
-                if let Err(storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info)))) =
-                    x
+                if let Err(StorageError(box StorageErrorInner::Txn(TxnError(
+                    box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))),
+                )))) = x
                 {
                     Some((
                         info.get_key(),
@@ -471,13 +483,15 @@ impl<E: Engine> AssertionStorage<E> {
             .unwrap_err();
 
         match err {
-            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict {
-                start_ts,
-                conflict_start_ts,
-                ref key,
-                ref primary,
-                ..
-            })) => {
+            StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                MvccError(box MvccErrorInner::WriteConflict {
+                    start_ts,
+                    conflict_start_ts,
+                    ref key,
+                    ref primary,
+                    ..
+                }),
+            )))) => {
                 assert_eq!(cur_start_ts, start_ts);
                 assert_eq!(confl_ts.into(), conflict_start_ts);
                 assert_eq!(key.to_owned(), confl_key.to_owned());
@@ -494,11 +508,14 @@ impl<E: Engine> AssertionStorage<E> {
         keys: Vec<&[u8]>,
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
+        actual_commit_ts: impl Into<TimeStamp>,
     ) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
-        self.store
+        let txn_status = self
+            .store
             .commit(self.ctx.clone(), keys, start_ts.into(), commit_ts.into())
             .unwrap();
+        assert_eq!(txn_status, TxnStatus::committed(actual_commit_ts.into()));
     }
 
     pub fn commit_with_illegal_tso(

@@ -9,9 +9,10 @@ use engine_traits::{
 };
 use rocksdb::{DBIterator, Writable, DB};
 
+use crate::db_vector::RocksDBVector;
 use crate::options::{RocksReadOptions, RocksWriteOptions};
 use crate::util::get_cf_handle;
-use crate::{RocksEngineIterator, Snapshot};
+use crate::{RocksEngineIterator, RocksSnapshot};
 
 #[derive(Clone, Debug)]
 #[repr(transparent)]
@@ -48,7 +49,7 @@ impl RocksEngine {
 }
 
 impl KvEngine for RocksEngine {
-    type Snapshot = Snapshot;
+    type Snapshot = RocksSnapshot;
     type WriteBatch = crate::WriteBatch;
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()> {
@@ -69,8 +70,8 @@ impl KvEngine for RocksEngine {
         Self::WriteBatch::new(Arc::clone(&self.0))
     }
 
-    fn snapshot(&self) -> Snapshot {
-        Snapshot::new(self.0.clone())
+    fn snapshot(&self) -> RocksSnapshot {
+        RocksSnapshot::new(self.0.clone())
     }
 
     fn sync(&self) -> Result<()> {
@@ -85,7 +86,7 @@ impl KvEngine for RocksEngine {
 impl Iterable for RocksEngine {
     type Iterator = RocksEngineIterator;
 
-    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         Ok(RocksEngineIterator::from_raw(DBIterator::new(
             self.0.clone(),
@@ -93,7 +94,7 @@ impl Iterable for RocksEngine {
         )))
     }
 
-    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iterator> {
+    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         let handle = get_cf_handle(&self.0, cf)?;
         let opt: RocksReadOptions = opts.into();
         Ok(RocksEngineIterator::from_raw(DBIterator::new_cf(
@@ -105,17 +106,24 @@ impl Iterable for RocksEngine {
 }
 
 impl Peekable for RocksEngine {
-    fn get_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    type DBVector = RocksDBVector;
+
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
         let v = self.0.get_opt(key, &opt.into_raw())?;
-        Ok(v.map(|v| v.to_vec()))
+        Ok(v.map(RocksDBVector::from_raw))
     }
 
-    fn get_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get_value_cf_opt(
+        &self,
+        opts: &ReadOptions,
+        cf: &str,
+        key: &[u8],
+    ) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
         let handle = get_cf_handle(&self.0, cf)?;
         let v = self.0.get_cf_opt(handle, key, &opt.into_raw())?;
-        Ok(v.map(|v| v.to_vec()))
+        Ok(v.map(RocksDBVector::from_raw))
     }
 }
 
@@ -147,7 +155,7 @@ mod tests {
     use std::sync::Arc;
     use tempfile::Builder;
 
-    use crate::{RocksEngine, Snapshot};
+    use crate::{RocksEngine, RocksSnapshot};
 
     #[test]
     fn test_base() {
@@ -197,9 +205,9 @@ mod tests {
         engine.put(b"k1", b"v1").unwrap();
         engine.put_cf(cf, b"k1", b"v2").unwrap();
 
-        assert_eq!(&*engine.get(b"k1").unwrap().unwrap(), b"v1");
-        assert!(engine.get_cf("foo", b"k1").is_err());
-        assert_eq!(&*engine.get_cf(cf, b"k1").unwrap().unwrap(), b"v2");
+        assert_eq!(&*engine.get_value(b"k1").unwrap().unwrap(), b"v1");
+        assert!(engine.get_value_cf("foo", b"k1").is_err());
+        assert_eq!(&*engine.get_value_cf(cf, b"k1").unwrap().unwrap(), b"v2");
     }
 
     #[test]
@@ -264,7 +272,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let snap = Snapshot::new(engine.get_sync_db());
+        let snap = RocksSnapshot::new(engine.get_sync_db());
 
         engine.put(b"a3", b"v3").unwrap();
         assert!(engine.seek(b"a3").unwrap().is_some());
