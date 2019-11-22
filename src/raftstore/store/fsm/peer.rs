@@ -1503,12 +1503,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
             if my_peer_id == peer.get_id() {
-                match self.fsm.peer.maybe_destroy() {
-                    None => panic!("{} try to destroy but failed", self.fsm.peer.tag),
-                    Some(job) => {
-                        self.handle_destroy_peer(job);
-                    }
-                }
+                self.destroy_peer(false);
             } else {
                 panic!(
                     "{} trying to remove unknown peer {:?}",
