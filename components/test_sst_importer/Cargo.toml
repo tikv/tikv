@@ -9,7 +9,7 @@ description = "test helpers for sst_importer"
 test = false
 
 [dependencies]
-crc = "1.8"
+crc32fast = "1.2"
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
 kvproto = { git = "https://github.com/hicqu/kvproto.git", branch = "follower-read-with-applied" }
 

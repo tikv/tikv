@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(box_patterns)]
+
 #[macro_use]
 extern crate tikv_util;
 
