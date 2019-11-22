@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::path::Path;
 use std::str::FromStr;
@@ -13,6 +14,7 @@ use engine::rocks::{
     CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
     SeekKey, Writable, WriteBatch, WriteOptions, DB,
 };
+use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, Module};
@@ -810,11 +812,14 @@ impl<E: Engine> Debugger<E> {
             Module::Server => {
                 if config_name == GC_IO_LIMITER_CONFIG_NAME {
                     if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
+                        let bps = i64::try_from(bytes_per_sec.0).unwrap_or_else(|_| {
+                            (panic!("{} > i64::max_value", GC_IO_LIMITER_CONFIG_NAME))
+                        });
                         return self
                             .gc_worker
                             .as_ref()
                             .expect("must be some")
-                            .change_io_limit(bytes_per_sec.0)
+                            .change_io_limit(bps)
                             .map_err(|e| Error::Other(e.into()));
                     }
                 }
