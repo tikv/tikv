@@ -150,9 +150,9 @@ impl DateTimeExtension for Time {
     /// returns the seconds since 0000-00-00 00:00:00
     fn second_since_zero(&self) -> i64 {
         i64::from(self.day_number()) * 3600i64 * 24i64
-            + self.hour() as i64 * 3600i64
-            + self.minute() as i64 * 60i64
-            + self.second() as i64
+            + i64::from(self.hour()) * 3600i64
+            + i64::from(self.minute()) * 60i64
+            + i64::from(self.second())
     }
 }
 
