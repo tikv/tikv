@@ -289,7 +289,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonExtractSig => json_extract_fn_meta(),
         ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
         ScalarFuncSig::Bin => bin_fn_meta(),
+        ScalarFuncSig::IsIPv4 => is_ipv4_fn_meta(),
         ScalarFuncSig::IsIPv4Compat => is_ipv4_compat_fn_meta(),
+        ScalarFuncSig::IsIPv6 => is_ipv6_fn_meta(),
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
         ScalarFuncSig::CastIntAsString |
