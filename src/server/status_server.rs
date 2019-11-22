@@ -60,6 +60,7 @@ impl StatusServer {
             .unwrap()
     }
 
+    #[cfg(target_os = "linux")]
     fn extract_thread_name(thread_name: &str) -> String {
         lazy_static! {
             static ref THREAD_NAME_RE: Regex =
