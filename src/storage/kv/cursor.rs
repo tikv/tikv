@@ -356,6 +356,7 @@ impl<I: Iterator> Cursor<I> {
         }
     }
 
+    #[inline(never)]
     fn handle_error_status(&self, e: Error) -> Result<()> {
         // Split out the error case to reduce hot-path code size.
         CRITICAL_ERROR.with_label_values(&["rocksdb iter"]).inc();

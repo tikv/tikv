@@ -319,6 +319,7 @@ impl RegionIterator {
     }
 }
 
+#[inline(never)]
 fn handle_check_key_in_region_error(e: crate::raftstore::Error) -> Result<()> {
     // Split out the error case to reduce hot-path code size.
     CRITICAL_ERROR
