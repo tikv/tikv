@@ -119,6 +119,36 @@ pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
+pub fn right(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            if *rhs <= 0 {
+                return Ok(Some(Vec::new()));
+            }
+            match str::from_utf8(&*lhs) {
+                Ok(s) => {
+                    let rhs = *rhs as usize;
+                    let len = s.chars().count();
+                    if len > rhs {
+                        let idx = s
+                            .char_indices()
+                            .nth(len - rhs)
+                            .map(|(idx, _)| idx)
+                            .unwrap_or_else(|| s.len());
+                        Ok(Some(s[idx..].to_string().into_bytes()))
+                    } else {
+                        Ok(Some(s.to_string().into_bytes()))
+                    }
+                }
+                Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
 pub fn hex_str_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|b| hex::encode_upper(b).into_bytes()))
 }
@@ -456,6 +486,51 @@ mod tests {
                 .push_param(lhs)
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::Left)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_right() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(0), Some(b"".to_vec())),
+            (Some(b"hello".to_vec()), Some(1), Some(b"o".to_vec())),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(2),
+                Some("据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("忠犬ハチ公".as_bytes().to_vec()),
+                Some(3),
+                Some("ハチ公".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(100),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(-1),
+                Some(b"".to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(i64::max_value()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (None, Some(-1), None),
+            (Some(b"hello".to_vec()), None, None),
+            (None, None, None),
+        ];
+
+        for (lhs, rhs, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::Right)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
