@@ -104,10 +104,10 @@ pub fn apply_plain_cf_file<F>(
     db: &DB,
     cf: &str,
     batch_size: usize,
-    key_callback: F,
+    mut key_callback: F,
 ) -> Result<(), Error>
 where
-    F: for<'r> Fn(&'r [u8]),
+    F: for<'r> FnMut(&'r [u8]),
 {
     let mut decoder = BufReader::new(box_try!(File::open(path)));
     let cf_handle = box_try!(get_cf_handle(&db, cf));
@@ -155,10 +155,13 @@ fn create_sst_file_writer(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
+    use crate::raftstore::store::keys;
     use crate::raftstore::store::snap::tests::*;
+    use crate::raftstore::store::snap::SNAPSHOT_CFS;
     use engine::CF_DEFAULT;
     use tempfile::Builder;
 
@@ -176,42 +179,64 @@ mod tests {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
                 let db = db_creater(&dir.path(), db_opt.clone(), None).unwrap();
-
-                let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
-                let plain_file_path = snap_cf_dir.path().join("plain");
-                let snap = DbSnapshot::new(Arc::clone(&db));
-                let stats = build_plain_cf_file(
-                    &plain_file_path.to_str().unwrap(),
-                    &snap,
-                    CF_DEFAULT,
-                    b"a",
-                    b"z",
-                )
-                .unwrap();
-                if stats.key_count == 0 {
-                    assert_eq!(
-                        fs::metadata(&plain_file_path).unwrap_err().kind(),
-                        io::ErrorKind::NotFound
-                    );
-                    continue;
-                }
-
+                // Collect keys via the key_callback into a collection.
+                let mut applied_keys: HashMap<_, Vec<_>> = HashMap::new();
                 let dir1 = Builder::new()
                     .prefix("test-snap-cf-db-apply")
                     .tempdir()
                     .unwrap();
                 let db1 = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
-                let detector = TestStaleDetector {};
-                apply_plain_cf_file(
-                    &plain_file_path.to_str().unwrap(),
-                    &detector,
-                    &db1,
-                    CF_DEFAULT,
-                    16,
-                    |_| {},
-                )
-                .unwrap();
+
+                let snap = DbSnapshot::new(Arc::clone(&db));
+                for cf in SNAPSHOT_CFS {
+                    let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
+                    let plain_file_path = snap_cf_dir.path().join("plain");
+                    let stats = build_plain_cf_file(
+                        &plain_file_path.to_str().unwrap(),
+                        &snap,
+                        cf,
+                        &keys::data_key(b"a"),
+                        &keys::data_end_key(b"z"),
+                    )
+                    .unwrap();
+                    if stats.key_count == 0 {
+                        assert_eq!(
+                            fs::metadata(&plain_file_path).unwrap_err().kind(),
+                            io::ErrorKind::NotFound
+                        );
+                        continue;
+                    }
+
+                    let detector = TestStaleDetector {};
+                    apply_plain_cf_file(
+                        &plain_file_path.to_str().unwrap(),
+                        &detector,
+                        &db1,
+                        cf,
+                        16,
+                        |k| applied_keys.entry(cf).or_default().push(k.to_owned()),
+                    )
+                    .unwrap();
+                }
+
                 assert_eq_db(&db, &db1);
+
+                // Scan keys from db
+                let mut keys_in_db: HashMap<_, Vec<_>> = HashMap::new();
+                for cf in SNAPSHOT_CFS {
+                    snap.scan_cf(
+                        cf,
+                        &keys::data_key(b"a"),
+                        &keys::data_end_key(b"z"),
+                        true,
+                        |k, _| {
+                            keys_in_db.entry(cf).or_default().push(k.to_owned());
+                            Ok(true)
+                        },
+                    )
+                    .unwrap();
+                }
+                assert_eq!(applied_keys, keys_in_db);
             }
         }
     }
