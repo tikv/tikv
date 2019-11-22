@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::mpsc;
@@ -9,10 +10,11 @@ use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::util::io_limiter::IOLimiter;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_rocks::RocksIOLimiter;
+use engine_traits::IOLimiter;
 use futures::Future;
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
@@ -23,10 +25,13 @@ use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
-use crate::storage::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
+use crate::storage::kv::{
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
+    Statistics,
+};
 use crate::storage::metrics::*;
-use crate::storage::mvcc::{MvccReader, MvccTxn};
-use crate::storage::{Callback, Error, Key, Result};
+use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
+use crate::storage::{Callback, Error, ErrorInner, Key, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
@@ -88,14 +93,15 @@ impl GCConfig {
 /// Provides safe point.
 /// TODO: Give it a better name?
 pub trait GCSafePointProvider: Send + 'static {
-    fn get_safe_point(&self) -> Result<u64>;
+    fn get_safe_point(&self) -> Result<TimeStamp>;
 }
 
 impl<T: PdClient + 'static> GCSafePointProvider for Arc<T> {
-    fn get_safe_point(&self) -> Result<u64> {
+    fn get_safe_point(&self) -> Result<TimeStamp> {
         let future = self.get_gc_safe_point();
         future
             .wait()
+            .map(Into::into)
             .map_err(|e| box_err!("failed to get safe point from PD: {:?}", e))
     }
 }
@@ -103,7 +109,7 @@ impl<T: PdClient + 'static> GCSafePointProvider for Arc<T> {
 enum GCTask {
     GC {
         ctx: Context,
-        safe_point: u64,
+        safe_point: TimeStamp,
         callback: Callback<()>,
     },
     UnsafeDestroyRange {
@@ -166,7 +172,7 @@ struct GCRunner<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     /// Used to limit the write flow of GC.
-    limiter: Option<IOLimiter>,
+    limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
 
     cfg: GCConfig,
 
@@ -178,13 +184,9 @@ impl<E: Engine> GCRunner<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
+        limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
         cfg: GCConfig,
     ) -> Self {
-        let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
-            Some(IOLimiter::new(cfg.max_write_bytes_per_sec.0))
-        } else {
-            None
-        };
         Self {
             engine,
             local_storage,
@@ -205,7 +207,7 @@ impl<E: Engine> GCRunner<E> {
                 Ok(snapshot)
             }
             Some((_, Err(e))) => Err(e),
-            None => Err(EngineError::Timeout(timeout)),
+            None => Err(EngineError::from(EngineErrorInner::Timeout(timeout))),
         }
         .map_err(Error::from)
     }
@@ -214,7 +216,7 @@ impl<E: Engine> GCRunner<E> {
     fn scan_keys(
         &mut self,
         ctx: &mut Context,
-        safe_point: u64,
+        safe_point: TimeStamp,
         from: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
@@ -256,12 +258,12 @@ impl<E: Engine> GCRunner<E> {
     fn gc_keys(
         &mut self,
         ctx: &mut Context,
-        safe_point: u64,
+        safe_point: TimeStamp,
         keys: Vec<Key>,
         mut next_scan_key: Option<Key>,
     ) -> Result<Option<Key>> {
         let snapshot = self.get_snapshot(ctx)?;
-        let mut txn = MvccTxn::new(snapshot, 0, !ctx.get_not_fill_cache()).unwrap();
+        let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), !ctx.get_not_fill_cache()).unwrap();
         for k in keys {
             let gc_info = txn.gc(k.clone(), safe_point)?;
 
@@ -294,7 +296,7 @@ impl<E: Engine> GCRunner<E> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
-            if let Some(limiter) = &self.limiter {
+            if let Some(limiter) = &*self.limiter.lock().unwrap() {
                 limiter.request(write_size as i64);
             }
             self.engine.write(ctx, modifies)?;
@@ -302,7 +304,7 @@ impl<E: Engine> GCRunner<E> {
         Ok(next_scan_key)
     }
 
-    fn gc(&mut self, ctx: &mut Context, safe_point: u64) -> Result<()> {
+    fn gc(&mut self, ctx: &mut Context, safe_point: TimeStamp) -> Result<()> {
         debug!(
             "start doing GC";
             "region_id" => ctx.get_region_id(),
@@ -484,7 +486,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GCTask>) -> Result<()> {
     match e {
         ScheduleError::Full(mut task) => {
             GC_TOO_BUSY_COUNTER.inc();
-            (task.take_callback())(Err(Error::GCWorkerTooBusy));
+            (task.take_callback())(Err(Error::from(ErrorInner::GCWorkerTooBusy)));
             Ok(())
         }
         _ => Err(box_err!("failed to schedule gc task: {:?}", e)),
@@ -495,7 +497,7 @@ fn handle_gc_task_schedule_error(e: ScheduleError<GCTask>) -> Result<()> {
 fn schedule_gc(
     scheduler: &worker::Scheduler<GCTask>,
     ctx: Context,
-    safe_point: u64,
+    safe_point: TimeStamp,
     callback: Callback<()>,
 ) -> Result<()> {
     scheduler
@@ -508,7 +510,7 @@ fn schedule_gc(
 }
 
 /// Does GC synchronously.
-fn gc(scheduler: &worker::Scheduler<GCTask>, ctx: Context, safe_point: u64) -> Result<()> {
+fn gc(scheduler: &worker::Scheduler<GCTask>, ctx: Context, safe_point: TimeStamp) -> Result<()> {
     wait_op!(|callback| schedule_gc(scheduler, ctx, safe_point, callback)).unwrap_or_else(|| {
         error!("failed to receive result of gc");
         Err(box_err!("gc_worker: failed to receive result of gc"))
@@ -721,7 +723,7 @@ struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
 
     /// The current safe point. `GCManager` will try to update it periodically. When `safe_point` is
     /// updated, `GCManager` will start to do GC on all regions.
-    safe_point: u64,
+    safe_point: TimeStamp,
 
     safe_point_last_check_time: Instant,
 
@@ -739,7 +741,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     ) -> GCManager<S, R> {
         GCManager {
             cfg,
-            safe_point: 0,
+            safe_point: TimeStamp::zero(),
             safe_point_last_check_time: Instant::now(),
             worker_scheduler,
             gc_manager_ctx: GCManagerContext::new(),
@@ -802,13 +804,13 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// updated to a greater value than initial value.
     fn initialize(&mut self) {
         debug!("gc-manager is initializing");
-        self.safe_point = 0;
+        self.safe_point = TimeStamp::zero();
         self.try_update_safe_point();
         debug!("gc-manager started"; "safe_point" => self.safe_point);
     }
 
     /// Waits until the safe_point updates. Returns the new safe point.
-    fn wait_for_next_safe_point(&mut self) -> GCManagerResult<u64> {
+    fn wait_for_next_safe_point(&mut self) -> GCManagerResult<TimeStamp> {
         loop {
             if self.try_update_safe_point() {
                 return Ok(self.safe_point);
@@ -845,7 +847,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             Ordering::Greater => {
                 debug!("gc_worker: update safe point"; "safe_point" => safe_point);
                 self.safe_point = safe_point;
-                AUTO_GC_SAFE_POINT_GAUGE.set(safe_point as i64);
+                AUTO_GC_SAFE_POINT_GAUGE.set(safe_point.into_inner() as i64);
                 true
             }
         }
@@ -1102,6 +1104,7 @@ pub struct GCWorker<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     cfg: Option<GCConfig>,
+    limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
 
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
@@ -1122,6 +1125,7 @@ impl<E: Engine> Clone for GCWorker<E> {
             local_storage: self.local_storage.clone(),
             raft_store_router: self.raft_store_router.clone(),
             cfg: self.cfg.clone(),
+            limiter: self.limiter.clone(),
             refs: self.refs.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
@@ -1159,11 +1163,19 @@ impl<E: Engine> GCWorker<E> {
                 .create(),
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
+        let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
+            let bps = i64::try_from(cfg.max_write_bytes_per_sec.0)
+                .expect("snap_max_write_bytes_per_sec > i64::max_value");
+            Some(IOLimiter::new(bps))
+        } else {
+            None
+        };
         GCWorker {
             engine,
             local_storage,
             raft_store_router,
             cfg: Some(cfg),
+            limiter: Arc::new(Mutex::new(limiter)),
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             worker,
             worker_scheduler,
@@ -1187,6 +1199,7 @@ impl<E: Engine> GCWorker<E> {
             self.engine.clone(),
             self.local_storage.take(),
             self.raft_store_router.take(),
+            self.limiter.clone(),
             self.cfg.take().unwrap(),
         );
         self.worker
@@ -1202,15 +1215,20 @@ impl<E: Engine> GCWorker<E> {
             h.stop()?;
         }
         // Stop self.
-        let h = self.worker.lock().unwrap().stop().unwrap();
-        if let Err(e) = h.join() {
-            Err(box_err!("failed to join gc_worker handle, err: {:?}", e))
-        } else {
-            Ok(())
+        if let Some(h) = self.worker.lock().unwrap().stop() {
+            if let Err(e) = h.join() {
+                return Err(box_err!("failed to join gc_worker handle, err: {:?}", e));
+            }
         }
+        Ok(())
     }
 
-    pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
+    pub fn async_gc(
+        &self,
+        ctx: Context,
+        safe_point: TimeStamp,
+        callback: Callback<()>,
+    ) -> Result<()> {
         KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
         self.worker_scheduler
             .schedule(GCTask::GC {
@@ -1243,6 +1261,19 @@ impl<E: Engine> GCWorker<E> {
             })
             .or_else(handle_gc_task_schedule_error)
     }
+
+    pub fn change_io_limit(&self, limit: i64) -> Result<()> {
+        let mut limiter = self.limiter.lock().unwrap();
+        if limit == 0 {
+            limiter.take();
+        } else {
+            limiter
+                .get_or_insert_with(|| RocksIOLimiter::new(limit))
+                .set_bytes_per_second(limit as i64);
+        }
+        info!("GC io limit changed"; "max_write_bytes_per_sec" => limit);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1251,7 +1282,7 @@ mod tests {
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
     use crate::storage::kv::Result as EngineResult;
-    use crate::storage::lock_manager::DummyLockMgr;
+    use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
     use futures::Future;
     use kvproto::metapb;
@@ -1259,11 +1290,11 @@ mod tests {
     use std::sync::mpsc::{channel, Receiver, Sender};
 
     struct MockSafePointProvider {
-        rx: Receiver<u64>,
+        rx: Receiver<TimeStamp>,
     }
 
     impl GCSafePointProvider for MockSafePointProvider {
-        fn get_safe_point(&self) -> Result<u64> {
+        fn get_safe_point(&self) -> Result<TimeStamp> {
             // Error will be ignored by `GCManager`, which is equivalent to that the safe_point
             // is not updated.
             self.rx.try_recv().map_err(|e| box_err!(e))
@@ -1301,7 +1332,7 @@ mod tests {
     struct GCManagerTestUtil {
         gc_manager: Option<GCManager<MockSafePointProvider, MockRegionInfoProvider>>,
         worker: Worker<GCTask>,
-        safe_point_sender: Sender<u64>,
+        safe_point_sender: Sender<TimeStamp>,
         gc_task_receiver: Receiver<GCTask>,
     }
 
@@ -1337,8 +1368,8 @@ mod tests {
             self.gc_task_receiver.try_iter().collect()
         }
 
-        pub fn add_next_safe_point(&self, safe_point: u64) {
-            self.safe_point_sender.send(safe_point).unwrap();
+        pub fn add_next_safe_point(&self, safe_point: impl Into<TimeStamp>) {
+            self.safe_point_sender.send(safe_point.into()).unwrap();
         }
 
         pub fn stop(&mut self) {
@@ -1357,8 +1388,8 @@ mod tests {
     /// Param `expected_gc_tasks` is a `Vec` of tuples which is `(region_id, safe_point)`.
     fn test_auto_gc(
         regions: Vec<(Vec<u8>, Vec<u8>, u64)>,
-        safe_points: Vec<u64>,
-        expected_gc_tasks: Vec<(u64, u64)>,
+        safe_points: Vec<impl Into<TimeStamp> + Copy>,
+        expected_gc_tasks: Vec<(u64, impl Into<TimeStamp>)>,
     ) {
         let regions: BTreeMap<_, _> = regions
             .into_iter()
@@ -1398,7 +1429,7 @@ mod tests {
         assert_eq!(gc_tasks.len(), expected_gc_tasks.len());
         let all_passed = gc_tasks.into_iter().zip(expected_gc_tasks.into_iter()).all(
             |((region, safe_point), (expect_region, expect_safe_point))| {
-                region == expect_region && safe_point == expect_safe_point
+                region == expect_region && safe_point == expect_safe_point.into()
             },
         );
         assert!(all_passed);
@@ -1427,10 +1458,10 @@ mod tests {
     fn test_update_safe_point() {
         let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
         let mut gc_manager = test_util.gc_manager.take().unwrap();
-        assert_eq!(gc_manager.safe_point, 0);
+        assert_eq!(gc_manager.safe_point, TimeStamp::zero());
         test_util.add_next_safe_point(233);
         assert!(gc_manager.try_update_safe_point());
-        assert_eq!(gc_manager.safe_point, 233);
+        assert_eq!(gc_manager.safe_point, 233.into());
 
         let (tx, rx) = channel();
         ThreadBuilder::new()
@@ -1442,7 +1473,7 @@ mod tests {
         test_util.add_next_safe_point(233);
         test_util.add_next_safe_point(233);
         test_util.add_next_safe_point(234);
-        assert_eq!(rx.recv().unwrap(), 234);
+        assert_eq!(rx.recv().unwrap(), 234.into());
 
         test_util.stop();
     }
@@ -1451,13 +1482,13 @@ mod tests {
     fn test_gc_manager_initialize() {
         let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
         let mut gc_manager = test_util.gc_manager.take().unwrap();
-        assert_eq!(gc_manager.safe_point, 0);
+        assert_eq!(gc_manager.safe_point, TimeStamp::zero());
         test_util.add_next_safe_point(0);
         test_util.add_next_safe_point(5);
         gc_manager.initialize();
-        assert_eq!(gc_manager.safe_point, 0);
+        assert_eq!(gc_manager.safe_point, TimeStamp::zero());
         assert!(gc_manager.try_update_safe_point());
-        assert_eq!(gc_manager.safe_point, 5);
+        assert_eq!(gc_manager.safe_point, 5.into());
     }
 
     #[test]
@@ -1571,7 +1602,7 @@ mod tests {
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
     fn check_data<E: Engine>(
-        storage: &Storage<E, DummyLockMgr>,
+        storage: &Storage<E, DummyLockManager>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = storage
@@ -1580,7 +1611,7 @@ mod tests {
                 Key::from_encoded_slice(b""),
                 None,
                 expected_data.len() + 1,
-                1,
+                1.into(),
                 Options::default(),
             )
             .wait()
@@ -1596,8 +1627,8 @@ mod tests {
 
     fn test_destroy_range_impl(
         init_keys: &[Vec<u8>],
-        start_ts: u64,
-        commit_ts: u64,
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<()> {
@@ -1631,6 +1662,8 @@ mod tests {
             .collect();
         let primary = init_keys[0].clone();
 
+        let start_ts = start_ts.into();
+
         // Write these data to the storage.
         wait_op!(|cb| storage.async_prewrite(
             Context::default(),
@@ -1645,9 +1678,15 @@ mod tests {
 
         // Commit.
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
-        wait_op!(|cb| storage.async_commit(Context::default(), keys, start_ts, commit_ts, cb))
-            .unwrap()
-            .unwrap();
+        wait_op!(|cb| storage.async_commit(
+            Context::default(),
+            keys,
+            start_ts,
+            commit_ts.into(),
+            cb
+        ))
+        .unwrap()
+        .unwrap();
 
         // Assert these data is successfully written to the storage.
         check_data(&storage, &data);
@@ -1770,5 +1809,43 @@ mod tests {
         let mut invalid_cfg = GCConfig::default();
         invalid_cfg.batch_keys = 0;
         assert!(invalid_cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_change_io_limit() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut gc_worker = GCWorker::new(engine, None, None, GCConfig::default());
+        gc_worker.start().unwrap();
+        assert!(gc_worker.limiter.lock().unwrap().is_none());
+
+        // Enable io iolimit
+        gc_worker.change_io_limit(1024).unwrap();
+        assert_eq!(
+            gc_worker
+                .limiter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .get_bytes_per_second(),
+            1024
+        );
+
+        // Change io limit
+        gc_worker.change_io_limit(2048).unwrap();
+        assert_eq!(
+            gc_worker
+                .limiter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .get_bytes_per_second(),
+            2048,
+        );
+
+        // Disable io limit
+        gc_worker.change_io_limit(0).unwrap();
+        assert!(gc_worker.limiter.lock().unwrap().is_none());
     }
 }

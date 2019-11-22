@@ -12,6 +12,7 @@ use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::create_debug;
 use kvproto::import_sstpb::create_import_sst;
 use pd_client::{PdClient, RpcClient};
+use std::convert::TryFrom;
 use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -205,9 +206,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
+    let bps = i64::try_from(cfg.server.snap_max_write_bytes_per_sec.0)
+        .unwrap_or_else(|_| fatal!("snap_max_write_bytes_per_sec > i64::max_value"));
+
     // Create snapshot manager, server.
     let snap_mgr = SnapManagerBuilder::default()
-        .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0)
+        .max_write_bytes_per_sec(bps)
         .max_total_size(cfg.server.snap_max_total_size.0)
         .build(
             snap_path.as_path().to_str().unwrap().to_owned(),
@@ -233,7 +237,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     );
 
     // Create Debug service.
-    let debug_service = DebugService::new(engines.clone(), raft_router.clone());
+    let debug_service = DebugService::new(engines.clone(), raft_router.clone(), gc_worker.clone());
 
     // Create Backup service.
     let mut backup_worker = tikv_util::worker::Worker::new("backup-endpoint");

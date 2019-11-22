@@ -498,13 +498,13 @@ fn generate_init_metadata_fn(
     where_clause: Option<&WhereClause>,
 ) -> TokenStream {
     let fn_body = if let Some(metadata_ctor) = metadata_ctor {
-        quote! { Box::new(#metadata_ctor(expr)) }
+        quote! { #metadata_ctor(expr).map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>) }
     } else {
-        quote! { Box::new(()) }
+        quote! { Ok(Box::new(())) }
     };
     quote! {
         fn init_metadata #impl_generics (expr: &mut ::tipb::Expr)
-            -> Box<dyn std::any::Any + Send> #where_clause {
+            -> Result<Box<dyn std::any::Any + Send>> #where_clause {
             #fn_body
         }
     }
@@ -622,7 +622,7 @@ impl VargsRpnFn {
             where_clause,
             |metadata_ctor| {
                 quote! {
-                    let metadata = &#metadata_ctor(expr);
+                    let metadata = &#metadata_ctor(expr).unwrap();
                     #fn_ident #ty_generics_turbofish ( #(#captures,)* &[]).ok();
                 }
             },
@@ -753,7 +753,7 @@ impl RawVargsRpnFn {
             where_clause,
             |metadata_ctor| {
                 quote! {
-                    let metadata = &#metadata_ctor(expr);
+                    let metadata = &#metadata_ctor(expr).unwrap();
                     #fn_ident #ty_generics_turbofish ( #(#captures,)* &[]).ok();
                 }
             },
@@ -955,7 +955,7 @@ impl NormalRpnFn {
                 quote! {
                     let arg: &#tp = unsafe { &*std::ptr::null() };
                     #(let (#extract2, arg) = arg.extract(0));*;
-                    let metadata = &#metadata_ctor(expr);
+                    let metadata = &#metadata_ctor(expr).unwrap();
                     #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
                 }
             },

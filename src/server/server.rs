@@ -17,7 +17,7 @@ use tokio_timer::timer::Handle;
 use crate::coprocessor::Endpoint;
 use crate::raftstore::store::SnapManager;
 use crate::server::gc_worker::GCWorker;
-use crate::storage::lock_manager::LockMgr;
+use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -66,7 +66,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<E: Engine, L: LockMgr>(
+    pub fn new<E: Engine, L: LockManager>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
