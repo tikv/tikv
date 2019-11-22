@@ -4,10 +4,10 @@ use std::io::{self, BufReader};
 use std::{fs, usize};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::util::io_limiter::IOLimiter;
 use engine::rocks::{IngestExternalFileOptions, Snapshot as DbSnapshot, Writable, WriteBatch, DB};
 use engine::{CfName, Iterable};
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+use engine_traits::IOLimiter;
 use engine_traits::{SstWriter, SstWriterBuilder};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
@@ -57,13 +57,13 @@ pub fn build_plain_cf_file(
 /// Build a snapshot file for the given column family in sst format.
 /// If there are no key-value pairs fetched, no files will be created at `path`,
 /// otherwise the file will be created and synchronized.
-pub fn build_sst_cf_file(
+pub fn build_sst_cf_file<L: IOLimiter>(
     path: &str,
     snap: &DbSnapshot,
     cf: CfName,
     start_key: &[u8],
     end_key: &[u8],
-    io_limiter: Option<&IOLimiter>,
+    io_limiter: Option<&L>,
 ) -> Result<BuildStatistics, Error> {
     let mut sst_writer = create_sst_file_writer(snap, cf, path)?;
     let mut stats = BuildStatistics::default();
@@ -155,6 +155,7 @@ mod tests {
     use super::*;
     use crate::raftstore::store::snap::tests::*;
     use engine::CF_DEFAULT;
+    use engine_rocks::RocksIOLimiter;
     use tempfile::Builder;
 
     struct TestStaleDetector;
@@ -220,7 +221,7 @@ mod tests {
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let sst_file_path = snap_cf_dir.path().join("sst");
-                let stats = build_sst_cf_file(
+                let stats = build_sst_cf_file::<RocksIOLimiter>(
                     &sst_file_path.to_str().unwrap(),
                     &DbSnapshot::new(Arc::clone(&db)),
                     CF_DEFAULT,

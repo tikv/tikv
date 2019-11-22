@@ -10,8 +10,8 @@ use std::sync::Arc;
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
 use engine_traits::Iterator;
+use engine_traits::{IOLimiter, LimitReader};
 use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::{SeekKey, SstReader, SstWriter, SstWriterBuilder};
 use external_storage::create_storage;
@@ -91,7 +91,7 @@ impl SSTImporter {
         url: &str,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limiter: Option<Arc<IOLimiter>>,
+        speed_limiter: Option<Arc<E::IOLimiter>>,
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
@@ -118,7 +118,7 @@ impl SSTImporter {
         url: &str,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limiter: Option<Arc<IOLimiter>>,
+        speed_limiter: Option<Arc<E::IOLimiter>>,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
 

@@ -411,6 +411,7 @@ mod tests {
     use engine::Engines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
+    use engine_rocks::RocksIOLimiter;
     use engine_rocks::RocksSstWriterBuilder;
     use engine_traits::{SstWriter, SstWriterBuilder};
     use tikv_util::config::{ReadableDuration, ReadableSize};
@@ -1047,7 +1048,7 @@ mod tests {
         // Generate a snapshot
         let default_sst_file_path = path.path().join("default.sst");
         let write_sst_file_path = path.path().join("write.sst");
-        build_sst_cf_file(
+        build_sst_cf_file::<RocksIOLimiter>(
             &default_sst_file_path.to_str().unwrap(),
             &Snapshot::new(Arc::clone(&engines.kv)),
             CF_DEFAULT,
@@ -1056,7 +1057,7 @@ mod tests {
             None,
         )
         .unwrap();
-        build_sst_cf_file(
+        build_sst_cf_file::<RocksIOLimiter>(
             &write_sst_file_path.to_str().unwrap(),
             &Snapshot::new(Arc::clone(&engines.kv)),
             CF_WRITE,
