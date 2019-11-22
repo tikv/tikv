@@ -60,6 +60,30 @@ impl<S: Snapshot> MvccTxn<S> {
             collapse_rollback: true,
         })
     }
+    pub fn for_scan(
+        snapshot: S,
+        scan_mode: Option<ScanMode>,
+        start_ts: TimeStamp,
+        fill_cache: bool,
+    ) -> Result<Self> {
+        Ok(Self {
+            // Use `ScanMode::Forward` when gc or prewrite with multiple `Mutation::Insert`,
+            // which would seek less times.
+            // When `scan_mode` is `Some(ScanMode::Forward)`, all keys must be writte by
+            // in ascending order.
+            reader: MvccReader::new(snapshot.clone(), scan_mode, fill_cache, IsolationLevel::Si),
+            gc_reader: MvccReader::new(
+                snapshot,
+                Some(ScanMode::Forward),
+                fill_cache,
+                IsolationLevel::Si,
+            ),
+            start_ts,
+            writes: vec![],
+            write_size: 0,
+            collapse_rollback: true,
+        })
+    }
 
     pub fn collapse_rollback(&mut self, collapse: bool) {
         self.collapse_rollback = collapse;
