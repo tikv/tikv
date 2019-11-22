@@ -188,7 +188,7 @@ impl SSTImporter {
                 // the SST is empty, so no need to iterate at all (should be impossible?)
                 return Ok(Some(meta.get_range().clone()));
             }
-            let start_key = keys::origin_key(iter.key()?);
+            let start_key = keys::origin_key(iter.key());
             if is_before_start_bound(start_key, &range_start) {
                 // SST's start is before the range to consume, so needs to iterate to skip over
                 return Ok(None);
@@ -197,7 +197,7 @@ impl SSTImporter {
 
             // seek to end and fetch the last (inclusive) key of the SST.
             iter.seek(SeekKey::End);
-            let last_key = keys::origin_key(iter.key()?);
+            let last_key = keys::origin_key(iter.key());
             if is_after_end_bound(last_key, &range_end) {
                 // SST's end is after the range to consume
                 return Ok(None);
@@ -228,7 +228,7 @@ impl SSTImporter {
             Bound::Excluded(_) => unreachable!(),
         };
         while iter.valid() {
-            let old_key = keys::origin_key(iter.key()?);
+            let old_key = keys::origin_key(iter.key());
             if is_after_end_bound(old_key, &range_end) {
                 break;
             }
@@ -242,7 +242,7 @@ impl SSTImporter {
 
             key.truncate(new_prefix_data_key_len);
             key.extend_from_slice(&old_key[old_prefix.len()..]);
-            sst_writer.put(&key, iter.value()?)?;
+            sst_writer.put(&key, iter.value())?;
             iter.next();
             if first_key.is_none() {
                 first_key = Some(keys::origin_key(&key).to_vec());
