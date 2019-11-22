@@ -4,8 +4,6 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read};
 use std::path::Path;
 
-use sha2::{Digest, Sha256};
-
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     let meta = fs::metadata(path)?;
     Ok(meta.len())
@@ -81,10 +79,10 @@ pub fn calc_crc32_bytes(contents: &[u8]) -> u32 {
     digest.finalize()
 }
 
-pub fn sha256(input: &[u8]) -> Result<Vec<u8>, ()> {
-    let mut hasher = Sha256::default();
-    hasher.input(input);
-    Ok(hex::encode(hasher.result()).into_bytes())
+/// Calculates the given content's SHA256 checksum.
+pub fn sha256(input: &[u8]) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+    openssl::hash::hash(openssl::hash::MessageDigest::sha256(), input)
+        .map(|digest| hex::encode(digest).into_bytes())
 }
 
 #[cfg(test)]
