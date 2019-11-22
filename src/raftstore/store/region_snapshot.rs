@@ -6,14 +6,12 @@ use engine::{
     SyncSnapshot,
 };
 use engine_rocks::{Compat, RocksEngineIterator};
-use engine_traits::SeekKey;
 use kvproto::metapb::Region;
 use std::sync::Arc;
 
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
-use crate::storage::Iterator;
 use engine_traits::util::check_key_in_range;
 use engine_traits::{Iterable, Iterator};
 use tikv_util::keybuilder::KeyBuilder;
@@ -145,26 +143,9 @@ impl Peekable for RegionSnapshot {
         )
         .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
-        self.snap.get_value(&data_key).map_err(|e| {
-            CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
-            if panic_when_unexpected_key_or_data() {
-                set_panic_mark();
-                panic!(
-                    "failed to get value of key {} in region {}: {:?}",
-                    hex::encode_upper(&key),
-                    self.region.get_id(),
-                    e,
-                );
-            } else {
-                error!(
-                    "failed to get value of key";
-                    "key" => hex::encode_upper(&key),
-                    "region" => self.region.get_id(),
-                    "error" => ?e,
-                );
-                e
-            }
-        })
+        self.snap
+            .get_value(&data_key)
+            .map_err(|e| self.handle_get_value_error(e, "", key))
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
@@ -176,27 +157,34 @@ impl Peekable for RegionSnapshot {
         )
         .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
-        self.snap.get_value_cf(cf, &data_key).map_err(|e| {
-            CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
-            if panic_when_unexpected_key_or_data() {
-                set_panic_mark();
-                panic!(
-                    "failed to get value of key {} in region {}: {:?}",
-                    hex::encode_upper(&key),
-                    self.region.get_id(),
-                    e,
-                );
-            } else {
-                error!(
-                    "failed to get value of key in cf";
-                    "key" => hex::encode_upper(&key),
-                    "region" => self.region.get_id(),
-                    "cf" => cf,
-                    "error" => ?e,
-                );
-                e
-            }
-        })
+        self.snap
+            .get_value_cf(cf, &data_key)
+            .map_err(|e| self.handle_get_value_error(e, cf, key))
+    }
+}
+
+impl RegionSnapshot {
+    #[inline(never)]
+    fn handle_get_value_error(&self, e: EngineError, cf: &str, key: &[u8]) -> EngineError {
+        CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
+        if panic_when_unexpected_key_or_data() {
+            set_panic_mark();
+            panic!(
+                "failed to get value of key {} in region {}: {:?}",
+                hex::encode_upper(&key),
+                self.region.get_id(),
+                e,
+            );
+        } else {
+            error!(
+                "failed to get value of key in cf";
+                "key" => hex::encode_upper(&key),
+                "region" => self.region.get_id(),
+                "cf" => cf,
+                "error" => ?e,
+            );
+            e
+        }
     }
 }
 
@@ -241,10 +229,7 @@ impl RegionIterator {
             .c()
             .iterator_opt(iter_opt)
             .expect("creating snapshot iterator"); // FIXME error handling
-        RegionIterator {
-            iter,
-            region,
-        }
+        RegionIterator { iter, region }
     }
 
     pub fn new_cf(
@@ -259,18 +244,15 @@ impl RegionIterator {
             .c()
             .iterator_cf_opt(cf, iter_opt)
             .expect("creating snapshot iterator"); // FIXME error handling
-        RegionIterator {
-            iter,
-            region,
-        }
+        RegionIterator { iter, region }
     }
 
     pub fn seek_to_first(&mut self) -> bool {
-        self.iter.seek_to_first()
+        crate::storage::Iterator::seek_to_first(&mut self.iter)
     }
 
     pub fn seek_to_last(&mut self) -> bool {
-        self.iter.seek_to_last()
+        crate::storage::Iterator::seek_to_last(&mut self.iter)
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
