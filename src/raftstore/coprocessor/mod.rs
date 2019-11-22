@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::DB;
+use engine::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
@@ -82,6 +83,14 @@ pub trait QueryObserver: Coprocessor {
 
     /// Hook to call after applying write request.
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {}
+}
+
+pub trait ApplySnapshotObserver: Coprocessor {
+    /// Hook to call before applying key from plain file.
+    fn pre_apply_plain_key(&self, _: &mut ObserverContext<'_>, _: CfName, _: &[u8]) {}
+
+    /// Hook to call before applying sst file.
+    fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName) {}
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use

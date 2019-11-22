@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::DB;
+use engine::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -18,6 +19,7 @@ struct Entry<T> {
 // TODO: change it to Send + Clone.
 pub type BoxAdminObserver = Box<dyn AdminObserver + Send + Sync>;
 pub type BoxQueryObserver = Box<dyn QueryObserver + Send + Sync>;
+pub type BoxApplySnapshotObserver = Box<dyn ApplySnapshotObserver + Send + Sync>;
 pub type BoxSplitCheckObserver = Box<dyn SplitCheckObserver + Send + Sync>;
 pub type BoxRoleObserver = Box<dyn RoleObserver + Send + Sync>;
 pub type BoxRegionChangeObserver = Box<dyn RegionChangeObserver + Send + Sync>;
@@ -27,6 +29,7 @@ pub type BoxRegionChangeObserver = Box<dyn RegionChangeObserver + Send + Sync>;
 pub struct Registry {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
+    apply_snapshot_observers: Vec<Entry<BoxApplySnapshotObserver>>,
     split_check_observers: Vec<Entry<BoxSplitCheckObserver>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
@@ -53,6 +56,14 @@ impl Registry {
 
     pub fn register_query_observer(&mut self, priority: u32, qo: BoxQueryObserver) {
         push!(priority, qo, self.query_observers);
+    }
+
+    pub fn register_apply_snapshot_observer(
+        &mut self,
+        priority: u32,
+        aso: BoxApplySnapshotObserver,
+    ) {
+        push!(priority, aso, self.apply_snapshot_observers);
     }
 
     pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver) {
@@ -213,6 +224,25 @@ impl CoprocessorHost {
                 admin
             );
         }
+    }
+
+    pub fn pre_apply_plain_key_from_snapshot(&self, region: &Region, cf: CfName, key: &[u8]) {
+        loop_ob!(
+            region,
+            &self.registry.apply_snapshot_observers,
+            pre_apply_plain_key,
+            cf,
+            key
+        );
+    }
+
+    pub fn pre_apply_sst_from_snapshot(&self, region: &Region, cf: CfName) {
+        loop_ob!(
+            region,
+            &self.registry.apply_snapshot_observers,
+            pre_apply_sst,
+            cf
+        );
     }
 
     pub fn new_split_checker_host(

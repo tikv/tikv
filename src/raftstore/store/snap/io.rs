@@ -98,13 +98,17 @@ pub fn build_sst_cf_file(
 }
 
 /// Apply the given snapshot file into a column family.
-pub fn apply_plain_cf_file(
+pub fn apply_plain_cf_file<F>(
     path: &str,
     stale_detector: &impl StaleDetector,
     db: &DB,
     cf: &str,
     batch_size: usize,
-) -> Result<(), Error> {
+    key_callback: F,
+) -> Result<(), Error>
+where
+    F: for<'r> Fn(&'r [u8]),
+{
     let mut decoder = BufReader::new(box_try!(File::open(path)));
     let cf_handle = box_try!(get_cf_handle(&db, cf));
     let wb = WriteBatch::default();
@@ -120,6 +124,7 @@ pub fn apply_plain_cf_file(
             return Ok(());
         }
         let value = box_try!(decoder.decode_compact_bytes());
+        key_callback(&key);
         box_try!(wb.put_cf(cf_handle, &key, &value));
         if wb.data_size() >= batch_size {
             box_try!(db.write(&wb));
@@ -203,6 +208,7 @@ mod tests {
                     &db1,
                     CF_DEFAULT,
                     16,
+                    |_| {},
                 )
                 .unwrap();
                 assert_eq_db(&db, &db1);

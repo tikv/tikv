@@ -329,6 +329,7 @@ impl SnapContext {
             region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
+            coprocessor_host: Arc::clone(&self.coprocessor_host),
         };
         s.apply(options)?;
 

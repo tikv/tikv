@@ -34,6 +34,7 @@ use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_si
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
 
+use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::metrics::{
     INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
     SNAPSHOT_CF_SIZE,
@@ -157,6 +158,7 @@ pub struct ApplyOptions {
     pub region: Region,
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
+    pub coprocessor_host: Arc<CoprocessorHost>,
 }
 
 /// `Snapshot` is a trait for snapshot.
@@ -843,6 +845,8 @@ impl Snapshot for Snap {
         box_try!(self.validate(Arc::clone(&options.db)));
 
         let abort_checker = ApplyAbortChecker(options.abort);
+        let coprocessor_host = options.coprocessor_host;
+        let region = options.region;
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty cf file.
@@ -852,10 +856,21 @@ impl Snapshot for Snap {
             if plain_file_used(cf_file.cf) {
                 let path = cf_file.path.to_str().unwrap();
                 let batch_size = options.write_batch_size;
-                snap_io::apply_plain_cf_file(path, &abort_checker, &options.db, cf, batch_size)?;
+                // let cb = |key| {
+                //     coprocessor_host.pre_apply_plain_key_from_snapshot(&region, cf, key)
+                // };
+                snap_io::apply_plain_cf_file(
+                    path,
+                    &abort_checker,
+                    &options.db,
+                    cf,
+                    batch_size,
+                    |_| {},
+                )?;
             } else {
                 let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
                 let path = cf_file.clone_path.to_str().unwrap();
+                coprocessor_host.pre_apply_sst_from_snapshot(&region, cf);
                 snap_io::apply_sst_cf_file(path, &options.db, cf)?
             }
         }
@@ -1378,6 +1393,7 @@ pub mod tests {
         SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
     };
 
+    use crate::raftstore::coprocessor::CoprocessorHost;
     use crate::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
     use crate::raftstore::store::{keys, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
     use crate::raftstore::Result;
@@ -1709,6 +1725,7 @@ pub mod tests {
             region: region.clone(),
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
+            coprocessor_host: Arc::new(CoprocessorHost::default()),
         };
         // Verify thte snapshot applying is ok.
         assert!(s4.apply(options).is_ok());
@@ -2024,6 +2041,7 @@ pub mod tests {
             region: region.clone(),
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
+            coprocessor_host: Arc::new(CoprocessorHost::default()),
         };
         assert!(s5.apply(options).is_err());
 
