@@ -4,6 +4,7 @@ use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::Result;
+use std::net::Ipv4Addr;
 
 const IPV6_LENGTH: usize = 16;
 const PREFIX_COMPAT: [u8; 12] = [0x00; 12];
@@ -23,6 +24,21 @@ pub fn is_ipv4_compat(addr: &Option<Bytes>) -> Result<Option<i64>> {
         }
         None => Ok(Some(0)),
     }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn inet_ntoa(input: &Option<Int>) -> Result<Option<Bytes>> {
+    Ok(input.as_ref().and_then(|input| {
+        if *input < 0 || *input > i64::from(u32::max_value()) {
+            None
+        } else {
+            let v = *input as u32;
+            let ipv4_addr =
+                Ipv4Addr::new((v >> 24) as u8, (v >> 16) as u8, (v >> 8) as u8, v as u8);
+            Some(format!("{}", ipv4_addr).into_bytes())
+        }
+    }))
 }
 
 #[cfg(test)]
@@ -61,6 +77,30 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
                 .evaluate(ScalarFuncSig::IsIPv4Compat)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_inet_ntoa() {
+        let test_cases = vec![
+            (Some(167773449), Some(b"10.0.5.9".to_vec())),
+            (Some(2063728641), Some(b"123.2.0.1".to_vec())),
+            (Some(0), Some(b"0.0.0.0".to_vec())),
+            (Some(545460846593), None),
+            (Some(-1), None),
+            (
+                Some(i64::from(u32::max_value())),
+                Some(b"255.255.255.255".to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::InetNtoa)
                 .unwrap();
             assert_eq!(output, expect);
         }
