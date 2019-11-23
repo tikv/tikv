@@ -4,12 +4,16 @@ use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
-use tikv::storage::mvcc::MvccTxn;
-use tikv::storage::{Key, Mutation, Options};
+use tikv::storage::mvcc::{self, MvccTxn};
+use tikv::storage::{Key, Mutation, Options, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
-fn setup_prewrite<E, F>(engine: &E, config: &BenchConfig<F>, start_ts: u64) -> Vec<Key>
+fn setup_prewrite<E, F>(
+    engine: &E,
+    config: &BenchConfig<F>,
+    start_ts: impl Into<TimeStamp>,
+) -> Vec<Key>
 where
     E: Engine,
     F: EngineFactory<E>,
@@ -18,7 +22,7 @@ where
     let option = Options::default();
 
     let snapshot = engine.snapshot(&ctx).unwrap();
-    let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
     let kvs = KvGenerator::new(config.key_length, config.value_length).generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
         txn.prewrite(
@@ -51,7 +55,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
         |(mutations, option)| {
             for (mutation, primary) in mutations {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
+                let mut txn = mvcc::new_txn!(snapshot, 1, true);
                 txn.prewrite(mutation, &primary, option).unwrap();
                 let modifies = txn.into_modifies();
                 black_box(engine.write(&ctx, modifies)).unwrap();
@@ -69,8 +73,8 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
-                txn.commit(key, 2).unwrap();
+                let mut txn = mvcc::new_txn!(snapshot, 1, true);
+                txn.commit(key, 2.into()).unwrap();
                 let modifies = txn.into_modifies();
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }
@@ -87,7 +91,7 @@ fn txn_rollback_prewrote<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
+                let mut txn = mvcc::new_txn!(snapshot, 1, true);
                 txn.rollback(key).unwrap();
                 let modifies = txn.into_modifies();
                 black_box(engine.write(&ctx, modifies)).unwrap();
@@ -105,7 +109,7 @@ fn txn_rollback_conflict<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
+                let mut txn = mvcc::new_txn!(snapshot, 1, true);
                 txn.rollback(key).unwrap();
                 let modifies = txn.into_modifies();
                 black_box(engine.write(&ctx, modifies)).unwrap();
@@ -131,7 +135,7 @@ fn txn_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
         |keys| {
             for key in keys {
                 let snapshot = engine.snapshot(&ctx).unwrap();
-                let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
+                let mut txn = mvcc::new_txn!(snapshot, 1, true);
                 txn.rollback(key).unwrap();
                 let modifies = txn.into_modifies();
                 black_box(engine.write(&ctx, modifies)).unwrap();
