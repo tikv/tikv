@@ -136,6 +136,17 @@ pub fn locate_binary_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result
         .or(Some(0)))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn reverse_binary(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|bytes| {
+        let mut s = bytes.to_vec();
+        s.reverse();
+        s
+    }))
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,6 +517,27 @@ mod tests {
                 .push_param(substr)
                 .push_param(s)
                 .evaluate(ScalarFuncSig::LocateBinary2Args)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_reverse_binary() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(b"olleh".to_vec())),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (
+                Some("中国".as_bytes().to_vec()),
+                Some(vec![0o275u8, 0o233u8, 0o345u8, 0o255u8, 0o270u8, 0o344u8]),
+            ),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::ReverseBinary)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
