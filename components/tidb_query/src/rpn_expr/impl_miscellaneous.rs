@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_inet6_aton() {
-        let cases = vec![
+        let test_cases = vec![
             (
                 Some(b"0.0.0.0".to_vec()),
                 Some(vec![0x00, 0x00, 0x00, 0x00]),
