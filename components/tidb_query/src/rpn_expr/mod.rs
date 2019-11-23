@@ -351,6 +351,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
         ScalarFuncSig::Left => left_fn_meta(),
         ScalarFuncSig::LocateBinary2Args => locate_binary_2_args_fn_meta(),
+        ScalarFuncSig::LocateBinary3Args => locate_binary_3_args_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
