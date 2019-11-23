@@ -1,10 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
+use engine::rocks::{DBVector, TablePropertiesCollection, DB};
 use engine::{
     self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
     SyncSnapshot,
 };
+use engine_rocks::{Compat, RocksEngineIterator};
+use engine_traits::SeekKey;
 use kvproto::metapb::Region;
 use std::sync::Arc;
 
@@ -12,6 +14,7 @@ use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
 use engine_traits::util::check_key_in_range;
+use engine_traits::{Iterable, Iterator};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -200,7 +203,7 @@ impl Peekable for RegionSnapshot {
 /// iterate in the region. It behaves as if underlying
 /// db only contains one region.
 pub struct RegionIterator {
-    iter: DBIterator<Arc<DB>>,
+    iter: RocksEngineIterator,
     valid: bool,
     region: Arc<Region>,
     start_key: Vec<u8>,
@@ -238,7 +241,10 @@ impl RegionIterator {
         update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
-        let iter = snap.db_iterator(iter_opt);
+        let iter = snap
+            .c()
+            .iterator_opt(iter_opt)
+            .expect("creating snapshot iterator"); // FIXME error handling
         RegionIterator {
             iter,
             valid: false,
@@ -258,7 +264,10 @@ impl RegionIterator {
         update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
-        let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
+        let iter = snap
+            .c()
+            .iterator_cf_opt(cf, iter_opt)
+            .expect("creating snapshot iterator"); // FIXME error handling
         RegionIterator {
             iter,
             valid: false,
@@ -362,10 +371,7 @@ impl RegionIterator {
 
     #[inline]
     pub fn status(&self) -> Result<()> {
-        self.iter
-            .status()
-            .map_err(|e| EngineError::RocksDb(e))
-            .map_err(From::from)
+        self.iter.status().map_err(From::from)
     }
 
     #[inline]
@@ -411,6 +417,7 @@ mod tests {
     use engine::Engines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
+    use engine_rocks::RocksIOLimiter;
     use engine_rocks::RocksSstWriterBuilder;
     use engine_traits::{SstWriter, SstWriterBuilder};
     use tikv_util::config::{ReadableDuration, ReadableSize};
@@ -895,8 +902,8 @@ mod tests {
         // Write some mvcc keys and values into db
         // default_cf : a_7, b_7
         // write_cf : a_8, b_8
-        let start_ts = 7;
-        let commit_ts = 8;
+        let start_ts = 7.into();
+        let commit_ts = 8.into();
         let write = Write::new(WriteType::Put, start_ts, None);
         let db = &engines.kv;
         let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
@@ -1047,7 +1054,7 @@ mod tests {
         // Generate a snapshot
         let default_sst_file_path = path.path().join("default.sst");
         let write_sst_file_path = path.path().join("write.sst");
-        build_sst_cf_file(
+        build_sst_cf_file::<RocksIOLimiter>(
             &default_sst_file_path.to_str().unwrap(),
             &Snapshot::new(Arc::clone(&engines.kv)),
             CF_DEFAULT,
@@ -1056,7 +1063,7 @@ mod tests {
             None,
         )
         .unwrap();
-        build_sst_cf_file(
+        build_sst_cf_file::<RocksIOLimiter>(
             &write_sst_file_path.to_str().unwrap(),
             &Snapshot::new(Arc::clone(&engines.kv)),
             CF_WRITE,
@@ -1091,7 +1098,7 @@ mod tests {
         r.set_start_key(b"a".to_vec());
         r.set_end_key(b"z".to_vec());
         let snapshot = RegionSnapshot::from_raw(Arc::clone(&engines1.kv), r);
-        let mut scanner = ScannerBuilder::new(snapshot, 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(Some(Key::from_raw(b"a")), None)
             .build()
             .unwrap();

@@ -6,8 +6,10 @@ use std::option::Option;
 use std::sync::Arc;
 
 use super::{CFHandle, DBVector, ReadOptions, UnsafeSnap, DB};
+use crate::iterable::IterOptionsExt;
 use crate::{DBIterator, Error, IterOption, Iterable, Peekable, Result};
 
+#[repr(C)] // Guarantee same representation as in engine_rocks
 pub struct Snapshot {
     db: Arc<DB>,
     snap: UnsafeSnap,
@@ -43,23 +45,6 @@ impl Snapshot {
     pub fn get_db(&self) -> Arc<DB> {
         Arc::clone(&self.db)
     }
-
-    pub fn db_iterator(&self, iter_opt: IterOption) -> DBIterator<Arc<DB>> {
-        let mut opt = iter_opt.build_read_opts();
-        unsafe {
-            opt.set_snapshot(&self.snap);
-        }
-        DBIterator::new(Arc::clone(&self.db), opt)
-    }
-
-    pub fn db_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<Arc<DB>>> {
-        let handle = super::util::get_cf_handle(&self.db, cf)?;
-        let mut opt = iter_opt.build_read_opts();
-        unsafe {
-            opt.set_snapshot(&self.snap);
-        }
-        Ok(DBIterator::new_cf(Arc::clone(&self.db), handle, opt))
-    }
 }
 
 impl Debug for Snapshot {
@@ -77,6 +62,7 @@ impl Drop for Snapshot {
 }
 
 #[derive(Debug, Clone)]
+#[repr(transparent)] // Guarantee same representation as in engine_rocks
 pub struct SyncSnapshot(Arc<Snapshot>);
 
 impl Deref for SyncSnapshot {

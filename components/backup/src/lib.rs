@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![recursion_limit = "200"]
+#![feature(box_patterns)]
 
 #[macro_use]
 extern crate slog_global;

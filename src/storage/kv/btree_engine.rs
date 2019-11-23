@@ -12,8 +12,8 @@ use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 
 use crate::storage::kv::{
-    Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError, Iterator, Modify,
-    Result as EngineResult, ScanMode, Snapshot,
+    Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError,
+    ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, ScanMode, Snapshot,
 };
 use crate::storage::{Key, Value};
 
@@ -77,7 +77,7 @@ impl Engine for BTreeEngine {
         cb: EngineCallback<()>,
     ) -> EngineResult<()> {
         if modifies.is_empty() {
-            return Err(EngineError::EmptyRequest);
+            return Err(EngineError::from(EngineErrorInner::EmptyRequest));
         }
         cb((CbContext::new(), write_modifies(&self, modifies)));
 
