@@ -932,7 +932,7 @@ impl ScalarFunc {
                     if *byte == b'\'' || *byte == b'\\' {
                         result.push(b'\\');
                         result.push(*byte)
-                    } else if *byte == b'\0'{
+                    } else if *byte == b'\0' {
                         result.push(b'\\');
                         result.push(b'0')
                     } else if *byte == 26u8 {
