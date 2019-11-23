@@ -922,30 +922,25 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        match self.children[0].eval_string(ctx, row) {
-            Err(e) => return Err(e.into()),
-            Ok(None) => return Ok(Some(Cow::Borrowed(b"NULL"))),
-            Ok(Some(s)) => {
-                let mut result = Vec::<u8>::with_capacity(s.len());
-                result.push(b'\'');
-                for byte in s.into_iter() {
-                    if *byte == b'\'' || *byte == b'\\' {
-                        result.push(b'\\');
-                        result.push(*byte)
-                    } else if *byte == b'\0' {
-                        result.push(b'\\');
-                        result.push(b'0')
-                    } else if *byte == 26u8 {
-                        result.push(b'\\');
-                        result.push(b'Z');
-                    } else {
-                        result.push(*byte)
-                    }
-                }
-                result.push(b'\'');
-                Ok(Some(Cow::Owned(result)))
+        let s = try_opt_or!(self.children[0].eval_string(ctx, row), Some(Cow::Borrowed(b"NULL")));
+        let mut result = Vec::<u8>::with_capacity(s.len());
+        result.push(b'\'');
+        for byte in s.iter() {
+            if *byte == b'\'' || *byte == b'\\' {
+                result.push(b'\\');
+                result.push(*byte)
+            } else if *byte == b'\0' {
+                result.push(b'\\');
+                result.push(b'0')
+            } else if *byte == 26u8 {
+                result.push(b'\\');
+                result.push(b'Z');
+            } else {
+                result.push(*byte)
             }
         }
+        result.push(b'\'');
+        Ok(Some(Cow::Owned(result)))
     }
 }
 
