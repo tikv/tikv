@@ -914,6 +914,38 @@ impl ScalarFunc {
             .map(|i| 1 + i as i64)
             .or(Some(0)))
     }
+
+    #[inline]
+    pub fn quote<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        match self.children[0].eval_string(ctx, row) {
+            Err(e) => return Err(e.into()),
+            Ok(None) => return Ok(Some(Cow::Borrowed(b"NULL"))),
+            Ok(Some(s)) => {
+                let mut result = Vec::<u8>::with_capacity(s.len());
+                result.push('\'' as u8);
+                for byte in s.into_iter() {
+                    if *byte == '\'' as u8 || *byte == '\\' as u8 {
+                        result.push('\\' as u8);
+                        result.push(*byte)
+                    } else if *byte == '0' as u8 {
+                        result.push('\\' as u8);
+                        result.push('0' as u8)
+                    } else if *byte == 'Z' as u8 {
+                        result.push('\\' as u8);
+                        result.push('Z' as u8);
+                    } else {
+                        result.push(*byte)
+                    }
+                }
+                result.push('\'' as u8);
+                Ok(Some(Cow::Owned(result)))
+            }
+        }
+    }
 }
 
 // when target_len is 0, return Some(0), means the pad function should return empty string
@@ -3385,5 +3417,27 @@ mod tests {
             let got = eval_func(ScalarFuncSig::InstrBinary, &[substr, s]).unwrap();
             assert_eq!(got, exp);
         }
+    }
+
+    #[test]
+    fn test_quote() {
+        let cases: Vec<(&str, &str)> = vec![
+            (r"Don\'t!", r"'Don\\\'t!'"),
+            (r"Don't", r"'Don\'t'"),
+            (r"\'", r"'\\\''"),
+            (r#"\""#, r#"'\\"'"#),
+            (r"萌萌哒(๑•ᴗ•๑)😊", r"'萌萌哒(๑•ᴗ•๑)😊'"),
+            (r"㍿㌍㍑㌫", r"'㍿㌍㍑㌫'"),
+        ];
+
+        for (input, expect) in cases {
+            let input = Datum::Bytes(input.as_bytes().to_vec());
+            let expect_vec = Datum::Bytes(expect.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::Quote, &[input]).unwrap();
+            assert_eq!(got, expect_vec)
+        }
+
+        let got = eval_func(ScalarFuncSig::Quote, &[Datum::Null]).unwrap();
+        assert_eq!(got, Datum::Bytes("NULL".as_bytes().to_vec()))
     }
 }
