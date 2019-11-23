@@ -146,7 +146,6 @@ pub fn reverse_binary(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     }))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
