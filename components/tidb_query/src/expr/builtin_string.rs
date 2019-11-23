@@ -916,6 +916,7 @@ impl ScalarFunc {
     }
 
     #[inline]
+    // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_quote
     pub fn quote<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -926,7 +927,7 @@ impl ScalarFunc {
             Ok(None) => return Ok(Some(Cow::Borrowed(b"NULL"))),
             Ok(Some(s)) => {
                 let mut result = Vec::<u8>::with_capacity(s.len());
-                result.push('\'' as u8);
+                result.push(b'\'');
                 for byte in s.into_iter() {
                     if *byte == '\'' as u8 || *byte == '\\' as u8 {
                         result.push('\\' as u8);
@@ -941,7 +942,7 @@ impl ScalarFunc {
                         result.push(*byte)
                     }
                 }
-                result.push('\'' as u8);
+                result.push(b'\'');
                 Ok(Some(Cow::Owned(result)))
             }
         }
@@ -3428,6 +3429,7 @@ mod tests {
             (r#"\""#, r#"'\\"'"#),
             (r"萌萌哒(๑•ᴗ•๑)😊", r"'萌萌哒(๑•ᴗ•๑)😊'"),
             (r"㍿㌍㍑㌫", r"'㍿㌍㍑㌫'"),
+            (r"Z0", r"'\Z\0'")
         ];
 
         for (input, expect) in cases {
@@ -3437,7 +3439,8 @@ mod tests {
             assert_eq!(got, expect_vec)
         }
 
+        //check for null
         let got = eval_func(ScalarFuncSig::Quote, &[Datum::Null]).unwrap();
-        assert_eq!(got, Datum::Bytes("NULL".as_bytes().to_vec()))
+        assert_eq!(got, Datum::Bytes(b"NULL".to_vec()))
     }
 }
