@@ -273,7 +273,7 @@ mod tests {
         // test NULL case
         let test_null_case = |sig| {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(None)
+                .push_param(None::<DateTime>)
                 .evaluate::<Int>(sig)
                 .unwrap();
             assert_eq!(output, None);
