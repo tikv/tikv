@@ -93,21 +93,25 @@ pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     }))
 }
 
-#[rpn_fn(varg, min_args = 3)]
+#[rpn_fn]
 #[inline]
-pub fn replace(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
-    if args.iter().any(|arg| arg.is_none()) {
-        return Ok(None);
-    }
-    let s = String::from_utf8_lossy(args[0].as_ref().unwrap());
-    let from_str = String::from_utf8_lossy(args[1].as_ref().unwrap());
-    let to_str = String::from_utf8_lossy(args[2].as_ref().unwrap());
-    if from_str.is_empty() {
-        return Ok(Some(s.into_owned().into_bytes()));
-    }
-    Ok(Some(
-        s.replace(from_str.as_ref(), to_str.as_ref()).into_bytes(),
-    ))
+pub fn replace(
+    s: &Option<Bytes>,
+    from_str: &Option<Bytes>,
+    to_str: &Option<Bytes>,
+) -> Result<Option<Bytes>> {
+    Ok(match (s, from_str, to_str) {
+        (Some(s), Some(from_str), Some(to_str)) => {
+            if from_str.is_empty() {
+                return Ok(Some(s.clone()));
+            }
+            let s = String::from_utf8_lossy(&s);
+            let from_str = String::from_utf8_lossy(&from_str);
+            let to_str = String::from_utf8_lossy(&to_str);
+            Some(s.replace(from_str.as_ref(), to_str.as_ref()).into_bytes())
+        }
+        _ => None,
+    })
 }
 
 #[rpn_fn]
