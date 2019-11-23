@@ -60,19 +60,19 @@ pub fn hour(t: &Option<DateTime>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 pub fn minute(t: &Option<DateTime>) -> Result<Option<Int>> {
-    Ok(t.as_ref().map(|t| i64::from(t.minutes())))
+    Ok(t.as_ref().map(|t| i64::from(t.minute())))
 }
 
 #[rpn_fn]
 #[inline]
 pub fn second(t: &Option<DateTime>) -> Result<Option<Int>> {
-    Ok(t.as_ref().map(|t| i64::from(t.secs())))
+    Ok(t.as_ref().map(|t| i64::from(t.second())))
 }
 
 #[rpn_fn]
 #[inline]
 pub fn micro_second(t: &Option<DateTime>) -> Result<Option<Int>> {
-    Ok(t.as_ref().map(|t| i64::from(t.subsec_micros())))
+    Ok(t.as_ref().map(|t| i64::from(t.micro())))
 }
 
 #[cfg(test)]
