@@ -1,3 +1,5 @@
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use futures::Future;
 use grpcio::{RpcContext, UnarySink};
 use kvproto::diagnosticspb::{
