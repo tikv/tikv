@@ -929,15 +929,15 @@ impl ScalarFunc {
                 let mut result = Vec::<u8>::with_capacity(s.len());
                 result.push(b'\'');
                 for byte in s.into_iter() {
-                    if *byte == '\'' as u8 || *byte == '\\' as u8 {
-                        result.push('\\' as u8);
+                    if *byte == b'\'' || *byte == b'\\' {
+                        result.push(b'\\');
                         result.push(*byte)
-                    } else if *byte == '0' as u8 {
-                        result.push('\\' as u8);
-                        result.push('0' as u8)
-                    } else if *byte == 'Z' as u8 {
-                        result.push('\\' as u8);
-                        result.push('Z' as u8);
+                    } else if *byte == b'\0'{
+                        result.push(b'\\');
+                        result.push(b'0')
+                    } else if *byte == 26u8 {
+                        result.push(b'\\');
+                        result.push(b'Z');
                     } else {
                         result.push(*byte)
                     }
@@ -1095,7 +1095,7 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 mod tests {
     use super::{encoded_size, TrimDirection};
     use crate::codec::mysql::charset::CHARSET_BIN;
-    use std::{f64, i64};
+    use std::{f64, i64, str};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use tipb::{Expr, ScalarFuncSig};
 
@@ -3429,7 +3429,7 @@ mod tests {
             (r#"\""#, r#"'\\"'"#),
             (r"萌萌哒(๑•ᴗ•๑)😊", r"'萌萌哒(๑•ᴗ•๑)😊'"),
             (r"㍿㌍㍑㌫", r"'㍿㌍㍑㌫'"),
-            (r"Z0", r"'\Z\0'")
+            (str::from_utf8(&[26, 0]).unwrap(), r"'\Z\0'"),
         ];
 
         for (input, expect) in cases {
