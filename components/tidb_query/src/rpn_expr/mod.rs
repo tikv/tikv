@@ -6,6 +6,7 @@ pub mod impl_arithmetic;
 pub mod impl_cast;
 pub mod impl_compare;
 pub mod impl_control;
+pub mod impl_encryption;
 pub mod impl_json;
 pub mod impl_like;
 pub mod impl_math;
@@ -26,6 +27,7 @@ use self::impl_arithmetic::*;
 use self::impl_cast::*;
 use self::impl_compare::*;
 use self::impl_control::*;
+use self::impl_encryption::*;
 use self::impl_json::*;
 use self::impl_like::*;
 use self::impl_math::*;
@@ -350,6 +352,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
         ScalarFuncSig::Left => left_fn_meta(),
         ScalarFuncSig::LocateBinary2Args => locate_binary_2_args_fn_meta(),
+        ScalarFuncSig::Uncompress => uncompress_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
