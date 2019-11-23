@@ -53,26 +53,26 @@ pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<In
 
 #[rpn_fn]
 #[inline]
-pub fn hour(t: &Option<DateTime>) -> Result<Option<Int>> {
-    Ok(t.as_ref().map(|t| i64::from(t.hour())))
+pub fn hour(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.hours())))
 }
 
 #[rpn_fn]
 #[inline]
-pub fn minute(t: &Option<DateTime>) -> Result<Option<Int>> {
-    Ok(t.as_ref().map(|t| i64::from(t.minute())))
+pub fn minute(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.minutes())))
 }
 
 #[rpn_fn]
 #[inline]
-pub fn second(t: &Option<DateTime>) -> Result<Option<Int>> {
-    Ok(t.as_ref().map(|t| i64::from(t.second())))
+pub fn second(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.secs())))
 }
 
 #[rpn_fn]
 #[inline]
-pub fn micro_second(t: &Option<DateTime>) -> Result<Option<Int>> {
-    Ok(t.as_ref().map(|t| i64::from(t.micro())))
+pub fn micro_second(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.subsec_micros())))
 }
 
 #[cfg(test)]
@@ -253,13 +253,11 @@ mod tests {
             ("272:59:59.99", 0, 273, 0, 0, 0),
         ];
 
-        let mut ctx = EvalContext::default();
         for (arg, fsp, h, m, s, ms) in cases {
-            let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, fsp, true).unwrap());
-
+            let duration = Some(Duration::parse(arg.as_bytes(), fsp).unwrap());
             let test_case_func = |sig, res| {
                 let output = RpnFnScalarEvaluator::new()
-                    .push_param(datetime.clone())
+                    .push_param(duration.clone())
                     .evaluate::<Int>(sig)
                     .unwrap();
                 assert_eq!(output, Some(res));
@@ -273,7 +271,7 @@ mod tests {
         // test NULL case
         let test_null_case = |sig| {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(None::<DateTime>)
+                .push_param(None::<Duration>)
                 .evaluate::<Int>(sig)
                 .unwrap();
             assert_eq!(output, None);
