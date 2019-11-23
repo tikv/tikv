@@ -7,6 +7,7 @@ use super::super::expr::EvalContext;
 use crate::codec::data_type::*;
 use crate::codec::mysql::Time;
 use crate::codec::Error;
+use crate::expr::SqlMode;
 use crate::Result;
 
 #[rpn_fn(capture = [ctx])]
@@ -59,6 +60,23 @@ pub fn from_days(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Time
         let time = Time::from_days(ctx, daynr as u32)?;
         Ok(Some(time))
     })
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn month(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    let t = match t {
+        Some(v) => v,
+        _ => return Ok(None),
+    };
+    if t.is_zero() {
+        if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .map(|_| Ok(None))?;
+        }
+    }
+    Ok(Some(Int::from(t.month())))
 }
 
 #[cfg(test)]
@@ -249,6 +267,35 @@ mod tests {
                 .evaluate(ScalarFuncSig::FromDays)
                 .unwrap();
             assert_eq!(output, datetime);
+        }
+    }
+
+    #[test]
+    fn test_month() {
+        let cases = vec![
+            (Some("0000-00-00 00:00:00"), Some(0i64)),
+            (Some("2018-01-01 01:01:01"), Some(1i64)),
+            (Some("2018-02-01 01:01:01"), Some(2i64)),
+            (Some("2018-03-01 01:01:01"), Some(3i64)),
+            (Some("2018-04-01 01:01:01"), Some(4i64)),
+            (Some("2018-05-01 01:01:01"), Some(5i64)),
+            (Some("2018-06-01 01:01:01"), Some(6i64)),
+            (Some("2018-07-01 01:01:01"), Some(7i64)),
+            (Some("2018-08-01 01:01:01"), Some(8i64)),
+            (Some("2018-09-01 01:01:01"), Some(9i64)),
+            (Some("2018-10-01 01:01:01"), Some(10i64)),
+            (Some("2018-11-01 01:01:01"), Some(11i64)),
+            (Some("2018-12-01 01:01:01"), Some(12i64)),
+            (None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (time, expect) in cases {
+            let time = time.map(|t| DateTime::parse_datetime(&mut ctx, t, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(time)
+                .evaluate(ScalarFuncSig::Month)
+                .unwrap();
+            assert_eq!(output, expect);
         }
     }
 }
