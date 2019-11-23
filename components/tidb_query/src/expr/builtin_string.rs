@@ -922,7 +922,10 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let s = try_opt_or!(self.children[0].eval_string(ctx, row), Some(Cow::Borrowed(b"NULL")));
+        let s = try_opt_or!(
+            self.children[0].eval_string(ctx, row),
+            Some(Cow::Borrowed(b"NULL"))
+        );
         let mut result = Vec::<u8>::with_capacity(s.len());
         result.push(b'\'');
         for byte in s.iter() {
