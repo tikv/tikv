@@ -255,7 +255,7 @@ mod tests {
 
         let mut ctx = EvalContext::default();
         for (arg, fsp, h, m, s, ms) in cases {
-            let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, fsp, true).unwrap());
 
             let test_case_func = |sig, res| {
                 let output = RpnFnScalarEvaluator::new()
