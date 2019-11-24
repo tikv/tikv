@@ -1889,8 +1889,33 @@ mod tests {
                 Datum::Bytes("abc,CAFÉ,数据库".as_bytes().to_vec()),
             ),
             (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Null,
+                    Datum::Bytes(b"defg".to_vec()),
+                ],
+                Datum::Bytes(b"abc,defg".to_vec()),
+            ),
+            (
                 vec![Datum::Null, Datum::Bytes(b"abc".to_vec())],
                 Datum::Null,
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Null,
+                    Datum::Bytes(b"abc".to_vec()),
+                ],
+                Datum::Bytes(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Null,
+                ],
+                Datum::Bytes(b"abc".to_vec()),
             ),
             (
                 vec![
@@ -1907,11 +1932,10 @@ mod tests {
                     Datum::Bytes(b"abc".to_vec()),
                     Datum::Null,
                     Datum::Null,
-                    Datum::Bytes(b"".to_vec()),
                     Datum::Bytes(b"defg".to_vec()),
                     Datum::Null,
                 ],
-                Datum::Bytes(b"abc,,defg".to_vec()),
+                Datum::Bytes(b"abc,defg".to_vec()),
             ),
             (
                 vec![
