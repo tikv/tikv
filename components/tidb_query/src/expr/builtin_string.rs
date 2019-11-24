@@ -173,19 +173,25 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let sep = try_opt!(self.children[0].eval_string(ctx, row));
-        let mut output = Vec::new();
-        let rest = &self.children[1..];
-        let last_idx = rest.len() - 1;
-        for (idx, x) in rest.iter().enumerate() {
-            let s = x.eval_string(ctx, row)?;
-            if let Some(s) = s {
-                output.extend_from_slice(s.as_ref());
-                if idx != last_idx {
-                    output.extend_from_slice(sep.as_ref());
+        use crate::expr::Expression;
+        fn collect_valid_strs<'a, 'b: 'a>(
+            exps: &'b [Expression],
+            ctx: &mut EvalContext,
+            row: &'a [Datum],
+        ) -> Result<Vec<Cow<'a, [u8]>>> {
+            let mut result = Vec::new();
+            for exp in exps {
+                let x = exp.eval_string(ctx, row)?;
+                if let Some(s) = x {
+                    result.push(s);
                 }
             }
+            Ok(result)
         }
+
+        let sep = try_opt!(self.children[0].eval_string(ctx, row));
+        let strs = collect_valid_strs(&self.children[1..], ctx, row)?;
+        let output = strs.as_slice().join(sep.as_ref());
         Ok(Some(Cow::Owned(output)))
     }
 
@@ -1906,10 +1912,30 @@ mod tests {
             (
                 vec![
                     Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Null,
+                ],
+                Datum::Bytes(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
                     Datum::Bytes(b"".to_vec()),
                     Datum::Bytes(b"abc".to_vec()),
                 ],
                 Datum::Bytes(b",abc".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Null,
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Null,
+                    Datum::Null,
+                    Datum::Bytes(b"defg".to_vec()),
+                    Datum::Null,
+                ],
+                Datum::Bytes(b"abc,defg".to_vec()),
             ),
             (
                 vec![
