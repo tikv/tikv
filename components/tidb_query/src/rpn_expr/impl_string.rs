@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::str;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
@@ -109,6 +110,68 @@ pub fn rtrim(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
             Vec::new()
         }
     }))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            if *rhs <= 0 {
+                return Ok(Some(Vec::new()));
+            }
+            match str::from_utf8(&*lhs) {
+                Ok(s) => {
+                    let l = *rhs as usize;
+                    if s.chars().count() > l {
+                        Ok(Some(s.chars().take(l).collect::<String>().into_bytes()))
+                    } else {
+                        Ok(Some(s.to_string().into_bytes()))
+                    }
+                }
+                Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn hex_str_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    Ok(arg.as_ref().map(|b| hex::encode_upper(b).into_bytes()))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn locate_binary_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result<Option<i64>> {
+    let (substr, s) = match (substr, s) {
+        (Some(v1), Some(v2)) => (v1, v2),
+        _ => return Ok(None),
+    };
+
+    Ok(twoway::find_bytes(s.as_slice(), substr.as_slice())
+        .map(|i| 1 + i as i64)
+        .or(Some(0)))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn locate_binary_3_args(
+    substr: &Option<Bytes>,
+    s: &Option<Bytes>,
+    pos: &Option<Int>,
+) -> Result<Option<Int>> {
+    if let (Some(substr), Some(s), Some(pos)) = (substr, s, pos) {
+        if *pos < 1 || *pos as usize > s.len() + 1 {
+            return Ok(Some(0));
+        }
+        Ok(twoway::find_bytes(&s[*pos as usize - 1..], substr)
+            .map(|i| pos + i as i64)
+            .or(Some(0)))
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -447,6 +510,151 @@ mod tests {
                 .evaluate(ScalarFuncSig::RTrim)
                 .unwrap();
             assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+        }
+    }
+
+    #[test]
+    fn test_left() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(0i64), Some(b"".to_vec())),
+            (Some(b"hello".to_vec()), Some(1i64), Some(b"h".to_vec())),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(2i64),
+                Some("数据".as_bytes().to_vec()),
+            ),
+            (
+                Some("忠犬ハチ公".as_bytes().to_vec()),
+                Some(3i64),
+                Some("忠犬ハ".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(100i64),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(-1i64),
+                Some(b"".to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(i64::max_value()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (None, Some(-1), None),
+            (Some(b"hello".to_vec()), None, None),
+            (None, None, None),
+        ];
+
+        for (lhs, rhs, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::Left)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_hex_str_arg() {
+        let test_cases = vec![
+            (Some(b"abc".to_vec()), Some(b"616263".to_vec())),
+            (
+                Some("你好".as_bytes().to_vec()),
+                Some(b"E4BDA0E5A5BD".to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::HexStrArg)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_locate_binary_2_args() {
+        let test_cases = vec![
+            (None, None, None),
+            (None, Some("abc"), None),
+            (Some("abc"), None, None),
+            (Some(""), Some("foobArbar"), Some(1)),
+            (Some(""), Some(""), Some(1)),
+            (Some("xxx"), Some(""), Some(0)),
+            (Some("BaR"), Some("foobArbar"), Some(0)),
+            (Some("bar"), Some("foobArbar"), Some(7)),
+            (
+                Some("好世"),
+                Some("你好世界"),
+                Some(1 + "你好世界".find("好世").unwrap() as i64),
+            ),
+        ];
+
+        for (substr, s, expect_output) in test_cases {
+            let substr = substr.map(|v| v.as_bytes().to_vec());
+            let s = s.map(|v| v.as_bytes().to_vec());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(substr)
+                .push_param(s)
+                .evaluate(ScalarFuncSig::LocateBinary2Args)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_locate_binary_3_args() {
+        let cases = vec![
+            ("", "foobArbar", 0, 0),
+            ("", "foobArbar", 1, 1),
+            ("", "foobArbar", 2, 2),
+            ("", "foobArbar", 9, 9),
+            ("", "foobArbar", 10, 10),
+            ("", "foobArbar", 11, 0),
+            ("", "", 1, 1),
+            ("BaR", "foobArbar", 3, 0),
+            ("bar", "foobArbar", 1, 7),
+            (
+                "好世",
+                "你好世界",
+                1,
+                1 + "你好世界".find("好世").unwrap() as i64,
+            ),
+        ];
+
+        for (substr, s, pos, exp) in cases {
+            let substr = Some(substr.as_bytes().to_vec());
+            let s = Some(s.as_bytes().to_vec());
+            let pos = Some(pos);
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(substr)
+                .push_param(s)
+                .push_param(pos)
+                .evaluate(ScalarFuncSig::LocateBinary3Args)
+                .unwrap();
+            assert_eq!(output, Some(exp))
+        }
+
+        let null_cases = vec![
+            (None, Some(b"".to_vec()), Some(1), None),
+            (Some(b"".to_vec()), None, None, None),
+            (None, None, None, None),
+        ];
+
+        for (substr, s, pos, exp) in null_cases {
+            let output: Option<i64> = RpnFnScalarEvaluator::new()
+                .push_param(substr)
+                .push_param(s)
+                .push_param(pos)
+                .evaluate(ScalarFuncSig::LocateBinary3Args)
+                .unwrap();
+            assert_eq!(output, exp)
         }
     }
 }
