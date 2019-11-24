@@ -190,15 +190,8 @@ impl ScalarFunc {
         }
 
         let sep = try_opt!(self.children[0].eval_string(ctx, row));
-        let mut output = Vec::new();
         let strs = collect_valid_strs(&self.children[1..], ctx, row)?;
-        for (idx, s) in strs.iter().enumerate() {
-            if idx != 0 {
-                output.extend_from_slice(sep.as_ref());
-            }
-            output.extend_from_slice(s.as_ref());
-        }
-
+        let output = strs.as_slice().join(sep.as_ref());
         Ok(Some(Cow::Owned(output)))
     }
 
