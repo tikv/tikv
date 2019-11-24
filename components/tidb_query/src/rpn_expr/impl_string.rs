@@ -43,14 +43,16 @@ pub fn concat(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
 #[rpn_fn(varg, min_args = 2)]
 #[inline]
 pub fn concat_ws(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
-    if let (Some(sep), Some(s1)) = (args[0], args[1]) {
-        let mut output = s1.to_vec();
-        for s in &args[2..] {
-            if let Some(s) = s {
-                output.extend_from_slice(sep);
+    if let Some(sep) = args[0] {
+        let mut output = Bytes::new();
+        let rest = &args[1..];
+        let last_idx = rest.len() - 1;
+        for (idx, x) in rest.iter().enumerate() {
+            if let Some(s) = x {
                 output.extend_from_slice(s);
-            } else {
-                return Ok(None);
+                if idx != last_idx {
+                    output.extend_from_slice(sep);
+                }
             }
         }
         Ok(Some(output))
@@ -326,13 +328,38 @@ mod tests {
                     None,
                     Some(b"defg".to_vec()),
                 ],
-                None,
+                Some(b"abc,defg".to_vec()),
             ),
             (
                 vec![Some(b",".to_vec()), Some(b"abc".to_vec())],
                 Some(b"abc".to_vec()),
             ),
-            (vec![None, None], None),
+            (
+                vec![Some(b",".to_vec()), None, Some(b"abc".to_vec())],
+                Some(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"".to_vec()),
+                    Some(b"abc".to_vec()),
+                ],
+                Some(b",abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some("忠犬ハチ公".as_bytes().to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                    Some("قاعدة البيانات".as_bytes().to_vec()),
+                ],
+                Some(
+                    "CAFÉ忠犬ハチ公数据库忠犬ハチ公قاعدة البيانات"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (vec![None, Some(b"abc".to_vec())], None),
         ];
         for (row, exp) in cases {
             let output = RpnFnScalarEvaluator::new()
