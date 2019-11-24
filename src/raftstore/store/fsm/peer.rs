@@ -1336,6 +1336,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
         if job.initialized {
+            // When initialized is true and async_remove is false, applyfsm is no need to
+            // send destroy msg to peerfsm because peerfsm has already destroyed.
+            // In this case, if applyfsm sends destroy msg, peerfsm may be destroyed twice
+            // because there are some msgs in channel so peerfsm still need to handle them (e.g. callback)
             self.ctx.apply_router.schedule_task(
                 job.region_id,
                 ApplyTask::destroy(job.region_id, job.async_remove),
