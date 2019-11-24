@@ -46,14 +46,12 @@ pub fn concat_ws(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
     if let Some(sep) = args[0] {
         let mut output = Bytes::new();
         let rest = &args[1..];
-        let last_idx = rest.len() - 1;
-        for (idx, x) in rest.iter().enumerate() {
-            if let Some(s) = x {
-                output.extend_from_slice(s);
-                if idx != last_idx {
-                    output.extend_from_slice(sep);
-                }
+        let iter = rest.iter().filter_map(|x| x.as_ref()).enumerate();
+        for (idx, x) in iter {
+            if idx != 0 {
+                output.extend_from_slice(sep);
             }
+            output.extend_from_slice(x);
         }
         Ok(Some(output))
     } else {
