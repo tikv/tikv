@@ -25,11 +25,16 @@ use crate::raftstore::router::ServerRaftStoreRouter;
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
+use crate::server::metrics::{
+    AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC, AUTO_GC_SAFE_POINT_GAUGE, AUTO_GC_STATUS_GAUGE_VEC,
+    GC_COMMAND_COUNTER_VEC_STATIC, GC_EMPTY_RANGE_COUNTER, GC_GCTASK_COUNTER_VEC,
+    GC_GCTASK_FAIL_COUNTER_VEC, GC_KEYS_COUNTER_VEC, GC_SKIPPED_COUNTER,
+    GC_TASK_DURATION_HISTOGRAM_VEC, GC_TOO_BUSY_COUNTER,
+};
 use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
     Statistics,
 };
-use crate::storage::metrics::*;
 use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
 use crate::storage::{Callback, Error, ErrorInner, Result};
 use keys::Key;
@@ -235,7 +240,7 @@ impl<E: Engine> GcRunner<E> {
         // skip gc before scanning all data.
         let skip_gc = is_range_start && !reader.need_gc(safe_point, self.cfg.ratio_threshold);
         let res = if skip_gc {
-            KV_GC_SKIPPED_COUNTER.inc();
+            GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
         } else {
             reader
@@ -245,7 +250,7 @@ impl<E: Engine> GcRunner<E> {
                     if keys.is_empty() {
                         assert!(next.is_none());
                         if is_range_start {
-                            KV_GC_EMPTY_RANGE_COUNTER.inc();
+                            GC_EMPTY_RANGE_COUNTER.inc();
                         }
                     }
                     Ok((keys, next))
@@ -1236,7 +1241,7 @@ impl<E: Engine> GcWorker<E> {
         safe_point: TimeStamp,
         callback: Callback<()>,
     ) -> Result<()> {
-        KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
+        GC_COMMAND_COUNTER_VEC_STATIC.gc.inc();
         self.worker_scheduler
             .schedule(GcTask::Gc {
                 ctx,
@@ -1258,7 +1263,7 @@ impl<E: Engine> GcWorker<E> {
         end_key: Key,
         callback: Callback<()>,
     ) -> Result<()> {
-        KV_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
+        GC_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
         self.worker_scheduler
             .schedule(GcTask::UnsafeDestroyRange {
                 ctx,
