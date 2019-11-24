@@ -14,7 +14,7 @@ impl IntWithSign {
         IntWithSign(num, is_neg)
     }
 
-    // Shrink NUM to fit the boundary of i64.
+    // Shrink num to fit the boundary of i64.
     fn shrink_from_signed_uint(num: u64, is_neg: bool) -> IntWithSign {
         let value = if is_neg {
             num.min(-Int::min_value() as u64)
