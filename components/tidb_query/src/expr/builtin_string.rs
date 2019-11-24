@@ -173,16 +173,16 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let mut output_sep: Vec<u8> = Vec::new();
-        let mut output: Vec<u8> = Vec::new();
-        for (index, expr) in self.children.iter().enumerate() {
-            let input = try_opt!(expr.eval_string(ctx, row));
-            match index {
-                0 => output_sep = input.to_vec(),
-                1 => output = input.to_vec(),
-                _ => {
-                    output.extend_from_slice(&output_sep);
-                    output.extend_from_slice(&input);
+        let sep = try_opt!(self.children[0].eval_string(ctx, row));
+        let mut output = Vec::new();
+        let rest = &self.children[1..];
+        let last_idx = rest.len() - 1;
+        for (idx, x) in rest.iter().enumerate() {
+            let s = x.eval_string(ctx, row)?;
+            if let Some(s) = s {
+                output.extend_from_slice(s.as_ref());
+                if idx != last_idx {
+                    output.extend_from_slice(sep.as_ref());
                 }
             }
         }
@@ -1889,9 +1889,41 @@ mod tests {
                     Datum::Null,
                     Datum::Bytes(b"defg".to_vec()),
                 ],
+                Datum::Bytes(b"abc,defg".to_vec()),
+            ),
+            (
+                vec![Datum::Null, Datum::Bytes(b"abc".to_vec())],
                 Datum::Null,
             ),
-            (vec![Datum::Null], Datum::Null),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Null,
+                    Datum::Bytes(b"abc".to_vec()),
+                ],
+                Datum::Bytes(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                ],
+                Datum::Bytes(b",abc".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes("忠犬ハチ公".as_bytes().to_vec()),
+                    Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+                    Datum::Bytes("数据库".as_bytes().to_vec()),
+                    Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+                ],
+                Datum::Bytes(
+                    "CAFÉ忠犬ハチ公数据库忠犬ハチ公قاعدة البيانات"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
         ];
         let mut ctx = EvalContext::default();
         for (row, exp) in cases {
