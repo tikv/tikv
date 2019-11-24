@@ -8,48 +8,54 @@
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
 //! We keep these components in the `TiKV` struct.
 
-use crate::setup::*;
-use crate::signal_handler;
-use engine::rocks;
-use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
-use engine::rocks::util::security::encrypted_env_from_cipher_file;
+use crate::{setup::*, signal_handler};
+use engine::{
+    rocks,
+    rocks::util::{
+        metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL},
+        security::encrypted_env_from_cipher_file,
+    },
+};
 use fs2::FileExt;
 use futures_cpupool::Builder;
-use kvproto::backup::create_backup;
-use kvproto::deadlock::create_deadlock;
-use kvproto::debugpb::create_debug;
-use kvproto::diagnosticspb::create_diagnostics;
-use kvproto::import_sstpb::create_import_sst;
-use pd_client::{PdClient, RpcClient};
-use std::convert::TryFrom;
-use std::fmt;
-use std::fs::File;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
-use std::time::Duration;
-use tikv::config::{ConfigController, TiKvConfig};
-use tikv::coprocessor;
-use tikv::import::{ImportSSTService, SSTImporter};
-use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use tikv::raftstore::router::ServerRaftStoreRouter;
-use tikv::raftstore::store::fsm::store::{
-    RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP,
+use kvproto::{
+    backup::create_backup, deadlock::create_deadlock, debugpb::create_debug,
+    diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
-use tikv::raftstore::store::{fsm, LocalReader};
-use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
-use tikv::server::gc_worker::{AutoGcConfig, GcWorker};
-use tikv::server::lock_manager::LockManager;
-use tikv::server::resolve;
-use tikv::server::service::{DebugService, DiagnosticsService};
-use tikv::server::status_server::StatusServer;
-use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv::server::{create_raft_storage, Node, RaftKv, Server};
-use tikv::storage;
-use tikv_util::check_environment_variables;
-use tikv_util::security::SecurityManager;
-use tikv_util::time::Monitor;
-use tikv_util::worker::{FutureWorker, Worker};
+use pd_client::{PdClient, RpcClient};
+use std::{
+    convert::TryFrom,
+    fmt,
+    fs::File,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    thread::JoinHandle,
+    time::Duration,
+};
+use tikv::raftstore::router::ServerRaftStoreRouter,
+use tikv::{
+    config::{ConfigController, TiKvConfig},
+    coprocessor,
+    import::{ImportSSTService, SSTImporter},
+    raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor},
+    raftstore::store::fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
+    raftstore::store::{fsm, LocalReader},
+    raftstore::store::{new_compaction_listener, SnapManagerBuilder},
+    server::gc_worker::{AutoGcConfig, GcWorker},
+    server::lock_manager::LockManager,
+    server::resolve,
+    server::service::{DebugService, DiagnosticsService},
+    server::status_server::StatusServer,
+    server::DEFAULT_CLUSTER_ID,
+    server::{create_raft_storage, Node, RaftKv, Server},
+    storage,
+};
+use tikv_util::{
+    check_environment_variables,
+    security::SecurityManager,
+    time::Monitor,
+    worker::{FutureWorker, Worker},
+};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
