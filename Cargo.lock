@@ -426,7 +426,7 @@ dependencies = [
  "panic_hook",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.2",
- "static_assertions 1.0.0",
+ "static_assertions 1.1.0",
  "tikv_alloc",
 ]
 
@@ -727,6 +727,7 @@ dependencies = [
 name = "engine"
 version = "0.0.1"
 dependencies = [
+ "engine_traits",
  "hex",
  "kvproto",
  "lazy_static",
@@ -765,6 +766,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "static_assertions 1.1.0",
  "sys-info",
  "tempfile",
  "tikv_alloc",
@@ -2938,7 +2940,6 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
- "engine",
  "engine_traits",
  "external_storage",
  "futures",
@@ -2984,9 +2985,9 @@ checksum = "c19be23126415861cb3a23e501d34a708f7f9b2183c5252d690941c2e69199d5"
 
 [[package]]
 name = "static_assertions"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fa13613355688665b68639b1c378a62dbedea78aff0fc59a4fa656cbbdec657"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "str_stack"
