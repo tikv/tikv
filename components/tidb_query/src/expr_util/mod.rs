@@ -3,3 +3,4 @@
 //! Common utility implementations for both RPN expression and normal expression.
 
 pub mod like;
+pub mod miscellaneous;
