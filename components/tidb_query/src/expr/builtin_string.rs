@@ -925,7 +925,6 @@ impl ScalarFunc {
             self.children[0].eval_string(ctx, row),
             Some(Cow::Borrowed(b"NULL"))
         );
-        let mut count = 2;
         let mut result = Vec::<u8>::with_capacity(s.len() * 2 + 2);
         result.push(b'\'');
         for byte in s.iter() {
