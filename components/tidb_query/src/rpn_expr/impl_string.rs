@@ -44,16 +44,13 @@ pub fn concat(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
 #[inline]
 pub fn concat_ws(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
     if let Some(sep) = args[0] {
-        let mut output = Bytes::new();
         let rest = &args[1..];
-        let iter = rest.iter().filter_map(|x| x.as_ref()).enumerate();
-        for (idx, x) in iter {
-            if idx != 0 {
-                output.extend_from_slice(sep);
-            }
-            output.extend_from_slice(x);
-        }
-        Ok(Some(output))
+        Ok(Some(
+            rest.iter()
+                .filter_map(|x| x.as_ref().map(|inner| inner.as_slice()))
+                .collect::<Vec<&[u8]>>()
+                .join::<&[u8]>(sep.as_ref()),
+        ))
     } else {
         Ok(None)
     }
