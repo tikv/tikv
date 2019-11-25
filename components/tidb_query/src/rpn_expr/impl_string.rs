@@ -105,10 +105,16 @@ pub fn replace(
             if from_str.is_empty() {
                 return Ok(Some(s.clone()));
             }
-            let s = String::from_utf8_lossy(&s);
-            let from_str = String::from_utf8_lossy(&from_str);
-            let to_str = String::from_utf8_lossy(&to_str);
-            Some(s.replace(from_str.as_ref(), to_str.as_ref()).into_bytes())
+            let mut dest = Vec::with_capacity(s.len());
+            let mut last = 0;
+            while let Some(mut start) = twoway::find_bytes(&s[last..], from_str) {
+                start += last;
+                dest.extend_from_slice(&s[last..start]);
+                dest.extend_from_slice(to_str);
+                last = start + from_str.len();
+            }
+            dest.extend_from_slice(&s[last..]);
+            Some(dest)
         }
         _ => None,
     })
@@ -460,34 +466,96 @@ mod tests {
     fn test_replace() {
         let cases = vec![
             ((None, None, None), None),
-            ((None, Some("a"), Some("b")), None),
-            ((Some("a"), None, Some("b")), None),
-            ((Some("a"), Some("b"), None), None),
+            ((None, Some(b"a".to_vec()), Some(b"b".to_vec())), None),
+            ((Some(b"a".to_vec()), None, Some(b"b".to_vec())), None),
+            ((Some(b"a".to_vec()), Some(b"b".to_vec()), None), None),
             (
-                (Some("www.mysql.com"), Some("mysql"), Some("pingcap")),
-                Some("www.pingcap.com"),
+                (
+                    Some(b"www.mysql.com".to_vec()),
+                    Some(b"mysql".to_vec()),
+                    Some(b"pingcap".to_vec()),
+                ),
+                Some(b"www.pingcap.com".to_vec()),
             ),
             (
-                (Some("www.mysql.com"), Some("w"), Some("1")),
-                Some("111.mysql.com"),
+                (
+                    Some(b"www.mysql.com".to_vec()),
+                    Some(b"w".to_vec()),
+                    Some(b"1".to_vec()),
+                ),
+                Some(b"111.mysql.com".to_vec()),
             ),
-            ((Some("1234"), Some("2"), Some("55")), Some("15534")),
-            ((Some(""), Some("a"), Some("b")), Some("")),
-            ((Some("abc"), Some(""), Some("d")), Some("abc")),
-            ((Some("aaa"), Some("a"), Some("")), Some("")),
-            ((Some("aaa"), Some("A"), Some("")), Some("aaa")),
-            ((Some("新年快乐"), Some("年"), Some("春")), Some("新春快乐")),
-            ((Some("心想事成"), Some("心"), Some("❤️")), Some("❤️想事成")),
+            (
+                (
+                    Some(b"1234".to_vec()),
+                    Some(b"2".to_vec()),
+                    Some(b"55".to_vec()),
+                ),
+                Some(b"15534".to_vec()),
+            ),
+            (
+                (Some(b"".to_vec()), Some(b"a".to_vec()), Some(b"b".to_vec())),
+                Some(b"".to_vec()),
+            ),
+            (
+                (
+                    Some(b"abc".to_vec()),
+                    Some(b"".to_vec()),
+                    Some(b"d".to_vec()),
+                ),
+                Some(b"abc".to_vec()),
+            ),
+            (
+                (
+                    Some(b"aaa".to_vec()),
+                    Some(b"a".to_vec()),
+                    Some(b"".to_vec()),
+                ),
+                Some(b"".to_vec()),
+            ),
+            (
+                (
+                    Some(b"aaa".to_vec()),
+                    Some(b"A".to_vec()),
+                    Some(b"".to_vec()),
+                ),
+                Some(b"aaa".to_vec()),
+            ),
+            (
+                (
+                    Some("新年快乐".as_bytes().to_vec()),
+                    Some("年".as_bytes().to_vec()),
+                    Some("春".as_bytes().to_vec()),
+                ),
+                Some("新春快乐".as_bytes().to_vec()),
+            ),
+            (
+                (
+                    Some("心心相印".as_bytes().to_vec()),
+                    Some("心".as_bytes().to_vec()),
+                    Some("❤️".as_bytes().to_vec()),
+                ),
+                Some("❤️❤️相印".as_bytes().to_vec()),
+            ),
+            // some invalid bytes
+            (
+                (
+                    Some(b"Hello \xF0\x90\x80World".to_vec()),
+                    Some(b"World".to_vec()),
+                    Some(b"123".to_vec()),
+                ),
+                Some(b"Hello \xF0\x90\x80123".to_vec()),
+            ),
         ];
 
         for ((s, from_str, to_str), expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(s.map(|s| s.as_bytes().to_vec()))
-                .push_param(from_str.map(|s| s.as_bytes().to_vec()))
-                .push_param(to_str.map(|s| s.as_bytes().to_vec()))
+                .push_param(s)
+                .push_param(from_str)
+                .push_param(to_str)
                 .evaluate(ScalarFuncSig::Replace)
                 .unwrap();
-            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
+            assert_eq!(output, expect_output);
         }
     }
 
