@@ -33,10 +33,7 @@ pub fn inet_ntoa(input: &Option<Int>) -> Result<Option<Bytes>> {
         if *input < 0 || *input > i64::from(u32::max_value()) {
             None
         } else {
-            let v = *input as u32;
-            let ipv4_addr =
-                Ipv4Addr::new((v >> 24) as u8, (v >> 16) as u8, (v >> 8) as u8, v as u8);
-            Some(format!("{}", ipv4_addr).into_bytes())
+            Some(format!("{}", Ipv4Addr::from(*input as u32)).into_bytes())
         }
     }))
 }
