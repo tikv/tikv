@@ -51,6 +51,59 @@ pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<In
     Ok(Some(i64::from(day)))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn period_add(p: &Option<Int>, n: &Option<Int>) -> Result<Option<Int>> {
+    match (p, n) {
+        (Some(p), Some(n)) => {
+            let (month, _) = (i64::from(period_to_month(*p as u64) as i32)).overflowing_add(n);
+            Ok(Some(month_to_period(u64::from(month as u32)) as i64))
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn period_diff(p1: &Option<Int>, p2: &Option<Int>) -> Result<Option<Int>> {
+    match (p1, p2) {
+        (Some(p1), Some(p2)) => Ok(Some(
+            period_to_month(*p1 as u64) as i64 - period_to_month(*p2 as u64) as i64,
+        )),
+        _ => Ok(None),
+    }
+}
+
+#[inline]
+fn period_to_month(period: u64) -> u64 {
+    if period == 0 {
+        return 0;
+    }
+    let (year, month) = (period / 100, period % 100);
+    if year < 70 {
+        (year + 2000) * 12 + month - 1
+    } else if year < 100 {
+        (year + 1900) * 12 + month - 1
+    } else {
+        year * 12 + month - 1
+    }
+}
+
+#[inline]
+fn month_to_period(month: u64) -> u64 {
+    if month == 0 {
+        return 0;
+    }
+    let year = month / 12;
+    if year < 70 {
+        (year + 2000) * 100 + month % 12 + 1
+    } else if year < 100 {
+        (year + 1900) * 100 + month % 12 + 1
+    } else {
+        year * 100 + month % 12 + 1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +261,67 @@ mod tests {
             .evaluate::<Int>(ScalarFuncSig::WeekDay)
             .unwrap();
         assert_eq!(output, None);
+    }
+
+    #[test]
+    fn test_period_add() {
+        let cases = vec![
+            (2, 222, 201808),
+            (0, 222, 0),
+            (196802, 14, 196904),
+            (6901, 13, 207002),
+            (7001, 13, 197102),
+            (200212, 9223372036854775807, 200211),
+            (9223372036854775807, 0, 27201459511),
+            (9223372036854775807, 9223372036854775807, 27201459510),
+            (201611, 2, 201701),
+            (201611, 3, 201702),
+            (201611, -13, 201510),
+            (1611, 3, 201702),
+            (7011, 3, 197102),
+            (12323, 10, 12509),
+            (0, 3, 0),
+        ];
+        for (arg1, arg2, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(arg1))
+                .push_param(Some(arg2))
+                .evaluate(ScalarFuncSig::PeriodAdd)
+                .unwrap();
+            assert_eq!(output, Some(exp));
+        }
+    }
+
+    #[test]
+    fn test_period_diff() {
+        let cases = vec![
+            (213002, 7010, 1912),
+            (213002, 215810, -344),
+            (2202, 9601, 313),
+            (202202, 9601, 313),
+            (200806, 6907, -733),
+            (201611, 201611, 0),
+            (200802, 200703, 11),
+            (0, 999999999, -120000086),
+            (9999999, 0, 1200086),
+            (411, 200413, -2),
+            (197000, 207700, -1284),
+            (201701, 201611, 2),
+            (201702, 201611, 3),
+            (201510, 201611, -13),
+            (201702, 1611, 3),
+            (197102, 7011, 3),
+            (12509, 12323, 10),
+            (12509, 12323, 10),
+        ];
+
+        for (arg1, arg2, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(arg1))
+                .push_param(Some(arg2))
+                .evaluate(ScalarFuncSig::PeriodDiff)
+                .unwrap();
+            assert_eq!(output, Some(exp));
+        }
     }
 }
