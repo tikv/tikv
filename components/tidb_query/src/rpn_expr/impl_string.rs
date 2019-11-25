@@ -40,6 +40,22 @@ pub fn concat(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
     Ok(Some(output))
 }
 
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn concat_ws(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+    if let Some(sep) = args[0] {
+        let rest = &args[1..];
+        Ok(Some(
+            rest.iter()
+                .filter_map(|x| x.as_ref().map(|inner| inner.as_slice()))
+                .collect::<Vec<&[u8]>>()
+                .join::<&[u8]>(sep.as_ref()),
+        ))
+    } else {
+        Ok(None)
+    }
+}
+
 #[rpn_fn]
 #[inline]
 pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
@@ -290,6 +306,131 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
                 .evaluate(ScalarFuncSig::Concat)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_concat_ws() {
+        let cases = vec![
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"abc".to_vec()),
+                    Some(b"defg".to_vec()),
+                ],
+                Some(b"abc,defg".to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some("忠犬ハチ公".as_bytes().to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                    Some("قاعدة البيانات".as_bytes().to_vec()),
+                    Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                ],
+                Some(
+                    "忠犬ハチ公,CAFÉ,数据库,قاعدة البيانات,НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"abc".to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                ],
+                Some("abc,CAFÉ,数据库".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"abc".to_vec()),
+                    None,
+                    Some(b"defg".to_vec()),
+                ],
+                Some(b"abc,defg".to_vec()),
+            ),
+            (
+                vec![Some(b",".to_vec()), Some(b"abc".to_vec())],
+                Some(b"abc".to_vec()),
+            ),
+            (
+                vec![Some(b",".to_vec()), None, Some(b"abc".to_vec())],
+                Some(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"".to_vec()),
+                    Some(b"abc".to_vec()),
+                ],
+                Some(b",abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some("忠犬ハチ公".as_bytes().to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                    Some("قاعدة البيانات".as_bytes().to_vec()),
+                ],
+                Some(
+                    "CAFÉ忠犬ハチ公数据库忠犬ハチ公قاعدة البيانات"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (vec![None, Some(b"abc".to_vec())], None),
+            (
+                vec![Some(b",".to_vec()), None, Some(b"abc".to_vec())],
+                Some(b"abc".to_vec()),
+            ),
+            (
+                vec![Some(b",".to_vec()), Some(b"abc".to_vec()), None],
+                Some(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"".to_vec()),
+                    Some(b"abc".to_vec()),
+                ],
+                Some(b",abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some("忠犬ハチ公".as_bytes().to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                    Some("قاعدة البيانات".as_bytes().to_vec()),
+                ],
+                Some(
+                    "CAFÉ忠犬ハチ公数据库忠犬ハチ公قاعدة البيانات"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    None,
+                    Some(b"abc".to_vec()),
+                    None,
+                    None,
+                    Some(b"defg".to_vec()),
+                    None,
+                ],
+                Some(b"abc,defg".to_vec()),
+            ),
+        ];
+        for (row, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::ConcatWs)
                 .unwrap();
             assert_eq!(output, exp);
         }
