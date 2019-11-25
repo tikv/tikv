@@ -1,12 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag};
-use tipb::{Expr, ScalarFuncSig};
 
 use crate::codec::data_type::*;
 use crate::codec::Error;
-use crate::rpn_expr::RpnFnMeta;
 use crate::Result;
 
 #[rpn_fn]
@@ -59,38 +56,18 @@ pub fn unary_not_decimal(arg: &Option<Decimal>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|v| v.is_zero() as i64))
 }
 
-pub fn map_unary_minus_int_func(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
-    if children.len() != 1 {
-        return Err(other_err!(
-            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
-            value,
-            children.len()
-        ));
-    }
-    if children[0]
-        .get_field_type()
-        .as_accessor()
-        .flag()
-        .contains(FieldTypeFlag::UNSIGNED)
-    {
-        Ok(unary_minus_uint_fn_meta())
-    } else {
-        Ok(unary_minus_int_fn_meta())
-    }
-}
-
 #[rpn_fn]
 #[inline]
-fn unary_minus_uint(arg: &Option<Int>) -> Result<Option<Int>> {
-    match arg {
+pub fn unary_minus_uint(arg: &Option<Int>) -> Result<Option<Int>> {
+    match *arg {
         Some(val) => {
-            let uval = *val as u64;
+            let uval = val as u64;
             if uval > std::i64::MAX as u64 + 1 {
                 Err(Error::overflow("BIGINT", &format!("-{}", uval)).into())
             } else if uval == std::i64::MAX as u64 + 1 {
                 Ok(Some(std::i64::MIN))
             } else {
-                Ok(Some(-*val))
+                Ok(Some(-val))
             }
         }
         None => Ok(None),
@@ -99,13 +76,13 @@ fn unary_minus_uint(arg: &Option<Int>) -> Result<Option<Int>> {
 
 #[rpn_fn]
 #[inline]
-fn unary_minus_int(arg: &Option<Int>) -> Result<Option<Int>> {
-    match arg {
+pub fn unary_minus_int(arg: &Option<Int>) -> Result<Option<Int>> {
+    match *arg {
         Some(val) => {
-            if *val == std::i64::MIN {
+            if val == std::i64::MIN {
                 Err(Error::overflow("BIGINT", &format!("-{}", val)).into())
             } else {
-                Ok(Some(-*val))
+                Ok(Some(-val))
             }
         }
         None => Ok(None),
@@ -231,7 +208,7 @@ fn right_shift(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{builder::FieldTypeBuilder, FieldTypeTp};
+    use tidb_query_datatype::{builder::FieldTypeBuilder, FieldTypeFlag, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
     use super::*;
