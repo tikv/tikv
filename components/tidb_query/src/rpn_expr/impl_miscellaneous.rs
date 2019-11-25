@@ -8,6 +8,9 @@ use crate::Result;
 use std::convert::TryFrom;
 use std::net::Ipv4Addr;
 
+const IPV6_LENGTH: usize = 16;
+const PREFIX_COMPAT: [u8; 12] = [0x00; 12];
+
 #[rpn_fn]
 #[inline]
 pub fn inet_ntoa(arg: &Option<Int>) -> Result<Option<Bytes>> {
@@ -16,8 +19,25 @@ pub fn inet_ntoa(arg: &Option<Int>) -> Result<Option<Bytes>> {
         .map(|arg| format!("{}", Ipv4Addr::from(arg)).into_bytes()))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn is_ipv4_compat(addr: &Option<Bytes>) -> Result<Option<i64>> {
+    match addr {
+        Some(addr) => {
+            if addr.len() != IPV6_LENGTH {
+                return Ok(Some(0));
+            }
+            if !addr.starts_with(&PREFIX_COMPAT) {
+                return Ok(Some(0));
+            }
+            Ok(Some(1))
+        }
+        None => Ok(Some(0)),
+    }
+}
+
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
     use tipb::ScalarFuncSig;
@@ -42,31 +62,8 @@ mod test {
                 .evaluate(ScalarFuncSig::InetNtoa)
                 .unwrap();
             assert_eq!(output, expected);
-const IPV6_LENGTH: usize = 16;
-const PREFIX_COMPAT: [u8; 12] = [0x00; 12];
-
-#[rpn_fn]
-#[inline]
-pub fn is_ipv4_compat(addr: &Option<Bytes>) -> Result<Option<i64>> {
-    match addr {
-        Some(addr) => {
-            if addr.len() != IPV6_LENGTH {
-                return Ok(Some(0));
-            }
-            if !addr.starts_with(&PREFIX_COMPAT) {
-                return Ok(Some(0));
-            }
-            Ok(Some(1))
         }
-        None => Ok(Some(0)),
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use tipb::ScalarFuncSig;
-
-    use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_is_ipv4_compat() {
