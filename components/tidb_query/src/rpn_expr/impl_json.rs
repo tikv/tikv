@@ -162,9 +162,13 @@ fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
 
 // Args should be like `(&Option<Json> , &[&Option<Bytes>])`.
 fn json_with_paths_validator(expr: &tipb::Expr) -> Result<()> {
-    let children = expr.get_children();
-    assert!(children.len() >= 2);
+    assert!(expr.get_children().len() >= 2);
     // args should be like `&Option<Json> , &[&Option<Bytes>]`.
+    valid_paths(expr)
+}
+
+fn valid_paths(expr: &tipb::Expr) -> Result<()> {
+    let children = expr.get_children();
     super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
     for i in 1..children.len() {
         super::function::validate_expr_return_type(&children[i], EvalType::Bytes)?;
@@ -189,19 +193,8 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
 
 // Args should be like `(&Option<Json> , &[&Option<Bytes>])`.
 fn json_with_path_validator(expr: &tipb::Expr) -> Result<()> {
-    let children = expr.get_children();
-    if children.len() == 0 || children.len() > 2 {
-        return Err(other_err!(
-            "expr children length Expect 1 or 2, received `{}`",
-            children.len()
-        ));
-    }
-    // args should be like `&Option<Json> , &[&Option<Bytes>]`.
-    super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
-    if children.len() > 1 {
-        super::function::validate_expr_return_type(&children[1], EvalType::Bytes)?;
-    }
-    Ok(())
+    assert!(expr.get_children().len() == 2 || expr.get_children().len() == 1);
+    valid_paths(expr)
 }
 
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_path_validator)]
