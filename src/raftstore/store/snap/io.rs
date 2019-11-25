@@ -4,11 +4,11 @@ use std::io::{self, BufReader};
 use std::{fs, usize};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::{IngestExternalFileOptions, Snapshot as DbSnapshot, Writable, WriteBatch, DB};
-use engine::{CfName, Iterable};
-use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+use engine::rocks::{IngestExternalFileOptions, Writable, WriteBatch, DB};
+use engine::CfName;
+use engine_rocks::{RocksSnapshot, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::IOLimiter;
-use engine_traits::{SstWriter, SstWriterBuilder};
+use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
 use super::Error;
@@ -29,7 +29,7 @@ pub struct BuildStatistics {
 /// otherwise the file will be created and synchronized.
 pub fn build_plain_cf_file(
     path: &str,
-    snap: &DbSnapshot,
+    snap: &RocksSnapshot,
     cf: &str,
     start_key: &[u8],
     end_key: &[u8],
@@ -59,7 +59,7 @@ pub fn build_plain_cf_file(
 /// otherwise the file will be created and synchronized.
 pub fn build_sst_cf_file<L: IOLimiter>(
     path: &str,
-    snap: &DbSnapshot,
+    snap: &RocksSnapshot,
     cf: CfName,
     start_key: &[u8],
     end_key: &[u8],
@@ -137,12 +137,11 @@ pub fn apply_sst_cf_file(path: &str, db: &DB, cf: &str) -> Result<(), Error> {
 }
 
 fn create_sst_file_writer(
-    snap: &DbSnapshot,
+    snap: &RocksSnapshot,
     cf: CfName,
     path: &str,
 ) -> Result<RocksSstWriter, Error> {
-    let db = snap.get_db();
-    let engine = RocksEngine::from_ref(&db);
+    let engine = snap.get_db();
     let builder = RocksSstWriterBuilder::new().set_db(&engine).set_cf(cf);
     let writer = box_try!(builder.build(path));
     Ok(writer)
@@ -175,7 +174,7 @@ mod tests {
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let plain_file_path = snap_cf_dir.path().join("plain");
-                let snap = DbSnapshot::new(Arc::clone(&db));
+                let snap = RocksSnapshot::new(Arc::clone(&db));
                 let stats = build_plain_cf_file(
                     &plain_file_path.to_str().unwrap(),
                     &snap,
@@ -223,7 +222,7 @@ mod tests {
                 let sst_file_path = snap_cf_dir.path().join("sst");
                 let stats = build_sst_cf_file::<RocksIOLimiter>(
                     &sst_file_path.to_str().unwrap(),
-                    &DbSnapshot::new(Arc::clone(&db)),
+                    &RocksSnapshot::new(Arc::clone(&db)),
                     CF_DEFAULT,
                     b"a",
                     b"z",
