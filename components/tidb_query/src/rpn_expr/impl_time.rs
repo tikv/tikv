@@ -7,7 +7,6 @@ use super::super::expr::EvalContext;
 use crate::codec::data_type::*;
 use crate::codec::mysql::Time;
 use crate::codec::Error;
-use crate::expr::SqlMode;
 use crate::Result;
 
 #[rpn_fn(capture = [ctx])]
@@ -62,22 +61,10 @@ pub fn from_days(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Time
     })
 }
 
-#[rpn_fn(capture = [ctx])]
+#[rpn_fn]
 #[inline]
-pub fn month(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
-    let t = match t {
-        Some(v) => v,
-        _ => return Ok(None),
-    };
-    if t.is_zero() {
-        if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
-            return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
-                .map(|_| Ok(None))?;
-        }
-        return Ok(Some(0));
-    }
-    Ok(Some(Int::from(t.month())))
+pub fn month(t: &Option<DateTime>) -> Result<Option<Int>> {
+    t.map_or(Ok(None), |time| Ok(Some(Int::from(time.month()))))
 }
 
 #[cfg(test)]
