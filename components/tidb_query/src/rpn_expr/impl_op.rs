@@ -1,9 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::rpn_fn;
+use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag};
+use tipb::{Expr, ScalarFuncSig};
 
 use crate::codec::data_type::*;
 use crate::codec::Error;
+use crate::rpn_expr::RpnFnMeta;
 use crate::Result;
 
 #[rpn_fn]
@@ -56,15 +59,53 @@ pub fn unary_not_decimal(arg: &Option<Decimal>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|v| v.is_zero() as i64))
 }
 
+pub fn map_unary_minus_int_func(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 1 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    if children[0]
+        .get_field_type()
+        .as_accessor()
+        .flag()
+        .contains(FieldTypeFlag::UNSIGNED)
+    {
+        Ok(unary_minus_uint_fn_meta())
+    } else {
+        Ok(unary_minus_int_fn_meta())
+    }
+}
+
 #[rpn_fn]
 #[inline]
-pub fn unary_minus_int(arg: &Option<Int>) -> Result<Option<Int>> {
+fn unary_minus_uint(arg: &Option<Int>) -> Result<Option<Int>> {
     match arg {
-        Some(v) => {
-            if *v == std::i64::MIN {
-                Err(Error::overflow("BIGINT", &format!("-{}", v)).into())
+        Some(val) => {
+            let uval = *val as u64;
+            if uval > std::i64::MAX as u64 + 1 {
+                Err(Error::overflow("BIGINT", &format!("-{}", uval)).into())
+            } else if uval == std::i64::MAX as u64 + 1 {
+                Ok(Some(std::i64::MIN))
             } else {
-                Ok(Some(-*v))
+                Ok(Some(-*val))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+fn unary_minus_int(arg: &Option<Int>) -> Result<Option<Int>> {
+    match arg {
+        Some(val) => {
+            if *val == std::i64::MIN {
+                Err(Error::overflow("BIGINT", &format!("-{}", val)).into())
+            } else {
+                Ok(Some(-*val))
             }
         }
         None => Ok(None),
@@ -74,13 +115,13 @@ pub fn unary_minus_int(arg: &Option<Int>) -> Result<Option<Int>> {
 #[rpn_fn]
 #[inline]
 pub fn unary_minus_real(arg: &Option<Real>) -> Result<Option<Real>> {
-    Ok(arg.map(|v| -v))
+    Ok(arg.map(|val| -val))
 }
 
 #[rpn_fn]
 #[inline]
 pub fn unary_minus_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
-    Ok(arg.as_ref().map(|v| -v.clone()))
+    Ok(arg.as_ref().map(|val| -val.clone()))
 }
 
 #[rpn_fn]
@@ -190,6 +231,7 @@ fn right_shift(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
 
 #[cfg(test)]
 mod tests {
+    use tidb_query_datatype::{builder::FieldTypeBuilder, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
     use super::*;
@@ -310,14 +352,42 @@ mod tests {
 
     #[test]
     fn test_unary_minus_int() {
-        let test_cases = vec![
+        let unsigned_test_cases = vec![
+            (None, None),
+            (Some((std::i64::MAX as u64 + 1) as i64), Some(std::i64::MIN)),
+            (Some(12345), Some(-12345)),
+            (Some(0), Some(0)),
+        ];
+        for (arg, expect_output) in unsigned_test_cases {
+            let field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(FieldTypeFlag::UNSIGNED)
+                .build();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(arg, field_type)
+                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+        assert!(RpnFnScalarEvaluator::new()
+            .push_param_with_field_type(
+                Some((std::i64::MAX as u64 + 2) as i64),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::LongLong)
+                    .flag(FieldTypeFlag::UNSIGNED)
+                    .build()
+            )
+            .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+            .is_err());
+
+        let signed_test_cases = vec![
             (None, None),
             (Some(std::i64::MAX), Some(-std::i64::MAX)),
             (Some(-std::i64::MAX), Some(std::i64::MAX)),
             (Some(std::i64::MIN + 1), Some(std::i64::MAX)),
             (Some(0), Some(0)),
         ];
-        for (arg, expect_output) in test_cases {
+        for (arg, expect_output) in signed_test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
