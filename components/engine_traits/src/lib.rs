@@ -220,6 +220,8 @@ mod errors;
 pub use crate::errors::*;
 mod options;
 pub use crate::options::*;
+pub mod range;
+pub use crate::range::*;
 pub mod util;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
