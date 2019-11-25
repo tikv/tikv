@@ -897,7 +897,7 @@ fn exp_float_str_to_int_str<'a>(
 ) -> Result<Cow<'a, str>> {
     // int_cnt and digits contain the prefix `+/-` if valid_float[0] is `+/-`
     let mut digits: Vec<u8> = Vec::with_capacity(valid_float.len());
-    let int_cnt: i64;
+    let mut int_cnt: i64;
     match dot_idx {
         None => {
             digits.extend_from_slice(&valid_float[..e_idx].as_bytes());
@@ -915,8 +915,13 @@ fn exp_float_str_to_int_str<'a>(
     }
     // make `digits` immutable
     let digits = digits;
-    let exp: i64 = box_try!((&valid_float[(e_idx + 1)..]).parse::<i64>());
-    let (int_cnt, is_overflow): (i64, bool) = int_cnt.overflowing_add(exp);
+    let exp = valid_float[(e_idx + 1)..].parse::<i64>();
+    let mut is_overflow = exp.is_err();
+    if !is_overflow {
+        let (result, overflow): (i64, bool) = int_cnt.overflowing_add(exp.unwrap());
+        int_cnt = result;
+        is_overflow = overflow;
+    }
     if int_cnt > 21 || is_overflow {
         // MaxInt64 has 19 decimal digits.
         // MaxUint64 has 20 decimal digits.
@@ -1194,6 +1199,28 @@ mod tests {
                     tp
                 ),
             }
+        }
+    }
+
+    #[test]
+    fn test_bytes_to_int_overflow() {
+        let tests: Vec<(&[u8], _, _)> = vec![
+            (
+                b"12e1234817291749271847289417294",
+                FieldTypeTp::LongLong,
+                9223372036854775807,
+            ),
+            (
+                b"12e1234817291749271847289417294",
+                FieldTypeTp::Long,
+                2147483647,
+            ),
+            (b"12e1234817291749271847289417294", FieldTypeTp::Tiny, 127),
+        ];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+        for (from, tp, to) in tests {
+            let r = from.to_int(&mut ctx, tp).unwrap();
+            assert_eq!(to, r);
         }
     }
 
