@@ -19,6 +19,8 @@ use protobuf::text_format::print_to_string;
 use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};
 use crate::server::transport::RaftStoreRouter;
+use crate::storage::gc_worker::GCWorker;
+use crate::storage::kv::Engine;
 use tikv_util::metrics;
 
 use tikv_alloc;
@@ -45,20 +47,20 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter> {
+pub struct Service<T: RaftStoreRouter, E: Engine> {
     pool: CpuPool,
-    debugger: Debugger,
+    debugger: Debugger<E>,
     raft_router: T,
 }
 
-impl<T: RaftStoreRouter> Service<T> {
-    /// Constructs a new `Service` with `Engines` and a `RaftStoreRouter`.
-    pub fn new(engines: Engines, raft_router: T) -> Service<T> {
+impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
+    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GCWorker`.
+    pub fn new(engines: Engines, raft_router: T, gc_worker: GCWorker<E>) -> Service<T, E> {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
             .create();
-        let debugger = Debugger::new(engines);
+        let debugger = Debugger::new(engines, Some(gc_worker));
         Service {
             pool,
             debugger,
@@ -84,7 +86,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
+impl<T: RaftStoreRouter + 'static, E: Engine + 'static> debugpb_grpc::Debug for Service<T, E> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 

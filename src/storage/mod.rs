@@ -630,7 +630,7 @@ pub struct Storage<E: Engine, L: LockMgr> {
     read_pool: ReadPool,
 
     /// Used to handle requests related to GC.
-    gc_worker: GCWorker<E>,
+    pub gc_worker: GCWorker<E>,
 
     /// How many strong references. Thread pool and workers will be stopped
     /// once there are no more references.
