@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::{Expr, FieldType, ScalarFuncSig};
+use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::codec::data_type::{Evaluable, ScalarValue};
@@ -96,6 +96,7 @@ impl RpnFnScalarEvaluator {
             .map(|expr_node| {
                 let mut ed = Expr::default();
                 ed.set_field_type(expr_node.field_type().clone());
+                ed.set_tp(expr_node.expr_tp());
                 ed
             })
             .collect();
@@ -105,6 +106,7 @@ impl RpnFnScalarEvaluator {
         fun_sig_expr.set_sig(sig);
         fun_sig_expr.set_children(children_ed.clone().into());
         fun_sig_expr.set_field_type(ret_field_type.clone());
+        fun_sig_expr.set_tp(ExprType::ScalarFunc);
 
         // use validator_ptr to testing the test arguments.
         let func: RpnFnMeta = super::super::map_expr_node_to_rpn_func(&fun_sig_expr).unwrap();
@@ -113,9 +115,15 @@ impl RpnFnScalarEvaluator {
             return (Err(e), context);
         }
 
+        let metadata = match (func.metadata_ctor_ptr)(&mut fun_sig_expr) {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                return (Err(e), context);
+            }
+        };
         let expr = self
             .rpn_expr_builder
-            .push_fn_call(func, children_ed.len(), ret_field_type)
+            .push_fn_call_with_metadata(func, children_ed.len(), ret_field_type, metadata)
             .build();
 
         let mut columns = LazyBatchColumnVec::empty();

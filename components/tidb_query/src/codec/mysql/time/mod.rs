@@ -607,6 +607,22 @@ pub struct TimeArgs {
     time_type: TimeType,
 }
 
+impl Default for TimeArgs {
+    fn default() -> Self {
+        TimeArgs {
+            year: 0,
+            month: 0,
+            day: 0,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            micro: 0,
+            fsp: 0,
+            time_type: TimeType::Date,
+        }
+    }
+}
+
 impl TimeArgs {
     fn check(mut self, ctx: &mut EvalContext) -> Option<TimeArgs> {
         self.fsp = check_fsp(self.fsp).ok()? as i8;
@@ -1426,6 +1442,50 @@ impl Time {
 
     pub fn invalid_zero(self) -> bool {
         self.month() == 0 || self.day() == 0
+    }
+
+    pub fn from_days(ctx: &mut EvalContext, daynr: u32) -> Result<Self> {
+        let (year, month, day) = Time::get_date_from_daynr(daynr);
+        let time_args = TimeArgs {
+            year,
+            month,
+            day,
+            ..Default::default()
+        };
+        Time::new(ctx, time_args)
+    }
+
+    // Changes a daynr to year, month and day, daynr 0 is returned as date 00.00.00
+    #[inline]
+    fn get_date_from_daynr(daynr: u32) -> (u32, u32, u32) {
+        if daynr <= 365 || daynr >= 3_652_425 {
+            return (0, 0, 0);
+        }
+
+        let mut year = daynr * 100 / 36525;
+        let temp = (((year - 1) / 100 + 1) * 3) / 4;
+        let mut day_of_year = daynr - year * 365 - (year - 1) / 4 + temp;
+
+        let mut days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        while day_of_year > days_in_year {
+            day_of_year -= days_in_year;
+            year += 1;
+            days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        }
+
+        let mut month = 1;
+        for each_month in 1..=12 {
+            let last_day_of_month = last_day_of_month(year, each_month);
+            if day_of_year <= last_day_of_month {
+                break;
+            }
+            month += 1;
+            day_of_year -= last_day_of_month;
+        }
+
+        let day = day_of_year;
+
+        (year, month, day)
     }
 }
 
