@@ -475,6 +475,7 @@ mod tests {
             ((Some(""), Some("a"), Some("b")), Some("")),
             ((Some("abc"), Some(""), Some("d")), Some("abc")),
             ((Some("aaa"), Some("a"), Some("")), Some("")),
+            ((Some("aaa"), Some("A"), Some("")), Some("aaa")),
             ((Some("新年快乐"), Some("年"), Some("春")), Some("新春快乐")),
             ((Some("心想事成"), Some("心"), Some("❤️")), Some("❤️想事成")),
         ];
