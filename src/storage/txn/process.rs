@@ -478,7 +478,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd.kind {
         CommandKind::Prewrite {
-            mutations,
+            mut mutations,
             primary,
             start_ts,
             mut options,
@@ -487,7 +487,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let mut scan_mode = None;
             let rows = mutations.len();
             if options.for_update_ts.is_zero() && rows > FORWARD_MIN_MUTATIONS_NUM {
-                // TiKV client must sort keys in ascending order.
+                mutations.sort_by(|a, b| a.key().cmp(b.key()));
                 let left_key = mutations.first().unwrap().key().clone().append_ts(start_ts);
                 let right_key = mutations
                     .last()
@@ -502,6 +502,9 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     &right_key,
                     &mut statistics.write,
                 )? {
+                    // If there is no data in range, we could skip constraint check, and use Forward seek for CF_LOCK.
+                    // Because in most instances, there won't be more than one transaction write the same key. Seek
+                    // operation could skip nonexistent key in CF_LOCK.
                     options.skip_constraint_check = true;
                     scan_mode = Some(ScanMode::Forward)
                 }
