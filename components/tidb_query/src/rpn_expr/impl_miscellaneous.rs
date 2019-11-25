@@ -31,18 +31,16 @@ pub fn is_ipv4_compat(addr: &Option<Bytes>) -> Result<Option<i64>> {
 #[rpn_fn]
 #[inline]
 pub fn is_ipv4_mapped(addr: &Option<Bytes>) -> Result<Option<i64>> {
-    match addr {
+    Ok(match addr {
         Some(addr) => {
-            if addr.len() != IPV6_LENGTH {
-                return Ok(Some(0));
+            if addr.len() != IPV6_LENGTH || !addr.starts_with(&PREFIX_MAPPED) {
+                Some(0)
+            } else {
+                Some(1)
             }
-            if !addr.starts_with(&PREFIX_MAPPED) {
-                return Ok(Some(0));
-            }
-            Ok(Some(1))
         }
-        None => Ok(Some(0)),
-    }
+        None => Some(0),
+    })
 }
 
 #[cfg(test)]
