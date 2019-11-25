@@ -248,11 +248,11 @@ impl RegionIterator {
     }
 
     pub fn seek_to_first(&mut self) -> bool {
-        crate::storage::Iterator::seek_to_first(&mut self.iter)
+        self.iter.seek_to_first()
     }
 
     pub fn seek_to_last(&mut self) -> bool {
-        crate::storage::Iterator::seek_to_last(&mut self.iter)
+        self.iter.seek_to_last()
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
