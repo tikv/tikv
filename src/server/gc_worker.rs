@@ -263,7 +263,13 @@ impl<E: Engine> GCRunner<E> {
         mut next_scan_key: Option<Key>,
     ) -> Result<Option<Key>> {
         let snapshot = self.get_snapshot(ctx)?;
-        let mut txn = MvccTxn::for_scan(snapshot, Some(ScanMode::Forward), TimeStamp::zero(), !ctx.get_not_fill_cache()).unwrap();
+        let mut txn = MvccTxn::for_scan(
+            snapshot,
+            Some(ScanMode::Forward),
+            TimeStamp::zero(),
+            !ctx.get_not_fill_cache(),
+        )
+        .unwrap();
         for k in keys {
             let gc_info = txn.gc(k.clone(), safe_point)?;
 

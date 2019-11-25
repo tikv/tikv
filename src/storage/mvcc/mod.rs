@@ -895,7 +895,8 @@ pub mod tests {
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::for_scan(snapshot, Some(ScanMode::Forward), TimeStamp::zero(), true).unwrap();
+        let mut txn =
+            MvccTxn::for_scan(snapshot, Some(ScanMode::Forward), TimeStamp::zero(), true).unwrap();
         txn.gc(Key::from_raw(key), safe_point.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
