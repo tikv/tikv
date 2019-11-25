@@ -7,6 +7,7 @@ use super::super::expr::EvalContext;
 use crate::codec::data_type::*;
 use crate::codec::mysql::Time;
 use crate::codec::Error;
+use crate::expr::SqlMode;
 use crate::Result;
 
 #[rpn_fn(capture = [ctx])]
@@ -89,6 +90,25 @@ pub fn second(t: &Option<Duration>) -> Result<Option<Int>> {
 #[inline]
 pub fn micro_second(t: &Option<Duration>) -> Result<Option<Int>> {
     Ok(t.as_ref().map(|t| i64::from(t.subsec_micros())))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    let t = match t {
+        Some(v) => v,
+        _ => return Ok(None),
+    };
+
+    if t.is_zero() {
+        if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .map(|_| Ok(None))?;
+        }
+        return Ok(Some(0));
+    }
+    Ok(Some(Int::from(t.year())))
 }
 
 #[cfg(test)]
@@ -358,5 +378,36 @@ mod tests {
         test_null_case(ScalarFuncSig::Minute);
         test_null_case(ScalarFuncSig::Second);
         test_null_case(ScalarFuncSig::MicroSecond);
+    }
+
+    #[test]
+    fn test_year() {
+        let cases = vec![
+            (Some("0000-00-00 00:00:00"), Some(0i64)),
+            (Some("1-01-01 01:01:01"), Some(1i64)),
+            (Some("2018-01-01 01:01:01"), Some(2018i64)),
+            (Some("2019-01-01 01:01:01"), Some(2019i64)),
+            (Some("2020-01-01 01:01:01"), Some(2020i64)),
+            (Some("2021-01-01 01:01:01"), Some(2021i64)),
+            (Some("2022-01-01 01:01:01"), Some(2022i64)),
+            (Some("2023-01-01 01:01:01"), Some(2023i64)),
+            (Some("2024-01-01 01:01:01"), Some(2024i64)),
+            (Some("2025-01-01 01:01:01"), Some(2025i64)),
+            (Some("2026-01-01 01:01:01"), Some(2026i64)),
+            (Some("2027-01-01 01:01:01"), Some(2027i64)),
+            (Some("2028-01-01 01:01:01"), Some(2028i64)),
+            (Some("2029-01-01 01:01:01"), Some(2029i64)),
+            (None, None),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (time, expect) in cases {
+            let time = time.map(|t| DateTime::parse_datetime(&mut ctx, t, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(time)
+                .evaluate(ScalarFuncSig::Year)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
     }
 }
