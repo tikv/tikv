@@ -3,7 +3,7 @@
 use engine::rocks::{TablePropertiesCollection, DB};
 use engine::{self, IterOption};
 use engine_rocks::{RocksDBVector, RocksEngineIterator, RocksSnapshot, RocksSyncSnapshot};
-use engine_traits::{Peekable, ReadOptions, Result as EngineResult, Snapshot as SnapshotTrait};
+use engine_traits::{Peekable, ReadOptions, Result as EngineResult, Snapshot};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
 use std::sync::atomic::{AtomicU64, Ordering};
