@@ -1,11 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
+use engine::{Peekable, CF_RAFT, DB};
 use fail;
+use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftMessage, RegionLocalState};
+use raft::eraftpb::MessageType;
 use std::mem;
-use std::sync::atomic::AtomicBool;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
@@ -22,12 +24,13 @@ fn test_wait_for_apply_index() {
     pd_client.disable_default_operator();
 
     let r1 = cluster.run_conf_change();
-    cluster.must_put(b"k0", b"v0");
     let p2 = new_peer(2, 2);
     cluster.pd_client.must_add_peer(r1, p2.clone());
     let p3 = new_peer(3, 3);
     cluster.pd_client.must_add_peer(r1, p3.clone());
-    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+    cluster.must_put(b"k0", b"v0");
+    cluster.pd_client.must_none_pending_peer(p2.clone());
+    cluster.pd_client.must_none_pending_peer(p3.clone());
 
     let region = cluster.get_region(b"k0");
     cluster.must_transfer_leader(region.get_id(), p2.clone());
@@ -81,24 +84,31 @@ fn test_duplicate_read_index_ctx() {
     // Set region and peers
     let r1 = cluster.run_conf_change();
     let p1 = new_peer(1, 1);
-    cluster.must_put(b"k0", b"v0");
     let p2 = new_peer(2, 2);
     cluster.pd_client.must_add_peer(r1, p2.clone());
     let p3 = new_peer(3, 3);
     cluster.pd_client.must_add_peer(r1, p3.clone());
-    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+    cluster.must_put(b"k0", b"v0");
+    cluster.pd_client.must_none_pending_peer(p2.clone());
+    cluster.pd_client.must_none_pending_peer(p3.clone());
     let region = cluster.get_region(b"k0");
     assert_eq!(cluster.leader_of_region(region.get_id()).unwrap(), p1);
 
     // Delay all raft messages to peer 1.
     let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
-    let filter = Box::new(
+    let (sx, rx) = mpsc::sync_channel::<()>(2);
+    let recv_filter = Box::new(
         RegionPacketFilter::new(region.get_id(), 1)
             .direction(Direction::Recv)
             .when(Arc::new(AtomicBool::new(true)))
-            .reserve_dropped(Arc::clone(&dropped_msgs)),
+            .reserve_dropped(Arc::clone(&dropped_msgs))
+            .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
+                if msg.get_message().get_msg_type() == MessageType::MsgReadIndex {
+                    sx.send(()).unwrap();
+                }
+            })),
     );
-    cluster.sim.wl().add_recv_filter(1, filter);
+    cluster.sim.wl().add_recv_filter(1, recv_filter);
 
     // send two read index requests to leader
     let mut request = new_request(
@@ -115,8 +125,9 @@ fn test_duplicate_read_index_ctx() {
         .rl()
         .async_command_on_node(2, request.clone(), cb2)
         .unwrap();
-    thread::sleep(Duration::from_millis(200));
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
     request.mut_header().set_peer(p3.clone());
     let (cb3, rx3) = make_cb(&request);
     // send to peer 3
@@ -125,7 +136,7 @@ fn test_duplicate_read_index_ctx() {
         .rl()
         .async_command_on_node(3, request.clone(), cb3)
         .unwrap();
-    thread::sleep(Duration::from_millis(200));
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let router = cluster.sim.wl().get_router(1).unwrap();
     fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
@@ -136,6 +147,229 @@ fn test_duplicate_read_index_ctx() {
     fail::cfg("pause_on_peer_collect_message", "off").unwrap();
 
     // read index response must not be dropped
-    assert!(rx2.recv_timeout(Duration::from_millis(500)).is_ok());
-    assert!(rx3.recv_timeout(Duration::from_millis(500)).is_ok());
+    rx2.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx3.recv_timeout(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn test_read_before_init() {
+    let _guard = crate::setup();
+    // Initialize cluster
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // Set region and peers
+    let r1 = cluster.run_conf_change();
+    let p1 = new_peer(1, 1);
+    let p2 = new_peer(2, 2);
+    cluster.pd_client.must_add_peer(r1, p2.clone());
+    cluster.must_put(b"k0", b"v0");
+    cluster.pd_client.must_none_pending_peer(p2.clone());
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
+
+    fail::cfg("before_apply_snap_update_region", "return").unwrap();
+    // Add peer 3
+    let p3 = new_peer(3, 3);
+    cluster.pd_client.must_add_peer(r1, p3.clone());
+    thread::sleep(Duration::from_millis(500));
+    let region = cluster.get_region(b"k0");
+    assert_eq!(cluster.leader_of_region(r1).unwrap(), p1);
+
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cf_cmd("default", b"k0")],
+        false,
+    );
+    request.mut_header().set_peer(p3.clone());
+    request.mut_header().set_replica_read(true);
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(3, request, cb)
+        .unwrap();
+    let resp = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains("not initialized yet"),
+        "{:?}",
+        resp.get_header().get_error()
+    );
+}
+
+#[test]
+fn test_read_applying_snapshot() {
+    let _guard = crate::setup();
+    // Initialize cluster
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // Set region and peers
+    let r1 = cluster.run_conf_change();
+    let p1 = new_peer(1, 1);
+    let p2 = new_peer(2, 2);
+    cluster.pd_client.must_add_peer(r1, p2.clone());
+    cluster.must_put(b"k0", b"v0");
+    cluster.pd_client.must_none_pending_peer(p2.clone());
+
+    // Don't apply snapshot to init peer 3
+    fail::cfg("region_apply_snap", "pause").unwrap();
+    let p3 = new_peer(3, 3);
+    cluster.pd_client.must_add_peer(r1, p3.clone());
+    thread::sleep(Duration::from_millis(500));
+
+    // Check if peer 3 is applying snapshot
+    let region_key = keys::region_state_key(r1);
+    let region_state: RegionLocalState = cluster
+        .get_engine(3)
+        .get_msg_cf(CF_RAFT, &region_key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(region_state.get_state(), PeerState::Applying);
+    let region = cluster.get_region(b"k0");
+    assert_eq!(cluster.leader_of_region(r1).unwrap(), p1);
+
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cf_cmd("default", b"k0")],
+        false,
+    );
+    request.mut_header().set_peer(p3.clone());
+    request.mut_header().set_replica_read(true);
+    let (cb, rx) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(3, request, cb)
+        .unwrap();
+    let resp = match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(r) => r,
+        Err(_) => {
+            fail::cfg("region_apply_snap", "off").unwrap();
+            panic!("cannot receive response");
+        }
+    };
+    fail::cfg("region_apply_snap", "off").unwrap();
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains("applying snapshot"),
+        "{:?}",
+        resp.get_header().get_error()
+    );
+}
+
+#[test]
+fn test_read_after_cleanup_range_for_snap() {
+    let _guard = crate::setup();
+    let mut cluster = new_server_cluster(1, 3);
+    configure_for_snapshot(&mut cluster);
+    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // Set region and peers
+    let r1 = cluster.run_conf_change();
+    let p1 = new_peer(1, 1);
+    let p2 = new_peer(2, 2);
+    cluster.pd_client.must_add_peer(r1, p2.clone());
+    let p3 = new_peer(3, 3);
+    cluster.pd_client.must_add_peer(r1, p3.clone());
+    cluster.must_put(b"k0", b"v0");
+    cluster.pd_client.must_none_pending_peer(p2.clone());
+    cluster.pd_client.must_none_pending_peer(p3.clone());
+    let region = cluster.get_region(b"k0");
+    assert_eq!(cluster.leader_of_region(region.get_id()).unwrap(), p1);
+    cluster.stop_node(3);
+    (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
+    // Ensure logs are compacted.
+    must_truncated_to(cluster.get_engine(3), r1, 8);
+
+    fail::cfg("send_snapshot", "pause").unwrap();
+    cluster.run_node(3).unwrap();
+    // Sleep for a while to ensure peer 3 receives a HeartBeat
+    thread::sleep(Duration::from_millis(500));
+
+    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
+    let (read_index_sx, read_index_rx) = mpsc::sync_channel::<RaftMessage>(1);
+    let (snap_sx, snap_rx) = mpsc::sync_channel::<RaftMessage>(1);
+    let (heartbeat_sx, heartbeat_rx) = mpsc::sync_channel::<RaftMessage>(1);
+    let is_recv_heartbeat = AtomicBool::new(false);
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), 3)
+            .direction(Direction::Recv)
+            .when(Arc::new(AtomicBool::new(true)))
+            .reserve_dropped(Arc::clone(&dropped_msgs))
+            .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
+                if msg.get_message().get_msg_type() == MessageType::MsgReadIndexResp {
+                    read_index_sx.send(msg.clone()).unwrap();
+                } else if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                    snap_sx.send(msg.clone()).unwrap();
+                } else if msg.get_message().get_msg_type() == MessageType::MsgHeartbeat {
+                    if is_recv_heartbeat.compare_and_swap(false, true, Ordering::SeqCst) {
+                        heartbeat_sx.send(msg.clone()).unwrap();
+                    }
+                }
+            })),
+    );
+    cluster.sim.wl().add_recv_filter(3, recv_filter);
+    fail::cfg("send_snapshot", "off").unwrap();
+
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cf_cmd("default", b"k0")],
+        false,
+    );
+    request.mut_header().set_peer(p3.clone());
+    request.mut_header().set_replica_read(true);
+    // send request to peer 3
+    let (cb1, rx1) = make_cb(&request);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(3, request.clone(), cb1)
+        .unwrap();
+    let read_index_msg = read_index_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let snap_msg = snap_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let heartbeat_msg = heartbeat_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    fail::cfg("apply_snap_cleanup_range", "pause").unwrap();
+
+    let router = cluster.sim.wl().get_router(3).unwrap();
+    fail::cfg("pause_on_peer_collect_message", "pause").unwrap();
+    cluster.sim.wl().clear_recv_filters(3);
+    router.send_raft_message(heartbeat_msg).unwrap();
+    router.send_raft_message(snap_msg).unwrap();
+    router.send_raft_message(read_index_msg.clone()).unwrap();
+    fail::cfg("pause_on_peer_collect_message", "off").unwrap();
+    must_get_none(&cluster.get_engine(3), b"k0");
+    rx1.recv_timeout(Duration::from_millis(500)).unwrap_err();
+    fail::cfg("apply_snap_cleanup_range", "off").unwrap();
+    rx1.recv_timeout(Duration::from_secs(5)).unwrap();
+}
+
+fn must_truncated_to(engine: Arc<DB>, region_id: u64, index: u64) {
+    for _ in 1..300 {
+        let apply_state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+            .unwrap()
+            .unwrap();
+        let truncated_index = apply_state.get_truncated_state().get_index();
+        if truncated_index > index {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("raft log is not truncated to {}", index);
 }
