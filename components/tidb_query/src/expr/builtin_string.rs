@@ -915,7 +915,6 @@ impl ScalarFunc {
             .or(Some(0)))
     }
 
-    #[inline]
     // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_quote
     pub fn quote<'a, 'b: 'a>(
         &'b self,
@@ -926,7 +925,13 @@ impl ScalarFunc {
             self.children[0].eval_string(ctx, row),
             Some(Cow::Borrowed(b"NULL"))
         );
-        let mut result = Vec::<u8>::with_capacity(s.len());
+        let mut count = 2;
+        for byte in s.iter() {
+            if *byte == b'\'' || *byte == b'\\' || *byte == b'\0' || *byte == 26u8 {
+                count += 1;
+            }
+        }
+        let mut result = Vec::<u8>::with_capacity(s.len() + count);
         result.push(b'\'');
         for byte in s.iter() {
             if *byte == b'\'' || *byte == b'\\' {
