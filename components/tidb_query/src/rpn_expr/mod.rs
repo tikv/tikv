@@ -248,6 +248,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Cos => cos_fn_meta(),
         ScalarFuncSig::Tan => tan_fn_meta(),
         ScalarFuncSig::Cot => cot_fn_meta(),
+        ScalarFuncSig::Pow => pow_fn_meta(),
         ScalarFuncSig::Asin => asin_fn_meta(),
         ScalarFuncSig::Acos => acos_fn_meta(),
         ScalarFuncSig::Atan1Arg => atan_1_arg_fn_meta(),
@@ -264,6 +265,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Exp => exp_fn_meta(),
         ScalarFuncSig::Degrees => degrees_fn_meta(),
         ScalarFuncSig::Radians => radians_fn_meta(),
+        ScalarFuncSig::Conv => conv_fn_meta(),
         ScalarFuncSig::InInt => compare_in_fn_meta::<Int>(),
         ScalarFuncSig::InReal => compare_in_fn_meta::<Real>(),
         ScalarFuncSig::InString => compare_in_fn_meta::<Bytes>(),
@@ -351,6 +353,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Replace => replace_fn_meta(),
         ScalarFuncSig::Left => left_fn_meta(),
         ScalarFuncSig::LocateBinary2Args => locate_binary_2_args_fn_meta(),
+        ScalarFuncSig::LocateBinary3Args => locate_binary_3_args_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
