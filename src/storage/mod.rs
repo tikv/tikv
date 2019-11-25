@@ -604,7 +604,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Key>,
         lock_ts: TimeStamp,
         commit_ts: TimeStamp,
-        callback: Callback<()>,
+        callback: Callback<TxnStatus>,
     ) -> Result<()> {
         let cmd = Command {
             ctx,
@@ -614,7 +614,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 commit_ts,
             },
         };
-        self.schedule(cmd, StorageCallback::Boolean(callback))?;
+        self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
         Ok(())
     }
@@ -2146,7 +2146,7 @@ mod tests {
                 vec![Key::from_raw(b"x")],
                 100.into(),
                 110.into(),
-                expect_ok_callback(tx.clone(), 2),
+                expect_value_callback(tx.clone(), 2, TxnStatus::committed(110.into())),
             )
             .unwrap();
         storage
@@ -2155,7 +2155,7 @@ mod tests {
                 vec![Key::from_raw(b"y")],
                 101.into(),
                 111.into(),
-                expect_ok_callback(tx.clone(), 3),
+                expect_value_callback(tx.clone(), 3, TxnStatus::committed(111.into())),
             )
             .unwrap();
         rx.recv().unwrap();

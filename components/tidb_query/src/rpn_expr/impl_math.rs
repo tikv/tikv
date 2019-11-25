@@ -1,3 +1,4 @@
+use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
@@ -9,6 +10,14 @@ use crate::Result;
 #[inline]
 pub fn pi() -> Result<Option<Real>> {
     Ok(Some(Real::from(std::f64::consts::PI)))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn crc32(arg: &Option<Bytes>) -> Result<Option<Int>> {
+    Ok(arg
+        .as_ref()
+        .map(|bytes| i64::from(tikv_util::file::calc_crc32_bytes(&bytes))))
 }
 
 #[inline]
@@ -312,6 +321,22 @@ fn cot(arg: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
+fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            let pow = (lhs.into_inner()).pow(rhs.into_inner());
+            if pow.is_infinite() {
+                Err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)).into())
+            } else {
+                Ok(Real::new(pow).ok())
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
 fn degrees(arg: &Option<Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|n| Real::new(n.to_degrees()).ok()))
 }
@@ -356,6 +381,28 @@ mod tests {
             .evaluate(ScalarFuncSig::Pi)
             .unwrap();
         assert_eq!(output, Some(Real::from(std::f64::consts::PI)));
+    }
+
+    #[test]
+    fn test_crc32() {
+        let cases = vec![
+            (Some(""), Some(0)),
+            (Some("-1"), Some(808273962)),
+            (Some("mysql"), Some(2501908538)),
+            (Some("MySQL"), Some(3259397556)),
+            (Some("hello"), Some(907060870)),
+            (Some("❤️"), Some(4067711813)),
+            (None, None),
+        ];
+
+        for (input, expect) in cases {
+            let input = input.map(|s| s.as_bytes().to_vec());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Crc32)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
     }
 
     #[test]
@@ -877,6 +924,60 @@ mod tests {
             .push_param(Some(Real::from(0.0_f64)))
             .evaluate::<Real>(ScalarFuncSig::Cot)
             .is_err());
+    }
+
+    #[test]
+    fn test_pow() {
+        let cases = vec![
+            (
+                Some(Real::from(1.0f64)),
+                Some(Real::from(3.0f64)),
+                Some(Real::from(1.0f64)),
+            ),
+            (
+                Some(Real::from(3.0f64)),
+                Some(Real::from(0.0f64)),
+                Some(Real::from(1.0f64)),
+            ),
+            (
+                Some(Real::from(2.0f64)),
+                Some(Real::from(4.0f64)),
+                Some(Real::from(16.0f64)),
+            ),
+            (
+                Some(Real::from(std::f64::INFINITY)),
+                Some(Real::from(0.0f64)),
+                Some(Real::from(1.0f64)),
+            ),
+            (Some(Real::from(4.0f64)), None, None),
+            (None, Some(Real::from(4.0f64)), None),
+            (None, None, None),
+        ];
+
+        for (lhs, rhs, expect) in cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::Pow)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+
+        let invalid_cases = vec![
+            (
+                Some(Real::from(std::f64::INFINITY)),
+                Some(Real::from(std::f64::INFINITY)),
+            ),
+            (Some(Real::from(0.0f64)), Some(Real::from(-9999999.0f64))),
+        ];
+
+        for (lhs, rhs) in invalid_cases {
+            assert!(RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::Pow)
+                .is_err());
+        }
     }
 
     #[test]
