@@ -355,6 +355,47 @@ mod tests {
                 ),
             ),
             (vec![None, Some(b"abc".to_vec())], None),
+            (
+                vec![Some(b",".to_vec()), None, Some(b"abc".to_vec())],
+                Some(b"abc".to_vec()),
+            ),
+            (
+                vec![Some(b",".to_vec()), Some(b"abc".to_vec()), None],
+                Some(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"".to_vec()),
+                    Some(b"abc".to_vec()),
+                ],
+                Some(b",abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some("忠犬ハチ公".as_bytes().to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                    Some("قاعدة البيانات".as_bytes().to_vec()),
+                ],
+                Some(
+                    "CAFÉ忠犬ハチ公数据库忠犬ハチ公قاعدة البيانات"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    None,
+                    Some(b"abc".to_vec()),
+                    None,
+                    None,
+                    Some(b"defg".to_vec()),
+                    None,
+                ],
+                Some(b"abc,defg".to_vec()),
+            ),
         ];
         for (row, exp) in cases {
             let output = RpnFnScalarEvaluator::new()
