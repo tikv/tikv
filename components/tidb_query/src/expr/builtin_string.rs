@@ -926,12 +926,7 @@ impl ScalarFunc {
             Some(Cow::Borrowed(b"NULL"))
         );
         let mut count = 2;
-        for byte in s.iter() {
-            if *byte == b'\'' || *byte == b'\\' || *byte == b'\0' || *byte == 26u8 {
-                count += 1;
-            }
-        }
-        let mut result = Vec::<u8>::with_capacity(s.len() + count);
+        let mut result = Vec::<u8>::with_capacity(s.len() * 2 + 2);
         result.push(b'\'');
         for byte in s.iter() {
             if *byte == b'\'' || *byte == b'\\' {
