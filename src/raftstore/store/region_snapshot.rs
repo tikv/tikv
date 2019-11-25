@@ -1,11 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{DBVector, TablePropertiesCollection, DB};
-use engine::{
-    self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
-    SyncSnapshot,
-};
-use engine_rocks::{Compat, RocksEngineIterator};
+use engine::rocks::{TablePropertiesCollection, DB};
+use engine::{self, IterOption};
+use engine_rocks::{RocksDBVector, RocksEngineIterator, RocksSnapshot, RocksSyncSnapshot};
+use engine_traits::{Peekable, ReadOptions, Result as EngineResult, Snapshot as SnapshotTrait};
 use kvproto::metapb::Region;
 use std::sync::Arc;
 
@@ -13,7 +11,7 @@ use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
 use engine_traits::util::check_key_in_range;
-use engine_traits::{Iterable, Iterator};
+use engine_traits::{Error as EngineError, Iterable, Iterator};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -23,7 +21,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot {
-    snap: SyncSnapshot,
+    snap: RocksSyncSnapshot,
     region: Arc<Region>,
 }
 
@@ -33,10 +31,10 @@ impl RegionSnapshot {
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region)
+        RegionSnapshot::from_snapshot(RocksSnapshot::new(db).into_sync(), region)
     }
 
-    pub fn from_snapshot(snap: SyncSnapshot, region: Region) -> RegionSnapshot {
+    pub fn from_snapshot(snap: RocksSyncSnapshot, region: Region) -> RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
@@ -111,7 +109,12 @@ impl RegionSnapshot {
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
         let start = keys::enc_start_key(&self.region);
         let end = keys::enc_end_key(&self.region);
-        let prop = engine::util::get_range_properties_cf(&self.snap.get_db(), cf, &start, &end)?;
+        let prop = engine::util::get_range_properties_cf(
+            &self.snap.get_db().as_inner(),
+            cf,
+            &start,
+            &end,
+        )?;
         Ok(prop)
     }
 
@@ -134,7 +137,13 @@ impl Clone for RegionSnapshot {
 }
 
 impl Peekable for RegionSnapshot {
-    fn get_value(&self, key: &[u8]) -> EngineResult<Option<DBVector>> {
+    type DBVector = RocksDBVector;
+
+    fn get_value_opt(
+        &self,
+        opts: &ReadOptions,
+        key: &[u8],
+    ) -> EngineResult<Option<Self::DBVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),
@@ -144,11 +153,16 @@ impl Peekable for RegionSnapshot {
         .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
         self.snap
-            .get_value(&data_key)
+            .get_value_opt(opts, &data_key)
             .map_err(|e| self.handle_get_value_error(e, "", key))
     }
 
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
+    fn get_value_cf_opt(
+        &self,
+        opts: &ReadOptions,
+        cf: &str,
+        key: &[u8],
+    ) -> EngineResult<Option<Self::DBVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),
@@ -158,7 +172,7 @@ impl Peekable for RegionSnapshot {
         .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
         self.snap
-            .get_value_cf(cf, &data_key)
+            .get_value_cf_opt(opts, cf, &data_key)
             .map_err(|e| self.handle_get_value_error(e, cf, key))
     }
 }
@@ -222,18 +236,21 @@ fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
-    pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
+    pub fn new(
+        snap: &RocksSyncSnapshot,
+        region: Arc<Region>,
+        mut iter_opt: IterOption,
+    ) -> RegionIterator {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
         let iter = snap
-            .c()
             .iterator_opt(iter_opt)
             .expect("creating snapshot iterator"); // FIXME error handling
         RegionIterator { iter, region }
     }
 
     pub fn new_cf(
-        snap: &Snapshot,
+        snap: &RocksSyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOption,
         cf: &str,
@@ -241,7 +258,6 @@ impl RegionIterator {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
         let iter = snap
-            .c()
             .iterator_cf_opt(cf, iter_opt)
             .expect("creating snapshot iterator"); // FIXME error handling
         RegionIterator { iter, region }
@@ -348,14 +364,14 @@ mod tests {
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::{IngestExternalFileOptions, Snapshot, Writable};
+    use engine::rocks::{IngestExternalFileOptions, Writable};
     use engine::util::{delete_all_files_in_range, delete_all_in_range};
     use engine::Engines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
     use engine_rocks::RocksIOLimiter;
-    use engine_rocks::RocksSstWriterBuilder;
-    use engine_traits::{SstWriter, SstWriterBuilder};
+    use engine_rocks::{RocksSnapshot, RocksSstWriterBuilder};
+    use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;
 
@@ -992,7 +1008,7 @@ mod tests {
         let write_sst_file_path = path.path().join("write.sst");
         build_sst_cf_file::<RocksIOLimiter>(
             &default_sst_file_path.to_str().unwrap(),
-            &Snapshot::new(Arc::clone(&engines.kv)),
+            &RocksSnapshot::new(Arc::clone(&engines.kv)),
             CF_DEFAULT,
             b"",
             b"{",
@@ -1001,7 +1017,7 @@ mod tests {
         .unwrap();
         build_sst_cf_file::<RocksIOLimiter>(
             &write_sst_file_path.to_str().unwrap(),
-            &Snapshot::new(Arc::clone(&engines.kv)),
+            &RocksSnapshot::new(Arc::clone(&engines.kv)),
             CF_WRITE,
             b"",
             b"{",
