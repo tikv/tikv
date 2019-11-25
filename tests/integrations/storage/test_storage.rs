@@ -14,7 +14,7 @@ use engine::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
-use tikv::storage::{Engine, Key, Mutation};
+use tikv::storage::{Engine, Key, Mutation, TimeStamp};
 
 #[test]
 fn test_txn_store_get() {
@@ -63,7 +63,7 @@ fn test_txn_store_cleanup_rollback() {
     );
     store.get_err(b"secondary", 10);
     store.rollback_ok(vec![b"primary"], 5);
-    store.cleanup_ok(b"primary", 5);
+    store.cleanup_ok(b"primary", 5, 0);
 }
 
 #[test]
@@ -80,8 +80,8 @@ fn test_txn_store_cleanup_commit() {
     );
     store.get_err(b"secondary", 8);
     store.get_err(b"secondary", 12);
-    store.commit_ok(vec![b"primary"], 5, 10);
-    store.cleanup_err(b"primary", 5);
+    store.commit_ok(vec![b"primary"], 5, 10, 10);
+    store.cleanup_err(b"primary", 5, 0);
     store.rollback_err(vec![b"primary"], 5);
 }
 
@@ -102,12 +102,12 @@ fn test_txn_store_for_point_get_with_pk() {
         5,
     );
     store.get_ok(b"primary", 4, b"v1");
-    store.get_ok(b"primary", u64::MAX, b"v1");
+    store.get_ok(b"primary", TimeStamp::max(), b"v1");
     store.get_err(b"primary", 6);
 
     store.get_ok(b"secondary", 4, b"v3");
     store.get_err(b"secondary", 6);
-    store.get_err(b"secondary", u64::MAX);
+    store.get_err(b"secondary", TimeStamp::max());
 
     store.get_err(b"new_key", 6);
     store.get_ok(b"b", 6, b"v2");
@@ -517,7 +517,7 @@ fn test_txn_store_resolve_lock() {
         b"p2",
         10,
     );
-    store.resolve_lock_ok(5, None);
+    store.resolve_lock_ok(5, None::<TimeStamp>);
     store.resolve_lock_ok(10, Some(20));
     store.get_none(b"p1", 20);
     store.get_none(b"s1", 30);
@@ -789,11 +789,11 @@ fn test_txn_store_lock_primary() {
         ],
         b"p",
         2,
-        vec![(b"p", b"p", 1)],
+        vec![(b"p", b"p", 1.into())],
     );
     // txn2 cleanups txn1's lock.
     store.rollback_ok(vec![b"p"], 1);
-    store.resolve_lock_ok(1, None);
+    store.resolve_lock_ok(1, None::<TimeStamp>);
 
     // txn3 wants to write "p", "s", neither of them should be locked.
     store.prewrite_ok(
@@ -835,8 +835,8 @@ impl Oracle {
         }
     }
 
-    fn get_ts(&self) -> u64 {
-        self.ts.fetch_add(1, Ordering::Relaxed) as u64
+    fn get_ts(&self) -> TimeStamp {
+        (self.ts.fetch_add(1, Ordering::Relaxed) as u64).into()
     }
 }
 

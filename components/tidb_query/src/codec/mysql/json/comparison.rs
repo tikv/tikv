@@ -89,8 +89,8 @@ impl PartialOrd for Json {
                 (&Json::Object(_), &Json::Object(_)) => {
                     let mut left_data = vec![];
                     let mut right_data = vec![];
-                    left_data.encode_json(self).unwrap();
-                    right_data.encode_json(right).unwrap();
+                    left_data.write_json(self).unwrap();
+                    right_data.write_json(right).unwrap();
                     left_data.partial_cmp(&right_data)
                 }
                 _ => Some(Ordering::Equal),

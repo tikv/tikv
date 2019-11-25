@@ -2,14 +2,17 @@
 
 use super::column::{Column, ColumnEncoder};
 use super::Result;
+use crate::codec::data_type::VectorValue;
 use crate::codec::Datum;
-use std::io::Write;
+use crate::expr::EvalContext;
+use codec::buffer::BufferWriter;
+use tidb_query_datatype::FieldTypeAccessor;
+use tidb_query_datatype::FieldTypeFlag;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 use tipb::FieldType;
 
-/// `Chunk` stores multiple rows of data in Apache Arrow format.
-/// See https://arrow.apache.org/docs/memory_layout.html
+/// `Chunk` stores multiple rows of data.
 /// Values are appended in compact format and can be directly accessed without decoding.
 /// When the chunk is done processing, we can reuse the allocated memory by resetting it.
 pub struct Chunk {
@@ -56,6 +59,133 @@ impl Chunk {
         self.columns[col_idx].append_datum(v)
     }
 
+    /// Append a datum from vec to the column
+    #[inline]
+    pub fn append_vec(
+        &mut self,
+        row_indexes: &[usize],
+        field_type: &FieldType,
+        vec: &VectorValue,
+        column_index: usize,
+    ) -> Result<()> {
+        let col = &mut self.columns[column_index];
+        match vec {
+            VectorValue::Int(ref vec) => {
+                if field_type
+                    .as_accessor()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED)
+                {
+                    for &row_index in row_indexes {
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_u64(*val as u64).unwrap();
+                            }
+                        }
+                    }
+                } else {
+                    for &row_index in row_indexes {
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_i64(*val).unwrap();
+                            }
+                        }
+                    }
+                }
+            }
+            VectorValue::Real(ref vec) => {
+                if col.get_fixed_len() == 4 {
+                    for &row_index in row_indexes {
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_f32(f64::from(*val) as f32).unwrap();
+                            }
+                        }
+                    }
+                } else {
+                    for &row_index in row_indexes {
+                        match &vec[row_index] {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_f64(f64::from(*val)).unwrap();
+                            }
+                        }
+                    }
+                }
+            }
+            VectorValue::Decimal(ref vec) => {
+                for &row_index in row_indexes {
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_decimal(&val).unwrap();
+                        }
+                    }
+                }
+            }
+            VectorValue::Bytes(ref vec) => {
+                for &row_index in row_indexes {
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_bytes(&val).unwrap();
+                        }
+                    }
+                }
+            }
+            VectorValue::DateTime(ref vec) => {
+                for &row_index in row_indexes {
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_time(*val).unwrap();
+                        }
+                    }
+                }
+            }
+            VectorValue::Duration(ref vec) => {
+                for &row_index in row_indexes {
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_duration(*val).unwrap();
+                        }
+                    }
+                }
+            }
+            VectorValue::Json(ref vec) => {
+                for &row_index in row_indexes {
+                    match &vec[row_index] {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => col.append_json(&val).unwrap(),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Get the Row in the chunk with the row index.
     #[inline]
     pub fn get_row(&self, idx: usize) -> Option<Row<'_>> {
@@ -88,13 +218,13 @@ impl Chunk {
 pub trait ChunkEncoder: ColumnEncoder {
     fn encode_chunk(&mut self, data: &Chunk) -> Result<()> {
         for col in &data.columns {
-            self.encode_column(col)?;
+            self.write_column(col)?;
         }
         Ok(())
     }
 }
 
-impl<T: Write> ChunkEncoder for T {}
+impl<T: BufferWriter> ChunkEncoder for T {}
 
 /// `Row` represents one row in the chunk.
 pub struct Row<'a> {
@@ -121,8 +251,13 @@ impl<'a> Row<'a> {
 
     /// Get the datum of the column with the specified type in the row.
     #[inline]
-    pub fn get_datum(&self, col_idx: usize, fp: &FieldType) -> Result<Datum> {
-        self.c.columns[col_idx].get_datum(self.idx, fp)
+    pub fn get_datum(
+        &self,
+        col_idx: usize,
+        fp: &FieldType,
+        ctx: &mut EvalContext,
+    ) -> Result<Datum> {
+        self.c.columns[col_idx].get_datum(ctx, self.idx, fp)
     }
 }
 
@@ -163,6 +298,7 @@ mod tests {
 
     #[test]
     fn test_append_datum() {
+        let mut ctx = EvalContext::default();
         let fields = vec![
             field_type(FieldTypeTp::LongLong),
             field_type(FieldTypeTp::Float),
@@ -173,7 +309,7 @@ mod tests {
             field_type(FieldTypeTp::String),
         ];
         let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
-        let time: Time = Time::parse_utc_datetime("2012-12-31 11:30:45", -1).unwrap();
+        let time: Time = Time::parse_datetime(&mut ctx, "2012-12-31 11:30:45", -1, true).unwrap();
         let duration = Duration::parse(b"10:11:12", 0).unwrap();
         let dec: Decimal = "1234.00".parse().unwrap();
         let data = vec![
@@ -192,7 +328,7 @@ mod tests {
         }
         for row in chunk.iter() {
             for col_id in 0..row.len() {
-                let got = row.get_datum(col_id, &fields[col_id]).unwrap();
+                let got = row.get_datum(col_id, &fields[col_id], &mut ctx).unwrap();
                 assert_eq!(got, data[col_id]);
             }
 
@@ -213,6 +349,7 @@ mod tests {
             field_type(FieldTypeTp::JSON),
         ];
         let mut chunk = Chunk::new(&fields, rows);
+        let mut ctx = EvalContext::default();
 
         for row_id in 0..rows {
             let s = format!("{}.123435", row_id);
@@ -233,11 +370,15 @@ mod tests {
         assert_eq!(got.num_rows(), rows);
         for row_id in 0..rows {
             for (col_id, tp) in fields.iter().enumerate() {
-                let dt = got.get_row(row_id).unwrap().get_datum(col_id, tp).unwrap();
+                let dt = got
+                    .get_row(row_id)
+                    .unwrap()
+                    .get_datum(col_id, tp, &mut ctx)
+                    .unwrap();
                 let exp = chunk
                     .get_row(row_id)
                     .unwrap()
-                    .get_datum(col_id, tp)
+                    .get_datum(col_id, tp, &mut ctx)
                     .unwrap();
                 assert_eq!(dt, exp);
             }

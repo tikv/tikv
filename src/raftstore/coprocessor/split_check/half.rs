@@ -1,7 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::ops::Bound::Excluded;
-
 use engine::rocks::DB;
 use engine::util;
 use engine::{CF_DEFAULT, CF_WRITE};
@@ -145,9 +143,9 @@ fn get_region_approximate_middle_cf(
         let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
         keys.extend(
             props
-                .offsets
-                .range::<[u8], _>((Excluded(start_key.as_slice()), Excluded(end_key.as_slice())))
-                .map(|(k, _)| k.to_owned()),
+                .take_excluded_range(start_key.as_slice(), end_key.as_slice())
+                .into_iter()
+                .map(|(k, _)| k),
         );
     }
     if keys.is_empty() {
@@ -176,9 +174,7 @@ mod tests {
     use kvproto::pdpb::CheckPolicy;
     use tempfile::Builder;
 
-    use crate::raftstore::coprocessor::properties::{
-        RangePropertiesCollectorFactory, SizePropertiesCollectorFactory,
-    };
+    use crate::raftstore::coprocessor::properties::RangePropertiesCollectorFactory;
     use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
     use crate::storage::Key;
     use tikv_util::config::ReadableSize;
@@ -198,7 +194,7 @@ mod tests {
             .iter()
             .map(|cf| {
                 let mut cf_opts = ColumnFamilyOptions::new();
-                let f = Box::new(SizePropertiesCollectorFactory::default());
+                let f = Box::new(RangePropertiesCollectorFactory::default());
                 cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
                 CFOptions::new(cf, cf_opts)
             })

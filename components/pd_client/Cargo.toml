@@ -21,11 +21,12 @@ serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
 grpcio = { version = "0.5.0-alpha.3", features = [ "secure" ] }
+keys = { path = "../keys" }
 tikv_util = { path = "../tikv_util" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 hex = "0.3"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
+rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
 features = ["nightly", "push", "process"]

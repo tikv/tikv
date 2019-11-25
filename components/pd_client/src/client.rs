@@ -13,10 +13,10 @@ use kvproto::pdpb::{self, Member};
 
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
-use super::{Config, PdFuture};
+use super::{Config, PdFuture, UnixSecs};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use tikv_util::security::SecurityManager;
-use tikv_util::time::{duration_to_sec, time_now_sec};
+use tikv_util::time::duration_to_sec;
 use tikv_util::{Either, HandyRwLock};
 
 const CQ_COUNT: usize = 1;
@@ -79,10 +79,7 @@ impl RpcClient {
     }
 
     /// Gets given key's Region and Region's leader from PD.
-    pub fn get_region_and_leader(
-        &self,
-        key: &[u8],
-    ) -> Result<(metapb::Region, Option<metapb::Peer>)> {
+    fn get_region_and_leader(&self, key: &[u8]) -> Result<(metapb::Region, Option<metapb::Peer>)> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_region"])
             .start_coarse_timer();
@@ -266,7 +263,7 @@ impl PdClient for RpcClient {
         let executor = move |client: &RwLock<Inner>, req: pdpb::GetRegionByIdRequest| {
             let handler = client
                 .rl()
-                .client
+                .client_stub
                 .get_region_by_id_async_opt(&req, Self::call_option())
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |mut resp| {
@@ -310,8 +307,8 @@ impl PdClient for RpcClient {
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
         let mut interval = pdpb::TimeInterval::default();
-        interval.set_start_timestamp(region_stat.last_report_ts);
-        interval.set_end_timestamp(time_now_sec());
+        interval.set_start_timestamp(region_stat.last_report_ts.into_inner());
+        interval.set_end_timestamp(UnixSecs::now().into_inner());
         req.set_interval(interval);
 
         let executor = |client: &RwLock<Inner>, req: pdpb::RegionHeartbeatRequest| {
@@ -372,7 +369,7 @@ impl PdClient for RpcClient {
         let executor = move |client: &RwLock<Inner>, req: pdpb::AskSplitRequest| {
             let handler = client
                 .rl()
-                .client
+                .client_stub
                 .ask_split_async_opt(&req, Self::call_option())
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
@@ -404,7 +401,7 @@ impl PdClient for RpcClient {
         let executor = move |client: &RwLock<Inner>, req: pdpb::AskBatchSplitRequest| {
             let handler = client
                 .rl()
-                .client
+                .client_stub
                 .ask_batch_split_async_opt(&req, Self::call_option())
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
@@ -426,12 +423,14 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::StoreHeartbeatRequest::default();
         req.set_header(self.header());
-        stats.mut_interval().set_end_timestamp(time_now_sec());
+        stats
+            .mut_interval()
+            .set_end_timestamp(UnixSecs::now().into_inner());
         req.set_stats(stats);
         let executor = move |client: &RwLock<Inner>, req: pdpb::StoreHeartbeatRequest| {
             let handler = client
                 .rl()
-                .client
+                .client_stub
                 .store_heartbeat_async_opt(&req, Self::call_option())
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
@@ -458,7 +457,7 @@ impl PdClient for RpcClient {
         let executor = move |client: &RwLock<Inner>, req: pdpb::ReportBatchSplitRequest| {
             let handler = client
                 .rl()
-                .client
+                .client_stub
                 .report_batch_split_async_opt(&req, Self::call_option())
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
@@ -508,7 +507,7 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let handler = client
                 .rl()
-                .client
+                .client_stub
                 .get_gc_safe_point_async_opt(&req, option)
                 .unwrap();
             Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {

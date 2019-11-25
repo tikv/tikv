@@ -16,7 +16,8 @@ use engine::rocks::Writable;
 use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
-use engine::{ALL_CFS, CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT, CF_ROLLBACK};
+use engine::{ALL_CFS, CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT, CF_ROLLBACK, CF_WRITE};
+use engine_rocks::RocksEngine;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::raft_cmdpb::{
@@ -655,7 +656,7 @@ impl ApplyDelegate {
             merged: false,
             ready_source_region_id: 0,
             wait_merge_state: None,
-            is_merging: false,
+            is_merging: reg.is_merging,
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
@@ -1084,9 +1085,13 @@ impl ApplyDelegate {
         ctx: &ApplyContext,
         req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
-        fail_point!("on_apply_write_cmd", self.id() == 3, |_| {
-            unimplemented!();
-        });
+        fail_point!(
+            "on_apply_write_cmd",
+            cfg!(release) || self.id() == 3,
+            |_| {
+                unimplemented!();
+            }
+        );
 
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
@@ -1337,7 +1342,7 @@ impl ApplyDelegate {
         }
 
         ctx.importer
-            .ingest(sst, &ctx.engines.kv)
+            .ingest(sst, RocksEngine::from_ref(&ctx.engines.kv))
             .unwrap_or_else(|e| {
                 // If this failed, it means that the file is corrupted or something
                 // is wrong with the engine, but we can do nothing about that.
@@ -2143,6 +2148,7 @@ pub struct Registration {
     pub applied_index_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
+    pub is_merging: bool,
 }
 
 impl Registration {
@@ -2154,6 +2160,7 @@ impl Registration {
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
+            is_merging: peer.pending_merge_state.is_some(),
         }
     }
 }
@@ -2398,6 +2405,8 @@ impl ApplyFsm {
             self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
             |_| {}
         );
+        fail_point!("on_handle_apply", |_| {});
+
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
@@ -2536,6 +2545,13 @@ impl ApplyFsm {
 
         // if it is already up to date, no need to catch up anymore
         let apply_index = self.delegate.apply_state.get_applied_index();
+        debug!(
+            "check catch up logs for merge";
+            "apply_index" => apply_index,
+            "commit" => catch_up_logs.merge.get_commit(),
+            "region_id" => self.delegate.region_id(),
+            "peer_id" => self.delegate.id(),
+        );
         if apply_index < catch_up_logs.merge.get_commit() {
             fail_point!("on_handle_catch_up_logs_for_merge");
             let mut res = VecDeque::new();
@@ -2919,15 +2935,16 @@ mod tests {
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use engine::rocks::Writable;
-    use engine::{WriteBatch, CF_WRITE, DB};
+    use engine::{WriteBatch, DB};
+    use engine_rocks::RocksEngine;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
     use tempfile::{Builder, TempDir};
     use uuid::Uuid;
 
-    use crate::import::test_helpers::*;
     use crate::raftstore::store::{Config, RegionTask};
+    use test_sst_importer::*;
     use tikv_util::worker::dummy_scheduler;
 
     use super::*;
@@ -3603,7 +3620,7 @@ mod tests {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        check_db_range(&engines.kv, sst_range);
+        check_db_range(&RocksEngine::from_db(engines.kv.clone()), sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
         let apply_res = fetch_apply_res(&rx);

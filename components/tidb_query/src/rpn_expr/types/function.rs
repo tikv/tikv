@@ -20,7 +20,9 @@
 //! For more information on the procedural macro, see the documentation in
 //! `components/tidb_query_codegen/src/rpn_function`.
 
+use std::any::Any;
 use std::convert::TryFrom;
+use std::marker::PhantomData;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, FieldType};
@@ -39,6 +41,9 @@ pub struct RpnFnMeta {
     /// Validator against input expression tree.
     pub validator_ptr: fn(expr: &Expr) -> Result<()>,
 
+    /// The metadata constructor of the RPN function.
+    pub metadata_ctor_ptr: fn(expr: &mut Expr) -> Result<Box<dyn Any + Send>>,
+
     #[allow(clippy::type_complexity)]
     /// The RPN function.
     pub fn_ptr: fn(
@@ -48,6 +53,7 @@ pub struct RpnFnMeta {
         args: &[RpnStackNode<'_>],
         // Uncommon arguments are grouped together
         extra: &mut RpnFnCallExtra<'_>,
+        metadata: &(dyn Any + Send),
     ) -> Result<VectorValue>,
 }
 
@@ -160,22 +166,28 @@ pub trait Evaluator {
         output_rows: usize,
         args: &[RpnStackNode<'_>],
         extra: &mut RpnFnCallExtra<'_>,
+        metadata: &(dyn Any + Send),
     ) -> Result<VectorValue>;
 }
 
-pub struct ArgConstructor<E: Evaluator> {
+pub struct ArgConstructor<A: Evaluable, E: Evaluator> {
     arg_index: usize,
     inner: E,
+    _marker: PhantomData<A>,
 }
 
-impl<E: Evaluator> ArgConstructor<E> {
+impl<A: Evaluable, E: Evaluator> ArgConstructor<A, E> {
     #[inline]
     pub fn new(arg_index: usize, inner: E) -> Self {
-        ArgConstructor { arg_index, inner }
+        ArgConstructor {
+            arg_index,
+            inner,
+            _marker: PhantomData,
+        }
     }
 }
 
-impl<E: Evaluator> Evaluator for ArgConstructor<E> {
+impl<A: Evaluable, E: Evaluator> Evaluator for ArgConstructor<A, E> {
     fn eval(
         self,
         def: impl ArgDef,
@@ -183,37 +195,30 @@ impl<E: Evaluator> Evaluator for ArgConstructor<E> {
         output_rows: usize,
         args: &[RpnStackNode<'_>],
         extra: &mut RpnFnCallExtra<'_>,
+        metadata: &(dyn Any + Send),
     ) -> Result<VectorValue> {
         match &args[self.arg_index] {
             RpnStackNode::Scalar { value, .. } => {
-                match_template_evaluable! {
-                    TT, match value {
-                        ScalarValue::TT(v) => {
-                            let new_def = Arg {
-                                arg: ScalarArg(v),
-                                rem: def,
-                            };
-                            self.inner.eval(new_def, ctx, output_rows, args, extra)
-                        }
-                    }
-                }
+                let v = A::borrow_scalar_value(value);
+                let new_def = Arg {
+                    arg: ScalarArg(v),
+                    rem: def,
+                };
+                self.inner
+                    .eval(new_def, ctx, output_rows, args, extra, metadata)
             }
             RpnStackNode::Vector { value, .. } => {
                 let logical_rows = value.logical_rows();
-                match_template_evaluable! {
-                    TT, match value.as_ref() {
-                        VectorValue::TT(ref v) => {
-                            let new_def = Arg {
-                                arg: VectorArg {
-                                    physical_col: v,
-                                    logical_rows,
-                                },
-                                rem: def,
-                            };
-                            self.inner.eval(new_def, ctx, output_rows, args, extra)
-                        }
-                    }
-                }
+                let v = A::borrow_vector_value(value.as_ref());
+                let new_def = Arg {
+                    arg: VectorArg {
+                        physical_col: v,
+                        logical_rows,
+                    },
+                    rem: def,
+                };
+                self.inner
+                    .eval(new_def, ctx, output_rows, args, extra, metadata)
             }
         }
     }

@@ -2,9 +2,9 @@
 
 use super::super::types::Value;
 use super::lock::LockType;
-use super::{Error, Result};
+use super::{Error, ErrorInner, Result, TimeStamp};
 use crate::storage::{SHORT_VALUE_MAX_LEN, VALUE_PREFIX};
-use byteorder::ReadBytesExt;
+use codec::prelude::NumberDecoder;
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -19,6 +19,9 @@ const FLAG_PUT: u8 = b'P';
 const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
+
+/// The short value for rollback records which are protected from being collapsed.
+const PROTECTED_ROLLBACK_SHORT_VALUE: &[u8] = b"p";
 
 impl WriteType {
     pub fn from_lock_type(tp: LockType) -> Option<WriteType> {
@@ -53,8 +56,8 @@ impl WriteType {
 #[derive(PartialEq, Clone)]
 pub struct Write {
     pub write_type: WriteType,
-    pub start_ts: u64,
-    pub commit_ts: u64,
+    pub start_ts: TimeStamp,
+    pub commit_ts: TimeStamp,
     pub value: Option<Value>,
 }
 
@@ -79,8 +82,8 @@ impl std::fmt::Debug for Write {
 impl Write {
     pub fn new(
         write_type: WriteType,
-        start_ts: u64,
-        commit_ts: u64,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
         value: Option<Value>,
     ) -> Write {
         Write {
@@ -91,12 +94,126 @@ impl Write {
         }
     }
 
+    #[inline]
+    pub fn new_rollback(start_ts: TimeStamp, protected: bool) -> Write {
+        let value = if protected {
+            Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec())
+        } else {
+            None
+        };
+
+        Write {
+            write_type: WriteType::Rollback,
+            start_ts,
+            commit_ts: start_ts,
+            value,
+        }
+    }
+
+    #[inline]
+    pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
+        let write_type_bytes = b
+            .read_u8()
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+        WriteType::from_u8(write_type_bytes).ok_or_else(|| Error::from(ErrorInner::BadFormatWrite))
+    }
+
+    #[inline]
+    pub fn as_ref(&self) -> WriteRef<'_> {
+        WriteRef {
+            write_type: self.write_type,
+            start_ts: self.start_ts,
+            commit_ts: self.commit_ts,
+            value: self.value.as_ref().map(|v| v.as_slice()),
+        }
+    }
+
+    #[inline]
+    pub fn take_value(&mut self) -> Option<Value> {
+        self.value.take()
+    }
+}
+
+#[derive(PartialEq, Clone)]
+pub struct WriteRef<'a> {
+    pub write_type: WriteType,
+    pub start_ts: TimeStamp,
+    pub commit_ts: TimeStamp,
+    pub value: Option<&'a [u8]>,
+}
+
+impl std::fmt::Debug for WriteRef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Write")
+            .field("write_type", &self.write_type)
+            .field("start_ts", &self.start_ts)
+            .field("commit_ts", &self.commit_ts)
+            .field(
+                "value",
+                &self
+                    .value
+                    .as_ref()
+                    .map(|v| hex::encode_upper(v))
+                    .unwrap_or_else(|| "None".to_owned()),
+            )
+            .finish()
+    }
+}
+
+impl WriteRef<'_> {
+    pub fn parse(mut b: &[u8]) -> Result<WriteRef<'_>> {
+        let write_type_bytes = b
+            .read_u8()
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+        let write_type = WriteType::from_u8(write_type_bytes)
+            .ok_or_else(|| Error::from(ErrorInner::BadFormatWrite))?;
+        let start_ts = b
+            .read_u64()
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?
+            .into();
+        let commit_ts = b
+            .read_u64()
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?
+            .into();
+        if b.is_empty() {
+            return Ok(WriteRef {
+                write_type,
+                start_ts,
+                commit_ts,
+                value: None,
+            });
+        }
+
+        let flag = b
+            .read_u8()
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+        assert_eq!(flag, VALUE_PREFIX, "invalid flag [{}] in write", flag);
+
+        let len = b
+            .read_var_u64()
+            .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+        if len as usize != b.len() {
+            panic!(
+                "short value len [{}] not equal to content len [{}]",
+                len,
+                b.len()
+            );
+        }
+
+        Ok(WriteRef {
+            write_type,
+            start_ts,
+            commit_ts,
+            value: Some(b),
+        })
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2);
+        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN * 2 + SHORT_VALUE_MAX_LEN + 2);
         b.push(self.write_type.to_u8());
-        b.encode_u64(self.start_ts).unwrap();
-        b.encode_u64(self.commit_ts).unwrap();
-        if let Some(ref v) = self.value {
+        b.encode_u64(self.start_ts.into_inner()).unwrap();
+        b.encode_u64(self.commit_ts.into_inner()).unwrap();
+        if let Some(v) = self.value {
             b.push(VALUE_PREFIX);
             b.encode_var_u64(v.len() as u64).unwrap();
             b.extend_from_slice(v);
@@ -104,38 +221,29 @@ impl Write {
         b
     }
 
-    pub fn parse(mut b: &[u8]) -> Result<Write> {
-        if b.is_empty() {
-            return Err(Error::BadFormatWrite);
-        }
-        let write_type = WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)?;
-        let start_ts = number::decode_u64(&mut b)?;
-        let commit_ts = number::decode_u64(&mut b)?;
-        if b.is_empty() {
-            return Ok(Write::new(write_type, start_ts, commit_ts, None));
-        }
-
-        let flag = b.read_u8()?;
-        assert_eq!(flag, VALUE_PREFIX, "invalid flag [{}] in write", flag);
-
-        let len = number::decode_var_u64(&mut b)?;
-        if len as usize != b.len() {
-            panic!("value len [{}] not equal to content len [{}]", len, b.len());
-        }
-        Ok(Write::new(
-            write_type,
-            start_ts,
-            commit_ts,
-            Some(b.to_vec()),
-        ))
+    #[inline]
+    pub fn is_protected(&self) -> bool {
+        self.write_type == WriteType::Rollback
+            && self
+                .value
+                .as_ref()
+                .map(|v| *v == PROTECTED_ROLLBACK_SHORT_VALUE)
+                .unwrap_or_default()
     }
 
-    pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
-        WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)
+    #[inline]
+    pub fn to_owned(&self) -> Write {
+        Write::new(
+            self.write_type,
+            self.start_ts,
+            self.commit_ts,
+            self.value.map(|v| v.to_owned()),
+        )
     }
 
-    pub fn take_value(&mut self) -> Option<Value> {
-        self.value.take()
+    #[inline]
+    pub fn copy_value(&self) -> Option<Value> {
+        self.value.map(|v| v.to_owned())
     }
 }
 
@@ -180,22 +288,43 @@ mod tests {
     fn test_write() {
         // Test `Write::to_bytes()` and `Write::parse()` works as a pair.
         let mut writes = vec![
-            Write::new(WriteType::Put, 0, 1, None),
-            Write::new(WriteType::Delete, 0, 1, Some(b"value".to_vec())),
+            Write::new(WriteType::Put, 0.into(), 1.into(), None),
+            Write::new(
+                WriteType::Delete,
+                0.into(),
+                1.into(),
+                Some(b"value".to_vec()),
+            ),
         ];
         for (i, write) in writes.drain(..).enumerate() {
-            let v = write.to_bytes();
-            let w = Write::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
+            let v = write.as_ref().to_bytes();
+            let w = WriteRef::parse(&v[..])
+                .unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e))
+                .to_owned();
             assert_eq!(w, write, "#{} expect {:?}, but got {:?}", i, write, w);
             assert_eq!(Write::parse_type(&v).unwrap(), w.write_type);
         }
 
         // Test `Write::parse()` handles incorrect input.
-        assert!(Write::parse(b"").is_err());
+        assert!(WriteRef::parse(b"").is_err());
 
-        let lock = Write::new(WriteType::Lock, 1, 2, Some(b"value".to_vec()));
-        let v = lock.to_bytes();
-        assert!(Write::parse(&v[..1]).is_err());
+        let lock = Write::new(WriteType::Lock, 1.into(), 2.into(), Some(b"value".to_vec()));
+        let v = lock.as_ref().to_bytes();
+        assert!(WriteRef::parse(&v[..1]).is_err());
         assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
+    }
+
+    #[test]
+    fn test_is_protected() {
+        assert!(Write::new_rollback(1.into(), true).as_ref().is_protected());
+        assert!(!Write::new_rollback(2.into(), false).as_ref().is_protected());
+        assert!(!Write::new(
+            WriteType::Put,
+            3.into(),
+            3.into(),
+            Some(PROTECTED_ROLLBACK_SHORT_VALUE.to_vec())
+        )
+        .as_ref()
+        .is_protected());
     }
 }

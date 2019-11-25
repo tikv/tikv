@@ -48,6 +48,9 @@ endif
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
 ROCKSDB_SYS_PORTABLE=0
+TEST_THREADS := --test-threads=2
+else
+TEST_THREADS := ""
 endif
 
 # Build portable binary by default unless disable explicitly
@@ -77,6 +80,7 @@ BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
 export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
 export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+export TIKV_BUILD_GIT_TAG := $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 
@@ -92,6 +96,7 @@ default: release
 
 clean:
 	cargo clean
+	rm -rf bin dist
 
 
 ## Development builds
@@ -104,10 +109,6 @@ dev: format clippy
 
 build:
 	cargo build --no-default-features --features "${ENABLE_FEATURES}"
-
-run:
-	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
-
 
 ## Release builds (optimized dev builds)
 ## ----------------------------
@@ -136,7 +137,6 @@ prof_release:
 fail_release:
 	FAIL_POINT=1 make release
 
-
 ## Distribution builds (true release builds)
 ## -------------------
 
@@ -157,11 +157,48 @@ dist_release:
 # additional sanity checks and file movement.
 build_dist_release:
 	make x-build-dist
+	# Reduce binary size by compressing binaries.
+	# FIXME: Currently errors with `Couldn't find DIE referenced by DW_AT_abstract_origin`
+	# dwz ${CARGO_TARGET_DIR}/release/tikv-server
+	# FIXME: https://sourceware.org/bugzilla/show_bug.cgi?id=24764
+	# dwz ${CARGO_TARGET_DIR}/release/tikv-ctl
+	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-server
+	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-ctl
 
 # Distributable bins with SSE4.2 optimizations
 dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make dist_release
 
+# Create distributable artifacts. Binaries and Docker image tarballs.
+.PHONY: dist_artifacts
+dist_artifacts: dist_tarballs
+
+# Build gzipped tarballs of the binaries and docker images.
+# Used to build a `dist/` folder containing the release artifacts.
+.PHONY: dist_tarballs
+dist_tarballs: docker
+	docker rm -f tikv-binary-extraction-dummy || true
+	docker create --name tikv-binary-extraction-dummy pingcap/tikv
+	mkdir -p dist bin
+	docker cp tikv-binary-extraction-dummy:/tikv-server bin/tikv-server
+	docker cp tikv-binary-extraction-dummy:/tikv-ctl bin/tikv-ctl
+	tar -czf dist/tikv.tar.gz bin/*
+	docker save pingcap/tikv | gzip > dist/tikv-docker.tar.gz
+	docker rm tikv-binary-extraction-dummy
+
+# Create tags of the docker images
+.PHONY: docker-tag
+docker-tag: docker-tag-with-git-hash docker-tag-with-git-tag
+
+# Tag docker images with the git hash
+.PHONY: docker-tag-with-git-hash
+docker-tag-with-git-hash:
+	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_HASH}
+
+# Tag docker images with the git tag
+.PHONY: docker-tag-with-git-tag
+docker-tag-with-git-tag:
+	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_TAG}
 
 ## Testing
 ## -------
@@ -180,14 +217,18 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  $(TEST_THREADS) && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
+# This is used for CI test
+ci_test:
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --all-targets --no-run --message-format=json
+	bash scripts/check-bins-for-jemalloc.sh
 
 ## Static analysis
 ## ---------------
@@ -242,6 +283,10 @@ ctl:
 expression: format clippy
 	RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" --no-default-features --package tidb_query "expr" -- --nocapture
 
+# A special target for building TiKV docker image.
+.PHONY: docker
+docker:
+	bash ./scripts/gen-dockerfile.sh | docker build -t pingcap/tikv -f - .
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------

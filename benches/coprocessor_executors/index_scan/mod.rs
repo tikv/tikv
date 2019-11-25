@@ -3,6 +3,8 @@
 pub mod fixture;
 mod util;
 
+use criterion::measurement::Measurement;
+
 use crate::util::scan_bencher::ScanBencher;
 use crate::util::store::*;
 use crate::util::BenchCase;
@@ -13,7 +15,10 @@ const ROWS: usize = 5000;
 ///
 /// This kind of scanner is used in SQLs like `SELECT * FROM .. WHERE index = X`, an index lookup
 /// will be performed so that PK is needed.
-fn bench_index_scan_primary_key(b: &mut criterion::Bencher, input: &Input) {
+fn bench_index_scan_primary_key<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement + 'static,
+{
     let (index_id, table, store) = fixture::table_with_2_columns_and_one_index(ROWS);
     input.0.bench(
         b,
@@ -28,7 +33,10 @@ fn bench_index_scan_primary_key(b: &mut criterion::Bencher, input: &Input) {
 ///
 /// This kind of scanner is used in SQLs like `SELECT COUNT(*) FROM .. WHERE index = X` or
 /// `SELECT index FROM .. WHERE index = X`. There is no double read.
-fn bench_index_scan_index(b: &mut criterion::Bencher, input: &Input) {
+fn bench_index_scan_index<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement + 'static,
+{
     let (index_id, table, store) = fixture::table_with_2_columns_and_one_index(ROWS);
     input.0.bench(
         b,
@@ -40,21 +48,32 @@ fn bench_index_scan_index(b: &mut criterion::Bencher, input: &Input) {
 }
 
 #[derive(Clone)]
-struct Input(Box<dyn ScanBencher<util::IndexScanParam>>);
+struct Input<M>(Box<dyn ScanBencher<util::IndexScanParam, M>>)
+where
+    M: Measurement + 'static;
 
-impl Input {
-    pub fn new<T: ScanBencher<util::IndexScanParam> + 'static>(b: T) -> Self {
+impl<M> Input<M>
+where
+    M: Measurement + 'static,
+{
+    pub fn new<T: ScanBencher<util::IndexScanParam, M> + 'static>(b: T) -> Self {
         Self(Box::new(b))
     }
 }
 
-impl std::fmt::Debug for Input {
+impl<M> std::fmt::Display for Input<M>
+where
+    M: Measurement + 'static,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0.name())
     }
 }
 
-pub fn bench(c: &mut criterion::Criterion) {
+pub fn bench<M>(c: &mut criterion::Criterion<M>)
+where
+    M: Measurement + 'static,
+{
     let mut inputs = vec![
         Input::new(util::NormalIndexScanNext1024Bencher::<MemStore>::new()),
         Input::new(util::BatchIndexScanNext1024Bencher::<MemStore>::new()),
@@ -80,6 +99,14 @@ pub fn bench(c: &mut criterion::Criterion) {
 
     cases.sort();
     for case in cases {
-        c.bench_function_over_inputs(case.name, case.f, inputs.clone());
+        let mut group = c.benchmark_group(case.get_name());
+        for input in inputs.iter() {
+            group.bench_with_input(
+                criterion::BenchmarkId::from_parameter(input),
+                input,
+                case.get_fn(),
+            );
+        }
+        group.finish();
     }
 }

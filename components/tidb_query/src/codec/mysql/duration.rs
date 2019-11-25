@@ -2,11 +2,9 @@
 
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::{i64, u64};
 
 use codec::prelude::*;
-use tikv_util::codec::number::NumberEncoder;
 
 use super::{check_fsp, Decimal};
 use crate::codec::convert::ConvertTo;
@@ -612,7 +610,7 @@ impl Duration {
 
     fn format(self, sep: &str) -> String {
         use std::fmt::Write;
-        let res_max_len = 1 + 6 + 2 * sep.len() + 1 + MAX_FSP as usize;
+        let res_max_len = 8 + 2 * sep.len() + MAX_FSP as usize;
         let mut string = String::with_capacity(res_max_len);
         if self.get_neg() {
             string.push('-');
@@ -652,11 +650,11 @@ impl Duration {
 
     /// If the error is overflow, the result will be returned, too.
     /// Otherwise, only one of result or err will be returned
-    pub fn from_i64_without_ctx(mut n: i64, fsp: u8) -> (Option<Duration>, Option<Error>) {
+    pub fn from_i64_without_ctx(mut n: i64, fsp: i8) -> Result<Duration> {
+        let fsp = check_fsp(fsp)?;
         if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
-            let max = Duration::new(n < 0, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp);
-            return (Some(max), Some(Error::overflow("Duration", n)));
+            return Err(Error::overflow("Duration", n));
         }
 
         let negative = n < 0;
@@ -664,13 +662,10 @@ impl Duration {
             n = -n;
         }
         if n / 10000 > i64::from(MAX_HOURS) || n % 100 >= 60 || (n / 100) % 100 >= 60 {
-            return (
-                None,
-                Some(Error::Eval(
-                    format!("invalid time format: '{}'", n),
-                    ERR_TRUNCATE_WRONG_VALUE,
-                )),
-            );
+            return Err(Error::Eval(
+                format!("invalid time format: '{}'", n),
+                ERR_TRUNCATE_WRONG_VALUE,
+            ));
         }
         let dur = Duration::new(
             negative,
@@ -680,26 +675,26 @@ impl Duration {
             0,
             fsp,
         );
-        (Some(dur), None)
+        Ok(dur)
     }
 
-    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: u8) -> Result<Duration> {
-        let (dur, err) = Duration::from_i64_without_ctx(n, fsp);
-        err.map_or_else(
-            || {
-                debug_assert!(dur.is_some());
-                dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
-            },
-            |e| {
-                if e.is_overflow() {
-                    ctx.handle_overflow_err(e)?;
-                    debug_assert!(dur.is_some());
-                    dur.ok_or(box_err!("Expect a not none result here, this is a bug"))
-                } else {
-                    Err(e)
-                }
-            },
-        )
+    pub fn from_i64(ctx: &mut EvalContext, n: i64, fsp: i8) -> Result<Duration> {
+        Duration::from_i64_without_ctx(n, fsp).or_else(|e| {
+            if e.is_overflow() {
+                ctx.handle_overflow_err(e)?;
+                // Returns max duration if overflow occurred
+                Ok(Duration::new(
+                    n < 0,
+                    MAX_HOURS,
+                    MAX_MINUTES,
+                    MAX_SECONDS,
+                    0,
+                    fsp as u8,
+                ))
+            } else {
+                Err(e)
+            }
+        })
     }
 }
 
@@ -772,20 +767,30 @@ impl Ord for Duration {
     }
 }
 
-impl<T: Write> DurationEncoder for T {}
+impl<T: BufferWriter> DurationEncoder for T {}
 
 pub trait DurationEncoder: NumberEncoder {
-    fn encode_duration(&mut self, v: Duration) -> Result<()> {
-        self.encode_i64(v.to_nanos())?;
-        self.encode_i64(i64::from(v.get_fsp())).map_err(From::from)
+    fn write_duration(&mut self, v: Duration) -> Result<()> {
+        self.write_i64(v.to_nanos())?;
+        self.write_i64(i64::from(v.get_fsp())).map_err(From::from)
+    }
+
+    fn write_duration_to_chunk(&mut self, v: Duration) -> Result<()> {
+        self.write_i64_le(v.to_nanos())?;
+        Ok(())
     }
 }
 
 pub trait DurationDecoder: NumberDecoder {
-    /// `decode_duration` decodes duration encoded by `encode_duration`.
-    fn decode_duration(&mut self) -> Result<Duration> {
+    /// `read_duration` decodes duration encoded by `write_duration`.
+    fn read_duration(&mut self) -> Result<Duration> {
         let nanos = self.read_i64()?;
         let fsp = self.read_i64()?;
+        Duration::from_nanos(nanos, fsp as i8)
+    }
+
+    fn read_duration_from_chunk(&mut self, fsp: isize) -> Result<Duration> {
+        let nanos = self.read_i64_le()?;
         Duration::from_nanos(nanos, fsp as i8)
     }
 }
@@ -801,11 +806,11 @@ impl crate::codec::data_type::AsMySQLBool for Duration {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::EPSILON;
-
     use super::*;
     use crate::codec::data_type::DateTime;
+    use crate::codec::mysql::UNSPECIFIED_FSP;
     use crate::expr::{EvalConfig, EvalContext, Flag};
+    use std::f64::EPSILON;
     use std::sync::Arc;
 
     #[test]
@@ -1018,7 +1023,7 @@ mod tests {
             ("0000-00-00 00:00:00", 6, "000000"),
         ];
         for (s, fsp, expect) in cases {
-            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
+            let t = DateTime::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let du: Duration = t.convert(&mut ctx).unwrap();
             let get: Decimal = du.convert(&mut ctx).unwrap();
             assert_eq!(
@@ -1043,7 +1048,7 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (s, fsp, expect) in cases {
-            let t = DateTime::parse_utc_datetime(s, fsp).unwrap();
+            let t = DateTime::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let du: Duration = t.convert(&mut ctx).unwrap();
             let get: f64 = du.convert(&mut ctx).unwrap();
             assert!(
@@ -1092,8 +1097,11 @@ mod tests {
         for (input, fsp) in cases {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
-            buf.encode_duration(t).unwrap();
-            let got = buf.as_slice().decode_duration().unwrap();
+            buf.write_duration_to_chunk(t).unwrap();
+            let got = buf
+                .as_slice()
+                .read_duration_from_chunk(fsp as isize)
+                .unwrap();
             assert_eq!(t, got);
         }
     }
@@ -1135,8 +1143,15 @@ mod tests {
 
     #[test]
     fn test_from_i64() {
-        let cs: Vec<(i64, u8, Result<Duration>, bool)> = vec![
+        let cs: Vec<(i64, i8, Result<Duration>, bool)> = vec![
             // (input, fsp, expect, overflow)
+            // UNSPECIFIED_FSP
+            (
+                8385959,
+                UNSPECIFIED_FSP as i8,
+                Ok(Duration::parse(b"838:59:59", 0).unwrap()),
+                false,
+            ),
             (
                 101010,
                 0,
@@ -1238,7 +1253,7 @@ mod tests {
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8375960, 0, Err(Error::truncated_wrong_val("", "")), false),
             (8376049, 0, Err(Error::truncated_wrong_val("", "")), false),
-            // TODO, fix these test case after Duration::from_f64
+            // TODO: fix these test case after Duration::from_f64
             //  had impl logic for num>=10000000000
             (
                 10000000000,
@@ -1478,8 +1493,12 @@ mod benches {
             for &duration in cases {
                 let t = test::black_box(duration);
                 let mut buf = vec![];
-                buf.encode_duration(t).unwrap();
-                let got = test::black_box(buf.as_slice().decode_duration().unwrap());
+                buf.write_duration_to_chunk(t).unwrap();
+                let got = test::black_box(
+                    buf.as_slice()
+                        .read_duration_from_chunk(t.fsp() as isize)
+                        .unwrap(),
+                );
                 assert_eq!(t, got);
             }
         })

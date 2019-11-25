@@ -4,19 +4,23 @@ use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
-use tikv::storage::mvcc::{MvccReader, MvccTxn};
+use tikv::storage::mvcc::{self, MvccReader, MvccTxn, TimeStamp};
 use tikv::storage::{Key, Mutation, Options};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
 
-fn setup_prewrite<E, F>(engine: &E, config: &BenchConfig<F>, start_ts: u64) -> (E::Snap, Vec<Key>)
+fn setup_prewrite<E, F>(
+    engine: &E,
+    config: &BenchConfig<F>,
+    start_ts: impl Into<TimeStamp>,
+) -> (E::Snap, Vec<Key>)
 where
     E: Engine,
     F: EngineFactory<E>,
 {
     let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
-    let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
 
     let kvs = KvGenerator::with_seed(
         config.key_length,
@@ -59,7 +63,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
         },
         |(mutations, snapshot, option)| {
             for (mutation, primary) in mutations {
-                let mut txn = MvccTxn::new(snapshot.clone(), 1, true).unwrap();
+                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
                 txn.prewrite(mutation, &primary, option).unwrap();
             }
         },
@@ -73,8 +77,8 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
         || setup_prewrite(&engine, &config, 1),
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = MvccTxn::new(snapshot.clone(), 1, true).unwrap();
-                black_box(txn.commit(key, 1)).unwrap();
+                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
+                black_box(txn.commit(key, 1.into())).unwrap();
             }
         },
         BatchSize::SmallInput,
@@ -90,7 +94,7 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
         || setup_prewrite(&engine, &config, 1),
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = MvccTxn::new(snapshot.clone(), 1, true).unwrap();
+                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
                 black_box(txn.rollback(key)).unwrap();
             }
         },
@@ -107,7 +111,7 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
         || setup_prewrite(&engine, &config, 2),
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = MvccTxn::new(snapshot.clone(), 1, true).unwrap();
+                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
                 black_box(txn.rollback(key)).unwrap();
             }
         },
@@ -135,7 +139,7 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
         },
         |(snapshot, keys)| {
             for key in keys {
-                let mut txn = MvccTxn::new(snapshot.clone(), 1, true).unwrap();
+                let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
                 black_box(txn.rollback(key)).unwrap();
             }
         },
@@ -163,14 +167,8 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
         },
         |(snapshot, test_kvs)| {
             for key in test_kvs {
-                let mut reader = MvccReader::new(
-                    snapshot.clone(),
-                    None,
-                    true,
-                    None,
-                    None,
-                    ctx.get_isolation_level(),
-                );
+                let mut reader =
+                    MvccReader::new(snapshot.clone(), None, true, ctx.get_isolation_level());
                 black_box(reader.load_lock(&key).unwrap());
             }
         },
@@ -200,15 +198,9 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
         },
         |(snapshot, test_keys)| {
             for key in &test_keys {
-                let mut reader = MvccReader::new(
-                    snapshot.clone(),
-                    None,
-                    true,
-                    None,
-                    None,
-                    ctx.get_isolation_level(),
-                );
-                black_box(reader.get_commit(&key, u64::max_value()).unwrap());
+                let mut reader =
+                    MvccReader::new(snapshot.clone(), None, true, ctx.get_isolation_level());
+                black_box(reader.get_commit(&key, TimeStamp::max()).unwrap());
             }
         },
         BatchSize::SmallInput,

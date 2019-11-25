@@ -2,11 +2,15 @@
 
 use engine::CF_HISTORY;
 
-use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::Result;
+use engine::CF_DEFAULT;
+use kvproto::kvrpcpb::IsolationLevel;
+
+use crate::storage::kv::SEEK_BOUND;
+use crate::storage::mvcc::reader::util::{check_lock, CheckLockResult};
+use crate::storage::mvcc::write::{WriteRef, WriteType};
+use crate::storage::mvcc::{Result, TimeStamp};
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
-use super::super::util::CheckLockResult;
 use super::ScannerConfig;
 
 /// This struct can be used to scan keys starting from the given user key (greater than or equal).
@@ -67,7 +71,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                 if let CheckLockResult::Locked(e) =
                     super::super::util::check_lock(&current_user_key, self.cfg.ts, &lock)?
                 {
-                    return Err(e);
+                    return Err(e.into());
                 }
             } else {
                 return Ok(());
@@ -107,11 +111,11 @@ impl<S: Snapshot> ForwardScanner<S> {
                     Key::from_encoded_slice(self.latest_cursor.key(&mut self.statistics.latest));
                 let mut value = None;
                 let mut latest =
-                    Write::parse(self.latest_cursor.value(&mut self.statistics.latest))?;
+                    WriteRef::parse(self.latest_cursor.value(&mut self.statistics.latest))?;
                 if self.cfg.ts >= latest.commit_ts {
                     if latest.write_type == WriteType::Put {
                         found = true;
-                        value = latest.take_value();
+                        value = latest.copy_value();
                     }
                 } else if self.history_valid {
                     // seek from history
@@ -128,7 +132,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                             .unwrap()
                             .key(&mut self.statistics.history);
                         if Key::is_user_key_eq(history_key, key.as_encoded()) {
-                            let mut history = Write::parse(
+                            let mut history = WriteRef::parse(
                                 self.history_cursor
                                     .as_ref()
                                     .unwrap()
@@ -136,7 +140,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                             )?;
                             if history.write_type == WriteType::Put {
                                 found = true;
-                                value = history.take_value();
+                                value = history.copy_value();
                             }
                         }
                     } else {
@@ -179,7 +183,7 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let mut scanner = ScannerBuilder::new(snapshot, 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
             .build()
             .unwrap();
@@ -236,7 +240,7 @@ mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build()
             .unwrap();
@@ -251,7 +255,7 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test left bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(None, Some(Key::from_raw(&[3u8])))
             .build()
             .unwrap();
@@ -266,7 +270,7 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test right bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(Some(Key::from_raw(&[5u8])), None)
             .build()
             .unwrap();
@@ -281,7 +285,7 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(None, None)
             .build()
             .unwrap();

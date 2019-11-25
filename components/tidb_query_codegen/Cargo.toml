@@ -8,8 +8,8 @@ publish = false
 proc-macro = true
 
 [dependencies]
-darling = "0.9"
-syn = "0.15"
-quote = "0.6"
-proc-macro2 = "0.4"
+darling = "0.10"
+syn = { version = "1", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
 heck = "0.3"

@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use kvproto::metapb;
 
-use pd_client::PdClient;
+use pd_client::{take_peer_address, PdClient};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -76,7 +76,7 @@ impl<T: PdClient> Runner<T> {
                 .inc();
             return Err(box_err!("store {} has been removed", store_id));
         }
-        let addr = s.take_address();
+        let addr = take_peer_address(&mut s);
         // In some tests, we use empty address for store first,
         // so we should ignore here.
         // TODO: we may remove this check after we refactor the test.
@@ -142,8 +142,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use kvproto::metapb;
-    use kvproto::pdpb;
-    use pd_client::{PdClient, PdFuture, RegionStat, Result};
+    use pd_client::{PdClient, Result};
     use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -154,21 +153,6 @@ mod tests {
     }
 
     impl PdClient for MockPdClient {
-        fn get_cluster_id(&self) -> Result<u64> {
-            unimplemented!();
-        }
-        fn bootstrap_cluster(&self, _: metapb::Store, _: metapb::Region) -> Result<()> {
-            unimplemented!();
-        }
-        fn is_cluster_bootstrapped(&self) -> Result<bool> {
-            unimplemented!();
-        }
-        fn alloc_id(&self) -> Result<u64> {
-            unimplemented!();
-        }
-        fn put_store(&self, _: metapb::Store) -> Result<()> {
-            unimplemented!();
-        }
         fn get_store(&self, _: u64) -> Result<metapb::Store> {
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
@@ -176,58 +160,6 @@ mod tests {
             sock.set_port(tikv_util::time::duration_to_ms(self.start.elapsed()) as u16);
             store.set_address(format!("{}:{}", sock.ip(), sock.port()));
             Ok(store)
-        }
-        fn get_cluster_config(&self) -> Result<metapb::Cluster> {
-            unimplemented!();
-        }
-        fn get_region(&self, _: &[u8]) -> Result<metapb::Region> {
-            unimplemented!();
-        }
-        fn get_region_by_id(&self, _: u64) -> PdFuture<Option<metapb::Region>> {
-            unimplemented!();
-        }
-        fn region_heartbeat(
-            &self,
-            _: u64,
-            _: metapb::Region,
-            _: metapb::Peer,
-            _: RegionStat,
-        ) -> PdFuture<()> {
-            unimplemented!();
-        }
-
-        fn handle_region_heartbeat_response<F>(&self, _: u64, _: F) -> PdFuture<()>
-        where
-            F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
-        {
-            unimplemented!()
-        }
-
-        fn ask_split(&self, _: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
-            unimplemented!();
-        }
-
-        fn ask_batch_split(
-            &self,
-            _: metapb::Region,
-            _: usize,
-        ) -> PdFuture<pdpb::AskBatchSplitResponse> {
-            unimplemented!();
-        }
-        fn store_heartbeat(&self, _: pdpb::StoreStats) -> PdFuture<()> {
-            unimplemented!();
-        }
-        fn report_batch_split(&self, _: Vec<metapb::Region>) -> PdFuture<()> {
-            unimplemented!();
-        }
-        fn get_gc_safe_point(&self) -> PdFuture<u64> {
-            unimplemented!();
-        }
-        fn get_store_stats(&self, _: u64) -> Result<pdpb::StoreStats> {
-            unimplemented!()
-        }
-        fn get_operator(&self, _: u64) -> Result<pdpb::GetOperatorResponse> {
-            unimplemented!()
         }
     }
 
@@ -271,6 +203,17 @@ mod tests {
         let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
         let runner = new_runner(store);
         assert!(runner.get_address(0).is_err());
+    }
+
+    #[test]
+    fn test_resolve_store_peer_addr() {
+        let mut store = new_store("127.0.0.1:12345", metapb::StoreState::Up);
+        store.set_peer_address("127.0.0.1:22345".to_string());
+        let runner = new_runner(store);
+        assert_eq!(
+            runner.get_address(0).unwrap(),
+            "127.0.0.1:22345".to_string()
+        );
     }
 
     #[test]

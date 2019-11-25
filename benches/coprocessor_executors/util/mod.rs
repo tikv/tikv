@@ -9,6 +9,7 @@ pub mod store;
 pub use self::fixture::FixtureBuilder;
 
 use criterion::black_box;
+use criterion::measurement::Measurement;
 
 use kvproto::coprocessor::KeyRange;
 use tipb::Executor as PbExecutor;
@@ -16,6 +17,8 @@ use tipb::Executor as PbExecutor;
 use test_coprocessor::*;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Store as TxnStore};
+
+use std::marker::PhantomData;
 
 /// Gets the value of `TIKV_BENCH_LEVEL`. The larger value it is, the more comprehensive benchmarks
 /// will be.
@@ -51,36 +54,113 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     .unwrap()
 }
 
-pub struct BenchCase<I> {
+pub struct InnerBenchCase<I, M, F>
+where
+    M: Measurement + 'static,
+    F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static,
+{
+    pub _phantom_input: PhantomData<I>,
+    pub _phantom_measurement: PhantomData<M>,
     pub name: &'static str,
-    pub f: Box<dyn Fn(&mut criterion::Bencher, &I) + 'static>,
+    pub f: F,
 }
 
-impl<I> PartialEq for BenchCase<I> {
-    fn eq(&self, other: &Self) -> bool {
-        self.name.eq(other.name)
+type BenchFn<M, I> = Box<dyn Fn(&mut criterion::Bencher<M>, &I) + 'static>;
+
+pub trait IBenchCase {
+    type M: Measurement + 'static;
+    type I;
+
+    fn get_fn(&self) -> BenchFn<Self::M, Self::I>;
+
+    fn get_name(&self) -> &'static str;
+}
+
+impl<I, M, F> IBenchCase for InnerBenchCase<I, M, F>
+where
+    M: Measurement + 'static,
+    F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static,
+{
+    type M = M;
+    type I = I;
+
+    fn get_fn(&self) -> BenchFn<Self::M, Self::I> {
+        Box::new(self.f)
+    }
+
+    fn get_name(&self) -> &'static str {
+        self.name
     }
 }
 
-impl<I> PartialOrd for BenchCase<I> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.name.partial_cmp(other.name)
-    }
+pub struct BenchCase<I, M>
+where
+    M: Measurement + 'static,
+{
+    inner: Box<dyn IBenchCase<I = I, M = M>>,
 }
 
-impl<I> Ord for BenchCase<I> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.name.cmp(other.name)
-    }
-}
-
-impl<I> Eq for BenchCase<I> {}
-
-impl<I> BenchCase<I> {
-    pub fn new(name: &'static str, f: impl Fn(&mut criterion::Bencher, &I) + 'static) -> Self {
+impl<I, M> BenchCase<I, M>
+where
+    M: Measurement + 'static,
+    I: 'static,
+{
+    pub fn new<F>(name: &'static str, f: F) -> Self
+    where
+        F: Fn(&mut criterion::Bencher<M>, &I) + Copy + 'static,
+    {
         Self {
-            name,
-            f: Box::new(f),
+            inner: Box::new(InnerBenchCase {
+                _phantom_input: PhantomData,
+                _phantom_measurement: PhantomData,
+                name,
+                f,
+            }),
         }
     }
+
+    pub fn get_name(&self) -> &'static str {
+        self.inner.get_name()
+    }
+
+    pub fn get_fn(&self) -> BenchFn<M, I> {
+        self.inner.get_fn()
+    }
+}
+
+impl<I, M> PartialEq for BenchCase<I, M>
+where
+    M: Measurement + 'static,
+    I: 'static,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.get_name().eq(other.get_name())
+    }
+}
+
+impl<I, M> PartialOrd for BenchCase<I, M>
+where
+    M: Measurement + 'static,
+    I: 'static,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.get_name().partial_cmp(other.get_name())
+    }
+}
+
+impl<I, M> Ord for BenchCase<I, M>
+where
+    M: Measurement + 'static,
+    I: 'static,
+{
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.get_name().cmp(other.get_name())
+    }
+}
+
+impl<I, M> Eq for BenchCase<I, M>
+where
+    M: Measurement,
+    I: 'static,
+{
 }

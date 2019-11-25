@@ -16,8 +16,8 @@ use grpcio::{
     Result as GrpcResult,
 };
 use kvproto::pdpb::{
-    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient, RegionHeartbeatRequest,
-    RegionHeartbeatResponse, ResponseHeader,
+    ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
+    RegionHeartbeatRequest, RegionHeartbeatResponse, ResponseHeader,
 };
 use tokio_timer::timer::Handle;
 
@@ -33,7 +33,7 @@ pub struct Inner {
         UnboundedSender<RegionHeartbeatRequest>,
     >,
     pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Task>,
-    pub client: PdClient,
+    pub client_stub: PdClientStub,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
     on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
@@ -89,17 +89,17 @@ impl LeaderClient {
     pub fn new(
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-        client: PdClient,
+        client_stub: PdClientStub,
         members: GetMembersResponse,
     ) -> LeaderClient {
-        let (tx, rx) = client.region_heartbeat().unwrap();
+        let (tx, rx) = client_stub.region_heartbeat().unwrap();
         LeaderClient {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: Arc::new(RwLock::new(Inner {
                 env,
                 hb_sender: Either::Left(Some(tx)),
                 hb_receiver: Either::Left(Some(rx)),
-                client,
+                client_stub,
                 members,
                 security_mgr,
                 on_reconnect: None,
@@ -184,7 +184,7 @@ impl LeaderClient {
                 task.notify();
             }
             inner.hb_receiver = Either::Left(Some(rx));
-            inner.client = client;
+            inner.client_stub = client;
             inner.members = members;
             inner.last_update = Instant::now();
             if let Some(ref on_reconnect) = inner.on_reconnect {
@@ -313,11 +313,11 @@ where
 /// Do a request in synchronized fashion.
 pub fn sync_request<F, R>(client: &LeaderClient, retry: usize, func: F) -> Result<R>
 where
-    F: Fn(&PdClient) -> GrpcResult<R>,
+    F: Fn(&PdClientStub) -> GrpcResult<R>,
 {
     for _ in 0..retry {
         // DO NOT put any lock operation in match statement, or it will cause dead lock!
-        let ret = { func(&client.inner.rl().client).map_err(Error::Grpc) };
+        let ret = { func(&client.inner.rl().client_stub).map_err(Error::Grpc) };
         match ret {
             Ok(r) => {
                 return Ok(r);
@@ -338,7 +338,7 @@ pub fn validate_endpoints(
     env: Arc<Environment>,
     cfg: &Config,
     security_mgr: &SecurityManager,
-) -> Result<(PdClient, GetMembersResponse)> {
+) -> Result<(PdClientStub, GetMembersResponse)> {
     let len = cfg.endpoints.len();
     let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
 
@@ -392,7 +392,7 @@ fn connect(
     env: Arc<Environment>,
     security_mgr: &SecurityManager,
     addr: &str,
-) -> Result<(PdClient, GetMembersResponse)> {
+) -> Result<(PdClientStub, GetMembersResponse)> {
     info!("connecting to PD endpoint"; "endpoints" => addr);
     let addr = addr
         .trim_start_matches("http://")
@@ -402,7 +402,7 @@ fn connect(
         .keepalive_timeout(Duration::from_secs(3));
 
     let channel = security_mgr.connect(cb, addr);
-    let client = PdClient::new(channel);
+    let client = PdClientStub::new(channel);
     let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
     match client.get_members_opt(&GetMembersRequest::default(), option) {
         Ok(resp) => Ok((client, resp)),
@@ -414,7 +414,7 @@ pub fn try_connect_leader(
     env: Arc<Environment>,
     security_mgr: &SecurityManager,
     previous: &GetMembersResponse,
-) -> Result<(PdClient, GetMembersResponse)> {
+) -> Result<(PdClientStub, GetMembersResponse)> {
     let previous_leader = previous.get_leader();
     let members = previous.get_members();
     let cluster_id = previous.get_header().get_cluster_id();

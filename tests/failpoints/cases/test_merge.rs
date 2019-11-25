@@ -376,8 +376,7 @@ fn test_node_merge_catch_up_logs_no_need() {
     // the source region should be merged and the peer should be destroyed.
     assert!(pd_client.check_merged(left.get_id()));
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
-    let router = cluster.sim.wl().get_router(3).unwrap();
-    assert!(router.mailbox(left.get_id()).is_none());
+    cluster.must_region_not_exist(left.get_id(), 3);
 }
 
 /// Test if merging state will be removed after accepting a snapshot.
@@ -643,4 +642,88 @@ fn test_node_request_snapshot_reject_merge() {
     fail::remove(region_gen_snap_fp);
     // Drop cluster to ensure notifier will not send any message after rx is dropped.
     drop(cluster);
+}
+
+// Test if compact log is ignored after premerge was applied and restart
+// I.e. is_merging flag should be set after restart
+#[test]
+fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
+    let _guard = crate::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.cfg.raft_store.merge_max_log_gap = 10;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
+    // rely on this config to trigger a compact log
+    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize(1);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
+    cluster.run();
+    // prevent gc_log_tick to propose a compact log
+    let raft_gc_log_tick_fp = "on_raft_gc_log_tick";
+    fail::cfg(raft_gc_log_tick_fp, "return()").unwrap();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+
+    cluster.must_split(&region, b"k2");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+    let left_peer_1 = find_peer(&left, 1).cloned().unwrap();
+    cluster.must_transfer_leader(left.get_id(), left_peer_1);
+
+    // make log gap between store 1 and store 3, for min_index in preMerge
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    for i in 0..6 {
+        cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
+    }
+    // prevent on_apply_res to update merge_state in Peer
+    // if not, almost everything cannot propose including compact log
+    let on_apply_res_fp = "on_apply_res";
+    fail::cfg(on_apply_res_fp, "return()").unwrap();
+
+    let merge = new_prepare_merge(right.clone());
+    let req = new_admin_request(left.get_id(), left.get_region_epoch(), merge);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    if resp.get_header().has_error() {
+        panic!("response {:?} has error", resp);
+    }
+    cluster.clear_send_filters();
+    // prevent apply fsm to apply compact log
+    let handle_apply_fp = "on_handle_apply";
+    fail::cfg(handle_apply_fp, "return()").unwrap();
+
+    let state1 = cluster.truncated_state(left.get_id(), 1);
+    fail::remove(raft_gc_log_tick_fp);
+
+    // wait for compact log to be proposed and committed maybe
+    sleep_ms(30);
+
+    cluster.shutdown();
+
+    fail::remove(handle_apply_fp);
+    fail::remove(on_apply_res_fp);
+    // prevent sched_merge_tick to propose CommitMerge
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    cluster.start().unwrap();
+
+    // wait for compact log to apply
+    for _ in 0..50 {
+        let state2 = cluster.truncated_state(left.get_id(), 1);
+        if state1.get_index() != state2.get_index() {
+            break;
+        }
+        sleep_ms(10);
+    }
+    // can schedule merge now
+    fail::remove(schedule_merge_fp);
+
+    // propose to left region and wait for merge to succeed conveniently
+    cluster.must_put(b"k123", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k123", b"v2");
 }

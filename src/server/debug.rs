@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::collections::Bound::Excluded;
+use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -13,6 +13,7 @@ use engine::rocks::{
     CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
     SeekKey, Writable, WriteBatch, WriteOptions, DB,
 };
+use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_RAFT, CF_ROLLBACK, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, Module};
@@ -33,8 +34,10 @@ use crate::raftstore::store::{
     write_peer_state,
 };
 use crate::raftstore::store::{keys, PeerStorage};
-use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
+use crate::server::gc_worker::GCWorker;
+use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::types::Key;
+use crate::storage::Engine;
 use crate::storage::Iterator as EngineIterator;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
@@ -42,6 +45,8 @@ use tikv_util::config::ReadableSize;
 use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
+
+const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = RocksIterator<Arc<DB>>;
@@ -129,13 +134,14 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 }
 
 #[derive(Clone)]
-pub struct Debugger {
+pub struct Debugger<E: Engine> {
     engines: Engines,
+    gc_worker: Option<GCWorker<E>>,
 }
 
-impl Debugger {
-    pub fn new(engines: Engines) -> Debugger {
-        Debugger { engines }
+impl<E: Engine> Debugger<E> {
+    pub fn new(engines: Engines, gc_worker: Option<GCWorker<E>>) -> Debugger<E> {
+        Debugger { engines, gc_worker }
     }
 
     pub fn dump_key_mvcc_cf(&self, key: &[u8], cf: &str) -> Vec<String> {
@@ -146,7 +152,7 @@ impl Debugger {
         let mut vec = vec![];
         if cf == CF_LATEST {
             if iter.valid() && iter.key() == key {
-                let latest = Write::parse(iter.value()).unwrap();
+                let latest = WriteRef::parse(iter.value()).unwrap();
                 vec.push(format!("latest {:?}", latest));
             } else {
                 vec.push(String::from("lock None"));
@@ -163,7 +169,7 @@ impl Debugger {
                 if !Key::is_user_key_eq(iter.key(), key) {
                     break;
                 }
-                let history = Write::parse(iter.value()).unwrap();
+                let history = WriteRef::parse(iter.value()).unwrap();
                 vec.push(format!("history {:?}", history));
                 iter.next();
             }
@@ -172,7 +178,7 @@ impl Debugger {
                 if !Key::is_user_key_eq(iter.key(), key) {
                     break;
                 }
-                let rollback = Write::parse(iter.value()).unwrap();
+                let rollback = WriteRef::parse(iter.value()).unwrap();
                 vec.push(format!("rollback {:?}", rollback));
                 iter.next();
             }
@@ -661,7 +667,7 @@ impl Debugger {
     pub fn recreate_region(&self, region: Region) -> Result<()> {
         let region_id = region.get_id();
         let kv = self.engines.kv.as_ref();
-        let raft = self.engines.raft.as_ref();
+        let raft: &DB = self.engines.raft.as_ref();
 
         let kv_wb = WriteBatch::default();
         let raft_wb = WriteBatch::default();
@@ -847,6 +853,25 @@ impl Debugger {
                 }
                 Ok(())
             }
+            Module::Server => {
+                if config_name == GC_IO_LIMITER_CONFIG_NAME {
+                    if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
+                        let bps = i64::try_from(bytes_per_sec.0).unwrap_or_else(|_| {
+                            (panic!("{} > i64::max_value", GC_IO_LIMITER_CONFIG_NAME))
+                        });
+                        return self
+                            .gc_worker
+                            .as_ref()
+                            .expect("must be some")
+                            .change_io_limit(bps)
+                            .map_err(|e| Error::Other(e.into()));
+                    }
+                }
+                Err(Error::InvalidArgument(format!(
+                    "bad argument: {} {}",
+                    config_name, config_value
+                )))
+            }
             _ => Err(Error::NotFound(format!("unsupported module: {:?}", module))),
         }
     }
@@ -893,8 +918,8 @@ impl Debugger {
             ("num_files", collection.len() as u64),
             ("num_entries", num_entries),
             ("num_deletes", num_entries - mvcc_properties.num_versions),
-            ("mvcc.min_ts", mvcc_properties.min_ts),
-            ("mvcc.max_ts", mvcc_properties.max_ts),
+            ("mvcc.min_ts", mvcc_properties.min_ts.into_inner()),
+            ("mvcc.max_ts", mvcc_properties.max_ts.into_inner()),
             ("mvcc.num_rows", mvcc_properties.num_rows),
             ("mvcc.num_puts", mvcc_properties.num_puts),
             ("mvcc.num_versions", mvcc_properties.num_versions),
@@ -1167,7 +1192,7 @@ impl MvccChecker {
         Ok(None)
     }
 
-    fn next_default(&mut self, key: &[u8]) -> Result<Option<u64>> {
+    fn next_default(&mut self, key: &[u8]) -> Result<Option<TimeStamp>> {
         if self.default_iter.valid()
             && box_try!(Key::truncate_ts_for(keys::origin_key(
                 self.default_iter.key()
@@ -1182,13 +1207,13 @@ impl MvccChecker {
         Ok(None)
     }
 
-    fn next_write(&mut self, key: &[u8]) -> Result<Option<(u64, Write)>> {
+    fn next_write(&mut self, key: &[u8]) -> Result<Option<(TimeStamp, Write)>> {
         if self.write_iter.valid()
             && box_try!(Key::truncate_ts_for(keys::origin_key(
                 self.write_iter.key()
             ))) == key
         {
-            let write = box_try!(Write::parse(self.write_iter.value()));
+            let write = box_try!(WriteRef::parse(self.write_iter.value())).to_owned();
             let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(self.write_iter.key())));
             self.write_iter.next();
             return Ok(Some((commit_ts, write)));
@@ -1196,7 +1221,13 @@ impl MvccChecker {
         Ok(None)
     }
 
-    fn delete(&mut self, wb: &WriteBatch, cf: &str, key: &[u8], ts: Option<u64>) -> Result<()> {
+    fn delete(
+        &mut self,
+        wb: &WriteBatch,
+        cf: &str,
+        key: &[u8],
+        ts: Option<TimeStamp>,
+    ) -> Result<()> {
         let handle = box_try!(get_cf_handle(self.db.as_ref(), cf));
         match ts {
             Some(ts) => {
@@ -1265,7 +1296,7 @@ impl MvccInfoIterator {
                 LockType::Lock => lock_info.set_type(Op::Lock),
                 LockType::Pessimistic => lock_info.set_type(Op::PessimisticLock),
             }
-            lock_info.set_start_ts(lock.ts);
+            lock_info.set_start_ts(lock.ts.into_inner());
             lock_info.set_primary(lock.primary);
             lock_info.set_short_value(lock.value.unwrap_or_default());
             return Ok(Some((key, lock_info)));
@@ -1279,7 +1310,7 @@ impl MvccInfoIterator {
             for (key, value) in vec_kv {
                 let mut value_info = MvccValue::default();
                 let start_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
-                value_info.set_start_ts(start_ts);
+                value_info.set_start_ts(start_ts.into_inner());
                 value_info.set_value(value);
                 values.push(value_info);
             }
@@ -1292,7 +1323,7 @@ impl MvccInfoIterator {
         if let Some((prefix, vec_kv)) = Self::next_grouped(&mut self.write_iter) {
             let mut writes = Vec::with_capacity(vec_kv.len());
             for (key, value) in vec_kv {
-                let write = box_try!(Write::parse(&value));
+                let write = box_try!(WriteRef::parse(&value)).to_owned();
                 let mut write_info = MvccWrite::default();
                 match write.write_type {
                     WriteType::Put => write_info.set_type(Op::Put),
@@ -1300,9 +1331,9 @@ impl MvccInfoIterator {
                     WriteType::Lock => write_info.set_type(Op::Lock),
                     WriteType::Rollback => write_info.set_type(Op::Rollback),
                 }
-                write_info.set_start_ts(write.start_ts);
+                write_info.set_start_ts(write.start_ts.into_inner());
                 let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
-                write_info.set_commit_ts(commit_ts);
+                write_info.set_commit_ts(commit_ts.into_inner());
                 write_info.set_short_value(write.value.unwrap_or_default());
                 writes.push(write_info);
             }
@@ -1482,13 +1513,13 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec
         let props = RangeProperties::decode(v.user_collected_properties())?;
         keys.extend(
             props
-                .offsets
-                .range::<[u8], _>((Excluded(start.as_slice()), Excluded(end.as_slice())))
+                .take_excluded_range(start.as_slice(), end.as_slice())
+                .into_iter()
                 .filter(|_| {
                     found_keys_count += 1;
                     found_keys_count % 100 == 0
                 })
-                .map(|(k, _)| k.to_owned()),
+                .map(|(k, _)| k),
         );
     }
 
@@ -1536,11 +1567,15 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use crate::server::gc_worker::GCConfig;
     use crate::storage::mvcc::{Lock, LockType};
+    use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::Mutable;
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_rocks::RocksEngine;
+    use engine_traits::CFHandleExt;
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
@@ -1635,7 +1670,7 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> Debugger {
+    fn new_debugger() -> Debugger<TestEngine> {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
@@ -1654,10 +1689,13 @@ mod tests {
 
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
-        Debugger::new(engines)
+        let test_engine = TestEngineBuilder::new().build().unwrap();
+        let mut gc_worker = GCWorker::new(test_engine, None, None, GCConfig::default());
+        gc_worker.start().unwrap();
+        Debugger::new(engines, Some(gc_worker))
     }
 
-    impl Debugger {
+    impl Debugger<TestEngine> {
         fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
             db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
@@ -1819,7 +1857,11 @@ mod tests {
         let debugger = new_debugger();
         let engine = &debugger.engines.kv;
 
-        let cf_default_data = vec![(b"k1", b"v", 5), (b"k2", b"x", 10), (b"k3", b"y", 15)];
+        let cf_default_data = vec![
+            (b"k1", b"v", 5.into()),
+            (b"k2", b"x", 10.into()),
+            (b"k3", b"y", 15.into()),
+        ];
         for &(prefix, value, ts) in &cf_default_data {
             let encoded_key = Key::from_raw(prefix).append_ts(ts);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
@@ -1828,14 +1870,23 @@ mod tests {
 
         let lock_cf = engine.cf_handle(CF_LOCK).unwrap();
         let cf_lock_data = vec![
-            (b"k1", LockType::Put, b"v", 5),
-            (b"k4", LockType::Lock, b"x", 10),
-            (b"k5", LockType::Delete, b"y", 15),
+            (b"k1", LockType::Put, b"v", 5.into()),
+            (b"k4", LockType::Lock, b"x", 10.into()),
+            (b"k5", LockType::Delete, b"y", 15.into()),
         ];
         for &(prefix, tp, value, version) in &cf_lock_data {
             let encoded_key = Key::from_raw(prefix);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            let lock = Lock::new(tp, value.to_vec(), version, 0, None, 0, 0);
+            let lock = Lock::new(
+                tp,
+                value.to_vec(),
+                version,
+                0,
+                None,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+            );
             let value = lock.to_bytes();
             engine
                 .put_cf(lock_cf, key.as_slice(), value.as_slice())
@@ -1844,16 +1895,16 @@ mod tests {
 
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
         let cf_write_data = vec![
-            (b"k2", WriteType::Put, 5, 10),
-            (b"k3", WriteType::Put, 15, 20),
-            (b"k6", WriteType::Lock, 25, 30),
-            (b"k7", WriteType::Rollback, 35, 40),
+            (b"k2", WriteType::Put, 5.into(), 10.into()),
+            (b"k3", WriteType::Put, 15.into(), 20.into()),
+            (b"k6", WriteType::Lock, 25.into(), 30.into()),
+            (b"k7", WriteType::Rollback, 35.into(), 40.into()),
         ];
         for &(prefix, tp, start_ts, commit_ts) in &cf_write_data {
             let encoded_key = Key::from_raw(prefix).append_ts(commit_ts);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
             let write = Write::new(tp, start_ts, commit_ts, None);
-            let value = write.to_bytes();
+            let value = write.as_ref().to_bytes();
             engine
                 .put_cf(write_cf, key.as_slice(), value.as_slice())
                 .unwrap();
@@ -2091,7 +2142,7 @@ mod tests {
     #[test]
     fn test_recreate_region() {
         let debugger = new_debugger();
-        let engine = debugger.engines.kv.as_ref();
+        let engine = RocksEngine::from_ref(&debugger.engines.kv);
 
         let metadata = vec![("", "g"), ("g", "m"), ("m", "")];
 
@@ -2107,13 +2158,19 @@ mod tests {
             region_state.set_state(PeerState::Normal);
             region_state.set_region(region);
             let key = keys::region_state_key(region_id);
-            engine.put_msg_cf(cf_raft, &key, &region_state).unwrap();
+            engine
+                .as_inner()
+                .put_msg_cf(cf_raft.as_inner(), &key, &region_state)
+                .unwrap();
         }
 
         let remove_region_state = |region_id: u64| {
             let key = keys::region_state_key(region_id);
             let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
-            engine.delete_cf(cf_raft, &key).unwrap();
+            engine
+                .as_inner()
+                .delete_cf(cf_raft.as_inner(), &key)
+                .unwrap();
         };
 
         let mut region = Region::default();
@@ -2126,7 +2183,10 @@ mod tests {
         remove_region_state(1);
         remove_region_state(2);
         assert!(debugger.recreate_region(region.clone()).is_ok());
-        assert_eq!(get_region_state(engine, 100).get_region(), &region);
+        assert_eq!(
+            get_region_state(engine.as_inner(), 100).get_region(),
+            &region
+        );
 
         region.set_start_key(b"z".to_vec());
         region.set_end_key(b"".to_vec());
@@ -2212,7 +2272,7 @@ mod tests {
         for (key, ts, expect) in default {
             kv.push((
                 CF_DEFAULT,
-                Key::from_raw(key).append_ts(ts),
+                Key::from_raw(key).append_ts(ts.into()),
                 b"v".to_vec(),
                 expect,
             ));
@@ -2223,7 +2283,16 @@ mod tests {
             } else {
                 None
             };
-            let lock = Lock::new(tp, vec![], ts, 0, v, 0, 0);
+            let lock = Lock::new(
+                tp,
+                vec![],
+                ts.into(),
+                0,
+                v,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+            );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
         }
         for (key, start_ts, commit_ts, tp, short_value, expect) in write {
@@ -2232,11 +2301,11 @@ mod tests {
             } else {
                 None
             };
-            let write = Write::new(tp, start_ts, commit_ts, v);
+            let write = Write::new(tp, start_ts.into(), commit_ts.into(), v);
             kv.push((
                 CF_WRITE,
-                Key::from_raw(key).append_ts(commit_ts),
-                write.to_bytes(),
+                Key::from_raw(key).append_ts(commit_ts.into()),
+                write.as_ref().to_bytes(),
                 expect,
             ));
         }
@@ -2357,5 +2426,19 @@ mod tests {
             cluster_id,
             debugger.get_cluster_id().expect("get cluster id")
         );
+    }
+
+    #[test]
+    fn test_modify_gc_io_limit() {
+        let debugger = new_debugger();
+        debugger
+            .modify_tikv_config(Module::Server, "gc", "10MB")
+            .unwrap_err();
+        debugger
+            .modify_tikv_config(Module::Storage, GC_IO_LIMITER_CONFIG_NAME, "10MB")
+            .unwrap_err();
+        debugger
+            .modify_tikv_config(Module::Server, GC_IO_LIMITER_CONFIG_NAME, "10MB")
+            .unwrap();
     }
 }

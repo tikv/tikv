@@ -7,7 +7,8 @@ use tipb::ColumnInfo;
 use tipb::IndexScan;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor, ScanExecutorOptions};
-use crate::codec::table;
+use crate::codec::table::{self, check_index_key};
+use crate::expr::EvalContext;
 use crate::storage::Storage;
 use crate::Result;
 
@@ -31,6 +32,7 @@ impl IndexInnerExecutor {
 impl InnerExecutor for IndexInnerExecutor {
     fn decode_row(
         &self,
+        ctx: &mut EvalContext,
         key: Vec<u8>,
         value: Vec<u8>,
         columns: Arc<Vec<ColumnInfo>>,
@@ -40,6 +42,7 @@ impl InnerExecutor for IndexInnerExecutor {
         use tidb_query_datatype::prelude::*;
         use tidb_query_datatype::FieldTypeFlag;
 
+        check_index_key(key.as_slice())?;
         let (mut values, handle) = box_try!(table::cut_idx_key(key, &self.col_ids));
         let handle = match handle {
             None => box_try!(value.as_slice().read_i64::<BigEndian>()),
@@ -57,7 +60,7 @@ impl InnerExecutor for IndexInnerExecutor {
             } else {
                 datum::Datum::I64(handle)
             };
-            let mut bytes = box_try!(datum::encode_key(&[handle_datum]));
+            let mut bytes = box_try!(datum::encode_key(ctx, &[handle_datum]));
             values.append(pk_col.get_column_id(), &mut bytes);
         }
         Ok(Some(Row::origin(handle, values, columns)))
@@ -69,6 +72,7 @@ pub type IndexScanExecutor<S> = ScanExecutor<S, IndexInnerExecutor>;
 impl<S: Storage> IndexScanExecutor<S> {
     pub fn index_scan(
         mut meta: IndexScan,
+        context: EvalContext,
         key_ranges: Vec<KeyRange>,
         storage: S,
         unique: bool,
@@ -78,6 +82,7 @@ impl<S: Storage> IndexScanExecutor<S> {
         let inner = IndexInnerExecutor::new(&mut meta);
         Self::new(ScanExecutorOptions {
             inner,
+            context,
             columns,
             key_ranges,
             storage,
@@ -89,6 +94,7 @@ impl<S: Storage> IndexScanExecutor<S> {
     }
 
     pub fn index_scan_with_cols_len(
+        context: EvalContext,
         cols: i64,
         key_ranges: Vec<KeyRange>,
         storage: S,
@@ -100,6 +106,7 @@ impl<S: Storage> IndexScanExecutor<S> {
         };
         Self::new(ScanExecutorOptions {
             inner,
+            context,
             columns: vec![],
             key_ranges,
             storage,
@@ -117,7 +124,6 @@ pub mod tests {
     use std::i64;
 
     use tidb_query_datatype::FieldTypeTp;
-    use tikv_util::collections::HashMap;
     use tipb::ColumnInfo;
 
     use super::super::tests::*;
@@ -147,30 +153,6 @@ pub mod tests {
         key_range.set_start(start_key);
         key_range.set_end(end_key);
         key_range
-    }
-
-    pub fn generate_index_data(
-        table_id: i64,
-        index_id: i64,
-        handle: i64,
-        col_val: &Datum,
-        unique: bool,
-    ) -> (HashMap<i64, Vec<u8>>, Vec<u8>) {
-        let indice = vec![(2, (*col_val).clone()), (3, Datum::Dec(handle.into()))];
-        let mut expect_row = HashMap::default();
-        let mut v: Vec<_> = indice
-            .iter()
-            .map(|&(ref cid, ref value)| {
-                expect_row.insert(*cid, datum::encode_key(&[value.clone()]).unwrap());
-                value.clone()
-            })
-            .collect();
-        if !unique {
-            v.push(Datum::I64(handle));
-        }
-        let encoded = datum::encode_key(&v).unwrap();
-        let idx_key = table::encode_index_seek_key(table_id, index_id, &encoded);
-        (expect_row, idx_key)
     }
 
     pub fn prepare_index_data(
@@ -287,6 +269,7 @@ pub mod tests {
 
         let mut scanner = IndexScanExecutor::index_scan(
             wrapper.scan,
+            EvalContext::default(),
             wrapper.ranges,
             wrapper.store,
             false,
@@ -345,6 +328,7 @@ pub mod tests {
 
         let mut scanner = IndexScanExecutor::index_scan(
             wrapper.scan,
+            EvalContext::default(),
             wrapper.ranges,
             wrapper.store,
             unique,
@@ -400,6 +384,7 @@ pub mod tests {
 
         let mut scanner = IndexScanExecutor::index_scan(
             wrapper.scan,
+            EvalContext::default(),
             wrapper.ranges,
             wrapper.store,
             unique,
@@ -428,6 +413,7 @@ pub mod tests {
 
         let mut scanner = IndexScanExecutor::index_scan(
             wrapper.scan,
+            EvalContext::default(),
             wrapper.ranges,
             wrapper.store,
             false,
@@ -441,7 +427,7 @@ pub mod tests {
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];
             let handle_datum = datum::Datum::I64(handle as i64);
-            let pk = datum::encode_key(&[handle_datum]).unwrap();
+            let pk = datum::encode_key(&mut EvalContext::default(), &[handle_datum]).unwrap();
             for col in &wrapper.cols {
                 let cid = col.get_column_id();
                 let v = row.data.get(cid).unwrap();

@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
+use std::error::Error as StdError;
 use std::sync::{self, mpsc, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
@@ -24,6 +24,7 @@ use tikv::raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSy
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
+use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 
@@ -127,10 +128,18 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
+    pub fn pre_start_check(&mut self) -> result::Result<(), Box<dyn StdError>> {
+        for path in &self.paths {
+            self.cfg.storage.data_dir = path.path().to_str().unwrap().to_owned();
+            self.cfg.validate()?
+        }
+        Ok(())
+    }
+
     pub fn create_engines(&mut self) {
         for _ in 0..self.count {
             let dir = Builder::new().prefix("test_cluster").tempdir().unwrap();
-            let kv_path = dir.path().join("kv");
+            let kv_path = dir.path().join(DEFAULT_ROCKSDB_SUB_DIR);
             let cache = self.cfg.storage.block_cache.build_shared_cache();
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
@@ -138,7 +147,7 @@ impl<T: Simulator> Cluster<T> {
                 rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
-            let raft_path = dir.path().join(Path::new("raft"));
+            let raft_path = dir.path().join("raft");
             let raft_engine = Arc::new(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
@@ -369,7 +378,7 @@ impl<T: Simulator> Cluster<T> {
                 };
                 leaders
                     .entry(l.get_id())
-                    .or_insert_with(|| (l, vec![]))
+                    .or_insert((l, vec![]))
                     .1
                     .push(*store_id);
             }
@@ -897,6 +906,29 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn wait_region_split(&mut self, region: &metapb::Region) {
+        let mut try_cnt = 0;
+        let split_count = self.pd_client.get_split_count();
+        loop {
+            if self.pd_client.get_split_count() > split_count {
+                match self.pd_client.get_region(region.get_start_key()) {
+                    Err(_) => {}
+                    Ok(left) => {
+                        if left.get_end_key() != region.get_end_key() {
+                            return;
+                        }
+                    }
+                };
+            }
+
+            if try_cnt > 250 {
+                panic!("region {:?} has not been split after 5000ms", region);
+            }
+            try_cnt += 1;
+            sleep_ms(20);
+        }
+    }
+
     pub fn try_merge(&mut self, source: u64, target: u64) -> RaftCmdResponse {
         let region = self
             .pd_client
@@ -956,7 +988,7 @@ impl<T: Simulator> Cluster<T> {
 
             if try_cnt > 250 {
                 panic!(
-                    "region {} doesn't exist on store {} after {} tries: {:?}",
+                    "region {} still exists on store {} after {} tries: {:?}",
                     region_id, store_id, try_cnt, resp
                 );
             }

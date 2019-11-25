@@ -18,6 +18,7 @@ make_static_metric! {
         kv_commit,
         kv_cleanup,
         kv_batch_get,
+        kv_batch_get_command,
         kv_batch_rollback,
         kv_txn_heart_beat,
         kv_check_txn_status,
@@ -27,6 +28,7 @@ make_static_metric! {
         kv_delete_range,
         raw_get,
         raw_batch_get,
+        raw_batch_get_command,
         raw_scan,
         raw_batch_scan,
         raw_put,
@@ -127,6 +129,20 @@ lazy_static! {
         "tikv_config_rocksdb",
         "Config information of rocksdb",
         &["cf", "name"]
+    )
+    .unwrap();
+    pub static ref REQUEST_BATCH_SIZE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_server_request_batch_size",
+        "Size of request batch input",
+        &["type"],
+        exponential_buckets(1f64, 5f64, 10).unwrap()
+    )
+    .unwrap();
+    pub static ref REQUEST_BATCH_RATIO_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_server_request_batch_ratio",
+        "Ratio of request batch output to input",
+        &["type"],
+        exponential_buckets(1f64, 5f64, 10).unwrap()
     )
     .unwrap();
 }

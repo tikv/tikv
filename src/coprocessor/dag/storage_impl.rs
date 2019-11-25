@@ -64,12 +64,14 @@ impl<S: Store> Storage for TiKVStorage<S> {
         let key = range.0;
         let value = self
             .store
-            .get(&Key::from_raw(&key), &mut self.cf_stats_backlog)
+            .incremental_get(&Key::from_raw(&key))
             .map_err(Error::from)?;
         Ok(value.map(move |v| (key, v)))
     }
 
     fn collect_statistics(&mut self, dest: &mut Statistics) {
+        self.cf_stats_backlog
+            .add(&self.store.incremental_get_take_statistics());
         if let Some(scanner) = &mut self.scanner {
             self.cf_stats_backlog.add(&scanner.take_statistics());
         }

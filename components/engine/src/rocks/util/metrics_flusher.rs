@@ -81,6 +81,7 @@ fn flush_metrics(db: &DB, name: &str, shared_block_cache: bool) {
         }
     }
     flush_engine_properties(db, name, shared_block_cache);
+    flush_engine_iostall_properties(db, name);
 }
 
 #[cfg(test)]

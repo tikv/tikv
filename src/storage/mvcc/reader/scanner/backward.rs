@@ -2,11 +2,11 @@
 
 use engine::CF_HISTORY;
 
-use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::Result;
+use crate::storage::mvcc::reader::util::{check_lock, CheckLockResult};
+use crate::storage::mvcc::write::WriteType;
+use crate::storage::mvcc::{Result, TimeStamp, WriteRef};
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
-use super::super::util::CheckLockResult;
 use super::ScannerConfig;
 
 /// This struct can be used to scan keys starting from the given user key in the reverse order
@@ -66,9 +66,9 @@ impl<S: Snapshot> BackwardScanner<S> {
                     Key::from_encoded_slice(self.lock_cursor.key(&mut self.statistics.lock));
                 let lock = Lock::parse(self.lock_cursor.value(&mut self.statistics.lock))?;
                 if let CheckLockResult::Locked(e) =
-                    super::super::util::check_lock(&current_user_key, self.cfg.ts, &lock)?
+                    check_lock(&current_user_key, self.cfg.ts, &lock)?
                 {
-                    return Err(e);
+                    return Err(e.into());
                 }
             } else {
                 return Ok(());
@@ -112,11 +112,11 @@ impl<S: Snapshot> BackwardScanner<S> {
                     Key::from_encoded_slice(self.latest_cursor.key(&mut self.statistics.latest));
                 let mut value = None;
                 let mut latest =
-                    Write::parse(self.latest_cursor.value(&mut self.statistics.latest))?;
+                    WriteRef::parse(self.latest_cursor.value(&mut self.statistics.latest))?;
                 if self.cfg.ts >= latest.commit_ts {
                     if latest.write_type == WriteType::Put {
                         found = true;
-                        value = latest.take_value();
+                        value = latest.copy_value();
                     }
                 } else if self.history_valid {
                     // seek from history
@@ -133,7 +133,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                             .unwrap()
                             .key(&mut self.statistics.history);
                         if Key::is_user_key_eq(history_key, key.as_encoded()) {
-                            let mut history = Write::parse(
+                            let mut history = WriteRef::parse(
                                 self.history_cursor
                                     .as_ref()
                                     .unwrap()
@@ -141,7 +141,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                             )?;
                             if history.write_type == WriteType::Put {
                                 found = true;
-                                value = history.take_value();
+                                value = history.copy_value();
                             }
                         }
                     } else {

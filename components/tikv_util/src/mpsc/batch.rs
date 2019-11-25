@@ -101,7 +101,7 @@ impl Drop for Notifier {
 }
 
 pub struct Sender<T> {
-    sender: channel::Sender<T>,
+    sender: Option<channel::Sender<T>>,
     state: Arc<State>,
 }
 
@@ -118,6 +118,7 @@ impl<T> Clone for Sender<T> {
 impl<T> Drop for Sender<T> {
     #[inline]
     fn drop(&mut self) {
+        drop(self.sender.take());
         self.state.notify();
     }
 }
@@ -128,23 +129,29 @@ pub struct Receiver<T> {
 }
 
 impl<T> Sender<T> {
+    pub fn is_empty(&self) -> bool {
+        // When there is no sender references, it can't be known whether
+        // it's empty or not.
+        self.sender.as_ref().map_or(false, |s| s.is_empty())
+    }
+
     #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
-        self.sender.send(t)?;
+        self.sender.as_ref().unwrap().send(t)?;
         self.state.try_notify_post_send();
         Ok(())
     }
 
     #[inline]
     pub fn send_and_notify(&self, t: T) -> Result<(), SendError<T>> {
-        self.sender.send(t)?;
+        self.sender.as_ref().unwrap().send(t)?;
         self.state.notify();
         Ok(())
     }
 
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        self.sender.try_send(t)?;
+        self.sender.as_ref().unwrap().try_send(t)?;
         self.state.try_notify_post_send();
         Ok(())
     }
@@ -188,7 +195,7 @@ pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
     let (sender, receiver) = channel::unbounded();
     (
         Sender {
-            sender,
+            sender: Some(sender),
             state: state.clone(),
         },
         Receiver { receiver, state },
@@ -207,7 +214,7 @@ pub fn bounded<T>(cap: usize, notify_size: usize) -> (Sender<T>, Receiver<T>) {
     let (sender, receiver) = channel::bounded(cap);
     (
         Sender {
-            sender,
+            sender: Some(sender),
             state: state.clone(),
         },
         Receiver { receiver, state },
@@ -293,8 +300,11 @@ impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> Stream for BatchReceiver<T, E, I, C> 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{mpsc, Mutex};
     use std::{thread, time};
 
+    use futures::executor::{self, Notify, Spawn};
+    use futures::{stream, Async, Future};
     use futures_cpupool::CpuPool;
 
     use super::*;
@@ -346,16 +356,25 @@ mod tests {
         let rx = BatchReceiver::new(rx, 8, || Vec::with_capacity(4), |v, e| v.push(e));
 
         let msg_counter = Arc::new(AtomicUsize::new(0));
-        let msg_counter1 = Arc::clone(&msg_counter);
+        let msg_counter_spawned = Arc::clone(&msg_counter);
+        let (nty, polled) = mpsc::sync_channel(1);
         let pool = CpuPool::new(1);
-        pool.spawn(rx.for_each(move |v| {
-            let len = v.len();
-            assert!(len <= 8);
-            msg_counter1.fetch_add(len, Ordering::AcqRel);
-            Ok(())
-        }))
+        pool.spawn(
+            rx.select(stream::poll_fn(move || -> Poll<Option<Vec<u64>>, ()> {
+                nty.send(()).unwrap();
+                Ok(Async::Ready(None))
+            }))
+            .for_each(move |v| {
+                let len = v.len();
+                assert!(len <= 8);
+                msg_counter_spawned.fetch_add(len, Ordering::AcqRel);
+                Ok(())
+            }),
+        )
         .forget();
-        thread::sleep(time::Duration::from_millis(10));
+
+        // Wait until the receiver has been polled in the spawned thread.
+        polled.recv().unwrap();
 
         // Send without notify, the receiver can't get batched messages.
         assert!(tx.send(0).is_ok());
@@ -375,5 +394,37 @@ mod tests {
         }
         thread::sleep(time::Duration::from_millis(10));
         assert_eq!(msg_counter.load(Ordering::Acquire), 17);
+    }
+
+    #[test]
+    fn test_switch_between_sender_and_receiver() {
+        struct Notifier<F>(Arc<Mutex<Option<Spawn<F>>>>);
+        impl<F> Clone for Notifier<F> {
+            fn clone(&self) -> Notifier<F> {
+                Notifier(Arc::clone(&self.0))
+            }
+        }
+        impl<F> Notify for Notifier<F>
+        where
+            F: Future<Item = (), Error = ()> + Send + 'static,
+        {
+            fn notify(&self, id: usize) {
+                let n = Arc::new(self.clone());
+                let mut s = self.0.lock().unwrap();
+                match s.as_mut().map(|spawn| spawn.poll_future_notify(&n, id)) {
+                    Some(Ok(Async::NotReady)) | None => {}
+                    _ => *s = None,
+                }
+            }
+        }
+
+        let (tx, rx) = unbounded::<u64>(4);
+        let f = rx.for_each(|_| Ok(())).map_err(|_| ());
+        let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
+        Notifier(Arc::clone(&spawn)).notify(0);
+
+        // Switch to `receiver` in one thread in where `sender` is dropped.
+        drop(tx);
+        assert!(spawn.lock().unwrap().is_none());
     }
 }

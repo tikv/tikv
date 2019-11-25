@@ -47,16 +47,17 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
 
     pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
+        let mut ctx = EvalContext::new(config);
         for def in conditions_def {
             conditions.push(RpnExpressionBuilder::build_from_expr_tree(
                 def,
-                &config.tz,
+                &mut ctx,
                 src.schema().len(),
             )?);
         }
 
         Ok(Self {
-            context: EvalContext::new(config),
+            context: ctx,
             src,
             conditions,
         })
@@ -513,17 +514,19 @@ mod tests {
 
         let predicate: Vec<_> = (0..=1)
             .map(|offset| {
-                RpnExpressionBuilder::new()
-                    .push_column_ref(offset)
-                    .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
-                    .build()
+                move || {
+                    RpnExpressionBuilder::new()
+                        .push_column_ref(offset)
+                        .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
+                        .build()
+                }
             })
             .collect();
 
         for predicates in vec![
             // Swap predicates should produce same results.
-            vec![predicate[0].clone(), predicate[1].clone()],
-            vec![predicate[1].clone(), predicate[0].clone()],
+            vec![predicate[0](), predicate[1]()],
+            vec![predicate[1](), predicate[0]()],
         ] {
             let src_exec = make_src_executor_using_fixture_2();
             let mut exec = BatchSelectionExecutor::new_for_test(src_exec, predicates);
@@ -546,25 +549,19 @@ mod tests {
     fn test_multiple_predicate_2() {
         let predicate: Vec<_> = (0..=2)
             .map(|offset| {
-                RpnExpressionBuilder::new()
-                    .push_column_ref(offset)
-                    .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
-                    .build()
+                move || {
+                    RpnExpressionBuilder::new()
+                        .push_column_ref(offset)
+                        .push_fn_call(is_even_fn_meta(), 1, FieldTypeTp::LongLong)
+                        .build()
+                }
             })
             .collect();
 
         for predicates in vec![
             // Swap predicates should produce same results.
-            vec![
-                predicate[0].clone(),
-                predicate[1].clone(),
-                predicate[2].clone(),
-            ],
-            vec![
-                predicate[1].clone(),
-                predicate[2].clone(),
-                predicate[0].clone(),
-            ],
+            vec![predicate[0](), predicate[1](), predicate[2]()],
+            vec![predicate[1](), predicate[2](), predicate[0]()],
         ] {
             let src_exec = make_src_executor_using_fixture_2();
             let mut exec = BatchSelectionExecutor::new_for_test(src_exec, predicates);

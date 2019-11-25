@@ -1,13 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::{Cell, UnsafeCell};
-use std::cmp::Ordering;
+use std::cell::UnsafeCell;
+use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
-use crate::raftstore::coprocessor::SeekRegionCallback;
-use crate::raftstore::store::PdTask;
-use crate::storage::{Key, Value};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_HISTORY, CF_LATEST, CF_LOCK, CF_ROLLBACK, CF_WRITE};
@@ -17,34 +14,33 @@ use tikv_util::worker::FutureScheduler;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 use kvproto::errorpb::Error as ErrorHeader;
-use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
+use kvproto::kvrpcpb::Context;
+
+use crate::into_other::IntoOther;
+use crate::raftstore::coprocessor::SeekRegionCallback;
+use crate::storage::{Key, Value};
 
 mod btree_engine;
 mod compact_listener;
-mod cursor_builder;
+mod cursor;
 mod perf_context;
 mod rocksdb_engine;
+mod stats;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::compact_listener::{CompactedEvent, CompactionListener};
-pub use self::cursor_builder::CursorBuilder;
+pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
+pub use self::stats::{
+    CFStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
+};
 
 pub const SEEK_BOUND: u64 = 8;
-
 const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
-const STAT_TOTAL: &str = "total";
-const STAT_PROCESSED: &str = "processed";
-const STAT_GET: &str = "get";
-const STAT_NEXT: &str = "next";
-const STAT_PREV: &str = "prev";
-const STAT_SEEK: &str = "seek";
-const STAT_SEEK_FOR_PREV: &str = "seek_for_prev";
-const STAT_OVER_SEEK_BOUND: &str = "over_seek_bound";
-
 pub type Callback<T> = Box<dyn FnOnce((CbContext, Result<T>)) + Send>;
+pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug)]
 pub struct CbContext {
@@ -75,7 +71,7 @@ pub trait Engine: Send + Clone + 'static {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
             Some((_, res)) => res,
-            None => Err(Error::Timeout(timeout)),
+            None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }
     }
 
@@ -83,7 +79,7 @@ pub trait Engine: Send + Clone + 'static {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
             Some((_, res)) => res,
-            None => Err(Error::Timeout(timeout)),
+            None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }
     }
 
@@ -158,19 +154,6 @@ pub trait RegionInfoProvider: Send + Clone + 'static {
     fn seek_region(&self, from: &[u8], filter: SeekRegionCallback) -> Result<()>;
 }
 
-macro_rules! near_loop {
-    ($cond:expr, $fallback:expr, $st:expr) => {{
-        let mut cnt = 0;
-        while $cond {
-            cnt += 1;
-            if cnt >= SEEK_BOUND {
-                $st.over_seek_bound += 1;
-                return $fallback;
-            }
-        }
-    }};
-}
-
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ScanMode {
     Forward,
@@ -178,509 +161,9 @@ pub enum ScanMode {
     Mixed,
 }
 
-/// Statistics collects the ops taken when fetching data.
-#[derive(Default, Clone, Debug)]
-pub struct CFStatistics {
-    // How many keys that's effective to user. This counter should be increased
-    // by the caller.
-    pub processed: usize,
-    pub get: usize,
-    pub next: usize,
-    pub prev: usize,
-    pub seek: usize,
-    pub seek_for_prev: usize,
-    pub over_seek_bound: usize,
-    pub flow_stats: FlowStatistics,
-}
-
-#[derive(Default, Debug, Clone)]
-pub struct FlowStatistics {
-    pub read_keys: usize,
-    pub read_bytes: usize,
-}
-
-// Reports flow statistics to outside.
-pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
-    // Reports read flow statistics, the argument `read_stats` is a hash map
-    // saves the flow statistics of different region.
-    // TODO: maybe we need to return a Result later?
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>);
-}
-
-impl FlowStatsReporter for FutureScheduler<PdTask> {
-    fn report_read_stats(&self, read_stats: HashMap<u64, FlowStatistics>) {
-        if let Err(e) = self.schedule(PdTask::ReadStats { read_stats }) {
-            error!("Failed to send read flow statistics"; "err" => ?e);
-        }
-    }
-}
-
-impl FlowStatistics {
-    pub fn add(&mut self, other: &Self) {
-        self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
-        self.read_keys = self.read_keys.saturating_add(other.read_keys);
-    }
-}
-
-impl CFStatistics {
-    #[inline]
-    pub fn total_op_count(&self) -> usize {
-        self.get + self.next + self.prev + self.seek + self.seek_for_prev
-    }
-
-    pub fn details(&self) -> [(&'static str, usize); 8] {
-        [
-            (STAT_TOTAL, self.total_op_count()),
-            (STAT_PROCESSED, self.processed),
-            (STAT_GET, self.get),
-            (STAT_NEXT, self.next),
-            (STAT_PREV, self.prev),
-            (STAT_SEEK, self.seek),
-            (STAT_SEEK_FOR_PREV, self.seek_for_prev),
-            (STAT_OVER_SEEK_BOUND, self.over_seek_bound),
-        ]
-    }
-
-    pub fn add(&mut self, other: &Self) {
-        self.processed = self.processed.saturating_add(other.processed);
-        self.get = self.get.saturating_add(other.get);
-        self.next = self.next.saturating_add(other.next);
-        self.prev = self.prev.saturating_add(other.prev);
-        self.seek = self.seek.saturating_add(other.seek);
-        self.seek_for_prev = self.seek_for_prev.saturating_add(other.seek_for_prev);
-        self.over_seek_bound = self.over_seek_bound.saturating_add(other.over_seek_bound);
-        self.flow_stats.add(&other.flow_stats);
-    }
-
-    pub fn scan_info(&self) -> ScanInfo {
-        let mut info = ScanInfo::default();
-        info.set_processed(self.processed as i64);
-        info.set_total(self.total_op_count() as i64);
-        info
-    }
-}
-
-#[derive(Default, Clone, Debug)]
-pub struct Statistics {
-    pub lock: CFStatistics,
-    pub write: CFStatistics,
-    pub latest: CFStatistics,
-    pub history: CFStatistics,
-    pub rollback: CFStatistics,
-    pub data: CFStatistics,
-}
-
-impl Statistics {
-    pub fn total_op_count(&self) -> usize {
-        self.lock.total_op_count()
-            + self.write.total_op_count()
-            + self.data.total_op_count()
-            + self.latest.total_op_count()
-            + self.history.total_op_count()
-            + self.rollback.total_op_count()
-    }
-
-    pub fn total_processed(&self) -> usize {
-        self.lock.processed
-            + self.write.processed
-            + self.data.processed
-            + self.latest.processed
-            + self.history.processed
-            + self.rollback.processed
-    }
-
-    pub fn details(&self) -> [(&'static str, [(&'static str, usize); 8]); 3] {
-        [
-            (CF_DEFAULT, self.data.details()),
-            (CF_LOCK, self.lock.details()),
-            (CF_WRITE, self.write.details()),
-        ]
-    }
-
-    pub fn add(&mut self, other: &Self) {
-        self.lock.add(&other.lock);
-        self.latest.add(&other.latest);
-        self.history.add(&other.history);
-        self.data.add(&other.data);
-        self.write.add(&other.write);
-    }
-
-    pub fn scan_detail(&self) -> ScanDetail {
-        let mut detail = ScanDetail::default();
-        detail.set_data(self.data.scan_info());
-        detail.set_lock(self.lock.scan_info());
-        detail.set_write(self.write.scan_info());
-        detail
-    }
-
-    pub fn mut_cf_statistics(&mut self, cf: &str) -> &mut CFStatistics {
-        if cf.is_empty() {
-            return &mut self.data;
-        }
-        match cf {
-            CF_DEFAULT => &mut self.data,
-            CF_LOCK => &mut self.lock,
-            CF_WRITE => &mut self.write,
-            CF_LATEST => &mut self.latest,
-            CF_HISTORY => &mut self.history,
-            CF_ROLLBACK => &mut self.rollback,
-            _ => unreachable!(),
-        }
-    }
-}
-
-#[derive(Default, Debug)]
-pub struct StatisticsSummary {
-    pub stat: Statistics,
-    pub count: u64,
-}
-
-impl StatisticsSummary {
-    pub fn add_statistics(&mut self, v: &Statistics) {
-        self.stat.add(v);
-        self.count += 1;
-    }
-}
-
-pub struct Cursor<I: Iterator> {
-    iter: I,
-    scan_mode: ScanMode,
-    // the data cursor can be seen will be
-    min_key: Option<Vec<u8>>,
-    max_key: Option<Vec<u8>>,
-
-    // Use `Cell` to wrap these flags to provide interior mutability, so that `key()` and
-    // `value()` don't need to have `&mut self`.
-    cur_key_has_read: Cell<bool>,
-    cur_value_has_read: Cell<bool>,
-}
-
-impl<I: Iterator> Cursor<I> {
-    pub fn new(iter: I, mode: ScanMode) -> Self {
-        Self {
-            iter,
-            scan_mode: mode,
-            min_key: None,
-            max_key: None,
-
-            cur_key_has_read: Cell::new(false),
-            cur_value_has_read: Cell::new(false),
-        }
-    }
-
-    /// Mark key and value as unread. It will be invoked once cursor is moved.
-    #[inline]
-    fn mark_unread(&self) {
-        self.cur_key_has_read.set(false);
-        self.cur_value_has_read.set(false);
-    }
-
-    /// Mark key as read. Returns whether key was marked as read before this call.
-    #[inline]
-    fn mark_key_read(&self) -> bool {
-        self.cur_key_has_read.replace(true)
-    }
-
-    /// Mark value as read. Returns whether value was marked as read before this call.
-    #[inline]
-    fn mark_value_read(&self) -> bool {
-        self.cur_value_has_read.replace(true)
-    }
-
-    pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        fail_point!("kv_cursor_seek", |_| {
-            return Err(box_err!("kv cursor seek error"));
-        });
-
-        assert_ne!(self.scan_mode, ScanMode::Backward);
-        if self
-            .max_key
-            .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
-        {
-            self.iter.validate_key(key)?;
-            return Ok(false);
-        }
-
-        if self.scan_mode == ScanMode::Forward
-            && self.valid()?
-            && self.key(statistics) >= key.as_encoded().as_slice()
-        {
-            return Ok(true);
-        }
-
-        if !self.internal_seek(key, statistics)? {
-            self.max_key = Some(key.as_encoded().to_owned());
-            return Ok(false);
-        }
-        Ok(true)
-    }
-
-    /// Seek the specified key.
-    ///
-    /// This method assume the current position of cursor is
-    /// around `key`, otherwise you should use `seek` instead.
-    pub fn near_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        assert_ne!(self.scan_mode, ScanMode::Backward);
-        if !self.valid()? {
-            return self.seek(key, statistics);
-        }
-        let ord = self.key(statistics).cmp(key.as_encoded());
-        if ord == Ordering::Equal
-            || (self.scan_mode == ScanMode::Forward && ord == Ordering::Greater)
-        {
-            return Ok(true);
-        }
-        if self
-            .max_key
-            .as_ref()
-            .map_or(false, |k| k <= key.as_encoded())
-        {
-            self.iter.validate_key(key)?;
-            return Ok(false);
-        }
-        if ord == Ordering::Greater {
-            near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
-                self.seek(key, statistics),
-                statistics
-            );
-            if self.valid()? {
-                if self.key(statistics) < key.as_encoded().as_slice() {
-                    self.next(statistics);
-                }
-            } else {
-                assert!(self.seek_to_first(statistics));
-                return Ok(true);
-            }
-        } else {
-            // ord == Less
-            near_loop!(
-                self.next(statistics) && self.key(statistics) < key.as_encoded().as_slice(),
-                self.seek(key, statistics),
-                statistics
-            );
-        }
-        if !self.valid()? {
-            self.max_key = Some(key.as_encoded().to_owned());
-            return Ok(false);
-        }
-        Ok(true)
-    }
-
-    /// Get the value of specified key.
-    ///
-    /// This method assume the current position of cursor is
-    /// around `key`, otherwise you should `seek` first.
-    pub fn get(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<Option<&[u8]>> {
-        if self.scan_mode != ScanMode::Backward {
-            if self.near_seek(key, statistics)? && self.key(statistics) == &**key.as_encoded() {
-                return Ok(Some(self.value(statistics)));
-            }
-            return Ok(None);
-        }
-        if self.near_seek_for_prev(key, statistics)? && self.key(statistics) == &**key.as_encoded()
-        {
-            return Ok(Some(self.value(statistics)));
-        }
-        Ok(None)
-    }
-
-    pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        assert_ne!(self.scan_mode, ScanMode::Forward);
-        if self
-            .min_key
-            .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
-        {
-            self.iter.validate_key(key)?;
-            return Ok(false);
-        }
-
-        if self.scan_mode == ScanMode::Backward
-            && self.valid()?
-            && self.key(statistics) <= key.as_encoded().as_slice()
-        {
-            return Ok(true);
-        }
-
-        if !self.internal_seek_for_prev(key, statistics)? {
-            self.min_key = Some(key.as_encoded().to_owned());
-            return Ok(false);
-        }
-        Ok(true)
-    }
-
-    /// Find the largest key that is not greater than the specific key.
-    pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        assert_ne!(self.scan_mode, ScanMode::Forward);
-        if !self.valid()? {
-            return self.seek_for_prev(key, statistics);
-        }
-        let ord = self.key(statistics).cmp(key.as_encoded());
-        if ord == Ordering::Equal || (self.scan_mode == ScanMode::Backward && ord == Ordering::Less)
-        {
-            return Ok(true);
-        }
-
-        if self
-            .min_key
-            .as_ref()
-            .map_or(false, |k| k >= key.as_encoded())
-        {
-            self.iter.validate_key(key)?;
-            return Ok(false);
-        }
-
-        if ord == Ordering::Less {
-            near_loop!(
-                self.next(statistics) && self.key(statistics) < key.as_encoded().as_slice(),
-                self.seek_for_prev(key, statistics),
-                statistics
-            );
-            if self.valid()? {
-                if self.key(statistics) > key.as_encoded().as_slice() {
-                    self.prev(statistics);
-                }
-            } else {
-                assert!(self.seek_to_last(statistics));
-                return Ok(true);
-            }
-        } else {
-            near_loop!(
-                self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
-                self.seek_for_prev(key, statistics),
-                statistics
-            );
-        }
-
-        if !self.valid()? {
-            self.min_key = Some(key.as_encoded().to_owned());
-            return Ok(false);
-        }
-        Ok(true)
-    }
-
-    pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        if !self.seek_for_prev(key, statistics)? {
-            return Ok(false);
-        }
-
-        if self.key(statistics) == &**key.as_encoded() {
-            // should not update min_key here. otherwise reverse_seek_le may not
-            // work as expected.
-            return Ok(self.prev(statistics));
-        }
-
-        Ok(true)
-    }
-
-    /// Reverse seek the specified key.
-    ///
-    /// This method assume the current position of cursor is
-    /// around `key`, otherwise you should use `reverse_seek` instead.
-    pub fn near_reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        if !self.near_seek_for_prev(key, statistics)? {
-            return Ok(false);
-        }
-
-        if self.key(statistics) == &**key.as_encoded() {
-            return Ok(self.prev(statistics));
-        }
-
-        Ok(true)
-    }
-
-    #[inline]
-    pub fn key(&self, statistics: &mut CFStatistics) -> &[u8] {
-        let key = self.iter.key();
-        if !self.mark_key_read() {
-            statistics.flow_stats.read_bytes += key.len();
-            statistics.flow_stats.read_keys += 1;
-        }
-        key
-    }
-
-    #[inline]
-    pub fn value(&self, statistics: &mut CFStatistics) -> &[u8] {
-        let value = self.iter.value();
-        if !self.mark_value_read() {
-            statistics.flow_stats.read_bytes += value.len();
-        }
-        value
-    }
-
-    #[inline]
-    pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
-        statistics.seek += 1;
-        self.mark_unread();
-        self.iter.seek_to_first()
-    }
-
-    #[inline]
-    pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
-        statistics.seek += 1;
-        self.mark_unread();
-        self.iter.seek_to_last()
-    }
-
-    #[inline]
-    pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
-        statistics.seek += 1;
-        self.mark_unread();
-        self.iter.seek(key)
-    }
-
-    #[inline]
-    pub fn internal_seek_for_prev(
-        &mut self,
-        key: &Key,
-        statistics: &mut CFStatistics,
-    ) -> Result<bool> {
-        statistics.seek_for_prev += 1;
-        self.mark_unread();
-        self.iter.seek_for_prev(key)
-    }
-
-    #[inline]
-    pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
-        statistics.next += 1;
-        self.mark_unread();
-        self.iter.next()
-    }
-
-    #[inline]
-    pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
-        statistics.prev += 1;
-        self.mark_unread();
-        self.iter.prev()
-    }
-
-    #[inline]
-    // As Rocksdb described, if Iterator::Valid() is false, there are two possibilities:
-    // (1) We reached the end of the data. In this case, status() is OK();
-    // (2) there is an error. In this case status() is not OK().
-    // So check status when iterator is invalidated.
-    pub fn valid(&self) -> Result<bool> {
-        if !self.iter.valid() {
-            if let Err(e) = self.iter.status() {
-                CRITICAL_ERROR.with_label_values(&["rocksdb"]).inc();
-                if panic_when_unexpected_key_or_data() {
-                    set_panic_mark();
-                    panic!("Rocksdb error: {}", e);
-                }
-                return Err(e);
-            }
-            Ok(false)
-        } else {
-            Ok(true)
-        }
-    }
-}
-
 quick_error! {
     #[derive(Debug)]
-    pub enum Error {
+    pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
             description("request to underhook engine failed")
@@ -703,24 +186,73 @@ quick_error! {
     }
 }
 
-impl From<engine::Error> for Error {
-    fn from(err: engine::Error) -> Error {
-        Error::Request(err.into())
+impl From<engine::Error> for ErrorInner {
+    fn from(err: engine::Error) -> ErrorInner {
+        ErrorInner::Request(err.into())
     }
 }
 
-impl Error {
-    pub fn maybe_clone(&self) -> Option<Error> {
+impl From<engine_traits::Error> for ErrorInner {
+    fn from(err: engine_traits::Error) -> ErrorInner {
+        ErrorInner::Request(err.into_other())
+    }
+}
+
+impl ErrorInner {
+    pub fn maybe_clone(&self) -> Option<ErrorInner> {
         match *self {
-            Error::Request(ref e) => Some(Error::Request(e.clone())),
-            Error::Timeout(d) => Some(Error::Timeout(d)),
-            Error::EmptyRequest => Some(Error::EmptyRequest),
-            Error::Other(_) => None,
+            ErrorInner::Request(ref e) => Some(ErrorInner::Request(e.clone())),
+            ErrorInner::Timeout(d) => Some(ErrorInner::Timeout(d)),
+            ErrorInner::EmptyRequest => Some(ErrorInner::EmptyRequest),
+            ErrorInner::Other(_) => None,
         }
     }
 }
 
-pub type Result<T> = result::Result<T, Error>;
+pub struct Error(pub Box<ErrorInner>);
+
+impl Error {
+    pub fn maybe_clone(&self) -> Option<Error> {
+        self.0.maybe_clone().map(Error::from)
+    }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        std::error::Error::description(&self.0)
+    }
+
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(&self.0)
+    }
+}
+
+impl From<ErrorInner> for Error {
+    #[inline]
+    fn from(e: ErrorInner) -> Self {
+        Error(Box::new(e))
+    }
+}
+
+impl<T: Into<ErrorInner>> From<T> for Error {
+    #[inline]
+    default fn from(err: T) -> Self {
+        let err = err.into();
+        err.into()
+    }
+}
 
 thread_local! {
     // A pointer to thread local engine. Use raw pointer and `UnsafeCell` to reduce runtime check.
@@ -773,13 +305,13 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 
 #[cfg(test)]
 pub mod tests {
-    use super::SEEK_BOUND;
     use super::*;
     use crate::storage::{CfName, Key};
     use engine::IterOption;
     use engine::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
     use tikv_util::codec::bytes;
+
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {

@@ -5,7 +5,7 @@ use std::intrinsics::{likely, unlikely};
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
 use crate::buffer::{BufferReader, BufferWriter};
-use crate::{Error, Result};
+use crate::{ErrorInner, Result};
 
 pub const MAX_VARINT64_LENGTH: usize = 10;
 pub const U64_SIZE: usize = std::mem::size_of::<u64>();
@@ -268,6 +268,28 @@ impl NumberCodec {
         LittleEndian::read_i16(buf)
     }
 
+    /// Encodes a 32 bit float number `v` to `buf` in little endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 4`.
+    #[inline]
+    pub fn encode_f32_le(buf: &mut [u8], v: f32) {
+        LittleEndian::write_f32(buf, v)
+    }
+
+    /// Decodes a 32 bit float number `v` to `buf` in little endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 4`.
+    #[inline]
+    pub fn decode_f32_le(buf: &[u8]) -> f32 {
+        LittleEndian::read_f32(buf)
+    }
+
     /// Encodes an unsigned 32 bit integer `v` to `buf` in little endian,
     /// which is not memory-comparable.
     ///
@@ -412,7 +434,6 @@ impl NumberCodec {
     /// # Errors
     ///
     /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
-    #[inline]
     pub fn try_decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
         #[allow(clippy::cast_lossless)]
         unsafe {
@@ -446,7 +467,7 @@ impl NumberCodec {
                     ptr = ptr.add(1);
                 }
                 if unlikely(ptr == ptr_end) {
-                    return Err(Error::eof());
+                    return Err(ErrorInner::eof().into());
                 }
                 val |= (*ptr as u64) << shift;
                 Ok((val, ptr.offset_from(buf.as_ptr()) as usize + 1))
@@ -495,7 +516,6 @@ impl NumberCodec {
     /// complete, the length of buffer will be returned.
     ///
     /// This function is more efficient when `buf.len() >= 10`.
-    #[inline]
     pub fn get_first_encoded_var_int_len(buf: &[u8]) -> usize {
         unsafe {
             let mut ptr = buf.as_ptr();
@@ -535,7 +555,7 @@ macro_rules! read {
         let ret = {
             let buf = $s.bytes();
             if unsafe { unlikely(buf.len() < $size) } {
-                return Err(Error::eof());
+                return Err(ErrorInner::eof().into());
             }
             NumberCodec::$f(buf)
         };
@@ -688,6 +708,17 @@ pub trait NumberDecoder: BufferReader {
         read!(self, 4, decode_i32_le)
     }
 
+    /// Reads a 32 bit float  in little endian,
+    /// which is previously wrote via `write_f32_le`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 4.
+    #[inline]
+    fn read_f32_le(&mut self) -> Result<f32> {
+        read!(self, 4, decode_f32_le)
+    }
+
     /// Reads an unsigned 64 bit integer in little endian,
     /// which is previously wrote via `write_u64_le`.
     ///
@@ -766,7 +797,7 @@ macro_rules! write {
         {
             let buf = unsafe { $s.bytes_mut($size) };
             if unsafe { unlikely(buf.len() < $size) } {
-                return Err(Error::eof());
+                return Err(ErrorInner::eof().into());
             }
             NumberCodec::$f(buf, $v);
         }
@@ -919,6 +950,17 @@ pub trait NumberEncoder: BufferWriter {
         write!(self, v, 4, encode_i32_le)
     }
 
+    /// Writes a 32 bit float number `v` in little endian,
+    /// which is not memory-comparable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Io` if buffer remaining size < 4.
+    #[inline]
+    fn write_f32_le(&mut self, v: f32) -> Result<()> {
+        write!(self, v, 4, encode_f32_le)
+    }
+
     /// Writes an unsigned 64 bit integer `v` in little endian,
     /// which is not memory-comparable.
     ///
@@ -968,7 +1010,7 @@ pub trait NumberEncoder: BufferWriter {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
             if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
-                return Err(Error::eof());
+                return Err(ErrorInner::eof().into());
             }
             NumberCodec::encode_var_u64(buf, v)
         };
@@ -992,7 +1034,7 @@ pub trait NumberEncoder: BufferWriter {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
             if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
-                return Err(Error::eof());
+                return Err(ErrorInner::eof().into());
             }
             NumberCodec::encode_var_i64(buf, v)
         };
@@ -1757,7 +1799,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use crate::Error;
+    use crate::ErrorInner;
 
     use byteorder;
     use protobuf::CodedOutputStream;
@@ -1875,7 +1917,7 @@ mod benches {
             *data = &data[size..];
             return Ok(f(buf));
         }
-        Err(Error::eof())
+        Err(ErrorInner::eof().into())
     }
 
     /// The original implementation in TiKV
@@ -2079,7 +2121,7 @@ mod benches {
                     *data = unsafe { data.get_unchecked(10..) };
                     return Ok(res);
                 }
-                return Err(Error::eof());
+                return Err(ErrorInner::eof().into());
             }
         }
 
@@ -2093,7 +2135,7 @@ mod benches {
                 return Ok(res);
             }
         }
-        Err(Error::eof())
+        Err(ErrorInner::eof().into())
     }
 
     /// Decode u64 < 128 in VarInt using original TiKV implementation.

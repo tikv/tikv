@@ -2,7 +2,7 @@
 
 use ::darling::FromDeriveInput;
 use quote::quote;
-use syn::{parenthesized, Token};
+use syn::Token;
 
 mod kw {
     syn::custom_keyword!(state);
@@ -12,11 +12,9 @@ struct AggrFunctionStateExpr(syn::Expr);
 
 impl syn::parse::Parse for AggrFunctionStateExpr {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let content;
-        parenthesized!(content in input);
-        content.parse::<kw::state>()?;
-        content.parse::<Token![=]>()?;
-        Ok(Self(content.parse()?))
+        input.parse::<kw::state>()?;
+        input.parse::<Token![=]>()?;
+        Ok(Self(input.parse()?))
     }
 }
 
@@ -30,9 +28,11 @@ pub struct AggrFunctionOpts {
 
 impl AggrFunctionOpts {
     pub fn generate_tokens(self) -> proc_macro2::TokenStream {
-        assert_eq!(self.attrs.len(), 1, "Expect #[aggr_function] attribute");
-        let attr_tts = self.attrs.into_iter().next().unwrap().tts;
-        let state_expr = syn::parse2::<AggrFunctionStateExpr>(attr_tts)
+        let state_expr = self
+            .attrs
+            .first()
+            .expect("Expect #[aggr_function] attribute")
+            .parse_args::<AggrFunctionStateExpr>()
             .expect("Expect syntax to be #[aggr_function(state = expr)]")
             .0;
         let ident = &self.ident;

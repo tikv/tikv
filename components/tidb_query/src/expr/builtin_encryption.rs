@@ -4,15 +4,10 @@ use std::borrow::Cow;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::Datum;
-use crypto::{
-    digest::Digest,
-    md5::Md5,
-    sha1::Sha1,
-    sha2::{Sha224, Sha256, Sha384, Sha512},
-};
 use flate2::read::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex;
+use openssl::hash::{self, MessageDigest};
 use std::io::prelude::*;
 
 const SHA0: i64 = 0;
@@ -28,12 +23,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
-        let mut hasher = Md5::new();
-        let mut buff: [u8; 16] = [0; 16];
-        hasher.input(input.as_ref());
-        hasher.result(&mut buff);
-        let md5 = hex::encode(buff).into_bytes();
-        Ok(Some(Cow::Owned(md5)))
+        hex_digest(MessageDigest::md5(), &input).map(|digest| Some(Cow::Owned(digest)))
     }
 
     pub fn sha1<'a, 'b: 'a>(
@@ -42,12 +32,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
-        let mut hasher = Sha1::new();
-        let mut buff: [u8; 20] = [0; 20];
-        hasher.input(input.as_ref());
-        hasher.result(&mut buff);
-        let sha1 = hex::encode(buff).into_bytes();
-        Ok(Some(Cow::Owned(sha1)))
+        hex_digest(MessageDigest::sha1(), &input).map(|digest| Some(Cow::Owned(digest)))
     }
 
     pub fn sha2<'a, 'b: 'a>(
@@ -59,29 +44,17 @@ impl ScalarFunc {
         let hash_length = try_opt!(self.children[1].eval_int(ctx, row));
 
         let sha2 = match hash_length {
-            SHA0 | SHA256 => {
-                let mut hasher = Sha256::new();
-                hasher.input(input.as_ref());
-                hasher.result_str().into_bytes()
+            SHA0 | SHA256 => MessageDigest::sha256(),
+            SHA224 => MessageDigest::sha224(),
+            SHA384 => MessageDigest::sha384(),
+            SHA512 => MessageDigest::sha512(),
+            _ => {
+                ctx.warnings
+                    .append_warning(Error::incorrect_parameters("sha2"));
+                return Ok(None);
             }
-            SHA224 => {
-                let mut hasher = Sha224::new();
-                hasher.input(input.as_ref());
-                hasher.result_str().into_bytes()
-            }
-            SHA384 => {
-                let mut hasher = Sha384::new();
-                hasher.input(input.as_ref());
-                hasher.result_str().into_bytes()
-            }
-            SHA512 => {
-                let mut hasher = Sha512::new();
-                hasher.input(input.as_ref());
-                hasher.result_str().into_bytes()
-            }
-            _ => return Ok(None),
         };
-        Ok(Some(Cow::Owned(sha2)))
+        hex_digest(sha2, &input).map(|digest| Some(Cow::Owned(digest)))
     }
 
     #[inline]
@@ -166,6 +139,13 @@ impl ScalarFunc {
     }
 }
 
+#[inline]
+fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Vec<u8>> {
+    hash::hash(hashtype, input)
+        .map(|digest| hex::encode(digest).into_bytes())
+        .map_err(|e| Error::Other(box_err!("OpenSSL error: {:?}", e)))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::codec::Datum;
@@ -188,7 +168,7 @@ mod tests {
         for (input_str, exp_str) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::Md5, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "md5('{:?}')", input_str);
@@ -197,7 +177,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::Md5, &[input]);
-        let op = Expression::build(&ctx, op).unwrap();
+        let op = Expression::build(&mut ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "md5(NULL)");
@@ -217,7 +197,7 @@ mod tests {
         for (input_str, exp_str) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::Sha1, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "sha1('{:?}')", input_str);
@@ -226,7 +206,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::Sha1, &[input]);
-        let op = Expression::build(&ctx, op).unwrap();
+        let op = Expression::build(&mut ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "sha1(NULL)");
@@ -254,7 +234,7 @@ mod tests {
             let hash_length = datum_expr(Datum::I64(hash_length_i64));
 
             let op = scalar_func_expr(ScalarFuncSig::Sha2, &[input, hash_length]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "sha2('{:?}', {:?})", input_str, hash_length_i64);
@@ -276,7 +256,7 @@ mod tests {
                 ScalarFuncSig::Sha2,
                 &[datum_expr(input.clone()), datum_expr(hash_length.clone())],
             );
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp, "sha2('{:?}', {:?})", input, hash_length);
         }

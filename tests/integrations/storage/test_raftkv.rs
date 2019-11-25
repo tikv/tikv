@@ -194,6 +194,7 @@ fn test_invaild_read_index_when_no_leader() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_lease_read(&mut cluster, Some(50), Some(3));
     cluster.cfg.raft_store.raft_heartbeat_ticks = 1;
+    cluster.cfg.raft_store.hibernate_regions = false;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -245,11 +246,14 @@ fn test_invaild_read_index_when_no_leader() {
         .unwrap();
 
     let resp = rx.recv_timeout(time::Duration::from_millis(500)).unwrap();
-    assert!(resp
-        .get_header()
-        .get_error()
-        .get_message()
-        .contains("can not read index due to no leader"));
+    assert!(
+        resp.get_header()
+            .get_error()
+            .get_message()
+            .contains("can not read index due to no leader"),
+        "{:?}",
+        resp.get_header()
+    );
 }
 
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {

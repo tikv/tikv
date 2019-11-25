@@ -14,7 +14,7 @@ publish = false
 [features]
 default = ["jemalloc"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
-jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc"]
+jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
 portable = ["engine/portable"]
 sse = ["engine/sse"]
@@ -66,13 +66,15 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 slog-term = "2.4"
 slog_derive = "0.1"
 byteorder = "1.2"
+bytes = "0.4.12"
 rand = "0.6.5"
 quick-error = "1.2.2"
 tempfile = "3.0"
 time = "0.1"
 toml = "0.4"
 libc = "0.2"
-crc = "1.8"
+crc32fast = "1.2"
+crc64fast = "0.1"
 fs2 = "0.4"
 spin = "0.5"
 protobuf = "2.8"
@@ -89,6 +91,7 @@ futures-locks = "0.1"
 tokio-core = "0.1"
 tokio-timer = "0.2"
 tokio-executor = "0.1"
+tokio-sync = "0.1.7"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
@@ -96,7 +99,7 @@ zipf = "5.0.1"
 bitflags = "1.0.1"
 fail = "0.3"
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
-grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
+grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ] }
 raft = "0.6.0-alpha"
 crossbeam = "0.7.2"
 derive_more = "0.15.0"
@@ -108,8 +111,10 @@ tokio-fs = "0.1.6"
 tokio-io = "0.1.12"
 vlog = "0.1.4"
 mime = "0.3.13"
-farmhash = "1.1.5"
 failure = "0.1"
+prost = "0.5.0"
+regex = "1.3"
+derive-new = "0.5"
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 
@@ -120,19 +125,22 @@ engine = { path = "components/engine" }
 tidb_query = { path = "components/tidb_query" }
 pd_client = { path = "components/pd_client" }
 keys = { path = "components/keys" }
+engine_traits = { path = "components/engine_traits" }
 sst_importer = { path = "components/sst_importer" }
+engine_rocks = { path = "components/engine_rocks" }
+codec = { path = "components/codec" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
+rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
 features = ["nightly", "push", "process"]
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
+rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
 
 [replace]
 # TODO: remove this when new raft-rs is published.
@@ -144,7 +152,8 @@ rev = "7dd3d42f0c21384950afe6a46ed85352acf71625"
 [dev-dependencies]
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.
-criterion = { version = "0.2.11", features=['real_blackbox'] }
+criterion = "0.3"
+criterion-cpu-time = "0.1"
 arrow = "0.10.0"
 rand_xorshift = "0.1"
 
@@ -156,12 +165,15 @@ test_util = { path = "components/test_util" }
 test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
 test_coprocessor = { path = "components/test_coprocessor" }
+test_sst_importer = { path = "components/test_sst_importer" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }
+criterion-papi = "0.1"
+pprof = { version = "0.3", features = ["flamegraph", "protobuf"] }
 
 [workspace]
 members = [
@@ -172,6 +184,7 @@ members = [
   "components/test_raftstore",
   "components/test_storage",
   "components/test_coprocessor",
+  "components/test_sst_importer",
   "components/test_util",
   "components/tikv_alloc",
   "components/match_template",

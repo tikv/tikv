@@ -23,6 +23,7 @@ pub const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
 pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
 pub const ERR_DIVISION_BY_ZERO: i32 = 1365;
 pub const ERR_DATA_TOO_LONG: i32 = 1406;
+pub const ERR_INCORRECT_PARAMETERS: i32 = 1583;
 pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
 
 quick_error! {
@@ -143,13 +144,21 @@ impl Error {
     pub fn zlib_data_corrupted() -> Error {
         Error::Eval("ZLIB: Input data corrupted".into(), ZLIB_DATA_CORRUPTED)
     }
+
+    pub fn incorrect_parameters(val: &str) -> Error {
+        let msg = format!(
+            "Incorrect parameters in the call to native function '{}'",
+            val
+        );
+        Error::Eval(msg, ERR_INCORRECT_PARAMETERS)
+    }
 }
 
 impl From<Error> for tipb::Error {
     fn from(error: Error) -> tipb::Error {
         let mut err = tipb::Error::default();
         err.set_code(error.code());
-        err.set_msg(format!("{:?}", error));
+        err.set_msg(error.to_string());
         err
     }
 }
@@ -192,9 +201,9 @@ impl From<RegexpError> for Error {
     }
 }
 
-impl From<Box<codec::Error>> for Error {
-    fn from(err: Box<codec::Error>) -> Error {
-        box_err!("codec:{:?}", err)
+impl From<codec::Error> for Error {
+    fn from(err: codec::Error) -> Error {
+        box_err!("Codec: {}", err)
     }
 }
 

@@ -2,6 +2,8 @@
 
 mod util;
 
+use criterion::measurement::Measurement;
+
 use tidb_query_datatype::FieldTypeTp;
 use tipb::ExprType;
 use tipb_helper::ExprDefBuilder;
@@ -10,7 +12,10 @@ use crate::util::{BenchCase, FixtureBuilder};
 
 /// COUNT(1) GROUP BY COL where COL is a int column.
 /// Each row is a new group.
-fn bench_stream_aggr_count_1_group_by_int_col(b: &mut criterion::Bencher, input: &Input) {
+fn bench_stream_aggr_count_1_group_by_int_col<M>(b: &mut criterion::Bencher<M>, input: &Input<M>)
+where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_0_n();
     let group_by = vec![ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build()];
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
@@ -21,7 +26,12 @@ fn bench_stream_aggr_count_1_group_by_int_col(b: &mut criterion::Bencher, input:
 
 /// COUNT(1) GROUP BY COL where COL is a int column.
 /// There will be two groups totally.
-fn bench_stream_aggr_count_1_group_by_int_col_2_groups(b: &mut criterion::Bencher, input: &Input) {
+fn bench_stream_aggr_count_1_group_by_int_col_2_groups<M>(
+    b: &mut criterion::Bencher<M>,
+    input: &Input<M>,
+) where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_ordered(&[0x123456, 0xCCCC]);
     let group_by = vec![ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build()];
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
@@ -32,7 +42,12 @@ fn bench_stream_aggr_count_1_group_by_int_col_2_groups(b: &mut criterion::Benche
 
 /// COUNT(1) GROUP BY COL where COL is a decimal column.
 /// Each row is a new group.
-fn bench_stream_aggr_count_1_group_by_decimal_col(b: &mut criterion::Bencher, input: &Input) {
+fn bench_stream_aggr_count_1_group_by_decimal_col<M>(
+    b: &mut criterion::Bencher<M>,
+    input: &Input<M>,
+) where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows).push_column_decimal_0_n();
     let group_by = vec![ExprDefBuilder::column_ref(0, FieldTypeTp::NewDecimal).build()];
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
@@ -43,10 +58,12 @@ fn bench_stream_aggr_count_1_group_by_decimal_col(b: &mut criterion::Bencher, in
 
 /// COUNT(1) GROUP BY COL where COL is a decimal column.
 /// There will be two groups totally.
-fn bench_stream_aggr_count_1_group_by_decimal_col_2_groups(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
+fn bench_stream_aggr_count_1_group_by_decimal_col_2_groups<M>(
+    b: &mut criterion::Bencher<M>,
+    input: &Input<M>,
+) where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_decimal_ordered(&["680644618.9451818", "767257805709854474.824642776567"]);
     let group_by = vec![ExprDefBuilder::column_ref(0, FieldTypeTp::NewDecimal).build()];
@@ -58,7 +75,12 @@ fn bench_stream_aggr_count_1_group_by_decimal_col_2_groups(
 
 /// COUNT(1) GROUP BY COL1, COL2 where COL1 is a int column and COL2 is a real column.
 /// Each row is a new group.
-fn bench_stream_aggr_count_1_group_by_int_col_real_col(b: &mut criterion::Bencher, input: &Input) {
+fn bench_stream_aggr_count_1_group_by_int_col_real_col<M>(
+    b: &mut criterion::Bencher<M>,
+    input: &Input<M>,
+) where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_i64_0_n()
         .push_column_f64_0_n();
@@ -74,10 +96,12 @@ fn bench_stream_aggr_count_1_group_by_int_col_real_col(b: &mut criterion::Benche
 
 /// COUNT(1) GROUP BY COL1, COL2 where COL1 is a int column and COL2 is a real column.
 /// There will be two groups totally.
-fn bench_stream_aggr_count_1_group_by_int_col_real_col_2_groups(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
+fn bench_stream_aggr_count_1_group_by_int_col_real_col_2_groups<M>(
+    b: &mut criterion::Bencher<M>,
+    input: &Input<M>,
+) where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_i64_ordered(&[0xDEADBEEF, 0xFEE1DEAD])
         .push_column_f64_ordered(&[680644618.9451818]);
@@ -93,10 +117,12 @@ fn bench_stream_aggr_count_1_group_by_int_col_real_col_2_groups(
 
 /// COUNT(1), FIRST(COL3) GROUP BY COL1, COL2 where COL1 is a int column and
 /// COL2, COL3 are real columns. Each row is a new group.
-fn bench_stream_aggr_count_1_first_group_by_int_col_real_col(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
+fn bench_stream_aggr_count_1_first_group_by_int_col_real_col<M>(
+    b: &mut criterion::Bencher<M>,
+    input: &Input<M>,
+) where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_i64_0_n()
         .push_column_f64_0_n()
@@ -118,10 +144,12 @@ fn bench_stream_aggr_count_1_first_group_by_int_col_real_col(
 
 /// COUNT(1), FIRST(COL3) GROUP BY COL1, COL2 where COL1 is a int column and
 /// COL2, COL3 are real columns. There will be two groups totally.
-fn bench_stream_aggr_count_1_first_group_by_int_col_real_col_2_groups(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
+fn bench_stream_aggr_count_1_first_group_by_int_col_real_col_2_groups<M>(
+    b: &mut criterion::Bencher<M>,
+    input: &Input<M>,
+) where
+    M: Measurement,
+{
     let fb = FixtureBuilder::new(input.src_rows)
         .push_column_i64_ordered(&[0xDEADBEEF, 0xFEE1DEAD])
         .push_column_f64_ordered(&[680644618.9451818])
@@ -142,21 +170,30 @@ fn bench_stream_aggr_count_1_first_group_by_int_col_real_col_2_groups(
 }
 
 #[derive(Clone)]
-struct Input {
+struct Input<M>
+where
+    M: Measurement,
+{
     /// How many rows to aggregate
     src_rows: usize,
 
     /// The aggregate executor (batch / normal) to use
-    bencher: Box<dyn util::StreamAggrBencher>,
+    bencher: Box<dyn util::StreamAggrBencher<M>>,
 }
 
-impl std::fmt::Debug for Input {
+impl<M> std::fmt::Display for Input<M>
+where
+    M: Measurement,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/rows={}", self.bencher.name(), self.src_rows)
     }
 }
 
-pub fn bench(c: &mut criterion::Criterion) {
+pub fn bench<M>(c: &mut criterion::Criterion<M>)
+where
+    M: Measurement + 'static,
+{
     let mut inputs = vec![];
 
     let mut rows_options = vec![5000];
@@ -166,7 +203,7 @@ pub fn bench(c: &mut criterion::Criterion) {
     if crate::util::bench_level() >= 2 {
         rows_options.push(1);
     }
-    let bencher_options: Vec<Box<dyn util::StreamAggrBencher>> =
+    let bencher_options: Vec<Box<dyn util::StreamAggrBencher<M>>> =
         vec![Box::new(util::NormalBencher), Box::new(util::BatchBencher)];
 
     for rows in &rows_options {
@@ -220,6 +257,14 @@ pub fn bench(c: &mut criterion::Criterion) {
 
     cases.sort();
     for case in cases {
-        c.bench_function_over_inputs(case.name, case.f, inputs.clone());
+        let mut group = c.benchmark_group(case.get_name());
+        for input in inputs.iter() {
+            group.bench_with_input(
+                criterion::BenchmarkId::from_parameter(input),
+                input,
+                case.get_fn(),
+            );
+        }
+        group.finish();
     }
 }

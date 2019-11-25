@@ -35,6 +35,22 @@ pub fn date_format(
     Ok(Some(t.unwrap().into_bytes()))
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    if t.is_none() {
+        return Ok(None);
+    }
+    let t = t.as_ref().unwrap();
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .map(|_| Ok(None))?;
+    }
+    let day = t.weekday().num_days_from_monday();
+    Ok(Some(i64::from(day)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,7 +105,8 @@ mod tests {
             ),
         ];
         for (date, format, expect) in cases {
-            let date = Some(DateTime::parse_utc_datetime(date, 6).unwrap());
+            let date =
+                Some(DateTime::parse_datetime(&mut EvalContext::default(), date, 6, true).unwrap());
             let format = Some(format.as_bytes().to_vec());
             let expect = Some(expect.as_bytes().to_vec());
 
@@ -149,7 +166,9 @@ mod tests {
         ];
 
         for (date, format) in cases {
-            let date = date.map(|d| DateTime::parse_utc_datetime(d, 6).unwrap());
+            let date = date.map(|d| {
+                DateTime::parse_datetime(&mut EvalContext::default(), d, 6, true).unwrap()
+            });
             let format = format.map(|s| s.as_bytes().to_vec());
 
             let output = RpnFnScalarEvaluator::new()
@@ -159,5 +178,35 @@ mod tests {
                 .unwrap();
             assert_eq!(output, None, "{:?} {:?}", date, format);
         }
+    }
+
+    #[test]
+    fn test_week_day() {
+        let cases = vec![
+            ("2018-12-03", Some(0i64)),
+            ("2018-12-04", Some(1i64)),
+            ("2018-12-05", Some(2i64)),
+            ("2018-12-06", Some(3i64)),
+            ("2018-12-07", Some(4i64)),
+            ("2018-12-08", Some(5i64)),
+            ("2018-12-09", Some(6i64)),
+            ("0000-00-00", None),
+            ("2018-12-00", None),
+            ("2018-00-03", None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(datetime.clone())
+                .evaluate(ScalarFuncSig::WeekDay)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<DateTime>)
+            .evaluate::<Int>(ScalarFuncSig::WeekDay)
+            .unwrap();
+        assert_eq!(output, None);
     }
 }

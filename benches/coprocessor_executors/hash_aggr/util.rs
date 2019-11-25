@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use criterion::black_box;
+use criterion::measurement::Measurement;
 
 use tipb::Aggregation;
 use tipb::Expr;
@@ -18,21 +19,27 @@ use crate::util::bencher::Bencher;
 use crate::util::executor_descriptor::hash_aggregate;
 use crate::util::FixtureBuilder;
 
-pub trait HashAggrBencher {
+pub trait HashAggrBencher<M>
+where
+    M: Measurement,
+{
     fn name(&self) -> &'static str;
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         fb: &FixtureBuilder,
         group_by_expr: &[Expr],
         aggr_expr: &[Expr],
     );
 
-    fn box_clone(&self) -> Box<dyn HashAggrBencher>;
+    fn box_clone(&self) -> Box<dyn HashAggrBencher<M>>;
 }
 
-impl Clone for Box<dyn HashAggrBencher> {
+impl<M> Clone for Box<dyn HashAggrBencher<M>>
+where
+    M: Measurement,
+{
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
@@ -43,14 +50,17 @@ impl Clone for Box<dyn HashAggrBencher> {
 /// expression.
 pub struct NormalBencher;
 
-impl HashAggrBencher for NormalBencher {
+impl<M> HashAggrBencher<M> for NormalBencher
+where
+    M: Measurement,
+{
     fn name(&self) -> &'static str {
         "normal"
     }
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         fb: &FixtureBuilder,
         group_by_expr: &[Expr],
         aggr_expr: &[Expr],
@@ -69,7 +79,7 @@ impl HashAggrBencher for NormalBencher {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn HashAggrBencher> {
+    fn box_clone(&self) -> Box<dyn HashAggrBencher<M>> {
         Box::new(Self)
     }
 }
@@ -78,14 +88,17 @@ impl HashAggrBencher for NormalBencher {
 /// expression.
 pub struct BatchBencher;
 
-impl HashAggrBencher for BatchBencher {
+impl<M> HashAggrBencher<M> for BatchBencher
+where
+    M: Measurement,
+{
     fn name(&self) -> &'static str {
         "batch"
     }
 
     fn bench(
         &self,
-        b: &mut criterion::Bencher,
+        b: &mut criterion::Bencher<M>,
         fb: &FixtureBuilder,
         group_by_expr: &[Expr],
         aggr_expr: &[Expr],
@@ -118,7 +131,7 @@ impl HashAggrBencher for BatchBencher {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn HashAggrBencher> {
+    fn box_clone(&self) -> Box<dyn HashAggrBencher<M>> {
         Box::new(Self)
     }
 }

@@ -89,7 +89,8 @@ impl<Src: Executor> TopNExecutor<Src> {
         let mut heap = TopNHeap::new(self.limit, Arc::clone(&ctx))?;
         while let Some(row) = self.src.next()? {
             let row = row.take_origin()?;
-            let cols = row.inflate_cols_with_offsets(&ctx.borrow(), &self.related_cols_offset)?;
+            let cols =
+                row.inflate_cols_with_offsets(&mut ctx.borrow_mut(), &self.related_cols_offset)?;
             let ob_values = self.order_by.eval(&mut ctx.borrow_mut(), &cols)?;
             heap.try_add_row(row, ob_values, Arc::clone(&self.order_by.items))?;
         }
@@ -152,8 +153,8 @@ pub mod tests {
     use std::cell::RefCell;
     use std::sync::Arc;
 
+    use codec::prelude::NumberEncoder;
     use tidb_query_datatype::FieldTypeTp;
-    use tikv_util::codec::number::NumberEncoder;
     use tikv_util::collections::HashMap;
     use tipb::{Expr, ExprType};
 
@@ -168,7 +169,7 @@ pub mod tests {
         let mut item = ByItem::default();
         let mut expr = Expr::default();
         expr.set_tp(ExprType::ColumnRef);
-        expr.mut_val().encode_i64(offset).unwrap();
+        expr.mut_val().write_i64(offset).unwrap();
         item.set_expr(expr);
         item.set_desc(desc);
         item

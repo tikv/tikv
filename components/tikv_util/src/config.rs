@@ -754,6 +754,53 @@ pub fn check_data_dir(_data_path: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn get_file_count(data_path: &str, extension: &str) -> Result<usize, ConfigError> {
+    let op = "data-dir.file-count.get";
+    let dir = fs::read_dir(data_path).map_err(|e| {
+        ConfigError::FileSystem(format!(
+            "{}: read file dir {:?} failed: {:?}",
+            op, data_path, e
+        ))
+    })?;
+    let mut file_count = 0;
+    for entry in dir {
+        let entry = entry.map_err(|e| {
+            ConfigError::FileSystem(format!(
+                "{}: read file in file dir {:?} failed: {:?}",
+                op, data_path, e
+            ))
+        })?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if extension.is_empty() || extension == ext {
+                    file_count += 1;
+                }
+            } else if extension.is_empty() {
+                file_count += 1;
+            }
+        }
+    }
+    Ok(file_count)
+}
+
+// check dir is empty of file with certain extension, empty string for any extension.
+pub fn check_data_dir_empty(data_path: &str, extension: &str) -> Result<(), ConfigError> {
+    let op = "data-dir.empty.check";
+    let dir = Path::new(data_path);
+    if dir.exists() && !dir.is_file() {
+        let count = get_file_count(data_path, extension)?;
+        if count > 0 {
+            return Err(ConfigError::Limit(format!(
+                "{}: the number of file with extension {} in directory {} is non-zero, \
+                 got {}, expect 0.",
+                op, extension, data_path, count,
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
 /// More details about **Host** and **Port** can be found in WHATWG URL Standard.
 pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
@@ -798,6 +845,7 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+    use std::io::Write;
     use std::path::Path;
 
     use super::*;
@@ -1054,5 +1102,54 @@ mod tests {
         for (addr, is_ok) in table {
             assert_eq!(check_addr(addr).is_ok(), is_ok);
         }
+    }
+
+    fn create_file(fpath: &str, buf: &[u8]) {
+        let mut file = File::create(fpath).unwrap();
+        file.write_all(buf).unwrap();
+        file.flush().unwrap();
+    }
+
+    #[test]
+    fn test_get_file_count() {
+        let tmp_path = Builder::new()
+            .prefix("test-get-file-count")
+            .tempdir()
+            .unwrap()
+            .into_path();
+        let count = get_file_count(tmp_path.to_str().unwrap(), "txt").unwrap();
+        assert_eq!(count, 0);
+        let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
+        create_file(&tmp_file, b"");
+        let count = get_file_count(tmp_path.to_str().unwrap(), "").unwrap();
+        assert_eq!(count, 1);
+        let count = get_file_count(tmp_path.to_str().unwrap(), "txt").unwrap();
+        assert_eq!(count, 1);
+        let count = get_file_count(tmp_path.to_str().unwrap(), "xt").unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_check_data_dir_empty() {
+        // test invalid data_path
+        let ret = check_data_dir_empty("/sys/invalid", "txt");
+        assert!(ret.is_ok());
+        // test empty data_path
+        let tmp_path = Builder::new()
+            .prefix("test-get-file-count")
+            .tempdir()
+            .unwrap()
+            .into_path();
+        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
+        assert!(ret.is_ok());
+        // test non-empty data_path
+        let tmp_file = format!("{}", tmp_path.join("test-get-file-count.txt").display());
+        create_file(&tmp_file, b"");
+        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "");
+        assert!(ret.is_err());
+        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "txt");
+        assert!(ret.is_err());
+        let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
+        assert!(ret.is_ok());
     }
 }

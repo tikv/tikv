@@ -1,7 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crc::crc64::{self, Digest, Hasher64};
-
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse};
@@ -28,9 +26,10 @@ impl<S: Snapshot> ChecksumContext<S> {
     ) -> Result<Self> {
         let store = SnapshotStore::new(
             snap,
-            req.get_start_ts(),
+            req.get_start_ts().into(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
+            req_ctx.bypass_locks.clone(),
         );
         let scanner = RangesScanner::new(RangesScannerOptions {
             storage: store.into(),
@@ -56,10 +55,24 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         let mut checksum = 0;
         let mut total_kvs = 0;
         let mut total_bytes = 0;
+        let (old_prefix, new_prefix) = if self.req.has_rule() {
+            let mut rule = self.req.get_rule().clone();
+            (rule.take_old_prefix(), rule.take_new_prefix())
+        } else {
+            (vec![], vec![])
+        };
+
+        let mut prefix_digest = crc64fast::Digest::new();
+        prefix_digest.write(&old_prefix);
+
         while let Some((k, v)) = self.scanner.next()? {
-            checksum = checksum_crc64_xor(checksum, &k, &v);
+            if !k.starts_with(&new_prefix) {
+                return Err(box_err!("Wrong prefix expect: {:?}", new_prefix));
+            }
+            checksum =
+                checksum_crc64_xor(checksum, prefix_digest.clone(), &k[new_prefix.len()..], &v);
             total_kvs += 1;
-            total_bytes += k.len() + v.len();
+            total_bytes += k.len() + v.len() + old_prefix.len() - new_prefix.len();
         }
 
         let mut resp = ChecksumResponse::default();
@@ -78,9 +91,13 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
     }
 }
 
-fn checksum_crc64_xor(checksum: u64, k: &[u8], v: &[u8]) -> u64 {
-    let mut digest = Digest::new(crc64::ECMA);
-    digest.write(k);
+pub fn checksum_crc64_xor(
+    checksum: u64,
+    mut digest: crc64fast::Digest,
+    k_suffix: &[u8],
+    v: &[u8],
+) -> u64 {
+    digest.write(k_suffix);
     digest.write(v);
     checksum ^ digest.sum64()
 }

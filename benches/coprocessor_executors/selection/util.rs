@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use criterion::black_box;
+use criterion::measurement::Measurement;
 
 use tipb::Expr;
 
@@ -16,15 +17,21 @@ use crate::util::bencher::Bencher;
 use crate::util::executor_descriptor::selection;
 use crate::util::FixtureBuilder;
 
-pub trait SelectionBencher {
+pub trait SelectionBencher<M>
+where
+    M: Measurement,
+{
     fn name(&self) -> &'static str;
 
-    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, exprs: &[Expr]);
+    fn bench(&self, b: &mut criterion::Bencher<M>, fb: &FixtureBuilder, exprs: &[Expr]);
 
-    fn box_clone(&self) -> Box<dyn SelectionBencher>;
+    fn box_clone(&self) -> Box<dyn SelectionBencher<M>>;
 }
 
-impl Clone for Box<dyn SelectionBencher> {
+impl<M> Clone for Box<dyn SelectionBencher<M>>
+where
+    M: Measurement,
+{
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
@@ -34,12 +41,15 @@ impl Clone for Box<dyn SelectionBencher> {
 /// A bencher that will use normal selection executor to bench the giving expressions.
 pub struct NormalBencher;
 
-impl SelectionBencher for NormalBencher {
+impl<M> SelectionBencher<M> for NormalBencher
+where
+    M: Measurement,
+{
     fn name(&self) -> &'static str {
         "normal"
     }
 
-    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, exprs: &[Expr]) {
+    fn bench(&self, b: &mut criterion::Bencher<M>, fb: &FixtureBuilder, exprs: &[Expr]) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
             let meta = selection(exprs).take_selection();
             let src = fb.clone().build_normal_fixture_executor();
@@ -55,7 +65,7 @@ impl SelectionBencher for NormalBencher {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn SelectionBencher> {
+    fn box_clone(&self) -> Box<dyn SelectionBencher<M>> {
         Box::new(Self)
     }
 }
@@ -63,12 +73,15 @@ impl SelectionBencher for NormalBencher {
 /// A bencher that will use batch selection aggregation executor to bench the giving expressions.
 pub struct BatchBencher;
 
-impl SelectionBencher for BatchBencher {
+impl<M> SelectionBencher<M> for BatchBencher
+where
+    M: Measurement,
+{
     fn name(&self) -> &'static str {
         "batch"
     }
 
-    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, exprs: &[Expr]) {
+    fn bench(&self, b: &mut criterion::Bencher<M>, fb: &FixtureBuilder, exprs: &[Expr]) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
             Box::new(
@@ -83,7 +96,7 @@ impl SelectionBencher for BatchBencher {
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn SelectionBencher> {
+    fn box_clone(&self) -> Box<dyn SelectionBencher<M>> {
         Box::new(Self)
     }
 }

@@ -457,11 +457,26 @@ impl Peer {
     pub fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
         let mut entries = merge.get_entries();
         if entries.is_empty() {
-            return None;
+            // Though the entries is empty, it is possible that one source peer has caught up the logs
+            // but commit index is not updated. If Other source peers are already destroyed, so the raft
+            // group will not make any progress, namely the source peer can not get the latest commit index anymore.
+            // Here update the commit index to let source apply rest uncommitted entires.
+            if merge.get_commit() > self.raft_group.raft.raft_log.committed {
+                self.raft_group.raft.raft_log.commit_to(merge.get_commit());
+                return Some(merge.get_commit());
+            } else {
+                return None;
+            }
         }
         let first = entries.first().unwrap();
         // make sure message should be with index not smaller than committed
         let mut log_idx = first.get_index() - 1;
+        debug!(
+            "append merge entries";
+            "log_index" => log_idx,
+            "merge_commit" => merge.get_commit(),
+            "commit_index" => self.raft_group.raft.raft_log.committed,
+        );
         if log_idx < self.raft_group.raft.raft_log.committed {
             // There are maybe some logs not included in CommitMergeRequest's entries, like CompactLog,
             // so the commit index may exceed the last index of the entires from CommitMergeRequest.
@@ -1061,7 +1076,12 @@ impl Peer {
         // problem if the leader applies fewer values than the follower, the follower read
         // could get a newer value, and after that, the leader may read a stale value,
         // which violates linearizability.
-        self.get_store().applied_index() >= read_index && !self.is_splitting() && !self.is_merging()
+        self.get_store().applied_index() >= read_index
+            && !self.is_splitting()
+            && !self.is_merging()
+            // a peer which is applying snapshot will clean up its data and ingest a snapshot file,
+            // during between the two operations a replica read could read empty data.
+            && !self.is_applying_snapshot()
     }
 
     #[inline]
@@ -1413,6 +1433,7 @@ impl Peer {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+                assert!(read.read_index.is_some());
 
                 let is_read_index_request = read.cmds.len() == 1
                     && read.cmds[0].0.get_requests().len() == 1
@@ -1436,6 +1457,7 @@ impl Peer {
                         "peer_id" => self.peer.get_id(),
                     );
                     for (req, cb) in read.cmds.drain(..) {
+                        // We should check epoch since the range could be changed
                         if req.get_header().get_replica_read() {
                             cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                         } else {
@@ -1456,14 +1478,14 @@ impl Peer {
         // guarantee the orders are consistent with read_states. `advance` will
         // update the `read_index` of read request that before this successful
         // `ready`.
-        if !self.is_leader() && !ready.read_states().is_empty() {
+        if !self.is_leader() {
             // NOTE: there could still be some read requests following, which will be cleared in
             // `clear_uncommitted` later.
             for state in ready.read_states() {
                 self.pending_reads
                     .advance(state.request_ctx.as_slice(), state.index);
-                self.post_pending_read_index_on_replica(ctx);
             }
+            self.post_pending_read_index_on_replica(ctx);
         } else if self.ready_to_handle_read() {
             for state in ready.read_states() {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();

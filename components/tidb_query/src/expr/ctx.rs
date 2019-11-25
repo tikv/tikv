@@ -240,14 +240,6 @@ impl EvalContext {
         Err(err)
     }
 
-    pub fn handle_overflow(&mut self, is_overflow: bool) -> Result<()> {
-        if !is_overflow {
-            Ok(())
-        } else {
-            self.handle_overflow_err(Error::overflow("DECIMAL", ""))
-        }
-    }
-
     /// handle_overflow treats ErrOverflow as warnings or returns the error
     /// based on the cfg.handle_overflow state.
     pub fn handle_overflow_err(&mut self, err: Error) -> Result<()> {
