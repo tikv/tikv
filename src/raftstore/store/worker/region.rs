@@ -296,6 +296,7 @@ impl SnapContext {
             self.use_delete_range
         ));
         check_abort(&abort)?;
+        fail_point!("apply_snap_cleanup_range");
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =

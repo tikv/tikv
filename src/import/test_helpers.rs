@@ -5,11 +5,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::*;
-use tikv_util::collections::HashMap;
+use tikv_util::{collections::HashMap, file::calc_crc32_bytes as calc_data_crc32};
 use uuid::Uuid;
 
 use super::Result;
@@ -18,12 +17,6 @@ use crate::import::common::inside_region;
 use crate::pd::RegionInfo;
 use crate::raftstore::store::keys;
 use engine::rocks::{SstWriterBuilder, DB};
-
-pub fn calc_data_crc32(data: &[u8]) -> u32 {
-    let mut digest = crc32::Digest::new(crc32::IEEE);
-    digest.write(data);
-    digest.sum32()
-}
 
 pub fn check_db_range(db: &DB, range: (u8, u8)) {
     for i in range.0..range.1 {
