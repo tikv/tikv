@@ -226,6 +226,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::WeekDay => week_day_fn_meta(),
+        ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
         ScalarFuncSig::AbsReal => abs_real_fn_meta(),
@@ -344,6 +345,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Length => length_fn_meta(),
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
         ScalarFuncSig::Concat => concat_fn_meta(),
+        ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
         ScalarFuncSig::Reverse => reverse_fn_meta(),
         ScalarFuncSig::HexIntArg => hex_int_arg_fn_meta(),
@@ -351,8 +353,10 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LTrim => ltrim_fn_meta(),
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
         ScalarFuncSig::Left => left_fn_meta(),
+        ScalarFuncSig::Right => right_fn_meta(),
         ScalarFuncSig::LocateBinary2Args => locate_binary_2_args_fn_meta(),
         ScalarFuncSig::LocateBinary3Args => locate_binary_3_args_fn_meta(),
+        ScalarFuncSig::Strcmp => strcmp_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
