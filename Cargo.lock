@@ -393,6 +393,7 @@ dependencies = [
  "fail",
  "fs2",
  "futures",
+ "futures-cpupool",
  "grpcio",
  "hex",
  "kvproto",
@@ -426,7 +427,7 @@ dependencies = [
  "panic_hook",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.2",
- "static_assertions 1.0.0",
+ "static_assertions 1.1.0",
  "tikv_alloc",
 ]
 
@@ -727,6 +728,7 @@ dependencies = [
 name = "engine"
 version = "0.0.1"
 dependencies = [
+ "engine_traits",
  "hex",
  "kvproto",
  "lazy_static",
@@ -765,6 +767,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "static_assertions 1.1.0",
  "sys-info",
  "tempfile",
  "tikv_alloc",
@@ -1379,7 +1382,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#47672e7eabc02c4f7c6a971926293c9670dc7767"
+source = "git+https://github.com/pingcap/kvproto.git#4c654046831d1f4d7db8e4d44f7a6d0b35c33168"
 dependencies = [
  "futures",
  "grpcio",
@@ -2624,6 +2627,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rev_lines"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18eb52b6664d331053136fcac7e4883bdc6f5fc04a6aab3b0f75eafb80ab88b3"
+
+[[package]]
 name = "rgb"
 version = "0.8.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2938,7 +2947,6 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
- "engine",
  "engine_traits",
  "external_storage",
  "futures",
@@ -2984,9 +2992,9 @@ checksum = "c19be23126415861cb3a23e501d34a708f7f9b2183c5252d690941c2e69199d5"
 
 [[package]]
 name = "static_assertions"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fa13613355688665b68639b1c378a62dbedea78aff0fc59a4fa656cbbdec657"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "str_stack"
@@ -3178,6 +3186,7 @@ version = "0.0.1"
 dependencies = [
  "engine",
  "futures",
+ "futures-cpupool",
  "grpcio",
  "hex",
  "keys",
@@ -3363,6 +3372,7 @@ dependencies = [
  "more-asserts",
  "murmur3",
  "nix 0.11.1",
+ "nom 5.0.1",
  "panic_hook",
  "pd_client",
  "pprof",
@@ -3377,6 +3387,7 @@ dependencies = [
  "rand 0.6.5",
  "rand_xorshift",
  "regex",
+ "rev_lines",
  "serde",
  "serde_derive",
  "serde_json",

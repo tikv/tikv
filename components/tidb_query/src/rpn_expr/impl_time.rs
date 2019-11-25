@@ -7,6 +7,7 @@ use super::super::expr::EvalContext;
 use crate::codec::data_type::*;
 use crate::codec::mysql::time::extension::DateTimeExtension;
 use crate::codec::mysql::time::weekmode::WeekMode;
+use crate::codec::mysql::Time;
 use crate::codec::Error;
 use crate::Result;
 
@@ -67,6 +68,15 @@ pub fn week_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Optio
     }
     let week = t.week(WeekMode::from_bits_truncate(3));
     Ok(Some(Int::from(week)))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn from_days(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Time>> {
+    arg.map_or(Ok(None), |daynr: Int| {
+        let time = Time::from_days(ctx, daynr as u32)?;
+        Ok(Some(time))
+    })
 }
 
 #[cfg(test)]
@@ -258,5 +268,37 @@ mod tests {
             .evaluate::<Int>(ScalarFuncSig::WeekOfYear)
             .unwrap();
         assert_eq!(output, None);
+    }
+
+    #[test]
+    fn test_from_days() {
+        let cases = vec![
+            (ScalarValue::Int(Some(-140)), Some("0000-00-00")), // mysql FROM_DAYS returns 0000-00-00 for any day <= 365.
+            (ScalarValue::Int(Some(140)), Some("0000-00-00")), // mysql FROM_DAYS returns 0000-00-00 for any day <= 365.
+            (ScalarValue::Int(Some(735_000)), Some("2012-05-12")), // Leap year.
+            (ScalarValue::Int(Some(735_030)), Some("2012-06-11")),
+            (ScalarValue::Int(Some(735_130)), Some("2012-09-19")),
+            (ScalarValue::Int(Some(734_909)), Some("2012-02-11")),
+            (ScalarValue::Int(Some(734_878)), Some("2012-01-11")),
+            (ScalarValue::Int(Some(734_927)), Some("2012-02-29")),
+            (ScalarValue::Int(Some(734_634)), Some("2011-05-12")), // Non Leap year.
+            (ScalarValue::Int(Some(734_664)), Some("2011-06-11")),
+            (ScalarValue::Int(Some(734_764)), Some("2011-09-19")),
+            (ScalarValue::Int(Some(734_544)), Some("2011-02-11")),
+            (ScalarValue::Int(Some(734_513)), Some("2011-01-11")),
+            (ScalarValue::Int(Some(3_652_424)), Some("9999-12-31")),
+            (ScalarValue::Int(Some(3_652_425)), Some("0000-00-00")), // mysql FROM_DAYS returns 0000-00-00 for any day >= 3652425
+            (ScalarValue::Int(None), None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let datetime: Option<Time> =
+                exp.map(|exp: &str| Time::parse_date(&mut ctx, exp).unwrap());
+            let output: Option<Time> = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::FromDays)
+                .unwrap();
+            assert_eq!(output, datetime);
+        }
     }
 }

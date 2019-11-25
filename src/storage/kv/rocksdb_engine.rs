@@ -9,11 +9,15 @@ use std::time::Duration;
 
 use engine::rocks;
 use engine::rocks::util::CFOptions;
-use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
+use engine::rocks::{
+    ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, DB,
+};
 use engine::Engines;
 use engine::Error as EngineError;
+use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine::{IterOption, Peekable};
+use engine_rocks::RocksEngineIterator;
+use engine_traits::{Iterable, Iterator, Peekable, SeekKey};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 
@@ -26,7 +30,7 @@ use super::{
     Result, ScanMode, Snapshot,
 };
 
-pub use engine::SyncSnapshot as RocksSnapshot;
+pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
@@ -291,7 +295,7 @@ impl Engine for RocksEngine {
 }
 
 impl Snapshot for RocksSnapshot {
-    type Iter = DBIterator<Arc<DB>>;
+    type Iter = RocksEngineIterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>> {
         trace!("RocksSnapshot: get"; "key" => %key);
@@ -307,7 +311,7 @@ impl Snapshot for RocksSnapshot {
 
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
-        let iter = self.db_iterator(iter_opt);
+        let iter = self.iterator_opt(iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 
@@ -318,8 +322,53 @@ impl Snapshot for RocksSnapshot {
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
-        let iter = self.db_iterator_cf(cf, iter_opt)?;
+        let iter = self.iterator_cf_opt(cf, iter_opt)?;
         Ok(Cursor::new(iter, mode))
+    }
+}
+
+impl EngineIterator for RocksEngineIterator {
+    fn next(&mut self) -> bool {
+        Iterator::next(self)
+    }
+
+    fn prev(&mut self) -> bool {
+        Iterator::prev(self)
+    }
+
+    fn seek(&mut self, key: &Key) -> Result<bool> {
+        Ok(Iterator::seek(self, key.as_encoded().as_slice().into()))
+    }
+
+    fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
+        Ok(Iterator::seek_for_prev(
+            self,
+            key.as_encoded().as_slice().into(),
+        ))
+    }
+
+    fn seek_to_first(&mut self) -> bool {
+        Iterator::seek(self, SeekKey::Start)
+    }
+
+    fn seek_to_last(&mut self) -> bool {
+        Iterator::seek(self, SeekKey::End)
+    }
+
+    fn valid(&self) -> bool {
+        Iterator::valid(self)
+    }
+
+    fn status(&self) -> Result<()> {
+        Iterator::status(self).map_err(From::from)
+    }
+
+    fn key(&self) -> &[u8] {
+        Iterator::key(self)
+    }
+
+    fn value(&self) -> &[u8] {
+        Iterator::value(self)
     }
 }
 
@@ -344,11 +393,11 @@ impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
     }
 
     fn seek_to_first(&mut self) -> bool {
-        DBIterator::seek(self, SeekKey::Start)
+        DBIterator::seek(self, DBSeekKey::Start)
     }
 
     fn seek_to_last(&mut self) -> bool {
-        DBIterator::seek(self, SeekKey::End)
+        DBIterator::seek(self, DBSeekKey::End)
     }
 
     fn valid(&self) -> bool {
@@ -358,7 +407,7 @@ impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
     fn status(&self) -> Result<()> {
         DBIterator::status(self)
             .map_err(|e| EngineError::RocksDb(e))
-            .map_err(From::from)
+            .map_err(Error::from)
     }
 
     fn key(&self) -> &[u8] {
