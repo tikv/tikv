@@ -8,6 +8,8 @@ use engine::rocks::util::new_engine_opt as new_engine_opt_raw;
 use engine::rocks::util::CFOptions;
 use engine_traits::CF_DEFAULT;
 use engine_traits::{Error, Result};
+use engine_traits::Range;
+use rocksdb::Range as RocksRange;
 use rocksdb::{CFHandle, DB};
 use std::sync::Arc;
 
@@ -67,4 +69,8 @@ pub fn new_engine_opt(
     let engine = Arc::new(engine);
     let engine = RocksEngine::from_db(engine);
     Ok(engine)
+}
+
+pub fn range_to_rocks_range<'a>(range: &Range<'a>) -> RocksRange<'a> {
+    RocksRange::new(range.start_key, range.end_key)
 }
