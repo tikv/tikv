@@ -12,7 +12,6 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
-use crc::crc32::{self, Digest, Hasher32};
 use engine::rocks::util::{
     get_fastest_supported_compression_type, prepare_sst_for_ingestion, validate_sst_for_ingestion,
 };
@@ -290,7 +289,7 @@ struct CfFile {
     pub size: u64,
     pub written_size: u64,
     pub checksum: u32,
-    pub write_digest: Option<Digest>,
+    pub write_digest: Option<crc32fast::Hasher>,
 }
 
 #[derive(Default)]
@@ -464,7 +463,7 @@ impl Snap {
                 .create_new(true)
                 .open(&cf_file.tmp_path)?;
             cf_file.file = Some(f);
-            cf_file.write_digest = Some(Digest::new(crc32::IEEE));
+            cf_file.write_digest = Some(crc32fast::Hasher::new());
         }
         Ok(s)
     }
@@ -945,7 +944,7 @@ impl Snapshot for Snap {
                     ),
                 ));
             }
-            let checksum = cf_file.write_digest.as_ref().unwrap().sum32();
+            let checksum = cf_file.write_digest.clone().unwrap().finalize();
             if checksum != cf_file.checksum {
                 return Err(io::Error::new(
                     ErrorKind::Other,
@@ -1060,13 +1059,13 @@ impl Write for Snap {
 
             if next_buf.len() > left {
                 file.write_all(&next_buf[0..left])?;
-                digest.write(&next_buf[0..left]);
+                digest.update(&next_buf[0..left]);
                 cf_file.written_size += left as u64;
                 self.cf_index += 1;
                 next_buf = &next_buf[left..];
             } else {
                 file.write_all(next_buf)?;
-                digest.write(next_buf);
+                digest.update(next_buf);
                 cf_file.written_size += next_buf.len() as u64;
                 return Ok(buf.len());
             }

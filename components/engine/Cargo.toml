@@ -14,7 +14,6 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.
 protobuf = "~2.0"
 raft = "0.4"
 quick-error = "1.2.2"
-crc = "1.8"
 lazy_static = "0.2.1"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
