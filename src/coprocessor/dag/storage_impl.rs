@@ -11,6 +11,7 @@ pub struct TiKVStorage<S: Store> {
     store: S,
     scanner: Option<S::Scanner>,
     cf_stats_backlog: Statistics,
+    last_key: Option<Key>,
 }
 
 impl<S: Store> TiKVStorage<S> {
@@ -19,6 +20,7 @@ impl<S: Store> TiKVStorage<S> {
             store,
             scanner: None,
             cf_stats_backlog: Statistics::default(),
+            last_key: None,
         }
     }
 }
@@ -53,10 +55,29 @@ impl<S: Store> Storage for TiKVStorage<S> {
         Ok(())
     }
 
-    fn scan_next(&mut self) -> QEResult<Option<OwnedKvPair>> {
+    fn scan_next(&mut self) -> QEResult<Option<Vec<u8>>> {
         // Unwrap is fine because we must have called `reset_range` before calling `scan_next`.
-        let kv = self.scanner.as_mut().unwrap().next().map_err(Error::from)?;
-        Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
+        let key = self
+            .scanner
+            .as_mut()
+            .unwrap()
+            .next_ref()
+            .map_err(Error::from)?;
+        self.last_key = key;
+        Ok(self.last_key.as_ref().map(|k| k.to_raw().unwrap()))
+    }
+
+    fn last_scan_value(&self) -> &[u8] {
+        self.scanner.as_ref().unwrap().value()
+    }
+
+    fn scan_next_finalize(&mut self) -> QEResult<()> {
+        Ok(self
+            .scanner
+            .as_mut()
+            .unwrap()
+            .next_ref_finalize(self.last_key.as_ref().unwrap())
+            .map_err(Error::from)?)
     }
 
     fn get(&mut self, _is_key_only: bool, range: PointRange) -> QEResult<Option<OwnedKvPair>> {

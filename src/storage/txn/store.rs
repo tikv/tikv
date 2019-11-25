@@ -49,6 +49,12 @@ pub trait Scanner: Send {
     /// Get the next [`KvPair`](KvPair) if it exists.
     fn next(&mut self) -> Result<Option<(Key, Value)>>;
 
+    fn next_ref(&mut self) -> Result<Option<Key>>;
+
+    fn value(&self) -> &[u8];
+
+    fn next_ref_finalize(&mut self, key: &Key) -> Result<()>;
+
     /// Get the next [`KvPair`](KvPair)s up to `limit` if they exist.
     fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
         let mut results = Vec::with_capacity(limit);
@@ -483,24 +489,45 @@ impl Store for FixtureStore {
         Ok(FixtureStoreScanner {
             // TODO: Remove clone when GATs is available. See rust-lang/rfcs#1598.
             data: vec.into_iter(),
+            last_scanned_value: Vec::new(),
         })
     }
 }
 
 /// A Scanner that scans on fixtures.
 pub struct FixtureStoreScanner {
-    data: std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
+    data: std::vec::IntoIter<(Key, Result<Value>)>,
+    last_scanned_value: Value,
 }
 
 impl Scanner for FixtureStoreScanner {
     #[inline]
-    fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>> {
+    fn next(&mut self) -> Result<Option<(Key, Value)>> {
         let value = self.data.next();
         match value {
             None => Ok(None),
             Some((k, Ok(v))) => Ok(Some((k, v))),
             Some((_k, Err(e))) => Err(e),
         }
+    }
+
+    fn next_ref(&mut self) -> Result<Option<Key>> {
+        let some_kv = self.next()?;
+        if let Some((key, value)) = some_kv {
+            self.last_scanned_value = value;
+            Ok(Some(key))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn value(&self) -> &[u8] {
+        self.last_scanned_value.as_slice()
+    }
+
+    fn next_ref_finalize(&mut self, _key: &Key) -> Result<()> {
+        self.last_scanned_value.clear();
+        Ok(())
     }
 
     #[inline]

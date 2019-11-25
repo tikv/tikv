@@ -212,10 +212,12 @@ impl TestSuite {
             is_scanned_range_aware: false,
         });
         let digest = crc64fast::Digest::new();
-        while let Some((k, v)) = scanner.next().unwrap() {
+        while let Some(k) = scanner.next().unwrap() {
+            let v = scanner.value();
             checksum = checksum_crc64_xor(checksum, digest.clone(), &k, &v);
             total_kvs += 1;
             total_bytes += (k.len() + v.len()) as u64;
+            scanner.next_finalize().unwrap();
         }
         (checksum, total_kvs, total_bytes)
     }

@@ -26,7 +26,11 @@ pub trait Storage: Send {
         range: IntervalRange,
     ) -> Result<()>;
 
-    fn scan_next(&mut self) -> Result<Option<OwnedKvPair>>;
+    fn scan_next(&mut self) -> Result<Option<Vec<u8>>>;
+
+    fn last_scan_value(&self) -> &[u8];
+
+    fn scan_next_finalize(&mut self) -> Result<()>;
 
     // TODO: Use const generics.
     // TODO: Use reference is better.
@@ -47,8 +51,16 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         (**self).begin_scan(is_backward_scan, is_key_only, range)
     }
 
-    fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {
+    fn scan_next(&mut self) -> Result<Option<Vec<u8>>> {
         (**self).scan_next()
+    }
+
+    fn last_scan_value(&self) -> &[u8] {
+        (**self).last_scan_value()
+    }
+
+    fn scan_next_finalize(&mut self) -> Result<()> {
+        (**self).scan_next_finalize()
     }
 
     fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {

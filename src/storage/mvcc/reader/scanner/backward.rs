@@ -60,6 +60,7 @@ impl<S: Snapshot> BackwardScanner<S> {
     }
 
     /// Get the next key-value pair, in backward order.
+    #[inline(never)]
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
             if self.cfg.upper_bound.is_some() {

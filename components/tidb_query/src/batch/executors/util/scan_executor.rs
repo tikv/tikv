@@ -99,11 +99,11 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
         assert!(scan_rows > 0);
 
         for _ in 0..scan_rows {
-            let some_row = self.scanner.next()?;
-            if let Some((key, value)) = some_row {
+            let some_key = self.scanner.next()?;
+            if let Some(key) = some_key {
                 // Retrieved one row from point range or non-point range.
-
-                if let Err(e) = self.imp.process_kv_pair(&key, &value, columns) {
+                let value = self.scanner.value();
+                if let Err(e) = self.imp.process_kv_pair(&key, value, columns) {
                     // When there are errors in `process_kv_pair`, columns' length may not be
                     // identical. For example, the filling process may be partially done so that
                     // first several columns have N rows while the rest have N-1 rows. Since we do
@@ -113,6 +113,8 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
                     columns.truncate_into_equal_length();
                     return Err(e);
                 }
+
+                self.scanner.next_finalize()?;
             } else {
                 // Drained
                 return Ok(true);

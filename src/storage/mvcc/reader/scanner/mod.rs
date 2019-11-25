@@ -82,11 +82,10 @@ impl<S: Snapshot> ScannerBuilder<S> {
         let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         if self.0.desc {
-            Ok(Scanner::Backward(BackwardScanner::new(
-                self.0,
-                lock_cursor,
-                write_cursor,
-            )))
+            Ok(Scanner::Backward {
+                scanner: BackwardScanner::new(self.0, lock_cursor, write_cursor),
+                last_scanned_value: Vec::new(),
+            })
         } else {
             Ok(Scanner::Forward(ForwardScanner::new(
                 self.0,
@@ -115,21 +114,80 @@ impl<S: Snapshot> ScannerBuilder<S> {
 
 pub enum Scanner<S: Snapshot> {
     Forward(ForwardScanner<S>),
-    Backward(BackwardScanner<S>),
+    Backward {
+        scanner: BackwardScanner<S>,
+        last_scanned_value: Value,
+    },
+}
+
+#[inline(never)]
+fn next_ref_backward<S: Snapshot>(
+    scanner: &mut BackwardScanner<S>,
+    last_scanned_value: &mut Value,
+) -> TxnResult<Option<Key>> {
+    let some_kv = scanner.read_next()?;
+    if let Some((key, value)) = some_kv {
+        // Store the value into `last_scanned_value`.
+        std::mem::replace(last_scanned_value, value);
+        Ok(Some(key))
+    } else {
+        Ok(None)
+    }
 }
 
 impl<S: Snapshot> StoreScanner for Scanner<S> {
     fn next(&mut self) -> TxnResult<Option<(Key, Value)>> {
         match self {
-            Scanner::Forward(scanner) => Ok(scanner.read_next()?),
-            Scanner::Backward(scanner) => Ok(scanner.read_next()?),
+            Scanner::Forward(scanner) => {
+                let some_key = scanner.read_next()?;
+                if let Some(key) = some_key {
+                    let value = scanner.value().to_vec();
+                    scanner.read_next_finalize(&key)?;
+                    Ok(Some((key, value)))
+                } else {
+                    Ok(None)
+                }
+            }
+            Scanner::Backward { scanner, .. } => Ok(scanner.read_next()?),
         }
     }
+
+    fn next_ref(&mut self) -> TxnResult<Option<Key>> {
+        match self {
+            Scanner::Forward(scanner) => Ok(scanner.read_next()?),
+            Scanner::Backward {
+                scanner,
+                last_scanned_value,
+            } => next_ref_backward(scanner, last_scanned_value),
+        }
+    }
+
+    fn value(&self) -> &[u8] {
+        match self {
+            Scanner::Forward(scanner) => scanner.value(),
+            Scanner::Backward {
+                last_scanned_value, ..
+            } => last_scanned_value.as_slice(),
+        }
+    }
+
+    fn next_ref_finalize(&mut self, key: &Key) -> TxnResult<()> {
+        match self {
+            Scanner::Forward(scanner) => Ok(scanner.read_next_finalize(key)?),
+            Scanner::Backward {
+                last_scanned_value, ..
+            } => {
+                last_scanned_value.clear();
+                Ok(())
+            }
+        }
+    }
+
     /// Take out and reset the statistics collected so far.
     fn take_statistics(&mut self) -> Statistics {
         match self {
             Scanner::Forward(scanner) => scanner.take_statistics(),
-            Scanner::Backward(scanner) => scanner.take_statistics(),
+            Scanner::Backward { scanner, .. } => scanner.take_statistics(),
         }
     }
 }

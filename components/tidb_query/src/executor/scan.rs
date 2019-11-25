@@ -88,8 +88,10 @@ impl<S: Storage, T: InnerExecutor> Executor for ScanExecutor<S, T> {
     type StorageStats = S::Statistics;
 
     fn next(&mut self) -> Result<Option<Row>> {
-        let some_row = self.scanner.next()?;
-        if let Some((key, value)) = some_row {
+        let some_key = self.scanner.next()?;
+        if let Some(key) = some_key {
+            let value = self.scanner.value().to_vec();
+            self.scanner.next_finalize()?;
             self.inner
                 .decode_row(&mut self.context, key, value, self.columns.clone())
         } else {

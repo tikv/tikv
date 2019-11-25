@@ -2,7 +2,7 @@
 
 use super::range::*;
 use super::ranges_iter::*;
-use super::{OwnedKvPair, Storage};
+use super::Storage;
 use crate::error::StorageError;
 
 const KEY_BUFFER_CAPACITY: usize = 64;
@@ -12,6 +12,7 @@ const KEY_BUFFER_CAPACITY: usize = 64;
 pub struct RangesScanner<T> {
     storage: T,
     ranges_iter: RangesIterator,
+    last_get_value: Option<Vec<u8>>,
 
     scan_backward_in_range: bool,
     is_key_only: bool,
@@ -50,6 +51,7 @@ impl<T: Storage> RangesScanner<T> {
         RangesScanner {
             storage,
             ranges_iter,
+            last_get_value: None,
             scan_backward_in_range,
             is_key_only,
             scanned_rows_per_range: Vec::with_capacity(ranges_len),
@@ -65,8 +67,7 @@ impl<T: Storage> RangesScanner<T> {
 
     /// Fetches next row.
     // Note: This is not implemented over `Iterator` since it can fail.
-    // TODO: Change to use reference to avoid alloation and copy.
-    pub fn next(&mut self) -> Result<Option<OwnedKvPair>, StorageError> {
+    pub fn next(&mut self) -> Result<Option<Vec<u8>>, StorageError> {
         loop {
             let range = self.ranges_iter.next();
             let some_row = match range {
@@ -76,9 +77,16 @@ impl<T: Storage> RangesScanner<T> {
                     }
                     self.ranges_iter.notify_drained();
                     self.scanned_rows_per_range.push(0);
-                    self.storage.get(self.is_key_only, r)?
+                    let some_kv = self.storage.get(self.is_key_only, r)?;
+                    if let Some(kv) = some_kv {
+                        self.last_get_value = Some(kv.1);
+                        Some(kv.0)
+                    } else {
+                        None
+                    }
                 }
                 IterStatus::NewRange(Range::Interval(r)) => {
+                    self.last_get_value = None;
                     if self.is_scanned_range_aware {
                         self.update_scanned_range_from_new_range(&r);
                     }
@@ -87,7 +95,10 @@ impl<T: Storage> RangesScanner<T> {
                         .begin_scan(self.scan_backward_in_range, self.is_key_only, r)?;
                     self.storage.scan_next()?
                 }
-                IterStatus::Continue => self.storage.scan_next()?,
+                IterStatus::Continue => {
+                    self.last_get_value = None;
+                    self.storage.scan_next()?
+                }
                 IterStatus::Drained => {
                     if self.is_scanned_range_aware {
                         self.update_working_range_end_key();
@@ -110,6 +121,17 @@ impl<T: Storage> RangesScanner<T> {
                 self.ranges_iter.notify_drained();
             }
         }
+    }
+
+    pub fn value(&self) -> &[u8] {
+        match self.last_get_value.as_ref() {
+            None => self.storage.last_scan_value(),
+            Some(v) => v.as_slice(),
+        }
+    }
+
+    pub fn next_finalize(&mut self) -> Result<(), StorageError> {
+        Ok(self.storage.scan_next_finalize()?)
     }
 
     /// Appends storage statistics collected so far to the given container and clears the
@@ -211,10 +233,10 @@ impl<T: Storage> RangesScanner<T> {
         }
     }
 
-    fn update_scanned_range_from_scanned_row(&mut self, some_row: &Option<OwnedKvPair>) {
+    fn update_scanned_range_from_scanned_row(&mut self, some_row: &Option<Vec<u8>>) {
         assert!(self.is_scanned_range_aware);
 
-        if let Some((key, _)) = some_row {
+        if let Some(key) = some_row {
             self.working_range_end_key.clear();
             self.working_range_end_key.extend(key);
             if !self.scan_backward_in_range {
@@ -224,6 +246,7 @@ impl<T: Storage> RangesScanner<T> {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -666,3 +689,4 @@ mod tests {
         assert_eq!(&r.upper_exclusive, b"foo");
     }
 }
+*/

@@ -65,14 +65,16 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
         let mut prefix_digest = crc64fast::Digest::new();
         prefix_digest.write(&old_prefix);
 
-        while let Some((k, v)) = self.scanner.next()? {
+        while let Some(k) = self.scanner.next()? {
             if !k.starts_with(&new_prefix) {
                 return Err(box_err!("Wrong prefix expect: {:?}", new_prefix));
             }
+            let v = self.scanner.value();
             checksum =
                 checksum_crc64_xor(checksum, prefix_digest.clone(), &k[new_prefix.len()..], &v);
             total_kvs += 1;
             total_bytes += k.len() + v.len() + old_prefix.len() - new_prefix.len();
+            self.scanner.next_finalize()?;
         }
 
         let mut resp = ChecksumResponse::default();

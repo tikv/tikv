@@ -15,6 +15,7 @@ type FixtureValue = std::result::Result<Vec<u8>, ErrorBuilder>;
 pub struct FixtureStorage {
     data: Arc<BTreeMap<Vec<u8>, FixtureValue>>,
     data_view_unsafe: Option<btree_map::Range<'static, Vec<u8>, FixtureValue>>,
+    last_scanned_value: Vec<u8>,
     is_backward_scan: bool,
     is_key_only: bool,
 }
@@ -24,6 +25,7 @@ impl FixtureStorage {
         Self {
             data: Arc::new(data),
             data_view_unsafe: None,
+            last_scanned_value: Vec::new(),
             is_backward_scan: false,
             is_key_only: false,
         }
@@ -66,7 +68,7 @@ impl super::Storage for FixtureStorage {
         Ok(())
     }
 
-    fn scan_next(&mut self) -> Result<Option<super::OwnedKvPair>> {
+    fn scan_next(&mut self) -> Result<Option<Vec<u8>>> {
         let value = if !self.is_backward_scan {
             // During the call of this function, `data` must be valid and we are only returning
             // data clones to outside, so this access is safe.
@@ -77,14 +79,23 @@ impl super::Storage for FixtureStorage {
         match value {
             None => Ok(None),
             Some((k, Ok(v))) => {
+                self.last_scanned_value.clear();
                 if !self.is_key_only {
-                    Ok(Some((k.clone(), v.clone())))
-                } else {
-                    Ok(Some((k.clone(), Vec::new())))
+                    self.last_scanned_value.extend_from_slice(v.as_slice());
                 }
+                Ok(Some(k.clone()))
             }
             Some((_k, Err(err_producer))) => Err(err_producer()),
         }
+    }
+
+    fn last_scan_value(&self) -> &[u8] {
+        self.last_scanned_value.as_slice()
+    }
+
+    fn scan_next_finalize(&mut self) -> Result<()> {
+        self.last_scanned_value.clear();
+        Ok(())
     }
 
     fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<super::OwnedKvPair>> {
@@ -105,6 +116,7 @@ impl super::Storage for FixtureStorage {
     fn collect_statistics(&mut self, _dest: &mut Self::Statistics) {}
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,3 +231,4 @@ mod tests {
         assert_eq!(storage.scan_next().unwrap(), None);
     }
 }
+*/
