@@ -4,9 +4,9 @@ use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::Result;
-use std::str::FromStr;
 use std::convert::{TryFrom, TryInto};
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 
 const IPV4_LENGTH: usize = 4;
 const IPV6_LENGTH: usize = 16;
