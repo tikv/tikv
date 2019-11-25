@@ -248,6 +248,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Cos => cos_fn_meta(),
         ScalarFuncSig::Tan => tan_fn_meta(),
         ScalarFuncSig::Cot => cot_fn_meta(),
+        ScalarFuncSig::Pow => pow_fn_meta(),
         ScalarFuncSig::Asin => asin_fn_meta(),
         ScalarFuncSig::Acos => acos_fn_meta(),
         ScalarFuncSig::Atan1Arg => atan_1_arg_fn_meta(),
