@@ -40,6 +40,22 @@ pub fn concat(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
     Ok(Some(output))
 }
 
+#[rpn_fn(varg, min_args = 2)]
+#[inline]
+pub fn concat_ws(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
+    if let Some(sep) = args[0] {
+        let rest = &args[1..];
+        Ok(Some(
+            rest.iter()
+                .filter_map(|x| x.as_ref().map(|inner| inner.as_slice()))
+                .collect::<Vec<&[u8]>>()
+                .join::<&[u8]>(sep.as_ref()),
+        ))
+    } else {
+        Ok(None)
+    }
+}
+
 #[rpn_fn]
 #[inline]
 pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
@@ -106,6 +122,36 @@ pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
                     let l = *rhs as usize;
                     if s.chars().count() > l {
                         Ok(Some(s.chars().take(l).collect::<String>().into_bytes()))
+                    } else {
+                        Ok(Some(s.to_string().into_bytes()))
+                    }
+                }
+                Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn right(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            if *rhs <= 0 {
+                return Ok(Some(Vec::new()));
+            }
+            match str::from_utf8(&*lhs) {
+                Ok(s) => {
+                    let rhs = *rhs as usize;
+                    let len = s.chars().count();
+                    if len > rhs {
+                        let idx = s
+                            .char_indices()
+                            .nth(len - rhs)
+                            .map(|(idx, _)| idx)
+                            .unwrap_or_else(|| s.len());
+                        Ok(Some(s[idx..].to_string().into_bytes()))
                     } else {
                         Ok(Some(s.to_string().into_bytes()))
                     }
@@ -260,6 +306,131 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(row)
                 .evaluate(ScalarFuncSig::Concat)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_concat_ws() {
+        let cases = vec![
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"abc".to_vec()),
+                    Some(b"defg".to_vec()),
+                ],
+                Some(b"abc,defg".to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some("忠犬ハチ公".as_bytes().to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                    Some("قاعدة البيانات".as_bytes().to_vec()),
+                    Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                ],
+                Some(
+                    "忠犬ハチ公,CAFÉ,数据库,قاعدة البيانات,НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"abc".to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                ],
+                Some("abc,CAFÉ,数据库".as_bytes().to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"abc".to_vec()),
+                    None,
+                    Some(b"defg".to_vec()),
+                ],
+                Some(b"abc,defg".to_vec()),
+            ),
+            (
+                vec![Some(b",".to_vec()), Some(b"abc".to_vec())],
+                Some(b"abc".to_vec()),
+            ),
+            (
+                vec![Some(b",".to_vec()), None, Some(b"abc".to_vec())],
+                Some(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"".to_vec()),
+                    Some(b"abc".to_vec()),
+                ],
+                Some(b",abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some("忠犬ハチ公".as_bytes().to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                    Some("قاعدة البيانات".as_bytes().to_vec()),
+                ],
+                Some(
+                    "CAFÉ忠犬ハチ公数据库忠犬ハチ公قاعدة البيانات"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (vec![None, Some(b"abc".to_vec())], None),
+            (
+                vec![Some(b",".to_vec()), None, Some(b"abc".to_vec())],
+                Some(b"abc".to_vec()),
+            ),
+            (
+                vec![Some(b",".to_vec()), Some(b"abc".to_vec()), None],
+                Some(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    Some(b"".to_vec()),
+                    Some(b"abc".to_vec()),
+                ],
+                Some(b",abc".to_vec()),
+            ),
+            (
+                vec![
+                    Some("忠犬ハチ公".as_bytes().to_vec()),
+                    Some("CAFÉ".as_bytes().to_vec()),
+                    Some("数据库".as_bytes().to_vec()),
+                    Some("قاعدة البيانات".as_bytes().to_vec()),
+                ],
+                Some(
+                    "CAFÉ忠犬ハチ公数据库忠犬ハチ公قاعدة البيانات"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
+            (
+                vec![
+                    Some(b",".to_vec()),
+                    None,
+                    Some(b"abc".to_vec()),
+                    None,
+                    None,
+                    Some(b"defg".to_vec()),
+                    None,
+                ],
+                Some(b"abc,defg".to_vec()),
+            ),
+        ];
+        for (row, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(row)
+                .evaluate(ScalarFuncSig::ConcatWs)
                 .unwrap();
             assert_eq!(output, exp);
         }
@@ -475,6 +646,51 @@ mod tests {
                 .push_param(lhs)
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::Left)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_right() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(0), Some(b"".to_vec())),
+            (Some(b"hello".to_vec()), Some(1), Some(b"o".to_vec())),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(2),
+                Some("据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("忠犬ハチ公".as_bytes().to_vec()),
+                Some(3),
+                Some("ハチ公".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(100),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(-1),
+                Some(b"".to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some(i64::max_value()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (None, Some(-1), None),
+            (Some(b"hello".to_vec()), None, None),
+            (None, None, None),
+        ];
+
+        for (lhs, rhs, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::Right)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
