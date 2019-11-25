@@ -11,6 +11,7 @@ const KEY_BUFFER_CAPACITY: usize = 64;
 /// one row, or an interval range containing multiple rows.
 pub struct RangesScanner<T> {
     storage: T,
+    ranges: Vec<Range>,
     ranges_iter: RangesIterator,
 
     scan_backward_in_range: bool,
@@ -25,6 +26,9 @@ pub struct RangesScanner<T> {
     current_range: IntervalRange,
     working_range_begin_key: Vec<u8>,
     working_range_end_key: Vec<u8>,
+
+    scan_locks_first: bool,
+    locks_scanned: bool,
 }
 
 pub struct RangesScannerOptions<T> {
@@ -33,6 +37,7 @@ pub struct RangesScannerOptions<T> {
     pub scan_backward_in_range: bool, // TODO: This can be const generics
     pub is_key_only: bool,            // TODO: This can be const generics
     pub is_scanned_range_aware: bool, // TODO: This can be const generics
+    pub scan_locks_first: bool,
 }
 
 impl<T: Storage> RangesScanner<T> {
@@ -43,13 +48,15 @@ impl<T: Storage> RangesScanner<T> {
             scan_backward_in_range,
             is_key_only,
             is_scanned_range_aware,
+            scan_locks_first,
         }: RangesScannerOptions<T>,
     ) -> RangesScanner<T> {
         let ranges_len = ranges.len();
-        let ranges_iter = RangesIterator::new(ranges);
+        let ranges_iter = RangesIterator::new(ranges.clone());
         RangesScanner {
             storage,
             ranges_iter,
+            ranges,
             scan_backward_in_range,
             is_key_only,
             scanned_rows_per_range: Vec::with_capacity(ranges_len),
@@ -60,13 +67,24 @@ impl<T: Storage> RangesScanner<T> {
             },
             working_range_begin_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
             working_range_end_key: Vec::with_capacity(KEY_BUFFER_CAPACITY),
+            scan_locks_first,
+            locks_scanned: false,
         }
+    }
+
+    pub fn find_all_locks(&mut self) -> Result<(), StorageError> {
+        let ranges = ::std::mem::replace(&mut self.ranges, Vec::new());
+        self.storage.find_locks(ranges)
     }
 
     /// Fetches next row.
     // Note: This is not implemented over `Iterator` since it can fail.
-    // TODO: Change to use reference to avoid alloation and copy.
+    // TODO: Change to use reference to avoid allocation and copy.
     pub fn next(&mut self) -> Result<Option<OwnedKvPair>, StorageError> {
+        if self.scan_locks_first && !self.locks_scanned {
+            self.find_all_locks()?;
+            self.locks_scanned = true;
+        }
         loop {
             let range = self.ranges_iter.next();
             let some_row = match range {
@@ -83,8 +101,12 @@ impl<T: Storage> RangesScanner<T> {
                         self.update_scanned_range_from_new_range(&r);
                     }
                     self.scanned_rows_per_range.push(0);
-                    self.storage
-                        .begin_scan(self.scan_backward_in_range, self.is_key_only, r)?;
+                    self.storage.begin_scan(
+                        self.scan_backward_in_range,
+                        self.is_key_only,
+                        self.scan_locks_first,
+                        r,
+                    )?;
                     self.storage.scan_next()?
                 }
                 IterStatus::Continue => self.storage.scan_next()?,
@@ -259,6 +281,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
+            scan_locks_first: false,
         });
         assert_eq!(
             scanner.next().unwrap(),
@@ -295,6 +318,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: false,
+            scan_locks_first: false,
         });
         assert_eq!(
             scanner.next().unwrap(),
@@ -326,6 +350,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: true,
             is_scanned_range_aware: false,
+            scan_locks_first: false,
         });
         assert_eq!(scanner.next().unwrap(), Some((b"bar".to_vec(), Vec::new())));
         assert_eq!(
@@ -360,6 +385,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
+            scan_locks_first: false,
         });
         let mut scanned_rows_per_range = Vec::new();
 
@@ -415,6 +441,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            scan_locks_first: false,
         });
 
         let r = scanner.take_scanned_range();
@@ -435,6 +462,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            scan_locks_first: false,
         });
 
         assert_eq!(scanner.next().unwrap(), None);
@@ -451,6 +479,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            scan_locks_first: false,
         });
 
         assert_eq!(scanner.next().unwrap(), None);
@@ -467,6 +496,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            scan_locks_first: false,
         });
 
         assert_eq!(&scanner.next().unwrap().unwrap().0, b"foo");
@@ -505,6 +535,7 @@ mod tests {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: true,
+            scan_locks_first: false,
         });
 
         assert_eq!(&scanner.next().unwrap().unwrap().0, b"foo");
@@ -550,6 +581,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            scan_locks_first: false,
         });
 
         let r = scanner.take_scanned_range();
@@ -570,6 +602,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            scan_locks_first: false,
         });
 
         assert_eq!(scanner.next().unwrap(), None);
@@ -586,6 +619,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            scan_locks_first: false,
         });
 
         assert_eq!(scanner.next().unwrap(), None);
@@ -602,6 +636,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            scan_locks_first: false,
         });
 
         assert_eq!(&scanner.next().unwrap().unwrap().0, b"foo_3");
@@ -638,6 +673,7 @@ mod tests {
             scan_backward_in_range: true,
             is_key_only: false,
             is_scanned_range_aware: true,
+            scan_locks_first: false,
         });
 
         assert_eq!(&scanner.next().unwrap().unwrap().0, b"bar_2");

@@ -13,6 +13,9 @@ pub enum Error {
     #[fail(display = "Key is locked (will clean up) {:?}", _0)]
     Locked(kvproto::kvrpcpb::LockInfo),
 
+    #[fail(display = "Multiple keys are locked (will clean up)")]
+    MultiLocked(Vec<kvproto::kvrpcpb::LockInfo>),
+
     #[fail(display = "Coprocessor task terminated due to exceeding max time limit")]
     MaxExecuteTimeExceeded,
 

@@ -1,6 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tidb_query::storage::{IntervalRange, OwnedKvPair, PointRange, Result as QEResult, Storage};
+use tidb_query::storage::{
+    IntervalRange, OwnedKvPair, PointRange, Range, Result as QEResult, Storage,
+};
 
 use crate::coprocessor::Error;
 use crate::storage::Statistics;
@@ -36,6 +38,7 @@ impl<S: Store> Storage for TiKVStorage<S> {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
+        ignore_lock: bool,
         range: IntervalRange,
     ) -> QEResult<()> {
         if let Some(scanner) = &mut self.scanner {
@@ -45,7 +48,7 @@ impl<S: Store> Storage for TiKVStorage<S> {
         let upper = Some(Key::from_raw(&range.upper_exclusive));
         self.scanner = Some(
             self.store
-                .scanner(is_backward_scan, is_key_only, lower, upper)
+                .scanner(is_backward_scan, is_key_only, ignore_lock, lower, upper)
                 .map_err(Error::from)?,
             // There is no transform from storage error to QE's StorageError,
             // so an intermediate error is needed.
@@ -57,6 +60,17 @@ impl<S: Store> Storage for TiKVStorage<S> {
         // Unwrap is fine because we must have called `reset_range` before calling `scan_next`.
         let kv = self.scanner.as_mut().unwrap().next().map_err(Error::from)?;
         Ok(kv.map(|(k, v)| (k.into_raw().unwrap(), v)))
+    }
+
+    fn find_locks(&mut self, ranges: Vec<Range>) -> QEResult<()> {
+        match self
+            .store
+            .get_locks(ranges, &mut self.cf_stats_backlog)
+            .map_err(Error::from)?
+        {
+            Some(locks) => Err(Error::MultiLocked(locks).into()),
+            None => Ok(()),
+        }
     }
 
     fn get(&mut self, _is_key_only: bool, range: PointRange) -> QEResult<Option<OwnedKvPair>> {

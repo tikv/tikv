@@ -16,6 +16,7 @@ pub struct PointGetterBuilder<S: Snapshot> {
     isolation_level: IsolationLevel,
     ts: TimeStamp,
     bypass_locks: TsSet,
+    ignore_lock: bool,
 }
 
 impl<S: Snapshot> PointGetterBuilder<S> {
@@ -29,6 +30,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             isolation_level: IsolationLevel::Si,
             ts,
             bypass_locks: Default::default(),
+            ignore_lock: false,
         }
     }
 
@@ -80,6 +82,12 @@ impl<S: Snapshot> PointGetterBuilder<S> {
         self
     }
 
+    #[inline]
+    pub fn ignore_lock(mut self, ignore_lock: bool) -> Self {
+        self.ignore_lock = ignore_lock;
+        self
+    }
+
     /// Build `PointGetter` from the current configuration.
     pub fn build(self) -> Result<PointGetter<S>> {
         // If we only want to get single value, we can use prefix seek.
@@ -106,6 +114,7 @@ impl<S: Snapshot> PointGetterBuilder<S> {
             write_cursor,
 
             drained: false,
+            ignore_lock: self.ignore_lock,
         })
     }
 }
@@ -130,6 +139,7 @@ pub struct PointGetter<S: Snapshot> {
     /// when `multi == false`, to protect from producing undefined values when trying to get
     /// multiple values under `multi == false`.
     drained: bool,
+    ignore_lock: bool,
 }
 
 impl<S: Snapshot> PointGetter<S> {
@@ -154,8 +164,10 @@ impl<S: Snapshot> PointGetter<S> {
 
         match self.isolation_level {
             IsolationLevel::Si => {
-                // Check for locks that signal concurrent writes in Si.
-                self.load_and_check_lock(user_key)?;
+                if !self.ignore_lock {
+                    // Check for locks that signal concurrent writes in Si.
+                    self.load_and_check_lock(user_key)?;
+                }
             }
             IsolationLevel::Rc => {}
         }

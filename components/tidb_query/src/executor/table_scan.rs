@@ -57,6 +57,7 @@ impl<S: Storage> TableScanExecutor<S> {
         key_ranges: Vec<KeyRange>,
         storage: S,
         is_scanned_range_aware: bool,
+        scan_locks_first: bool,
     ) -> Result<Self> {
         let inner = TableInnerExecutor::new(&meta);
         let is_key_only = inner.is_key_only();
@@ -71,6 +72,7 @@ impl<S: Storage> TableScanExecutor<S> {
             is_key_only,
             accept_point_range: true,
             is_scanned_range_aware,
+            scan_locks_first,
         })
     }
 }

@@ -39,6 +39,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
         is_backward: bool,
+        scan_locks_first: bool,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
@@ -83,6 +84,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             is_backward,
             is_key_only,
             accept_point_range: true,
+            scan_locks_first,
         })?;
         Ok(Self(wrapper))
     }

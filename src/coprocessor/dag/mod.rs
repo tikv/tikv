@@ -21,6 +21,7 @@ pub fn build_handler<S: Store + 'static>(
     batch_row_limit: usize,
     is_streaming: bool,
     enable_batch_if_possible: bool,
+    scan_locks_first: bool,
 ) -> Result<Box<dyn RequestHandler>> {
     let mut is_batch = false;
     if enable_batch_if_possible && !is_streaming {
@@ -37,13 +38,19 @@ pub fn build_handler<S: Store + 'static>(
 
     if is_batch {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        Ok(BatchDAGHandler::new(req, ranges, store, deadline)?.into_boxed())
+        Ok(BatchDAGHandler::new(req, ranges, store, deadline, scan_locks_first)?.into_boxed())
     } else {
         COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
-        Ok(
-            DAGHandler::new(req, ranges, store, deadline, batch_row_limit, is_streaming)?
-                .into_boxed(),
-        )
+        Ok(DAGHandler::new(
+            req,
+            ranges,
+            store,
+            deadline,
+            batch_row_limit,
+            is_streaming,
+            scan_locks_first,
+        )?
+        .into_boxed())
     }
 }
 
@@ -57,6 +64,7 @@ impl DAGHandler {
         deadline: Deadline,
         batch_row_limit: usize,
         is_streaming: bool,
+        scan_locks_first: bool,
     ) -> Result<Self> {
         Ok(Self(tidb_query::executor::ExecutorsRunner::from_request(
             req,
@@ -65,6 +73,7 @@ impl DAGHandler {
             deadline,
             batch_row_limit,
             is_streaming,
+            scan_locks_first,
         )?))
     }
 }
@@ -91,6 +100,7 @@ impl BatchDAGHandler {
         ranges: Vec<KeyRange>,
         store: S,
         deadline: Deadline,
+        scan_locks_first: bool,
     ) -> Result<Self> {
         Ok(Self(
             tidb_query::batch::runner::BatchExecutorsRunner::from_request(
@@ -98,6 +108,7 @@ impl BatchDAGHandler {
                 ranges,
                 TiKVStorage::from(store),
                 deadline,
+                scan_locks_first,
             )?,
         ))
     }

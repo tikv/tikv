@@ -23,10 +23,13 @@ pub trait Storage: Send {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
+        ignore_lock: bool,
         range: IntervalRange,
     ) -> Result<()>;
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>>;
+
+    fn find_locks(&mut self, ranges: Vec<Range>) -> Result<()>;
 
     // TODO: Use const generics.
     // TODO: Use reference is better.
@@ -42,13 +45,18 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
+        ignore_lock: bool,
         range: IntervalRange,
     ) -> Result<()> {
-        (**self).begin_scan(is_backward_scan, is_key_only, range)
+        (**self).begin_scan(is_backward_scan, is_key_only, ignore_lock, range)
     }
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {
         (**self).scan_next()
+    }
+
+    fn find_locks(&mut self, ranges: Vec<Range>) -> Result<()> {
+        (**self).find_locks(ranges)
     }
 
     fn get(&mut self, is_key_only: bool, range: PointRange) -> Result<Option<OwnedKvPair>> {

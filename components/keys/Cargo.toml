@@ -10,9 +10,8 @@ derive_more = "0.15.0"
 failure = "0.1"
 farmhash = "1.1.5"
 hex = "0.3"
-kvproto = { git = "https://github.com/Fullstop000/kvproto.git", default-features = false }
+kvproto = { git = "https://github.com/Fullstop000/kvproto.git", default-features = false, branch = "batch_resolve_locks" }
 slog = "2.3"
-
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 

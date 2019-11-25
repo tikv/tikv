@@ -77,9 +77,19 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    #[inline]
+    pub fn ignore_lock(mut self, ignore_lock: bool) -> Self {
+        self.0.ignore_lock = ignore_lock;
+        self
+    }
+
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
-        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
+        let lock_cursor = if self.0.ignore_lock {
+            None
+        } else {
+            Some(self.0.create_cf_cursor(CF_LOCK)?)
+        };
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         if self.0.desc {
             Ok(Scanner::Backward(BackwardScanner::new(
@@ -150,6 +160,7 @@ pub struct ScannerConfig<S: Snapshot> {
     desc: bool,
 
     bypass_locks: TsSet,
+    ignore_lock: bool,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -164,6 +175,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             ts,
             desc,
             bypass_locks: Default::default(),
+            ignore_lock: false,
         }
     }
 

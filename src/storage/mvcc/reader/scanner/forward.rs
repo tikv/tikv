@@ -20,7 +20,7 @@ use super::ScannerConfig;
 /// Use `ScannerBuilder` to build `ForwardScanner`.
 pub struct ForwardScanner<S: Snapshot> {
     cfg: ScannerConfig<S>,
-    lock_cursor: Cursor<S::Iter>,
+    lock_cursor: Option<Cursor<S::Iter>>,
     write_cursor: Cursor<S::Iter>,
     /// `default cursor` is lazy created only when it's needed.
     default_cursor: Option<Cursor<S::Iter>>,
@@ -32,7 +32,7 @@ pub struct ForwardScanner<S: Snapshot> {
 impl<S: Snapshot> ForwardScanner<S> {
     pub fn new(
         cfg: ScannerConfig<S>,
-        lock_cursor: Cursor<S::Iter>,
+        lock_cursor: Option<Cursor<S::Iter>>,
         write_cursor: Cursor<S::Iter>,
     ) -> ForwardScanner<S> {
         ForwardScanner {
@@ -50,8 +50,8 @@ impl<S: Snapshot> ForwardScanner<S> {
         std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
-    /// Get the next key-value pair, in forward order.
-    pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
+    #[inline]
+    fn prepare(&mut self) -> Result<()> {
         if !self.is_started {
             if self.cfg.lower_bound.is_some() {
                 // TODO: `seek_to_first` is better, however it has performance issues currently.
@@ -59,19 +59,28 @@ impl<S: Snapshot> ForwardScanner<S> {
                     self.cfg.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
-                self.lock_cursor.seek(
-                    self.cfg.lower_bound.as_ref().unwrap(),
-                    &mut self.statistics.lock,
-                )?;
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.seek(
+                        self.cfg.lower_bound.as_ref().unwrap(),
+                        &mut self.statistics.lock,
+                    )?;
+                }
             } else {
                 self.write_cursor.seek_to_first(&mut self.statistics.write);
-                self.lock_cursor.seek_to_first(&mut self.statistics.lock);
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.seek_to_first(&mut self.statistics.lock);
+                }
             }
             self.is_started = true;
         }
+        Ok(())
+    }
+
+    /// Get the next key-value pair, in forward order.
+    pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
+        self.prepare()?;
 
         // The general idea is to simultaneously step write cursor and lock cursor.
-
         // TODO: We don't need to seek lock CF if isolation level is RC.
 
         loop {
@@ -93,8 +102,12 @@ impl<S: Snapshot> ForwardScanner<S> {
                 } else {
                     None
                 };
-                let l_key = if self.lock_cursor.valid()? {
-                    Some(self.lock_cursor.key(&mut self.statistics.lock))
+                let l_key = if let Some(lock_cursor) = &self.lock_cursor {
+                    if lock_cursor.valid()? {
+                        Some(lock_cursor.key(&mut self.statistics.lock))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -159,17 +172,21 @@ impl<S: Snapshot> ForwardScanner<S> {
                 match self.cfg.isolation_level {
                     IsolationLevel::Si => {
                         // Only needs to check lock in SI
-                        let lock = {
-                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                            Lock::parse(lock_value)?
-                        };
-                        result = lock
-                            .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
-                            .map(|_| None);
+                        if let Some(lock_cursor) = &self.lock_cursor {
+                            let lock = {
+                                let lock_value = lock_cursor.value(&mut self.statistics.lock);
+                                Lock::parse(lock_value)?
+                            };
+                            result = lock
+                                .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
+                                .map(|_| None);
+                        }
                     }
                     IsolationLevel::Rc => {}
                 }
-                self.lock_cursor.next(&mut self.statistics.lock);
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.next(&mut self.statistics.lock);
+                }
             }
             if has_write {
                 // We don't need to read version if there is a lock error already.

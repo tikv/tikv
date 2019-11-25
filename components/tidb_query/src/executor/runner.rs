@@ -35,13 +35,21 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
     ranges: Vec<KeyRange>,
     ctx: Arc<EvalConfig>,
     is_streaming: bool,
+    scan_locks_first: bool,
 ) -> Result<Box<dyn Executor<StorageStats = S::Statistics> + Send>> {
     let mut exec_descriptors = exec_descriptors.into_iter();
     let first = exec_descriptors
         .next()
         .ok_or_else(|| other_err!("No executor specified"))?;
 
-    let mut src = build_first_executor::<_, C>(first, storage, ranges, ctx.clone(), is_streaming)?;
+    let mut src = build_first_executor::<_, C>(
+        first,
+        storage,
+        ranges,
+        ctx.clone(),
+        is_streaming,
+        scan_locks_first,
+    )?;
     let mut summary_slot_index = 0;
 
     for mut exec in exec_descriptors {
@@ -112,6 +120,7 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
     ranges: Vec<KeyRange>,
     context: Arc<EvalConfig>,
     is_streaming: bool,
+    scan_locks_first: bool,
 ) -> Result<Box<dyn Executor<StorageStats = S::Statistics> + Send>> {
     let context = EvalContext::new(context);
     match first.get_tp() {
@@ -125,6 +134,7 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
                     ranges,
                     storage,
                     is_streaming,
+                    scan_locks_first,
                 )?
                 .with_summary_collector(C::new(0)),
             );
@@ -142,6 +152,7 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
                     storage,
                     unique,
                     is_streaming,
+                    scan_locks_first,
                 )?
                 .with_summary_collector(C::new(0)),
             );
@@ -159,6 +170,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
         deadline: Deadline,
         batch_row_limit: usize,
         is_streaming: bool,
+        scan_locks_first: bool,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -172,6 +184,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
                 ranges,
                 config,
                 is_streaming,
+                scan_locks_first,
             )?
         } else {
             build_executors::<_, ExecSummaryCollectorEnabled>(
@@ -180,6 +193,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
                 ranges,
                 config,
                 is_streaming,
+                scan_locks_first,
             )?
         };
 

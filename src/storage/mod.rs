@@ -462,6 +462,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 scanner = snap_store.scanner(
                                     false,
                                     options.key_only,
+                                    false,
                                     Some(start_key),
                                     end_key,
                                 )?;
@@ -469,6 +470,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                                 scanner = snap_store.scanner(
                                     true,
                                     options.key_only,
+                                    false,
                                     end_key,
                                     Some(start_key),
                                 )?;

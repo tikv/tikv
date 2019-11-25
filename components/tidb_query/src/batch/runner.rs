@@ -115,6 +115,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
     storage: S,
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
+    scan_locks_first: bool,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
@@ -140,6 +141,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                     columns_info,
                     ranges,
                     descriptor.get_desc(),
+                    scan_locks_first,
                 )?
                 .with_summary_collector(C::new(summary_slot_index)),
             );
@@ -159,6 +161,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                     ranges,
                     descriptor.get_desc(),
                     descriptor.get_unique(),
+                    scan_locks_first,
                 )?
                 .with_summary_collector(C::new(summary_slot_index)),
             );
@@ -306,6 +309,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
+        scan_locks_first: bool,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
@@ -318,6 +322,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 storage,
                 ranges,
                 config.clone(),
+                scan_locks_first,
             )?
         } else {
             build_executors::<_, ExecSummaryCollectorDisabled>(
@@ -325,6 +330,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 storage,
                 ranges,
                 config.clone(),
+                scan_locks_first,
             )?
         };
 

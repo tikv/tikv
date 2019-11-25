@@ -194,6 +194,7 @@ impl<E: Engine> Endpoint<E> {
                         batch_row_limit,
                         is_streaming,
                         enable_batch_if_possible,
+                        req.scan_all_locks,
                     )
                 });
             }
@@ -524,6 +525,10 @@ fn make_error_response(e: Error) -> coppb::Response {
         Error::Locked(info) => {
             tag = "meet_lock";
             resp.set_locked(info);
+        }
+        Error::MultiLocked(info) => {
+            tag = "meet_multiple_locks";
+            resp.set_all_locks(info.into());
         }
         Error::MaxExecuteTimeExceeded => {
             tag = "max_execute_time_exceeded";

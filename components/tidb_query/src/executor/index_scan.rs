@@ -77,6 +77,7 @@ impl<S: Storage> IndexScanExecutor<S> {
         storage: S,
         unique: bool,
         is_scanned_range_aware: bool,
+        scan_locks_first: bool,
     ) -> Result<Self> {
         let columns = meta.get_columns().to_vec();
         let inner = IndexInnerExecutor::new(&mut meta);
@@ -90,6 +91,7 @@ impl<S: Storage> IndexScanExecutor<S> {
             is_key_only: false,
             accept_point_range: unique,
             is_scanned_range_aware,
+            scan_locks_first,
         })
     }
 
@@ -114,6 +116,7 @@ impl<S: Storage> IndexScanExecutor<S> {
             is_key_only: false,
             accept_point_range: false,
             is_scanned_range_aware: false,
+            scan_locks_first: false,
         })
     }
 }

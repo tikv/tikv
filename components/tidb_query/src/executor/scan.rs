@@ -43,6 +43,7 @@ pub struct ScanExecutorOptions<S, T> {
     pub is_key_only: bool,
     pub accept_point_range: bool,
     pub is_scanned_range_aware: bool,
+    pub scan_locks_first: bool,
 }
 
 impl<S: Storage, T: InnerExecutor> ScanExecutor<S, T> {
@@ -57,6 +58,7 @@ impl<S: Storage, T: InnerExecutor> ScanExecutor<S, T> {
             is_key_only,
             accept_point_range,
             is_scanned_range_aware,
+            scan_locks_first,
         }: ScanExecutorOptions<S, T>,
     ) -> Result<Self> {
         box_try!(table::check_table_ranges(&key_ranges));
@@ -73,6 +75,7 @@ impl<S: Storage, T: InnerExecutor> ScanExecutor<S, T> {
             scan_backward_in_range: is_backward,
             is_key_only,
             is_scanned_range_aware,
+            scan_locks_first,
         });
 
         Ok(Self {

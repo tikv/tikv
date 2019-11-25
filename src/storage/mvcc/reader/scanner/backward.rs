@@ -29,7 +29,7 @@ const REVERSE_SEEK_BOUND: u64 = 16;
 /// Use `ScannerBuilder` to build `BackwardScanner`.
 pub struct BackwardScanner<S: Snapshot> {
     cfg: ScannerConfig<S>,
-    lock_cursor: Cursor<S::Iter>,
+    lock_cursor: Option<Cursor<S::Iter>>,
     write_cursor: Cursor<S::Iter>,
     /// `default cursor` is lazy created only when it's needed.
     default_cursor: Option<Cursor<S::Iter>>,
@@ -41,7 +41,7 @@ pub struct BackwardScanner<S: Snapshot> {
 impl<S: Snapshot> BackwardScanner<S> {
     pub fn new(
         cfg: ScannerConfig<S>,
-        lock_cursor: Cursor<S::Iter>,
+        lock_cursor: Option<Cursor<S::Iter>>,
         write_cursor: Cursor<S::Iter>,
     ) -> BackwardScanner<S> {
         BackwardScanner {
@@ -72,13 +72,17 @@ impl<S: Snapshot> BackwardScanner<S> {
                     self.cfg.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
-                self.lock_cursor.reverse_seek(
-                    self.cfg.upper_bound.as_ref().unwrap(),
-                    &mut self.statistics.lock,
-                )?;
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.reverse_seek(
+                        self.cfg.upper_bound.as_ref().unwrap(),
+                        &mut self.statistics.lock,
+                    )?;
+                }
             } else {
                 self.write_cursor.seek_to_last(&mut self.statistics.write);
-                self.lock_cursor.seek_to_last(&mut self.statistics.lock);
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.seek_to_last(&mut self.statistics.lock);
+                }
             }
             self.is_started = true;
         }
@@ -93,8 +97,12 @@ impl<S: Snapshot> BackwardScanner<S> {
                 } else {
                     None
                 };
-                let l_key = if self.lock_cursor.valid()? {
-                    Some(self.lock_cursor.key(&mut self.statistics.lock))
+                let l_key = if let Some(lock_cursor) = &self.lock_cursor {
+                    if lock_cursor.valid()? {
+                        Some(lock_cursor.key(&mut self.statistics.lock))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -134,17 +142,22 @@ impl<S: Snapshot> BackwardScanner<S> {
             if has_lock {
                 match self.cfg.isolation_level {
                     IsolationLevel::Si => {
-                        let lock = {
-                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                            Lock::parse(lock_value)?
-                        };
-                        result = lock
-                            .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
-                            .map(|_| None);
+                        // Only needs to check lock in SI
+                        if let Some(lock_cursor) = &self.lock_cursor {
+                            let lock = {
+                                let lock_value = lock_cursor.value(&mut self.statistics.lock);
+                                Lock::parse(lock_value)?
+                            };
+                            result = lock
+                                .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
+                                .map(|_| None);
+                        }
                     }
                     IsolationLevel::Rc => {}
                 }
-                self.lock_cursor.prev(&mut self.statistics.lock);
+                if let Some(lock_cursor) = self.lock_cursor.as_mut() {
+                    lock_cursor.next(&mut self.statistics.lock);
+                }
             }
             if has_write {
                 if result.is_ok() {

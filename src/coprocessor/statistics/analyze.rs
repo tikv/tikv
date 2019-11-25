@@ -180,7 +180,7 @@ impl<S: Snapshot> SampleBuilder<S> {
         let mut meta = TableScan::default();
         meta.set_columns(cols_info);
         let table_scanner =
-            ScanExecutor::table_scan(meta, EvalContext::default(), ranges, storage, false)?;
+            ScanExecutor::table_scan(meta, EvalContext::default(), ranges, storage, false, false)?;
         Ok(Self {
             data: table_scanner,
             col_len,
