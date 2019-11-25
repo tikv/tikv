@@ -440,44 +440,34 @@ mod tests {
     #[test]
     fn test_replace() {
         let cases = vec![
-            (vec![None, Some("a"), Some("b")], None),
-            (vec![Some("a"), None, Some("b")], None),
-            (vec![Some("a"), Some("b"), None], None),
+            ((None, None, None), None),
+            ((None, Some("a"), Some("b")), None),
+            ((Some("a"), None, Some("b")), None),
+            ((Some("a"), Some("b"), None), None),
             (
-                vec![Some("www.mysql.com"), Some("mysql"), Some("pingcap")],
+                (Some("www.mysql.com"), Some("mysql"), Some("pingcap")),
                 Some("www.pingcap.com"),
             ),
             (
-                vec![Some("www.mysql.com"), Some("w"), Some("1")],
+                (Some("www.mysql.com"), Some("w"), Some("1")),
                 Some("111.mysql.com"),
             ),
-            (vec![Some("1234"), Some("2"), Some("55")], Some("15534")),
-            (vec![Some(""), Some("a"), Some("b")], Some("")),
-            (vec![Some("abc"), Some(""), Some("d")], Some("abc")),
-            (vec![Some("aaa"), Some("a"), Some("")], Some("")),
-            (vec![Some("aaa"), Some("a"), Some("")], Some("")),
-            (
-                vec![Some("新年快乐"), Some("年"), Some("春")],
-                Some("新春快乐"),
-            ),
-            (
-                vec![Some("心想事成"), Some("心"), Some("❤️")],
-                Some("❤️想事成"),
-            ),
+            ((Some("1234"), Some("2"), Some("55")), Some("15534")),
+            ((Some(""), Some("a"), Some("b")), Some("")),
+            ((Some("abc"), Some(""), Some("d")), Some("abc")),
+            ((Some("aaa"), Some("a"), Some("")), Some("")),
+            ((Some("新年快乐"), Some("年"), Some("春")), Some("新春快乐")),
+            ((Some("心想事成"), Some("心"), Some("❤️")), Some("❤️想事成")),
         ];
 
-        for (args, expect_output) in cases {
-            let params = args.iter().map(|arg| arg.map(|s| s.as_bytes().to_vec()));
+        for ((s, from_str, to_str), expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_params(params)
+                .push_param(s.map(|s| s.as_bytes().to_vec()))
+                .push_param(from_str.map(|s| s.as_bytes().to_vec()))
+                .push_param(to_str.map(|s| s.as_bytes().to_vec()))
                 .evaluate(ScalarFuncSig::Replace)
                 .unwrap();
-            assert_eq!(
-                output,
-                expect_output.map(|s| s.as_bytes().to_vec()),
-                "args: {:?}",
-                args
-            );
+            assert_eq!(output, expect_output.map(|s| s.as_bytes().to_vec()));
         }
     }
 
