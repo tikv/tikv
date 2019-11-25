@@ -290,7 +290,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
-            | ScalarFuncSig::ToDays => (1, 1),
+            | ScalarFuncSig::ToDays
+            | ScalarFuncSig::FromDays => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -413,7 +414,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Format
             | ScalarFuncSig::FormatWithLocale
             | ScalarFuncSig::FoundRows
-            | ScalarFuncSig::FromDays
             | ScalarFuncSig::FromUnixTime1Arg
             | ScalarFuncSig::FromUnixTime2Arg
             | ScalarFuncSig::GetFormat
@@ -512,6 +512,11 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonKeys2ArgsSig
             | ScalarFuncSig::JsonValidStringSig
             | ScalarFuncSig::JsonValidOthersSig => return Err(Error::UnknownSignature(sig)),
+
+            // PbCode is unspecified
+            ScalarFuncSig::Unspecified => {
+                return Err(box_err!("TiDB internal error (unspecified PbCode)"))
+            }
         };
         if args < min_args || args > max_args {
             return Err(box_err!(
@@ -1019,6 +1024,7 @@ dispatch_call! {
         SubDatetimeAndDuration => sub_datetime_and_duration,
         SubDatetimeAndString => sub_datetime_and_string,
         SubTimeDateTimeNull => sub_time_datetime_null,
+        FromDays => from_days,
 
         IfNullTime => if_null_time,
         IfTime => if_time,
@@ -1272,6 +1278,7 @@ mod tests {
                     ScalarFuncSig::WeekDay,
                     ScalarFuncSig::WeekOfYear,
                     ScalarFuncSig::Year,
+                    ScalarFuncSig::FromDays,
                     ScalarFuncSig::UnaryNotInt,
                     ScalarFuncSig::UnaryNotReal,
                     ScalarFuncSig::UnaryNotDecimal,
@@ -1527,7 +1534,6 @@ mod tests {
             ScalarFuncSig::Format,
             ScalarFuncSig::FormatWithLocale,
             ScalarFuncSig::FoundRows,
-            ScalarFuncSig::FromDays,
             ScalarFuncSig::FromUnixTime1Arg,
             ScalarFuncSig::FromUnixTime2Arg,
             ScalarFuncSig::GetFormat,

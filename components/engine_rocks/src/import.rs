@@ -188,7 +188,10 @@ mod tests {
 
     fn check_db_with_kvs(db: &RocksEngine, cf: &str, kvs: &[(&str, &str)]) {
         for &(k, v) in kvs {
-            assert_eq!(db.get_cf(cf, k.as_bytes()).unwrap().unwrap(), v.as_bytes());
+            assert_eq!(
+                db.get_value_cf(cf, k.as_bytes()).unwrap().unwrap(),
+                v.as_bytes()
+            );
         }
     }
 

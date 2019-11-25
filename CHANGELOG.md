@@ -4,6 +4,8 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [Unreleased]
 - Make several `INFO` logs `DEBUG` and refined some log messages. (https://github.com/tikv/tikv/pull/4768)
+- `make docker` now builds the `pingcap/tikv` image, instead of the previous Dockerfile. (https://github.com/tikv/tikv/pull/5776)
+- `make dist_artifacts` now creates compressed archives of TiKV binaries and Docker images. (https://github.com/tikv/tikv/pull/5777)
 
 ## [3.0.3] - 2019-08-29
 + Fix the issue that ReadIndex might fail to respond to requests because of duplicate context [#5256](https://github.com/tikv/tikv/pull/5256)

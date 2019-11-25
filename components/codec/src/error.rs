@@ -2,8 +2,10 @@
 
 use std::io;
 
+use failure::{Backtrace, Fail};
+
 #[derive(Debug, Fail)]
-pub enum Error {
+pub enum ErrorInner {
     #[fail(display = "Io error: {}", _0)]
     Io(#[fail(cause)] io::Error),
 
@@ -11,23 +13,58 @@ pub enum Error {
     BadPadding,
 }
 
-impl Error {
-    pub(crate) fn eof() -> Box<Error> {
+impl ErrorInner {
+    #[inline]
+    pub(crate) fn eof() -> ErrorInner {
         io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF").into()
     }
 
-    pub(crate) fn bad_padding() -> Box<Error> {
-        Error::BadPadding.into()
+    #[inline]
+    pub(crate) fn bad_padding() -> ErrorInner {
+        ErrorInner::BadPadding
     }
 }
 
-impl From<io::Error> for Box<Error> {
+impl From<io::Error> for ErrorInner {
+    #[inline]
     fn from(e: io::Error) -> Self {
-        Error::Io(e).into()
+        ErrorInner::Io(e)
     }
 }
 
-// Box the error in case of large data structure when there is no error.
-pub type Result<T> = std::result::Result<T, Box<Error>>;
+// ====== The code below is to box the error so that the it can be as small as possible ======
+
+impl Fail for Box<ErrorInner> {
+    #[inline]
+    fn cause(&self) -> Option<&dyn Fail> {
+        (**self).cause()
+    }
+
+    #[inline]
+    fn backtrace(&self) -> Option<&Backtrace> {
+        (**self).backtrace()
+    }
+}
+
+#[derive(Debug, Fail)]
+#[fail(display = "{}", _0)]
+pub struct Error(#[fail(cause)] pub Box<ErrorInner>);
+
+impl From<ErrorInner> for Error {
+    #[inline]
+    fn from(e: ErrorInner) -> Self {
+        Error(Box::new(e))
+    }
+}
+
+impl<T: Into<ErrorInner>> From<T> for Error {
+    #[inline]
+    default fn from(err: T) -> Self {
+        let err = err.into();
+        err.into()
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 const_assert!(8 == std::mem::size_of::<Result<()>>());
