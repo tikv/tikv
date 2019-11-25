@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryFrom;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
-use std::convert::TryFrom;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
