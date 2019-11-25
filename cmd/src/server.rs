@@ -7,6 +7,7 @@ use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
+use futures_cpupool::Builder;
 use kvproto::backup::create_backup;
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::create_debug;
@@ -237,11 +238,21 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Arc::clone(&importer),
     );
 
+    // The `DebugService` and `DiagnosticsService` will share the same thread pool
+    let pool = Builder::new()
+        .name_prefix(thd_name!("debugger"))
+        .pool_size(1)
+        .create();
     // Create Debug service.
-    let debug_service = DebugService::new(engines.clone(), raft_router.clone(), gc_worker.clone());
+    let debug_service = DebugService::new(
+        engines.clone(),
+        pool.clone(),
+        raft_router.clone(),
+        gc_worker.clone(),
+    );
 
     // Create Diagnostics service
-    let diag_service = DiagnosticsService::new(cfg.log_file.clone());
+    let diag_service = DiagnosticsService::new(pool, cfg.log_file.clone());
 
     // Create Backup service.
     let mut backup_worker = tikv_util::worker::Worker::new("backup-endpoint");

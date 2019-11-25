@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::Future;
+use futures_cpupool::CpuPool;
 use grpcio::{RpcContext, UnarySink};
 use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
@@ -11,12 +12,13 @@ use crate::server::Error;
 /// Service handles the RPC messages for the `Diagnostics` service.
 #[derive(Clone)]
 pub struct Service {
+    pool: CpuPool,
     log_file: String,
 }
 
 impl Service {
-    pub fn new(log_file: String) -> Self {
-        Service { log_file }
+    pub fn new(pool: CpuPool, log_file: String) -> Self {
+        Service { pool, log_file }
     }
 }
 
@@ -31,7 +33,8 @@ impl Diagnostics for Service {
             .map_err(|err| Error::Other(box_err!("Search log error: {:?}", err)))
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map_err(|e| debug!("Diagnostics rpc failed"; "err" => ?e));
-        ctx.spawn(future);
+        let f = self.pool.spawn(future);
+        ctx.spawn(f);
     }
 
     fn server_info(
