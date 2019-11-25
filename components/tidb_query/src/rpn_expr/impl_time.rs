@@ -75,7 +75,7 @@ pub fn month(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>>
                 .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
                 .map(|_| Ok(None))?;
         }
-        return Ok(Some(0))
+        return Ok(Some(0));
     }
     Ok(Some(Int::from(t.month())))
 }
