@@ -269,7 +269,7 @@ impl<S: Snapshot> PointGetter<S> {
 mod tests {
     use super::*;
 
-    use engine::rocks::SyncSnapshot;
+    use engine_rocks::RocksSyncSnapshot;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     use crate::storage::mvcc::tests::*;
@@ -621,9 +621,9 @@ mod tests {
         must_get_none(&mut getter, b"foo3");
 
         fn new_omit_value_single_point_getter(
-            snapshot: SyncSnapshot,
+            snapshot: RocksSyncSnapshot,
             ts: TimeStamp,
-        ) -> PointGetter<SyncSnapshot> {
+        ) -> PointGetter<RocksSyncSnapshot> {
             PointGetterBuilder::new(snapshot, ts)
                 .isolation_level(IsolationLevel::Si)
                 .omit_value(true)

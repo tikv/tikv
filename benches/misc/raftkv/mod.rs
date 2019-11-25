@@ -14,6 +14,8 @@ use engine;
 use engine::rocks;
 use engine::rocks::DB;
 use engine::{ALL_CFS, CF_DEFAULT};
+use engine_rocks::RocksSnapshot;
+use engine_traits::Snapshot;
 use tikv::raftstore::store::{
     cmd_resp, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
     SignificantMsg, WriteResponse,
@@ -43,7 +45,7 @@ impl SyncBenchRouter {
         cmd_resp::bind_term(&mut response, 1);
         match cmd.callback {
             Callback::Read(cb) => {
-                let snapshot = engine::Snapshot::new(Arc::clone(&self.db));
+                let snapshot = RocksSnapshot::new(Arc::clone(&self.db));
                 let region = self.region.to_owned();
                 cb(ReadResponse {
                     response,
@@ -94,7 +96,7 @@ fn new_engine() -> (TempDir, Arc<DB>) {
 #[bench]
 fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     let (_dir, db) = new_engine();
-    let snapshot = engine::Snapshot::new(Arc::clone(&db));
+    let snapshot = RocksSnapshot::new(Arc::clone(&db));
     let resp = ReadResponse {
         response: RaftCmdResponse::default(),
         snapshot: Some(RegionSnapshot::from_snapshot(
