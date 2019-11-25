@@ -56,7 +56,7 @@ pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<In
 pub fn period_add(p: &Option<Int>, n: &Option<Int>) -> Result<Option<Int>> {
     match (p, n) {
         (Some(p), Some(n)) => {
-            let (month, _) = (i64::from(period_to_month(*p as u64) as i32)).overflowing_add(n);
+            let (month, _) = (i64::from(period_to_month(*p as u64) as i32)).overflowing_add(*n);
             Ok(Some(month_to_period(u64::from(month as u32)) as i64))
         }
         _ => Ok(None),
