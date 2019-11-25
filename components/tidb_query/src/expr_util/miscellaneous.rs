@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-pub fn inet_aton(arg: Cow<str>) -> Option<i64> {
+pub fn inet_aton(addr: Cow<str>) -> Option<i64> {
     if addr.len() == 0 || addr.ends_with('.') {
         return None;
     }
