@@ -319,6 +319,7 @@ impl From<codec::Error> for ErrorInner {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Generates `DefaultNotFound` error or panic directly based on config.
+#[inline(never)]
 pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
     CRITICAL_ERROR
         .with_label_values(&["default value not found"])
