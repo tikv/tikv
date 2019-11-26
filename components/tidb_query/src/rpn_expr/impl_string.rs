@@ -987,6 +987,7 @@ mod tests {
     #[test]
     fn test_space() {
         let test_cases = vec![
+            (None, None),
             (Some(0), Some(b"".to_vec())),
             (Some(0), Some(b"".to_vec())),
             (Some(3), Some(b"   ".to_vec())),
