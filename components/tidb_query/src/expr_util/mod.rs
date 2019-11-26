@@ -2,4 +2,5 @@
 
 //! Common utility implementations for both RPN expression and normal expression.
 
+pub mod conv;
 pub mod like;
