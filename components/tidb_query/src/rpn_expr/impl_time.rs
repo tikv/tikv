@@ -84,6 +84,12 @@ pub fn date_diff(
     }
 }
 
+#[rpn_fn]
+#[inline]
+pub fn month(t: &Option<DateTime>) -> Result<Option<Int>> {
+    t.map_or(Ok(None), |time| Ok(Some(Int::from(time.month()))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,5 +334,32 @@ mod tests {
             .evaluate::<Time>(ScalarFuncSig::DateDiff)
             .unwrap();
         assert_eq!(output, None);
+    }
+    fn test_month() {
+        let cases = vec![
+            (Some("0000-00-00 00:00:00"), Some(0i64)),
+            (Some("2018-01-01 01:01:01"), Some(1i64)),
+            (Some("2018-02-01 01:01:01"), Some(2i64)),
+            (Some("2018-03-01 01:01:01"), Some(3i64)),
+            (Some("2018-04-01 01:01:01"), Some(4i64)),
+            (Some("2018-05-01 01:01:01"), Some(5i64)),
+            (Some("2018-06-01 01:01:01"), Some(6i64)),
+            (Some("2018-07-01 01:01:01"), Some(7i64)),
+            (Some("2018-08-01 01:01:01"), Some(8i64)),
+            (Some("2018-09-01 01:01:01"), Some(9i64)),
+            (Some("2018-10-01 01:01:01"), Some(10i64)),
+            (Some("2018-11-01 01:01:01"), Some(11i64)),
+            (Some("2018-12-01 01:01:01"), Some(12i64)),
+            (None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (time, expect) in cases {
+            let time = time.map(|t| DateTime::parse_datetime(&mut ctx, t, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(time)
+                .evaluate(ScalarFuncSig::Month)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
     }
 }
