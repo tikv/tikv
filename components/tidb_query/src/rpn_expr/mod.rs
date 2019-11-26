@@ -113,6 +113,26 @@ fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     }
 }
 
+pub fn map_unary_minus_int_func(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 1 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    if children[0]
+        .get_field_type()
+        .as_accessor()
+        .flag()
+        .contains(FieldTypeFlag::UNSIGNED)
+    {
+        Ok(unary_minus_uint_fn_meta())
+    } else {
+        Ok(unary_minus_int_fn_meta())
+    }
+}
+
 #[rustfmt::skip]
 fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
     let value = expr.get_sig();
@@ -186,6 +206,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::UnaryNotInt => unary_not_int_fn_meta(),
         ScalarFuncSig::UnaryNotReal => unary_not_real_fn_meta(),
         ScalarFuncSig::UnaryNotDecimal => unary_not_decimal_fn_meta(),
+        ScalarFuncSig::UnaryMinusInt => map_unary_minus_int_func(value, children)?,
+        ScalarFuncSig::UnaryMinusReal => unary_minus_real_fn_meta(),
+        ScalarFuncSig::UnaryMinusDecimal => unary_minus_decimal_fn_meta(),
         ScalarFuncSig::BitAndSig => bit_and_fn_meta(),
         ScalarFuncSig::BitOrSig => bit_or_fn_meta(),
         ScalarFuncSig::BitXorSig => bit_xor_fn_meta(),
