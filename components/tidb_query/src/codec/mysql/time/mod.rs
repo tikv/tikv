@@ -498,7 +498,7 @@ mod parser {
 }
 
 impl Time {
-    fn parse(
+    pub fn parse(
         ctx: &mut EvalContext,
         input: &str,
         time_type: TimeType,
