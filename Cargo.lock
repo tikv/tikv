@@ -116,6 +116,7 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
+ "crc64fast",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -124,6 +125,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -391,6 +393,7 @@ dependencies = [
  "fail",
  "fs2",
  "futures",
+ "futures-cpupool",
  "grpcio",
  "hex",
  "kvproto",
@@ -424,7 +427,7 @@ dependencies = [
  "panic_hook",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.2",
- "static_assertions 1.0.0",
+ "static_assertions 1.1.0",
  "tikv_alloc",
 ]
 
@@ -489,6 +492,12 @@ checksum = "ba125de2af0df55319f41944744ad91c71113bf74a4646efff39afe1f6842db1"
 dependencies = [
  "cfg-if",
 ]
+
+[[package]]
+name = "crc64fast"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a82510de0a7cadd51dc68ff17da70aea0c80157f902230f9b157cecc2566318"
 
 [[package]]
 name = "criterion"
@@ -719,7 +728,7 @@ dependencies = [
 name = "engine"
 version = "0.0.1"
 dependencies = [
- "crc",
+ "engine_traits",
  "hex",
  "kvproto",
  "lazy_static",
@@ -744,7 +753,6 @@ dependencies = [
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
- "crc",
  "engine",
  "engine_traits",
  "hex",
@@ -759,6 +767,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
+ "static_assertions 1.1.0",
  "sys-info",
  "tempfile",
  "tikv_alloc",
@@ -1361,9 +1370,11 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
+ "farmhash",
  "hex",
  "kvproto",
  "panic_hook",
+ "slog",
  "tikv_alloc",
  "tikv_util",
 ]
@@ -1371,7 +1382,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#45e0702fff1eb53ef709e365becd907e2152476b"
+source = "git+https://github.com/pingcap/kvproto.git#4c654046831d1f4d7db8e4d44f7a6d0b35c33168"
 dependencies = [
  "futures",
  "grpcio",
@@ -1437,7 +1448,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#23a604459899f4f7a4c8967f16b6fa623474f27b"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3c11d292d545c5a028d621507d8479dbb4ef2945"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1454,7 +1465,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#23a604459899f4f7a4c8967f16b6fa623474f27b"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3c11d292d545c5a028d621507d8479dbb4ef2945"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1971,6 +1982,7 @@ dependencies = [
  "futures",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "lazy_static",
  "log",
@@ -2226,7 +2238,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/nrc/rust-protobuf?branch=v2.8#41b1542f4c8215d952834ffd0728f465c6d01a9e"
+source = "git+https://github.com/nrc/rust-protobuf?branch=v2.8#4df576feca3b10c01d55b0e7c634bfab30982087"
 dependencies = [
  "heck",
  "protobuf 2.8.0 (git+https://github.com/nrc/rust-protobuf?branch=v2.8)",
@@ -2615,6 +2627,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rev_lines"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18eb52b6664d331053136fcac7e4883bdc6f5fc04a6aab3b0f75eafb80ab88b3"
+
+[[package]]
 name = "rgb"
 version = "0.8.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2623,7 +2641,7 @@ checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#23a604459899f4f7a4c8967f16b6fa623474f27b"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#3c11d292d545c5a028d621507d8479dbb4ef2945"
 dependencies = [
  "crc",
  "libc",
@@ -2928,8 +2946,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sst_importer"
 version = "0.1.0"
 dependencies = [
- "crc",
- "engine",
+ "crc32fast",
  "engine_traits",
  "external_storage",
  "futures",
@@ -2975,9 +2992,9 @@ checksum = "c19be23126415861cb3a23e501d34a708f7f9b2183c5252d690941c2e69199d5"
 
 [[package]]
 name = "static_assertions"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fa13613355688665b68639b1c378a62dbedea78aff0fc59a4fa656cbbdec657"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "str_stack"
@@ -3169,8 +3186,10 @@ version = "0.0.1"
 dependencies = [
  "engine",
  "futures",
+ "futures-cpupool",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "pd_client",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3189,7 +3208,7 @@ dependencies = [
 name = "test_sst_importer"
 version = "0.1.0"
 dependencies = [
- "crc",
+ "crc32fast",
  "engine",
  "engine_rocks",
  "engine_traits",
@@ -3203,6 +3222,7 @@ name = "test_storage"
 version = "0.0.1"
 dependencies = [
  "futures",
+ "keys",
  "kvproto",
  "test_raftstore",
  "tikv",
@@ -3251,7 +3271,6 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "codec",
- "crc",
  "derive_more",
  "failure",
  "flate2",
@@ -3322,18 +3341,20 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
- "crc",
+ "codec",
+ "crc32fast",
+ "crc64fast",
  "criterion",
  "criterion-cpu-time",
  "criterion-papi",
  "crossbeam",
+ "derive-new",
  "derive_more",
  "engine",
  "engine_rocks",
  "engine_traits",
  "fail",
  "failure",
- "farmhash",
  "fs2",
  "futures",
  "futures-cpupool",
@@ -3351,6 +3372,7 @@ dependencies = [
  "more-asserts",
  "murmur3",
  "nix 0.11.1",
+ "nom 5.0.1",
  "panic_hook",
  "pd_client",
  "pprof",
@@ -3365,6 +3387,7 @@ dependencies = [
  "rand 0.6.5",
  "rand_xorshift",
  "regex",
+ "rev_lines",
  "serde",
  "serde_derive",
  "serde_json",
@@ -3426,7 +3449,7 @@ dependencies = [
  "backtrace",
  "byteorder",
  "chrono",
- "crc",
+ "crc32fast",
  "crossbeam",
  "fail",
  "futures",
