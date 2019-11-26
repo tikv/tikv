@@ -269,7 +269,7 @@ impl SnapContext {
     /// Applies snapshot data of the Region.
     fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("begin apply snap data"; "region_id" => region_id);
-        fail_point!("region_apply_snap");
+        fail_point!("region_apply_snap", |_| { Ok(()) });
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
@@ -296,6 +296,7 @@ impl SnapContext {
             self.use_delete_range
         ));
         check_abort(&abort)?;
+        fail_point!("apply_snap_cleanup_range");
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =

@@ -159,7 +159,11 @@ impl Simulator for ServerCluster {
             Arc::clone(&importer),
         );
         // Create Debug service.
-        let debug_service = DebugService::new(engines.clone(), raft_router.clone());
+        let debug_service = DebugService::new(
+            engines.clone(),
+            raft_router.clone(),
+            store.gc_worker.clone(),
+        );
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
