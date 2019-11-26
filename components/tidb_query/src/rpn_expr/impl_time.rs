@@ -91,6 +91,30 @@ pub fn month(t: &Option<DateTime>) -> Result<Option<Int>> {
     t.map_or(Ok(None), |time| Ok(Some(Int::from(time.month()))))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn hour(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.hours())))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn minute(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.minutes())))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn second(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.secs())))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn micro_second(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.subsec_micros())))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,5 +388,54 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect);
         }
+    }
+
+    #[test]
+    fn test_hour_min_sec_micro_sec() {
+        // test hour, minute, second, micro_second
+        let cases: Vec<(&str, i8, i64, i64, i64, i64)> = vec![
+            ("0 00:00:00.0", 0, 0, 0, 0, 0),
+            ("31 11:30:45", 0, 31 * 24 + 11, 30, 45, 0),
+            ("11:30:45.123345", 3, 11, 30, 45, 123000),
+            ("11:30:45.123345", 5, 11, 30, 45, 123350),
+            ("11:30:45.123345", 6, 11, 30, 45, 123345),
+            ("11:30:45.1233456", 6, 11, 30, 45, 123346),
+            ("11:30:45.000010", 6, 11, 30, 45, 10),
+            ("11:30:45.00010", 5, 11, 30, 45, 100),
+            ("-11:30:45.9233456", 0, 11, 30, 46, 0),
+            ("-11:30:45.9233456", 1, 11, 30, 45, 900000),
+            ("272:59:59.94", 2, 272, 59, 59, 940000),
+            ("272:59:59.99", 1, 273, 0, 0, 0),
+            ("272:59:59.99", 0, 273, 0, 0, 0),
+        ];
+
+        for (arg, fsp, h, m, s, ms) in cases {
+            let duration = Some(Duration::parse(arg.as_bytes(), fsp).unwrap());
+            let test_case_func = |sig, res| {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(duration.clone())
+                    .evaluate::<Int>(sig)
+                    .unwrap();
+                assert_eq!(output, Some(res));
+            };
+            test_case_func(ScalarFuncSig::Hour, h);
+            test_case_func(ScalarFuncSig::Minute, m);
+            test_case_func(ScalarFuncSig::Second, s);
+            test_case_func(ScalarFuncSig::MicroSecond, ms);
+        }
+
+        // test NULL case
+        let test_null_case = |sig| {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(None::<Duration>)
+                .evaluate::<Int>(sig)
+                .unwrap();
+            assert_eq!(output, None);
+        };
+
+        test_null_case(ScalarFuncSig::Hour);
+        test_null_case(ScalarFuncSig::Minute);
+        test_null_case(ScalarFuncSig::Second);
+        test_null_case(ScalarFuncSig::MicroSecond);
     }
 }
