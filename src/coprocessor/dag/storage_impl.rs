@@ -72,12 +72,16 @@ impl<S: Store> Storage for TiKVStorage<S> {
     }
 
     fn scan_next_finalize(&mut self) -> QEResult<()> {
-        Ok(self
-            .scanner
-            .as_mut()
-            .unwrap()
-            .next_ref_finalize(self.last_key.as_ref().unwrap())
-            .map_err(Error::from)?)
+        if let Some(last_key) = &self.last_key {
+            Ok(self
+                .scanner
+                .as_mut()
+                .unwrap()
+                .next_ref_finalize(last_key)
+                .map_err(Error::from)?)
+        } else {
+            Ok(())
+        }
     }
 
     fn get(&mut self, _is_key_only: bool, range: PointRange) -> QEResult<Option<OwnedKvPair>> {
