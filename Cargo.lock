@@ -393,6 +393,7 @@ dependencies = [
  "fail",
  "fs2",
  "futures",
+ "futures-cpupool",
  "grpcio",
  "hex",
  "kvproto",
@@ -1381,7 +1382,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#47672e7eabc02c4f7c6a971926293c9670dc7767"
+source = "git+https://github.com/pingcap/kvproto.git#4c654046831d1f4d7db8e4d44f7a6d0b35c33168"
 dependencies = [
  "futures",
  "grpcio",
@@ -2626,6 +2627,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rev_lines"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18eb52b6664d331053136fcac7e4883bdc6f5fc04a6aab3b0f75eafb80ab88b3"
+
+[[package]]
 name = "rgb"
 version = "0.8.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3179,6 +3186,7 @@ version = "0.0.1"
 dependencies = [
  "engine",
  "futures",
+ "futures-cpupool",
  "grpcio",
  "hex",
  "keys",
@@ -3364,6 +3372,7 @@ dependencies = [
  "more-asserts",
  "murmur3",
  "nix 0.11.1",
+ "nom 5.0.1",
  "panic_hook",
  "pd_client",
  "pprof",
@@ -3378,6 +3387,7 @@ dependencies = [
  "rand 0.6.5",
  "rand_xorshift",
  "regex",
+ "rev_lines",
  "serde",
  "serde_derive",
  "serde_json",
