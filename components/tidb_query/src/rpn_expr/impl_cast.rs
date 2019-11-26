@@ -1883,8 +1883,9 @@ mod tests {
             let actual = RpnFnScalarEvaluator::new()
                 .push_param(case)
                 .return_field_type(FieldTypeBuilder::new().tp(FieldTypeTp::Date).build())
-                .evaluate::<Time>(ScalarFuncSig::CastIntAsTime);
-            assert!(actual.is_err());
+                .evaluate::<Time>(ScalarFuncSig::CastIntAsTime)
+                .unwrap();
+            assert!(actual.is_none());
         }
     }
 
