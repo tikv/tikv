@@ -3,6 +3,7 @@
 use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
@@ -886,6 +887,19 @@ impl<E: Engine> Debugger<E> {
         res.push((
             "middle_key_by_approximate_size".to_string(),
             escape(&middle_key),
+        ));
+        res.push((
+            "sst_files".to_string(),
+            collection
+                .into_iter()
+                .map(|(k, _)| {
+                    Path::new(k)
+                        .file_name()
+                        .map(|f| f.to_str().unwrap())
+                        .unwrap_or(k)
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
         ));
         Ok(res)
     }
