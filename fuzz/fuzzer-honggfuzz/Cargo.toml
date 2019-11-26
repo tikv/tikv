@@ -5,4 +5,4 @@ publish = false
 
 [dependencies]
 fuzz-targets = {path = "../targets"}
-honggfuzz = "0.5"
+honggfuzz = "0.5.45"

@@ -469,6 +469,33 @@ mod parser {
             _ => None,
         }
     }
+
+    /// Try to parse a `u64` into a `Time` with the given type and fsp
+    pub fn parse_from_u64(
+        ctx: &mut EvalContext,
+        input: u64,
+        time_type: TimeType,
+        fsp: u8,
+    ) -> Option<Time> {
+        if input == 0 {
+            return Time::zero(ctx, fsp as i8, time_type).ok();
+        }
+        // NOTE: These numbers can be consider as strings
+        // The parser eats two digits each time from the end of string,
+        // and fill it into `Time` with reversed order.
+        // Port from: https://github.com/pingcap/tidb/blob/b1aad071489619998e4caefd235ed01f179c2db2/types/time.go#L1263
+        let aligned = match input {
+            101..=691_231 => (input + 20_000_000) * 1_000_000,
+            700_101..=991_231 => (input + 19_000_000) * 1_000_000,
+            10_000_101..=99_991_231 => input * 1_000_000,
+            101_000_000..=691_231_235_959 => input + 20_000_000_000_000,
+            700_101_000_000..=991_231_235_959 => input + 19_000_000_000_000,
+            1_000_000_000_000..=std::u64::MAX => input,
+            _ => return None,
+        };
+
+        Time::from_aligned_u64(ctx, aligned, time_type, fsp as i8).ok()
+    }
 }
 
 impl Time {
@@ -500,6 +527,15 @@ impl Time {
         round: bool,
     ) -> Result<Time> {
         Self::parse(ctx, input, TimeType::Timestamp, fsp, round)
+    }
+    pub fn parse_from_u64(
+        ctx: &mut EvalContext,
+        input: u64,
+        time_type: TimeType,
+        fsp: i8,
+    ) -> Result<Time> {
+        parser::parse_from_u64(ctx, input, time_type, check_fsp(fsp)?)
+            .ok_or_else(|| Error::incorrect_datetime_value(input))
     }
 }
 
@@ -733,6 +769,42 @@ impl Time {
         .ok()
     }
 
+    /// Construct a `Time` via a number in format: yyyymmddhhmmss
+    fn from_aligned_u64(
+        ctx: &mut EvalContext,
+        input: u64,
+        time_type: TimeType,
+        fsp: i8,
+    ) -> Result<Time> {
+        let ymd = (input / 1_000_000) as u32;
+        let hms = (input % 1_000_000) as u32;
+
+        let year = ymd / 10_000;
+        let md = ymd % 10_000 as u32;
+        let month = md / 100;
+        let day = md % 100;
+
+        let hour = hms / 10_000;
+        let ms = hms % 10_000;
+        let minute = ms / 100;
+        let second = ms % 100;
+
+        Time::new(
+            ctx,
+            TimeArgs {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                micro: 0,
+                time_type,
+                fsp,
+            },
+        )
+    }
+
     fn into_array(self) -> [u32; 7] {
         let mut slice = [0; 7];
         slice[0] = self.year();
@@ -858,11 +930,8 @@ impl Time {
         self.0 == 0
     }
 
-    pub fn zero(fsp: i8, time_type: TimeType) -> Result<Self> {
-        Ok(Time::unchecked_new(TimeArgs::zero(
-            check_fsp(fsp)? as i8,
-            time_type,
-        )))
+    pub fn zero(ctx: &mut EvalContext, fsp: i8, time_type: TimeType) -> Result<Self> {
+        Time::new(ctx, TimeArgs::zero(fsp, time_type))
     }
 
     #[inline]
@@ -1694,6 +1763,43 @@ mod tests {
 
             EvalContext::new(Arc::new(eval_config))
         }
+    }
+
+    #[test]
+    fn test_parse_from_u64() -> Result<()> {
+        let cases = vec![
+            ("0000-00-00 00:00:00", 0),
+            ("2000-01-01 00:00:00", 101),
+            ("2045-00-00 00:00:00", 450_000),
+            ("2059-12-31 00:00:00", 591_231),
+            ("1970-01-01 00:00:00", 700_101),
+            ("1999-12-31 00:00:00", 991_231),
+            ("2000-01-01 00:00:00", 101_000_000),
+            ("2069-12-31 23:59:59", 691_231_235_959),
+            ("1970-01-01 00:00:00", 700_101_000_000),
+            ("1999-12-31 23:59:59", 991_231_235_959),
+            ("0100-00-00 00:00:00", 1_000_000_000_000),
+            ("1000-01-01 00:00:00", 10_000_101_000_000),
+            ("1999-01-01 00:00:00", 19_990_101_000_000),
+        ];
+        let mut ctx = EvalContext::default();
+        for (expected, input) in cases {
+            let actual = Time::parse_from_u64(&mut ctx, input, TimeType::DateTime, 0)?;
+            assert_eq!(actual.to_string(), expected);
+        }
+
+        let should_fail = vec![
+            1,
+            100,
+            700_100,
+            10_000_100,
+            100_000_000,
+            100_000_101_000_000,
+        ];
+        for case in should_fail {
+            assert!(Time::parse_from_u64(&mut ctx, case, TimeType::DateTime, 0).is_err());
+        }
+        Ok(())
     }
 
     #[test]

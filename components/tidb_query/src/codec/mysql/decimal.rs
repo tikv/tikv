@@ -2234,10 +2234,13 @@ pub trait DecimalDecoder: NumberDecoder {
         }
         if trailing_digits > 0 {
             let x = read_word(self, DIG_2_BYTES[trailing_digits] as usize, &mut is_first)? ^ mask;
-            d.word_buf[word_idx] = x * TEN_POW[DIGITS_PER_WORD as usize - trailing_digits];
-            if d.word_buf[word_idx] > WORD_MAX {
-                return Err(box_err!("invalid trailing digits for decimal number"));
-            }
+            d.word_buf[word_idx] =
+                match x.checked_mul(TEN_POW[DIGITS_PER_WORD as usize - trailing_digits]) {
+                    Some(v) if v <= WORD_MAX => v,
+                    _ => {
+                        return Err(box_err!("invalid trailing digits for decimal number"));
+                    }
+                }
         }
         if d.int_cnt == 0 && d.frac_cnt == 0 {
             d.reset_to_zero();
