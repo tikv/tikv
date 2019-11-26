@@ -309,9 +309,8 @@ mod tests {
         ];
 
         for (arg, expect_output) in test_cases {
-            let arg = arg.map(|s| s.as_bytes().to_vec());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg)
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
                 .evaluate(ScalarFuncSig::Length)
                 .unwrap();
             assert_eq!(output, expect_output);
@@ -501,9 +500,8 @@ mod tests {
         ];
 
         for (arg, expect_output) in test_cases {
-            let arg = arg.map(|s| s.as_bytes().to_vec());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg)
+                .push_param(arg.map(|s| s.as_bytes().to_vec()))
                 .evaluate(ScalarFuncSig::BitLength)
                 .unwrap();
             assert_eq!(output, expect_output);
@@ -660,90 +658,73 @@ mod tests {
     #[test]
     fn test_replace() {
         let cases = vec![
-            ((None, None, None), None),
-            ((None, Some(b"a".to_vec()), Some(b"b".to_vec())), None),
-            ((Some(b"a".to_vec()), None, Some(b"b".to_vec())), None),
-            ((Some(b"a".to_vec()), Some(b"b".to_vec()), None), None),
+            (None, None, None, None),
+            (None, Some(b"a".to_vec()), Some(b"b".to_vec()), None),
+            (Some(b"a".to_vec()), None, Some(b"b".to_vec()), None),
+            (Some(b"a".to_vec()), Some(b"b".to_vec()), None, None),
             (
-                (
-                    Some(b"www.mysql.com".to_vec()),
-                    Some(b"mysql".to_vec()),
-                    Some(b"pingcap".to_vec()),
-                ),
+                Some(b"www.mysql.com".to_vec()),
+                Some(b"mysql".to_vec()),
+                Some(b"pingcap".to_vec()),
                 Some(b"www.pingcap.com".to_vec()),
             ),
             (
-                (
-                    Some(b"www.mysql.com".to_vec()),
-                    Some(b"w".to_vec()),
-                    Some(b"1".to_vec()),
-                ),
+                Some(b"www.mysql.com".to_vec()),
+                Some(b"w".to_vec()),
+                Some(b"1".to_vec()),
                 Some(b"111.mysql.com".to_vec()),
             ),
             (
-                (
-                    Some(b"1234".to_vec()),
-                    Some(b"2".to_vec()),
-                    Some(b"55".to_vec()),
-                ),
+                Some(b"1234".to_vec()),
+                Some(b"2".to_vec()),
+                Some(b"55".to_vec()),
                 Some(b"15534".to_vec()),
             ),
             (
-                (Some(b"".to_vec()), Some(b"a".to_vec()), Some(b"b".to_vec())),
+                Some(b"".to_vec()),
+                Some(b"a".to_vec()),
+                Some(b"b".to_vec()),
                 Some(b"".to_vec()),
             ),
             (
-                (
-                    Some(b"abc".to_vec()),
-                    Some(b"".to_vec()),
-                    Some(b"d".to_vec()),
-                ),
+                Some(b"abc".to_vec()),
+                Some(b"".to_vec()),
+                Some(b"d".to_vec()),
                 Some(b"abc".to_vec()),
             ),
             (
-                (
-                    Some(b"aaa".to_vec()),
-                    Some(b"a".to_vec()),
-                    Some(b"".to_vec()),
-                ),
+                Some(b"aaa".to_vec()),
+                Some(b"a".to_vec()),
+                Some(b"".to_vec()),
                 Some(b"".to_vec()),
             ),
             (
-                (
-                    Some(b"aaa".to_vec()),
-                    Some(b"A".to_vec()),
-                    Some(b"".to_vec()),
-                ),
+                Some(b"aaa".to_vec()),
+                Some(b"A".to_vec()),
+                Some(b"".to_vec()),
                 Some(b"aaa".to_vec()),
             ),
             (
-                (
-                    Some("新年快乐".as_bytes().to_vec()),
-                    Some("年".as_bytes().to_vec()),
-                    Some("春".as_bytes().to_vec()),
-                ),
+                Some("新年快乐".as_bytes().to_vec()),
+                Some("年".as_bytes().to_vec()),
+                Some("春".as_bytes().to_vec()),
                 Some("新春快乐".as_bytes().to_vec()),
             ),
             (
-                (
-                    Some("心心相印".as_bytes().to_vec()),
-                    Some("心".as_bytes().to_vec()),
-                    Some("❤️".as_bytes().to_vec()),
-                ),
+                Some("心心相印".as_bytes().to_vec()),
+                Some("心".as_bytes().to_vec()),
+                Some("❤️".as_bytes().to_vec()),
                 Some("❤️❤️相印".as_bytes().to_vec()),
             ),
-            // some invalid bytes
             (
-                (
-                    Some(b"Hello \xF0\x90\x80World".to_vec()),
-                    Some(b"World".to_vec()),
-                    Some(b"123".to_vec()),
-                ),
+                Some(b"Hello \xF0\x90\x80World".to_vec()),
+                Some(b"World".to_vec()),
+                Some(b"123".to_vec()),
                 Some(b"Hello \xF0\x90\x80123".to_vec()),
             ),
         ];
 
-        for ((s, from_str, to_str), expect_output) in cases {
+        for (s, from_str, to_str, expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(s)
                 .push_param(from_str)
@@ -883,11 +864,9 @@ mod tests {
         ];
 
         for (substr, s, expect_output) in test_cases {
-            let substr = substr.map(|v| v.as_bytes().to_vec());
-            let s = s.map(|v| v.as_bytes().to_vec());
             let output = RpnFnScalarEvaluator::new()
-                .push_param(substr)
-                .push_param(s)
+                .push_param(substr.map(|v| v.as_bytes().to_vec()))
+                .push_param(s.map(|v| v.as_bytes().to_vec()))
                 .evaluate(ScalarFuncSig::LocateBinary2Args)
                 .unwrap();
             assert_eq!(output, expect_output);
@@ -918,46 +897,30 @@ mod tests {
     #[test]
     fn test_locate_binary_3_args() {
         let cases = vec![
-            ("", "foobArbar", 0, 0),
-            ("", "foobArbar", 1, 1),
-            ("", "foobArbar", 2, 2),
-            ("", "foobArbar", 9, 9),
-            ("", "foobArbar", 10, 10),
-            ("", "foobArbar", 11, 0),
-            ("", "", 1, 1),
-            ("BaR", "foobArbar", 3, 0),
-            ("bar", "foobArbar", 1, 7),
+            (None, None, None, None),
+            (None, Some(""), Some(1), None),
+            (Some(""), None, None, None),
+            (Some(""), Some("foobArbar"), Some(1), Some(1)),
+            (Some(""), Some("foobArbar"), Some(0), Some(0)),
+            (Some(""), Some("foobArbar"), Some(2), Some(2)),
+            (Some(""), Some("foobArbar"), Some(9), Some(9)),
+            (Some(""), Some("foobArbar"), Some(10), Some(10)),
+            (Some(""), Some("foobArbar"), Some(11), Some(0)),
+            (Some(""), Some(""), Some(1), Some(1)),
+            (Some("BaR"), Some("foobArbar"), Some(3), Some(0)),
+            (Some("bar"), Some("foobArbar"), Some(1), Some(7)),
             (
-                "好世",
-                "你好世界",
-                1,
-                1 + "你好世界".find("好世").unwrap() as i64,
+                Some("好世"),
+                Some("你好世界"),
+                Some(1),
+                Some(1 + "你好世界".find("好世").unwrap() as i64),
             ),
         ];
 
         for (substr, s, pos, exp) in cases {
-            let substr = Some(substr.as_bytes().to_vec());
-            let s = Some(s.as_bytes().to_vec());
-            let pos = Some(pos);
             let output = RpnFnScalarEvaluator::new()
-                .push_param(substr)
-                .push_param(s)
-                .push_param(pos)
-                .evaluate(ScalarFuncSig::LocateBinary3Args)
-                .unwrap();
-            assert_eq!(output, Some(exp))
-        }
-
-        let null_cases = vec![
-            (None, Some(b"".to_vec()), Some(1), None),
-            (Some(b"".to_vec()), None, None, None),
-            (None, None, None, None),
-        ];
-
-        for (substr, s, pos, exp) in null_cases {
-            let output: Option<i64> = RpnFnScalarEvaluator::new()
-                .push_param(substr)
-                .push_param(s)
+                .push_param(substr.map(|v| v.as_bytes().to_vec()))
+                .push_param(s.map(|v| v.as_bytes().to_vec()))
                 .push_param(pos)
                 .evaluate(ScalarFuncSig::LocateBinary3Args)
                 .unwrap();
