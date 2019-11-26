@@ -62,6 +62,7 @@ pub fn from_days(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Time
 }
 
 #[rpn_fn(capture = [ctx])]
+#[inline]
 pub fn date_diff(
     ctx: &mut EvalContext,
     arg1: &Option<Time>,
@@ -331,10 +332,12 @@ mod tests {
         let output = RpnFnScalarEvaluator::new()
             .push_param(l)
             .push_param(r)
-            .evaluate::<Time>(ScalarFuncSig::DateDiff)
+            .evaluate::<Int>(ScalarFuncSig::DateDiff)
             .unwrap();
         assert_eq!(output, None);
     }
+
+    #[test]
     fn test_month() {
         let cases = vec![
             (Some("0000-00-00 00:00:00"), Some(0i64)),
