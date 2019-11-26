@@ -38,13 +38,13 @@ pub fn run_prometheus(
     let handler = thread::Builder::new()
         .name("promepusher".to_owned())
         .spawn(move || loop {
-            let metric_familys = prometheus::gather();
+            let metric_families = prometheus::gather();
 
             let res = prometheus::push_metrics(
                 &job,
                 prometheus::hostname_grouping_key(),
                 &address,
-                metric_familys,
+                metric_families,
                 None,
             );
             if let Err(e) = res {
@@ -61,8 +61,8 @@ pub fn run_prometheus(
 pub fn dump() -> String {
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
-    let metric_familys = prometheus::gather();
-    for mf in metric_familys {
+    let metric_families = prometheus::gather();
+    for mf in metric_families {
         if let Err(e) = encoder.encode(&[mf], &mut buffer) {
             warn!("prometheus encoding error"; "err" => ?e);
         }
