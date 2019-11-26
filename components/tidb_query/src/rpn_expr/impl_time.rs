@@ -71,12 +71,12 @@ pub fn date_diff(
     if let (Some(lhs), Some(rhs)) = (arg1, arg2) {
         if lhs.invalid_zero() {
             return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", lhs)))
+                .handle_invalid_time_error(Error::incorrect_datetime_value(lhs))
                 .map(|_| Ok(None))?;
         }
         if rhs.invalid_zero() {
             return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", rhs)))
+                .handle_invalid_time_error(Error::incorrect_datetime_value(rhs))
                 .map(|_| Ok(None))?;
         }
         Ok(lhs.date_diff(*rhs))
