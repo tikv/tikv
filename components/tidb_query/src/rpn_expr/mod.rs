@@ -321,6 +321,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::IsIPv4Compat => is_ipv4_compat_fn_meta(),
         ScalarFuncSig::IsIPv6 => is_ipv6_fn_meta(),
         ScalarFuncSig::Inet6Ntoa => inet6_ntoa_fn_meta(),
+        ScalarFuncSig::Inet6Aton => inet6_aton_fn_meta(),
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
         ScalarFuncSig::CastIntAsString |
@@ -381,6 +382,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::HexStrArg => hex_str_arg_fn_meta(),
         ScalarFuncSig::LTrim => ltrim_fn_meta(),
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
+        ScalarFuncSig::Replace => replace_fn_meta(),
         ScalarFuncSig::Left => left_fn_meta(),
         ScalarFuncSig::Right => right_fn_meta(),
         ScalarFuncSig::LocateBinary2Args => locate_binary_2_args_fn_meta(),
