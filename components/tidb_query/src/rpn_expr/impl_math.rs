@@ -104,7 +104,7 @@ impl Ceil for CeilIntToDec {
 
     #[inline]
     fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
-        Ok(Some(Self::Output::from(*arg)))
+        Ok(Some(Decimal::from(*arg)))
     }
 }
 
