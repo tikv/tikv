@@ -252,6 +252,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CharLength
             | ScalarFuncSig::Reverse
             | ScalarFuncSig::ReverseBinary
+            | ScalarFuncSig::Quote
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -435,7 +436,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
             | ScalarFuncSig::Quarter
-            | ScalarFuncSig::Quote
             | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
@@ -515,7 +515,7 @@ impl ScalarFunc {
 
             // PbCode is unspecified
             ScalarFuncSig::Unspecified => {
-                return Err(box_err!("TiDB internal error (unspecified PbCode)"))
+                return Err(box_err!("TiDB internal error (unspecified PbCode)"));
             }
         };
         if args < min_args || args > max_args {
@@ -986,6 +986,7 @@ dispatch_call! {
         ToBase64 => to_base64,
         Compress => compress,
         Uncompress => uncompress,
+        Quote => quote,
 
         Conv => conv,
         Trim1Arg => trim_1_arg,
@@ -1361,6 +1362,7 @@ mod tests {
                     ScalarFuncSig::Compress,
                     ScalarFuncSig::Uncompress,
                     ScalarFuncSig::UncompressedLength,
+                    ScalarFuncSig::Quote,
                 ],
                 1,
                 1,
@@ -1555,7 +1557,6 @@ mod tests {
             ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
             ScalarFuncSig::Quarter,
-            ScalarFuncSig::Quote,
             ScalarFuncSig::RandomBytes,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
