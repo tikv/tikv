@@ -225,6 +225,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
+        ScalarFuncSig::DateDiff => date_diff_fn_meta(),
         ScalarFuncSig::WeekDay => week_day_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),

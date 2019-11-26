@@ -61,6 +61,29 @@ pub fn from_days(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Time
     })
 }
 
+#[rpn_fn(capture = [ctx])]
+pub fn date_diff(
+    ctx: &mut EvalContext,
+    arg1: &Option<Time>,
+    arg2: &Option<Time>,
+) -> Result<Option<Int>> {
+    if let (Some(lhs), Some(rhs)) = (arg1, arg2) {
+        if lhs.invalid_zero() {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", lhs)))
+                .map(|_| Ok(None))?;
+        }
+        if rhs.invalid_zero() {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", rhs)))
+                .map(|_| Ok(None))?;
+        }
+        Ok(lhs.date_diff(*rhs))
+    } else {
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +273,60 @@ mod tests {
                 .unwrap();
             assert_eq!(output, datetime);
         }
+    }
+
+    #[test]
+    fn test_date_diff() {
+        let cases = vec![
+            (
+                "0000-01-01 00:00:00.000000",
+                "0000-01-01 00:00:00.000000",
+                0,
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                0,
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 00:00:00.000000",
+                1,
+            ),
+            (
+                "2018-02-01 00:00:00.000000",
+                "2018-02-02 00:00:00.000000",
+                -1,
+            ),
+            (
+                "2018-02-02 00:00:00.000000",
+                "2018-02-01 23:59:59.999999",
+                1,
+            ),
+            (
+                "2018-02-01 23:59:59.999999",
+                "2018-02-02 00:00:00.000000",
+                -1,
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (lhs, rhs, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Time::parse_datetime(&mut ctx, lhs, 6, true).unwrap())
+                .push_param(Time::parse_datetime(&mut ctx, rhs, 6, true).unwrap())
+                .evaluate(ScalarFuncSig::DateDiff)
+                .unwrap();
+            assert_eq!(output, Some(exp));
+        }
+
+        let l: Option<Time> = None;
+        let r: Option<Time> = None;
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(l)
+            .push_param(r)
+            .evaluate::<Time>(ScalarFuncSig::DateDiff)
+            .unwrap();
+        assert_eq!(output, None);
     }
 }
