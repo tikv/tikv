@@ -897,7 +897,7 @@ fn exp_float_str_to_int_str<'a>(
 ) -> Result<Cow<'a, str>> {
     // int_cnt and digits contain the prefix `+/-` if valid_float[0] is `+/-`
     let mut digits: Vec<u8> = Vec::with_capacity(valid_float.len());
-    let mut int_cnt: i64;
+    let int_cnt: i64;
     match dot_idx {
         None => {
             digits.extend_from_slice(&valid_float[..e_idx].as_bytes());
@@ -915,13 +915,11 @@ fn exp_float_str_to_int_str<'a>(
     }
     // make `digits` immutable
     let digits = digits;
-    let exp = valid_float[(e_idx + 1)..].parse::<i64>();
-    let mut is_overflow = exp.is_err();
-    if !is_overflow {
-        let (result, overflow): (i64, bool) = int_cnt.overflowing_add(exp.unwrap());
-        int_cnt = result;
-        is_overflow = overflow;
-    }
+    let exp = match valid_float[(e_idx + 1)..].parse::<i64>() {
+        Ok(exp) => exp,
+        _ => return Ok(Cow::Borrowed(valid_float)),
+    };
+    let (int_cnt, is_overflow): (i64, bool) = int_cnt.overflowing_add(exp);
     if int_cnt > 21 || is_overflow {
         // MaxInt64 has 19 decimal digits.
         // MaxUint64 has 20 decimal digits.
