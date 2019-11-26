@@ -157,6 +157,7 @@ dist_release:
 # additional sanity checks and file movement.
 build_dist_release:
 	make x-build-dist
+ifeq ($(shell uname),Linux) # Macs don't have objcopy
 	# Reduce binary size by compressing binaries.
 	# FIXME: Currently errors with `Couldn't find DIE referenced by DW_AT_abstract_origin`
 	# dwz ${CARGO_TARGET_DIR}/release/tikv-server
@@ -164,6 +165,7 @@ build_dist_release:
 	# dwz ${CARGO_TARGET_DIR}/release/tikv-ctl
 	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-server
 	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-ctl
+endif
 
 # Distributable bins with SSE4.2 optimizations
 dist_unportable_release:
