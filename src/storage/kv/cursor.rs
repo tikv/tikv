@@ -9,7 +9,9 @@ use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
-use crate::storage::kv::{CFStatistics, Iterator, Key, Result, ScanMode, Snapshot, SEEK_BOUND};
+use crate::storage::kv::{
+    CFStatistics, Error, Iterator, Key, Result, ScanMode, Snapshot, SEEK_BOUND,
+};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -346,28 +348,34 @@ impl<I: Iterator> Cursor<I> {
     pub fn valid(&self) -> Result<bool> {
         if !self.iter.valid() {
             if let Err(e) = self.iter.status() {
-                CRITICAL_ERROR.with_label_values(&["rocksdb iter"]).inc();
-                if panic_when_unexpected_key_or_data() {
-                    set_panic_mark();
-                    panic!(
-                        "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
-                        e,
-                        self.min_key.as_ref().map(|k| hex::encode_upper(k)),
-                        self.max_key.as_ref().map(|k| hex::encode_upper(k))
-                    );
-                } else {
-                    error!(
-                        "failed to iterate";
-                        "min_key" => ?self.min_key.as_ref().map(|k| hex::encode_upper(k)),
-                        "max_key" => ?self.max_key.as_ref().map(|k| hex::encode_upper(k)),
-                        "error" => ?e,
-                    );
-                }
-                return Err(e);
+                self.handle_error_status(e)?;
             }
             Ok(false)
         } else {
             Ok(true)
+        }
+    }
+
+    #[inline(never)]
+    fn handle_error_status(&self, e: Error) -> Result<()> {
+        // Split out the error case to reduce hot-path code size.
+        CRITICAL_ERROR.with_label_values(&["rocksdb iter"]).inc();
+        if panic_when_unexpected_key_or_data() {
+            set_panic_mark();
+            panic!(
+                "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
+                e,
+                self.min_key.as_ref().map(|v| hex::encode_upper(v)),
+                self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+            );
+        } else {
+            error!(
+                "failed to iterate";
+                "min_key" => ?self.min_key.as_ref().map(|v| hex::encode_upper(v)),
+                "max_key" => ?self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                "error" => ?e,
+            );
+            Err(e)
         }
     }
 }
