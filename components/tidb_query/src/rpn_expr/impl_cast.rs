@@ -1052,7 +1052,9 @@ mod tests {
         assert!(r.is_none());
     }
 
-    fn make_ctx_about_overflow_truncate_should_clip_to_zero(
+    /// Rust has no overload, so we has `make_ctx_1`, `make_ctx_2`, etc..
+    /// Please call one of these functions according to the param list.
+    fn make_ctx_1(
         overflow_as_warning: bool,
         truncate_as_warning: bool,
         should_clip_to_zero: bool,
@@ -1071,7 +1073,9 @@ mod tests {
         EvalContext::new(cfg)
     }
 
-    fn make_ctx_about_overflow_truncate_flags(
+    /// Rust has no overload, so we has `make_ctx_1`, `make_ctx_2`, etc..
+    /// Please call one of these functions according to the param list.
+    fn make_ctx_2(
         overflow_as_warning: bool,
         truncate_as_warning: bool,
         flags: Vec<Flag>,
@@ -1096,6 +1100,8 @@ mod tests {
         }
     }
 
+    /// Rust has no overload, so we has `make_ret_field_type_1`, `make_ret_field_type_2`, etc..
+    /// Please call one of these functions according to the param list.
     fn make_ret_field_type_1(unsigned: bool) -> FieldType {
         let mut ft = if unsigned {
             let mut ft = FieldType::default();
@@ -1110,6 +1116,8 @@ mod tests {
         ft
     }
 
+    /// Rust has no overload, so we has `make_ret_field_type_1`, `make_ret_field_type_2`, etc..
+    /// Please call one of these functions according to the param list.
     fn make_ret_field_type_2(unsigned: bool, flen: isize, decimal: isize) -> FieldType {
         let mut ft = make_ret_field_type_1(unsigned);
         let fta = ft.as_mut_accessor();
@@ -1118,6 +1126,8 @@ mod tests {
         ft
     }
 
+    /// Rust has no overload, so we has `make_ret_field_type_1`, `make_ret_field_type_2`, etc..
+    /// Please call one of these functions according to the param list.
     fn make_ret_field_type_3(
         flen: isize,
         charset: &str,
@@ -1133,6 +1143,8 @@ mod tests {
         ft
     }
 
+    /// Rust has no overload, so we has `make_ret_field_type_1`, `make_ret_field_type_2`, etc..
+    /// Please call one of these functions according to the param list.
     fn make_ret_field_type_4(flen: isize, decimal: isize, unsigned: bool) -> FieldType {
         let mut ft = FieldType::default();
         let fta = ft.as_mut_accessor();
@@ -1144,6 +1156,8 @@ mod tests {
         ft
     }
 
+    /// Rust has no overload, so we has `make_ret_field_type_1`, `make_ret_field_type_2`, etc..
+    /// Please call one of these functions according to the param list.
     fn make_ret_field_type_5(decimal: isize) -> FieldType {
         let mut ft = FieldType::default();
         let fta = ft.as_mut_accessor();
@@ -1201,7 +1215,7 @@ mod tests {
         }
     }
 
-    fn check_warning_2(ctx: &EvalContext, err_code: Vec<i32>, log: &str) {
+    fn check_warnings(ctx: &EvalContext, err_code: Vec<i32>, log: &str) {
         assert_eq!(
             ctx.warnings.warning_cnt,
             err_code.len(),
@@ -1303,7 +1317,7 @@ mod tests {
         ];
 
         for (input, result, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = make_ctx_1(true, false, false);
             let r = cast_any_as_any::<Real, Int>(&mut ctx, &Real::new(input).ok());
             let log = make_log(&input, &result, &r);
             check_result(Some(&result), &r, log.as_str());
@@ -1351,7 +1365,7 @@ mod tests {
         ];
 
         for (input, expect, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = make_ctx_1(true, false, false);
             let ia = make_implicit_args(false);
             let rtf = make_ret_field_type_1(true);
             let extra = make_extra(&rtf, &ia);
@@ -1370,7 +1384,7 @@ mod tests {
         ];
 
         for (input, expect, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, true);
+            let mut ctx = make_ctx_1(true, false, true);
             let ia = make_implicit_args(false);
             let rft = make_ret_field_type_1(true);
             let extra = make_extra(&rft, &ia);
@@ -1504,7 +1518,7 @@ mod tests {
         ];
 
         for (input, expect, err_code, cond) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = make_ctx_1(true, true, false);
             let ia = make_implicit_args(cond.in_union());
             let rft = make_ret_field_type_1(cond.is_unsigned());
             let extra = make_extra(&rft, &ia);
@@ -1517,7 +1531,7 @@ mod tests {
                 input, expect, err_code, cond, r
             );
             check_result(Some(&expect), &r, log.as_str());
-            check_warning_2(&ctx, err_code, log.as_str());
+            check_warnings(&ctx, err_code, log.as_str());
         }
     }
 
@@ -1558,7 +1572,7 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = make_ctx_1(true, false, false);
             let r = cast_any_as_any::<Decimal, Int>(&mut ctx, &Some(input.clone()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1634,7 +1648,7 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = make_ctx_1(true, false, false);
             let ia = make_implicit_args(false);
             let rft = make_ret_field_type_1(true);
             let extra = make_extra(&rft, &ia);
@@ -1688,7 +1702,7 @@ mod tests {
         ];
 
         for (input, expect) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = make_ctx_1(true, false, false);
             let r = cast_any_as_any::<Duration, Int>(&mut ctx, &Some(input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1734,7 +1748,7 @@ mod tests {
         ];
 
         for (input, expect, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = make_ctx_1(true, false, false);
             let r = cast_any_as_any::<Json, Int>(&mut ctx, &Some(input.clone()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1769,7 +1783,7 @@ mod tests {
         ];
 
         for (input, expect, error_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = make_ctx_1(true, true, false);
             let r = cast_json_as_uint(&mut ctx, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1805,7 +1819,7 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, true);
+            let mut ctx = make_ctx_1(true, true, true);
             let r = cast_json_as_uint(&mut ctx, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1985,7 +1999,7 @@ mod tests {
         ];
 
         for (input, expect, flen, decimal, truncated, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = make_ctx_1(true, true, false);
             let ia = make_implicit_args(false);
             let rft = make_ret_field_type_2(false, flen, decimal);
             let extra = make_extra(&rft, &ia);
@@ -2158,7 +2172,7 @@ mod tests {
         ];
 
         for (input, expect, flen, decimal, truncated, overflow, in_union) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = make_ctx_1(true, true, false);
             let ia = make_implicit_args(in_union);
             let rft = make_ret_field_type_2(true, flen, decimal);
             let extra = make_extra(&rft, &ia);
@@ -2263,7 +2277,7 @@ mod tests {
             ),
         ];
         for (input, expect, flen, decimal, err_codes) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = make_ctx_1(true, true, false);
             let ia = make_implicit_args(false);
             let rft = make_ret_field_type_2(true, flen, decimal);
             let extra = make_extra(&rft, &ia);
@@ -2370,7 +2384,7 @@ mod tests {
         ];
 
         for (input, expect, in_union, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = make_ctx_1(true, false, false);
             let ia = make_implicit_args(in_union);
             let rft = make_ret_field_type_1(true);
             let extra = make_extra(&rft, &ia);
@@ -2473,7 +2487,7 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(false, true, false);
+            let mut ctx = make_ctx_1(false, true, false);
             let r = cast_any_as_any::<Json, Real>(&mut ctx, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
@@ -2701,8 +2715,7 @@ mod tests {
         ];
         for (input, bytes, debug_str) in base_cs {
             for (flen_type, pad_zero, charset, tp, collation, err_code) in cs.iter() {
-                let mut ctx =
-                    make_ctx_about_overflow_truncate_should_clip_to_zero(false, true, false);
+                let mut ctx = make_ctx_1(false, true, false);
                 let ia = make_implicit_args(false);
                 let res_len = bytes.len();
                 let flen = match flen_type {
@@ -3401,18 +3414,12 @@ mod tests {
                     let ia = make_implicit_args(in_union);
                     let extra = make_extra(&rft, &ia);
 
-                    let mut ctx = make_ctx_about_overflow_truncate_flags(
-                        overflow_as_warning,
-                        truncate_as_warning,
-                        vec![in_dml_flag],
-                    );
+                    let mut ctx =
+                        make_ctx_2(overflow_as_warning, truncate_as_warning, vec![in_dml_flag]);
                     let cast_func_res = cast_func(&mut ctx, &extra, &Some(input.clone()));
 
-                    let mut ctx = make_ctx_about_overflow_truncate_flags(
-                        overflow_as_warning,
-                        truncate_as_warning,
-                        vec![in_dml_flag],
-                    );
+                    let mut ctx =
+                        make_ctx_2(overflow_as_warning, truncate_as_warning, vec![in_dml_flag]);
                     let pd_res = produce_dec_with_specified_tp(&mut ctx, base_res.clone(), &rft);
 
                     // make log
@@ -4427,8 +4434,7 @@ mod tests {
         ];
 
         for (input, fsp, expect, overflow) in cs {
-            let mut ctx =
-                make_ctx_about_overflow_truncate_should_clip_to_zero(overflow, false, false);
+            let mut ctx = make_ctx_1(overflow, false, false);
             let ia = make_implicit_args(false);
             let rft = make_ret_field_type_5(fsp);
             let extra = make_extra(&rft, &ia);
@@ -4476,8 +4482,7 @@ mod tests {
         // no matter whether call_real_as_duration call Duration::parse directly.
         for val in base_cs {
             for fsp in MIN_FSP..=MAX_FSP {
-                let mut ctx =
-                    make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+                let mut ctx = make_ctx_1(true, true, false);
                 let ia = make_implicit_args(false);
                 let rft = make_ret_field_type_5(fsp as isize);
                 let extra = make_extra(&rft, &ia);
