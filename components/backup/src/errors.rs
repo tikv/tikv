@@ -7,9 +7,9 @@ use engine_traits::Error as EngineTraitError;
 use kvproto::backup::Error as ErrorPb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::KeyError;
-use tikv::storage::kv::Error as EngineError;
-use tikv::storage::mvcc::Error as MvccError;
-use tikv::storage::txn::Error as TxnError;
+use tikv::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
+use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 
 use crate::metrics::*;
 
@@ -25,9 +25,13 @@ impl Into<ErrorPb> for Error {
                 err.mut_cluster_id_error().set_current(current);
                 err.mut_cluster_id_error().set_request(request);
             }
-            Error::Engine(EngineError::Request(e))
-            | Error::Txn(TxnError::Engine(EngineError::Request(e)))
-            | Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(e)))) => {
+            Error::Engine(EngineError(box EngineErrorInner::Request(e)))
+            | Error::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
+                box EngineErrorInner::Request(e),
+            ))))
+            | Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(e))),
+            )))) => {
                 if e.has_not_leader() {
                     BACKUP_RANGE_ERROR_VEC
                         .with_label_values(&["not_leader"])
@@ -60,7 +64,9 @@ impl Into<ErrorPb> for Error {
 
                 err.set_region_error(e);
             }
-            Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info))) => {
+            Error::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                box MvccErrorInner::KeyIsLocked(info),
+            )))) => {
                 BACKUP_RANGE_ERROR_VEC
                     .with_label_values(&["key_is_locked"])
                     .inc();
@@ -68,7 +74,7 @@ impl Into<ErrorPb> for Error {
                 e.set_locked(info);
                 err.set_kv_error(e);
             }
-            timeout @ Error::Engine(EngineError::Timeout(_)) => {
+            timeout @ Error::Engine(EngineError(box EngineErrorInner::Timeout(_))) => {
                 BACKUP_RANGE_ERROR_VEC.with_label_values(&["timeout"]).inc();
                 let mut busy = ServerIsBusy::default();
                 let reason = format!("{}", timeout);
