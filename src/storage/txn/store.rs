@@ -3,22 +3,14 @@
 use kvproto::kvrpcpb::{IsolationLevel, LockInfo};
 
 use crate::storage::metrics::*;
-<<<<<<< HEAD
 use crate::storage::mvcc::{
     EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, Scanner as MvccScanner,
-    ScannerBuilder, WriteRef,
+    ScannerBuilder, WriteRef, PointGetter, PointGetterBuilder, TsSet, Lock,
 };
-use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TimeStamp, TsSet};
-use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
-=======
-use crate::storage::mvcc::EntryScanner;
-use crate::storage::mvcc::Error as MvccError;
-use crate::storage::mvcc::{Lock, Scanner as MvccScanner, ScannerBuilder, Write};
-use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TsSet};
 use crate::storage::{CursorBuilder, Key, KvPair, Snapshot, Statistics, Value};
 use engine::CF_LOCK;
+use keys::TimeStamp;
 use tidb_query::storage::Range;
->>>>>>> *: add batch resolve locks support
 
 use super::{Error, ErrorInner, Result};
 
@@ -318,7 +310,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                                 match lock.check_ts_conflict(key, self.start_ts, &self.bypass_locks)
                                 {
                                     Ok(()) => continue,
-                                    Err(MvccError::KeyIsLocked(lock)) => locks.push(lock),
+                                    Err(MvccError(box MvccErrorInner::KeyIsLocked(lock))) => locks.push(lock),
                                     Err(e) => return Err(Error::from(e)),
                                 }
                             }
@@ -345,7 +337,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                                         &self.bypass_locks,
                                     ) {
                                         Ok(()) => {}
-                                        Err(MvccError::KeyIsLocked(lock)) => locks.push(lock),
+                                        Err(MvccError(box MvccErrorInner::KeyIsLocked(lock))) => locks.push(lock),
                                         Err(e) => return Err(Error::from(e)),
                                     }
                                     lock_cursor.next(&mut statistics.lock);
