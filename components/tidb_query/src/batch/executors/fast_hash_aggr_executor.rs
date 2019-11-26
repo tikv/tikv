@@ -81,7 +81,7 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         // Only a subset of all eval types are supported.
         let eval_type = box_try!(EvalType::try_from(def.get_field_type().as_accessor().tp()));
         match eval_type {
-            EvalType::Int | EvalType::Real | EvalType::Bytes | EvalType::Duration => {}
+            EvalType::Int | EvalType::Real | EvalType::Bytes | EvalType::Duration | EvalType::Decimal | EvalType::DateTime => {}
             _ => return Err(other_err!("Eval type {} is not supported", eval_type)),
         }
 
