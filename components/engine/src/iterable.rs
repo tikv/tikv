@@ -5,138 +5,33 @@ pub use crate::rocks::{DBIterator, ReadOptions, DB};
 use crate::Result;
 use tikv_util::keybuilder::KeyBuilder;
 
-#[derive(Clone, PartialEq)]
-enum SeekMode {
-    TotalOrder,
-    Prefix,
+pub use engine_traits::IterOptions as IterOption;
+pub use engine_traits::SeekMode;
+
+pub trait IterOptionsExt {
+    fn build_read_opts(self) -> ReadOptions;
 }
 
-pub struct IterOption {
-    lower_bound: Option<KeyBuilder>,
-    upper_bound: Option<KeyBuilder>,
-    prefix_same_as_start: bool,
-    fill_cache: bool,
-    // only supported when Titan enabled, otherwise it doesn't take effect.
-    titan_key_only: bool,
-    seek_mode: SeekMode,
-}
-
-impl IterOption {
-    pub fn new(
-        lower_bound: Option<KeyBuilder>,
-        upper_bound: Option<KeyBuilder>,
-        fill_cache: bool,
-    ) -> IterOption {
-        IterOption {
-            lower_bound,
-            upper_bound,
-            prefix_same_as_start: false,
-            fill_cache,
-            titan_key_only: false,
-            seek_mode: SeekMode::TotalOrder,
-        }
-    }
-
-    #[inline]
-    pub fn use_prefix_seek(mut self) -> IterOption {
-        self.seek_mode = SeekMode::Prefix;
-        self
-    }
-
-    #[inline]
-    pub fn total_order_seek_used(&self) -> bool {
-        self.seek_mode == SeekMode::TotalOrder
-    }
-
-    #[inline]
-    pub fn fill_cache(&mut self, v: bool) {
-        self.fill_cache = v;
-    }
-
-    #[inline]
-    pub fn titan_key_only(&mut self, v: bool) {
-        self.titan_key_only = v;
-    }
-
-    #[inline]
-    pub fn lower_bound(&self) -> Option<&[u8]> {
-        self.lower_bound.as_ref().map(|v| v.as_slice())
-    }
-
-    #[inline]
-    pub fn set_lower_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
-        let builder = KeyBuilder::from_slice(bound, reserved_prefix_len, 0);
-        self.lower_bound = Some(builder);
-    }
-
-    pub fn set_vec_lower_bound(&mut self, bound: Vec<u8>) {
-        self.lower_bound = Some(KeyBuilder::from_vec(bound, 0, 0));
-    }
-
-    pub fn set_lower_bound_prefix(&mut self, prefix: &[u8]) {
-        if let Some(ref mut builder) = self.lower_bound {
-            builder.set_prefix(prefix);
-        }
-    }
-
-    #[inline]
-    pub fn upper_bound(&self) -> Option<&[u8]> {
-        self.upper_bound.as_ref().map(|v| v.as_slice())
-    }
-
-    #[inline]
-    pub fn set_upper_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
-        let builder = KeyBuilder::from_slice(bound, reserved_prefix_len, 0);
-        self.upper_bound = Some(builder);
-    }
-
-    pub fn set_vec_upper_bound(&mut self, bound: Vec<u8>) {
-        self.upper_bound = Some(KeyBuilder::from_vec(bound, 0, 0));
-    }
-
-    pub fn set_upper_bound_prefix(&mut self, prefix: &[u8]) {
-        if let Some(ref mut builder) = self.upper_bound {
-            builder.set_prefix(prefix);
-        }
-    }
-
-    #[inline]
-    pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOption {
-        self.prefix_same_as_start = enable;
-        self
-    }
-
-    pub fn build_read_opts(self) -> ReadOptions {
+impl IterOptionsExt for IterOption {
+    fn build_read_opts(self) -> ReadOptions {
         let mut opts = ReadOptions::new();
-        opts.fill_cache(self.fill_cache);
-        if self.titan_key_only {
+        opts.fill_cache(self.fill_cache());
+        if self.key_only() {
             opts.set_titan_key_only(true);
         }
         if self.total_order_seek_used() {
             opts.set_total_order_seek(true);
-        } else if self.prefix_same_as_start {
+        } else if self.prefix_same_as_start() {
             opts.set_prefix_same_as_start(true);
         }
-        if let Some(builder) = self.lower_bound {
-            opts.set_iterate_lower_bound(builder.build());
+        let (lower, upper) = self.build_bounds();
+        if let Some(lower) = lower {
+            opts.set_iterate_lower_bound(lower);
         }
-        if let Some(builder) = self.upper_bound {
-            opts.set_iterate_upper_bound(builder.build());
+        if let Some(upper) = upper {
+            opts.set_iterate_upper_bound(upper);
         }
         opts
-    }
-}
-
-impl Default for IterOption {
-    fn default() -> IterOption {
-        IterOption {
-            lower_bound: None,
-            upper_bound: None,
-            prefix_same_as_start: false,
-            fill_cache: true,
-            titan_key_only: false,
-            seek_mode: SeekMode::TotalOrder,
-        }
     }
 }
 

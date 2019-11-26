@@ -1,3 +1,4 @@
+use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
@@ -93,6 +94,18 @@ impl Ceil for CeilDecToDec {
     #[inline]
     fn ceil(ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
         Ok(arg.ceil().into_result(ctx).map(Some)?)
+    }
+}
+
+pub struct CeilIntToDec;
+
+impl Ceil for CeilIntToDec {
+    type Input = Int;
+    type Output = Decimal;
+
+    #[inline]
+    fn ceil(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
+        Ok(Some(Decimal::from(*arg)))
     }
 }
 
@@ -320,6 +333,22 @@ fn cot(arg: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
+fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            let pow = (lhs.into_inner()).pow(rhs.into_inner());
+            if pow.is_infinite() {
+                Err(Error::overflow("DOUBLE", format!("{}.pow({})", lhs, rhs)).into())
+            } else {
+                Ok(Real::new(pow).ok())
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
 fn degrees(arg: &Option<Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|n| Real::new(n.to_degrees()).ok()))
 }
@@ -349,6 +378,22 @@ pub fn atan_2_args(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Re
         (Some(arg0), Some(arg1)) => Real::new(arg0.atan2(arg1.into_inner())).ok(),
         _ => None,
     })
+}
+
+#[inline]
+#[rpn_fn]
+pub fn conv(
+    n: &Option<Bytes>,
+    from_base: &Option<Int>,
+    to_base: &Option<Int>,
+) -> Result<Option<Bytes>> {
+    use crate::expr_util::conv::conv as conv_impl;
+    if let (Some(n), Some(from_base), Some(to_base)) = (n, from_base, to_base) {
+        let s = String::from_utf8_lossy(n);
+        Ok(conv_impl(s.as_ref(), *from_base, *to_base))
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -561,6 +606,24 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate::<Decimal>(ScalarFuncSig::CeilDecToDec)
+                .unwrap();
+            assert_eq!(expected, output);
+        }
+    }
+
+    #[test]
+    fn test_ceil_int_to_dec() {
+        let cases = vec![
+            ("-9223372036854775808", std::i64::MIN),
+            ("9223372036854775807", std::i64::MAX),
+            ("123", 123),
+            ("-123", -123),
+        ];
+        for (expected, input) in cases {
+            let expected = expected.parse::<Decimal>().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate::<Decimal>(ScalarFuncSig::CeilIntToDec)
                 .unwrap();
             assert_eq!(expected, output);
         }
@@ -910,6 +973,60 @@ mod tests {
     }
 
     #[test]
+    fn test_pow() {
+        let cases = vec![
+            (
+                Some(Real::from(1.0f64)),
+                Some(Real::from(3.0f64)),
+                Some(Real::from(1.0f64)),
+            ),
+            (
+                Some(Real::from(3.0f64)),
+                Some(Real::from(0.0f64)),
+                Some(Real::from(1.0f64)),
+            ),
+            (
+                Some(Real::from(2.0f64)),
+                Some(Real::from(4.0f64)),
+                Some(Real::from(16.0f64)),
+            ),
+            (
+                Some(Real::from(std::f64::INFINITY)),
+                Some(Real::from(0.0f64)),
+                Some(Real::from(1.0f64)),
+            ),
+            (Some(Real::from(4.0f64)), None, None),
+            (None, Some(Real::from(4.0f64)), None),
+            (None, None, None),
+        ];
+
+        for (lhs, rhs, expect) in cases {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::Pow)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+
+        let invalid_cases = vec![
+            (
+                Some(Real::from(std::f64::INFINITY)),
+                Some(Real::from(std::f64::INFINITY)),
+            ),
+            (Some(Real::from(0.0f64)), Some(Real::from(-9999999.0f64))),
+        ];
+
+        for (lhs, rhs) in invalid_cases {
+            assert!(RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate::<Real>(ScalarFuncSig::Pow)
+                .is_err());
+        }
+    }
+
+    #[test]
     fn test_asin() {
         let test_cases = vec![
             (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
@@ -1051,6 +1168,56 @@ mod tests {
                 .evaluate(ScalarFuncSig::Atan2Args)
                 .unwrap();
             assert!((output.unwrap() - expect.unwrap()).abs() < std::f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_conv() {
+        let tests = vec![
+            ("a", 16, 2, "1010"),
+            ("6E", 18, 8, "172"),
+            ("-17", 10, -18, "-H"),
+            ("  -17", 10, -18, "-H"),
+            ("-17", 10, 18, "2D3FGB0B9CG4BD1H"),
+            ("+18aZ", 7, 36, "1"),
+            ("  +18aZ", 7, 36, "1"),
+            ("18446744073709551615", -10, 16, "7FFFFFFFFFFFFFFF"),
+            ("12F", -10, 16, "C"),
+            ("  FF ", 16, 10, "255"),
+            ("TIDB", 10, 8, "0"),
+            ("aa", 10, 2, "0"),
+            (" A", -10, 16, "0"),
+            ("a6a", 10, 8, "0"),
+            ("16九a", 10, 8, "20"),
+            ("+", 10, 8, "0"),
+            ("-", 10, 8, "0"),
+        ];
+        for (n, f, t, e) in tests {
+            let n = Some(n.as_bytes().to_vec());
+            let f = Some(f);
+            let t = Some(t);
+            let e = Some(e.as_bytes().to_vec());
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(n)
+                .push_param(f)
+                .push_param(t)
+                .evaluate(ScalarFuncSig::Conv)
+                .unwrap();
+            assert_eq!(got, e);
+        }
+
+        let invalid_tests = vec![
+            (None, Some(10), Some(10), None),
+            (Some(b"a6a".to_vec()), Some(1), Some(8), None),
+        ];
+        for (n, f, t, e) in invalid_tests {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(n)
+                .push_param(f)
+                .push_param(t)
+                .evaluate::<Bytes>(ScalarFuncSig::Conv)
+                .unwrap();
+            assert_eq!(got, e);
         }
     }
 }
