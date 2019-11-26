@@ -3177,7 +3177,7 @@ dependencies = [
  "tidb_query",
  "tikv",
  "tikv_util",
- "tipb 0.0.1 (git+https://github.com/wshwsh12/tipb.git?branch=endian)",
+ "tipb",
 ]
 
 [[package]]
@@ -3304,7 +3304,7 @@ dependencies = [
  "tidb_query_datatype",
  "tikv_util",
  "time",
- "tipb 0.0.1 (git+https://github.com/wshwsh12/tipb.git?branch=endian)",
+ "tipb",
  "tipb_helper",
  "twoway",
 ]
@@ -3328,7 +3328,7 @@ dependencies = [
  "failure",
  "num-traits",
  "tikv_alloc",
- "tipb 0.0.1 (git+https://github.com/wshwsh12/tipb.git?branch=endian)",
+ "tipb",
 ]
 
 [[package]]
@@ -3411,7 +3411,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time",
- "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
+ "tipb",
  "tipb_helper",
  "tokio-core",
  "tokio-executor",
@@ -3522,21 +3522,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "tipb"
-version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#6161b015e21e33a70255d513ba8c984d5c8800eb"
-dependencies = [
- "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "protobuf-build",
-]
-
-[[package]]
 name = "tipb_helper"
 version = "0.0.1"
 dependencies = [
  "codec",
  "tidb_query_datatype",
- "tipb 0.0.1 (git+https://github.com/wshwsh12/tipb.git?branch=endian)",
+ "tipb",
 ]
 
 [[package]]
