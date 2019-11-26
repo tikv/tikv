@@ -291,7 +291,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
-            | ScalarFuncSig::ToDays => (1, 1),
+            | ScalarFuncSig::ToDays
+            | ScalarFuncSig::FromDays => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -414,7 +415,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Format
             | ScalarFuncSig::FormatWithLocale
             | ScalarFuncSig::FoundRows
-            | ScalarFuncSig::FromDays
             | ScalarFuncSig::FromUnixTime1Arg
             | ScalarFuncSig::FromUnixTime2Arg
             | ScalarFuncSig::GetFormat
@@ -1025,6 +1025,7 @@ dispatch_call! {
         SubDatetimeAndDuration => sub_datetime_and_duration,
         SubDatetimeAndString => sub_datetime_and_string,
         SubTimeDateTimeNull => sub_time_datetime_null,
+        FromDays => from_days,
 
         IfNullTime => if_null_time,
         IfTime => if_time,
@@ -1278,6 +1279,7 @@ mod tests {
                     ScalarFuncSig::WeekDay,
                     ScalarFuncSig::WeekOfYear,
                     ScalarFuncSig::Year,
+                    ScalarFuncSig::FromDays,
                     ScalarFuncSig::UnaryNotInt,
                     ScalarFuncSig::UnaryNotReal,
                     ScalarFuncSig::UnaryNotDecimal,
@@ -1534,7 +1536,6 @@ mod tests {
             ScalarFuncSig::Format,
             ScalarFuncSig::FormatWithLocale,
             ScalarFuncSig::FoundRows,
-            ScalarFuncSig::FromDays,
             ScalarFuncSig::FromUnixTime1Arg,
             ScalarFuncSig::FromUnixTime2Arg,
             ScalarFuncSig::GetFormat,
