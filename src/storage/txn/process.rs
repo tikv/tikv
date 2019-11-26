@@ -488,7 +488,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let rows = mutations.len();
             if options.for_update_ts.is_zero() && rows > FORWARD_MIN_MUTATIONS_NUM {
                 mutations.sort_by(|a, b| a.key().cmp(b.key()));
-                let left_key = mutations.first().unwrap().key().clone().append_ts(start_ts);
+                let left_key = mutations.first().unwrap().key().clone();
                 let right_key = mutations
                     .last()
                     .unwrap()
@@ -944,11 +944,8 @@ mod tests {
         assert_eq!(lock.hash, key.gen_hash());
     }
 
-    #[test]
-    fn test_process_write_impl_prewrite() {
+    fn inner_test_process_write_impl_conflict(pri_key_number: u8, write_num: usize) {
         let mut mutations = Vec::default();
-        let write_num: usize = FORWARD_MIN_MUTATIONS_NUM + 1;
-        let pri_key_number = write_num as u8 - 1;
         let pri_key = &[pri_key_number];
         for i in 0..write_num {
             mutations.push(Mutation::Insert((
@@ -1050,6 +1047,12 @@ mod tests {
                 .unwrap();
             assert!(v.is_some());
         }
+    }
+
+    #[test]
+    fn test_process_write_impl_prewrite() {
+        inner_test_process_write_impl_conflict(0, FORWARD_MIN_MUTATIONS_NUM + 1);
+        inner_test_process_write_impl_conflict(FORWARD_MIN_MUTATIONS_NUM as u8, FORWARD_MIN_MUTATIONS_NUM + 1);
     }
 
     fn prewrite<E: Engine>(
