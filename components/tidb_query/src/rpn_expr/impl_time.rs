@@ -63,7 +63,7 @@ pub fn week_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Optio
     let t = t.as_ref().unwrap();
     if t.invalid_zero() {
         return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
             .map(|_| Ok(None))?;
     }
     let week = t.week(WeekMode::from_bits_truncate(3));
