@@ -320,7 +320,7 @@ impl ScalarFunc {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .handle_invalid_time_error(Error::incorrect_datetime_value(t))
                 .map(|_| None);
         }
         Ok(Some(t.second_since_zero()))
@@ -331,7 +331,7 @@ impl ScalarFunc {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .handle_invalid_time_error(Error::incorrect_datetime_value(t))
                 .map(|_| None);
         }
         Ok(Some(i64::from((t.month() + 2) / 3)))
