@@ -3,6 +3,7 @@
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::codec::Error;
 use crate::Result;
 
 #[rpn_fn]
@@ -39,7 +40,7 @@ pub fn logical_xor(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>
 
 #[rpn_fn]
 #[inline]
-pub fn unary_not_int(arg: &Option<i64>) -> Result<Option<i64>> {
+pub fn unary_not_int(arg: &Option<Int>) -> Result<Option<i64>> {
     Ok(arg.map(|v| (v == 0) as i64))
 }
 
@@ -53,6 +54,51 @@ pub fn unary_not_real(arg: &Option<Real>) -> Result<Option<i64>> {
 #[inline]
 pub fn unary_not_decimal(arg: &Option<Decimal>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|v| v.is_zero() as i64))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_minus_uint(arg: &Option<Int>) -> Result<Option<Int>> {
+    match *arg {
+        Some(val) => {
+            let uval = val as u64;
+            if uval > std::i64::MAX as u64 + 1 {
+                Err(Error::overflow("BIGINT", &format!("-{}", uval)).into())
+            } else if uval == std::i64::MAX as u64 + 1 {
+                Ok(Some(std::i64::MIN))
+            } else {
+                Ok(Some(-val))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_minus_int(arg: &Option<Int>) -> Result<Option<Int>> {
+    match *arg {
+        Some(val) => {
+            if val == std::i64::MIN {
+                Err(Error::overflow("BIGINT", &format!("-{}", val)).into())
+            } else {
+                Ok(Some(-val))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_minus_real(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map(|val| -val))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_minus_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
+    Ok(arg.as_ref().map(|val| -val.clone()))
 }
 
 #[rpn_fn]
@@ -162,9 +208,10 @@ fn right_shift(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use tidb_query_datatype::{builder::FieldTypeBuilder, FieldTypeFlag, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::codec::mysql::TimeType;
     use crate::expr::EvalContext;
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
@@ -276,6 +323,100 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg.clone())
                 .evaluate(ScalarFuncSig::UnaryNotDecimal)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
+    fn test_unary_minus_int() {
+        let unsigned_test_cases = vec![
+            (None, None),
+            (Some((std::i64::MAX as u64 + 1) as i64), Some(std::i64::MIN)),
+            (Some(12345), Some(-12345)),
+            (Some(0), Some(0)),
+        ];
+        for (arg, expect_output) in unsigned_test_cases {
+            let field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(FieldTypeFlag::UNSIGNED)
+                .build();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(arg, field_type)
+                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+        assert!(RpnFnScalarEvaluator::new()
+            .push_param_with_field_type(
+                Some((std::i64::MAX as u64 + 2) as i64),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::LongLong)
+                    .flag(FieldTypeFlag::UNSIGNED)
+                    .build()
+            )
+            .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+            .is_err());
+
+        let signed_test_cases = vec![
+            (None, None),
+            (Some(std::i64::MAX), Some(-std::i64::MAX)),
+            (Some(-std::i64::MAX), Some(std::i64::MAX)),
+            (Some(std::i64::MIN + 1), Some(std::i64::MAX)),
+            (Some(0), Some(0)),
+        ];
+        for (arg, expect_output) in signed_test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+        assert!(RpnFnScalarEvaluator::new()
+            .push_param(std::i64::MIN)
+            .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+            .is_err());
+    }
+
+    #[test]
+    fn test_unary_minus_real() {
+        let test_cases = vec![
+            (None, None),
+            (Some(Real::from(0.123_f64)), Some(Real::from(-0.123_f64))),
+            (Some(Real::from(-0.123_f64)), Some(Real::from(0.123_f64))),
+            (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
+            (
+                Some(Real::from(std::f64::INFINITY)),
+                Some(Real::from(std::f64::NEG_INFINITY)),
+            ),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Real>(ScalarFuncSig::UnaryMinusReal)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
+    fn test_unary_minus_decimal() {
+        let test_cases = vec![
+            (None, None),
+            (Some(Decimal::zero()), Some(Decimal::zero())),
+            (
+                "0.123".parse::<Decimal>().ok(),
+                "-0.123".parse::<Decimal>().ok(),
+            ),
+            (
+                "-0.123".parse::<Decimal>().ok(),
+                "0.123".parse::<Decimal>().ok(),
+            ),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate::<Decimal>(ScalarFuncSig::UnaryMinusDecimal)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", arg);
         }
