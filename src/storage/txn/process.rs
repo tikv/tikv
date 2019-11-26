@@ -488,7 +488,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let rows = mutations.len();
             if options.for_update_ts.is_zero() && rows > FORWARD_MIN_MUTATIONS_NUM {
                 mutations.sort_by(|a, b| a.key().cmp(b.key()));
-                let left_key = mutations.first().unwrap().key().clone();
+                let left_key = mutations.first().unwrap().key();
                 let right_key = mutations
                     .last()
                     .unwrap()
@@ -498,7 +498,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 if !has_data_in_range(
                     snapshot.clone(),
                     CF_WRITE,
-                    &left_key,
+                    left_key,
                     &right_key,
                     &mut statistics.write,
                 )? {
@@ -943,7 +943,7 @@ mod tests {
         assert_eq!(lock.hash, key.gen_hash());
     }
 
-    fn inner_test_process_write_impl_conflict(pri_key_number: u8, write_num: usize) {
+    fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
         let mut mutations = Vec::default();
         let pri_key = &[pri_key_number];
         for i in 0..write_num {
@@ -1047,9 +1047,10 @@ mod tests {
     }
 
     #[test]
-    fn test_process_write_impl_prewrite() {
-        inner_test_process_write_impl_conflict(0, FORWARD_MIN_MUTATIONS_NUM + 1);
-        inner_test_process_write_impl_conflict(
+    fn test_prewrite_skip_constraint_check() {
+        inner_test_prewrite_skip_constraint_check(0, FORWARD_MIN_MUTATIONS_NUM + 1);
+        inner_test_prewrite_skip_constraint_check(5, FORWARD_MIN_MUTATIONS_NUM + 1);
+        inner_test_prewrite_skip_constraint_check(
             FORWARD_MIN_MUTATIONS_NUM as u8,
             FORWARD_MIN_MUTATIONS_NUM + 1,
         );
