@@ -32,7 +32,7 @@ use crate::storage::kv::{
 };
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
-use crate::storage::{Callback, Error, Key, Result};
+use crate::storage::{Callback, Error, ErrorInner, Key, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::duration_to_sec;
@@ -48,7 +48,7 @@ const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
 /// versions are deleted.
 const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
-pub const GC_MAX_PENDING_TASKS: usize = 2;
+pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
@@ -1086,6 +1086,9 @@ pub struct GCWorker<E: Engine> {
     cfg: Option<GCConfig>,
     limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
 
+    /// How many requests are scheduled from outside and unfinished.
+    scheduled_tasks: Arc<atomic::AtomicUsize>,
+
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<atomic::AtomicUsize>,
@@ -1106,6 +1109,7 @@ impl<E: Engine> Clone for GCWorker<E> {
             raft_store_router: self.raft_store_router.clone(),
             cfg: self.cfg.clone(),
             limiter: self.limiter.clone(),
+            scheduled_tasks: self.scheduled_tasks.clone(),
             refs: self.refs.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
@@ -1152,6 +1156,7 @@ impl<E: Engine> GCWorker<E> {
             raft_store_router,
             cfg: Some(cfg),
             limiter: Arc::new(Mutex::new(limiter)),
+            scheduled_tasks: Arc::new(atomic::AtomicUsize::new(0)),
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             worker,
             worker_scheduler,
@@ -1199,6 +1204,22 @@ impl<E: Engine> GCWorker<E> {
         Ok(())
     }
 
+    /// Check whether GCWorker is busy. If busy, callback will be invoked with an error that
+    /// indicates GCWorker is busy; otherwise, return a new callback that invokes the original
+    /// callback as well as decrease the scheduled task counter.
+    fn check_is_busy<T: 'static>(&self, callback: Callback<T>) -> Option<Callback<T>> {
+        if self.scheduled_tasks.fetch_add(1, atomic::Ordering::SeqCst) > GC_MAX_EXECUTING_TASKS {
+            self.scheduled_tasks.fetch_sub(1, atomic::Ordering::SeqCst);
+            callback(Err(Error::from(ErrorInner::GCWorkerTooBusy)));
+            return None;
+        }
+        let scheduled_tasks = Arc::clone(&self.scheduled_tasks);
+        Some(Box::new(move |r| {
+            scheduled_tasks.fetch_sub(1, atomic::Ordering::SeqCst);
+            callback(r);
+        }))
+    }
+
     pub fn async_gc(
         &self,
         ctx: Context,
@@ -1206,13 +1227,15 @@ impl<E: Engine> GCWorker<E> {
         callback: Callback<()>,
     ) -> Result<()> {
         KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
-        self.worker_scheduler
-            .schedule(GCTask::GC {
-                ctx,
-                safe_point,
-                callback,
-            })
-            .or_else(handle_gc_task_schedule_error)
+        self.check_is_busy(callback).map_or(Ok(()), |callback| {
+            self.worker_scheduler
+                .schedule(GCTask::GC {
+                    ctx,
+                    safe_point,
+                    callback,
+                })
+                .or_else(handle_gc_task_schedule_error)
+        })
     }
 
     /// Cleans up all keys in a range and quickly free the disk space. The range might span over
@@ -1228,14 +1251,16 @@ impl<E: Engine> GCWorker<E> {
         callback: Callback<()>,
     ) -> Result<()> {
         KV_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
-        self.worker_scheduler
-            .schedule(GCTask::UnsafeDestroyRange {
-                ctx,
-                start_key,
-                end_key,
-                callback,
-            })
-            .or_else(handle_gc_task_schedule_error)
+        self.check_is_busy(callback).map_or(Ok(()), |callback| {
+            self.worker_scheduler
+                .schedule(GCTask::UnsafeDestroyRange {
+                    ctx,
+                    start_key,
+                    end_key,
+                    callback,
+                })
+                .or_else(handle_gc_task_schedule_error)
+        })
     }
 
     pub fn change_io_limit(&self, limit: i64) -> Result<()> {
