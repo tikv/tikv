@@ -28,7 +28,6 @@ servo_arc = "0.1.1"
 bitfield = "0.13.2"
 protobuf = "2"
 openssl = { version = "0.10" }
-crc = "1.8"
 time = "0.1"
 quick-error = "1.2.2"
 bitflags = "1.0.1"

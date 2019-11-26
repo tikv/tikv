@@ -9,6 +9,7 @@ name = "integrations"
 path = "tests/integrations/mod.rs"
 
 [dependencies]
+crc64fast = "0.1"
 tikv = { path = "../../", default-features = false }
 kvproto = { git = "https://github.com/MyonKeminta/kvproto.git", branch = "misono/green-gc" }
 protobuf = "2.8"

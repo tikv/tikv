@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::mpsc;
@@ -9,28 +10,35 @@ use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::util::io_limiter::IOLimiter;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_rocks::RocksIOLimiter;
+use engine_traits::IOLimiter;
 use futures::Future;
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
+use tokio_core::reactor::Handle;
 
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
-use crate::storage::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
+use crate::storage::kv::{
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
+    Statistics,
+};
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
-use crate::storage::{Callback, Error, Key, Result};
+use crate::storage::{Callback, Error, ErrorInner, Key, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
-use tikv_util::time::{duration_to_sec, SlowTimer};
-use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
+use tikv_util::time::duration_to_sec;
+use tikv_util::worker::{
+    FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
+};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -40,9 +48,8 @@ const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
 /// versions are deleted.
 const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
-pub const GC_MAX_PENDING_TASKS: usize = 2;
+pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
-const GC_TASK_SLOW_SECONDS: u64 = 30;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
 
@@ -116,18 +123,6 @@ enum GCTask {
 }
 
 impl GCTask {
-    pub fn take_callback(&mut self) -> Callback<()> {
-        let callback = match self {
-            GCTask::GC {
-                ref mut callback, ..
-            } => callback,
-            GCTask::UnsafeDestroyRange {
-                ref mut callback, ..
-            } => callback,
-        };
-        mem::replace(callback, Box::new(|_| {}))
-    }
-
     pub fn get_label(&self) -> &'static str {
         match self {
             GCTask::GC { .. } => "gc",
@@ -167,7 +162,7 @@ struct GCRunner<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     /// Used to limit the write flow of GC.
-    limiter: Arc<Mutex<Option<IOLimiter>>>,
+    limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
 
     cfg: GCConfig,
 
@@ -179,7 +174,7 @@ impl<E: Engine> GCRunner<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        limiter: Arc<Mutex<Option<IOLimiter>>>,
+        limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
         cfg: GCConfig,
     ) -> Self {
         Self {
@@ -202,7 +197,7 @@ impl<E: Engine> GCRunner<E> {
                 Ok(snapshot)
             }
             Some((_, Err(e))) => Err(e),
-            None => Err(EngineError::Timeout(timeout)),
+            None => Err(EngineError::from(EngineErrorInner::Timeout(timeout))),
         }
         .map_err(Error::from)
     }
@@ -419,52 +414,7 @@ impl<E: Engine> GCRunner<E> {
         Ok(())
     }
 
-    fn handle_gc_worker_task(&mut self, mut task: GCTask) {
-        let label = task.get_label();
-        GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
-
-        let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
-
-        let result = match &mut task {
-            GCTask::GC {
-                ctx, safe_point, ..
-            } => self.gc(ctx, *safe_point),
-            GCTask::UnsafeDestroyRange {
-                ctx,
-                start_key,
-                end_key,
-                ..
-            } => self.unsafe_destroy_range(ctx, start_key, end_key),
-        };
-
-        GC_TASK_DURATION_HISTOGRAM_VEC
-            .with_label_values(&[label])
-            .observe(duration_to_sec(timer.elapsed()));
-        slow_log!(timer, "{}", task);
-
-        if result.is_err() {
-            GC_GCTASK_FAIL_COUNTER_VEC.with_label_values(&[label]).inc();
-        }
-        (task.take_callback())(result);
-    }
-}
-
-impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
-    #[inline]
-    fn run(&mut self, task: GCTask) {
-        self.handle_gc_worker_task(task);
-    }
-
-    // The default implementation of `run_batch` prints a warning to log when it takes over 1 second
-    // to handle a task. It's not proper here, so override it to remove the log.
-    #[inline]
-    fn run_batch(&mut self, tasks: &mut Vec<GCTask>) {
-        for task in tasks.drain(..) {
-            self.run(task);
-        }
-    }
-
-    fn on_tick(&mut self) {
+    fn update_statistics_metrics(&mut self) {
         let stats = mem::replace(&mut self.stats, Statistics::default());
         for (cf, details) in stats.details().iter() {
             for (tag, count) in details.iter() {
@@ -476,21 +426,56 @@ impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
     }
 }
 
-/// When we failed to schedule a `GCTask` to `GCRunner`, use this to handle the `ScheduleError`.
-fn handle_gc_task_schedule_error(e: ScheduleError<GCTask>) -> Result<()> {
-    match e {
-        ScheduleError::Full(mut task) => {
-            GC_TOO_BUSY_COUNTER.inc();
-            (task.take_callback())(Err(Error::GCWorkerTooBusy));
-            Ok(())
-        }
-        _ => Err(box_err!("failed to schedule gc task: {:?}", e)),
+impl<E: Engine> FutureRunnable<GCTask> for GCRunner<E> {
+    #[inline]
+    fn run(&mut self, task: GCTask, _handle: &Handle) {
+        let label = task.get_label();
+        GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
+
+        let timer = Instant::now();
+        let update_metrics = |is_err| {
+            GC_TASK_DURATION_HISTOGRAM_VEC
+                .with_label_values(&[label])
+                .observe(duration_to_sec(timer.elapsed()));
+
+            if is_err {
+                GC_GCTASK_FAIL_COUNTER_VEC.with_label_values(&[label]).inc();
+            }
+        };
+
+        match task {
+            GCTask::GC {
+                mut ctx,
+                safe_point,
+                callback,
+            } => {
+                let res = self.gc(&mut ctx, safe_point);
+                update_metrics(res.is_err());
+                callback(res);
+                self.update_statistics_metrics();
+            }
+            GCTask::UnsafeDestroyRange {
+                ctx,
+                start_key,
+                end_key,
+                callback,
+            } => {
+                let res = self.unsafe_destroy_range(&ctx, &start_key, &end_key);
+                update_metrics(res.is_err());
+                callback(res);
+            }
+        };
     }
+}
+
+/// When we failed to schedule a `GCTask` to `GCRunner`, use this to handle the `ScheduleError`.
+fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GCTask>) -> Result<()> {
+    Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 
 /// Schedules a `GCTask` to the `GCRunner`.
 fn schedule_gc(
-    scheduler: &worker::Scheduler<GCTask>,
+    scheduler: &FutureScheduler<GCTask>,
     ctx: Context,
     safe_point: TimeStamp,
     callback: Callback<()>,
@@ -505,7 +490,7 @@ fn schedule_gc(
 }
 
 /// Does GC synchronously.
-fn gc(scheduler: &worker::Scheduler<GCTask>, ctx: Context, safe_point: TimeStamp) -> Result<()> {
+fn gc(scheduler: &FutureScheduler<GCTask>, ctx: Context, safe_point: TimeStamp) -> Result<()> {
     wait_op!(|callback| schedule_gc(scheduler, ctx, safe_point, callback)).unwrap_or_else(|| {
         error!("failed to receive result of gc");
         Err(box_err!("gc_worker: failed to receive result of gc"))
@@ -723,7 +708,7 @@ struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
     safe_point_last_check_time: Instant,
 
     /// Used to schedule `GCTask`s.
-    worker_scheduler: worker::Scheduler<GCTask>,
+    worker_scheduler: FutureScheduler<GCTask>,
 
     /// Holds the running status. It will tell us if `GCManager` should stop working and exit.
     gc_manager_ctx: GCManagerContext,
@@ -732,7 +717,7 @@ struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
 impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     pub fn new(
         cfg: AutoGCConfig<S, R>,
-        worker_scheduler: worker::Scheduler<GCTask>,
+        worker_scheduler: FutureScheduler<GCTask>,
     ) -> GCManager<S, R> {
         GCManager {
             cfg,
@@ -1099,13 +1084,16 @@ pub struct GCWorker<E: Engine> {
     raft_store_router: Option<ServerRaftStoreRouter>,
 
     cfg: Option<GCConfig>,
-    limiter: Arc<Mutex<Option<IOLimiter>>>,
+    limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
+
+    /// How many requests are scheduled from outside and unfinished.
+    scheduled_tasks: Arc<atomic::AtomicUsize>,
 
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<atomic::AtomicUsize>,
-    worker: Arc<Mutex<Worker<GCTask>>>,
-    worker_scheduler: worker::Scheduler<GCTask>,
+    worker: Arc<Mutex<FutureWorker<GCTask>>>,
+    worker_scheduler: FutureScheduler<GCTask>,
 
     gc_manager_handle: Arc<Mutex<Option<GCManagerHandle>>>,
 }
@@ -1121,6 +1109,7 @@ impl<E: Engine> Clone for GCWorker<E> {
             raft_store_router: self.raft_store_router.clone(),
             cfg: self.cfg.clone(),
             limiter: self.limiter.clone(),
+            scheduled_tasks: self.scheduled_tasks.clone(),
             refs: self.refs.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
@@ -1152,14 +1141,12 @@ impl<E: Engine> GCWorker<E> {
         raft_store_router: Option<ServerRaftStoreRouter>,
         cfg: GCConfig,
     ) -> GCWorker<E> {
-        let worker = Arc::new(Mutex::new(
-            WorkerBuilder::new("gc-worker")
-                .pending_capacity(GC_MAX_PENDING_TASKS)
-                .create(),
-        ));
+        let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
         let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
-            Some(IOLimiter::new(cfg.max_write_bytes_per_sec.0))
+            let bps = i64::try_from(cfg.max_write_bytes_per_sec.0)
+                .expect("snap_max_write_bytes_per_sec > i64::max_value");
+            Some(IOLimiter::new(bps))
         } else {
             None
         };
@@ -1169,6 +1156,7 @@ impl<E: Engine> GCWorker<E> {
             raft_store_router,
             cfg: Some(cfg),
             limiter: Arc::new(Mutex::new(limiter)),
+            scheduled_tasks: Arc::new(atomic::AtomicUsize::new(0)),
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             worker,
             worker_scheduler,
@@ -1216,6 +1204,22 @@ impl<E: Engine> GCWorker<E> {
         Ok(())
     }
 
+    /// Check whether GCWorker is busy. If busy, callback will be invoked with an error that
+    /// indicates GCWorker is busy; otherwise, return a new callback that invokes the original
+    /// callback as well as decrease the scheduled task counter.
+    fn check_is_busy<T: 'static>(&self, callback: Callback<T>) -> Option<Callback<T>> {
+        if self.scheduled_tasks.fetch_add(1, atomic::Ordering::SeqCst) > GC_MAX_EXECUTING_TASKS {
+            self.scheduled_tasks.fetch_sub(1, atomic::Ordering::SeqCst);
+            callback(Err(Error::from(ErrorInner::GCWorkerTooBusy)));
+            return None;
+        }
+        let scheduled_tasks = Arc::clone(&self.scheduled_tasks);
+        Some(Box::new(move |r| {
+            scheduled_tasks.fetch_sub(1, atomic::Ordering::SeqCst);
+            callback(r);
+        }))
+    }
+
     pub fn async_gc(
         &self,
         ctx: Context,
@@ -1223,13 +1227,15 @@ impl<E: Engine> GCWorker<E> {
         callback: Callback<()>,
     ) -> Result<()> {
         KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
-        self.worker_scheduler
-            .schedule(GCTask::GC {
-                ctx,
-                safe_point,
-                callback,
-            })
-            .or_else(handle_gc_task_schedule_error)
+        self.check_is_busy(callback).map_or(Ok(()), |callback| {
+            self.worker_scheduler
+                .schedule(GCTask::GC {
+                    ctx,
+                    safe_point,
+                    callback,
+                })
+                .or_else(handle_gc_task_schedule_error)
+        })
     }
 
     /// Cleans up all keys in a range and quickly free the disk space. The range might span over
@@ -1245,23 +1251,25 @@ impl<E: Engine> GCWorker<E> {
         callback: Callback<()>,
     ) -> Result<()> {
         KV_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
-        self.worker_scheduler
-            .schedule(GCTask::UnsafeDestroyRange {
-                ctx,
-                start_key,
-                end_key,
-                callback,
-            })
-            .or_else(handle_gc_task_schedule_error)
+        self.check_is_busy(callback).map_or(Ok(()), |callback| {
+            self.worker_scheduler
+                .schedule(GCTask::UnsafeDestroyRange {
+                    ctx,
+                    start_key,
+                    end_key,
+                    callback,
+                })
+                .or_else(handle_gc_task_schedule_error)
+        })
     }
 
-    pub fn change_io_limit(&self, limit: u64) -> Result<()> {
+    pub fn change_io_limit(&self, limit: i64) -> Result<()> {
         let mut limiter = self.limiter.lock().unwrap();
         if limit == 0 {
             limiter.take();
         } else {
             limiter
-                .get_or_insert_with(|| IOLimiter::new(limit))
+                .get_or_insert_with(|| RocksIOLimiter::new(limit))
                 .set_bytes_per_second(limit as i64);
         }
         info!("GC io limit changed"; "max_write_bytes_per_sec" => limit);
@@ -1280,7 +1288,20 @@ mod tests {
     use futures::Future;
     use kvproto::metapb;
     use std::collections::BTreeMap;
+    use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
+
+    fn take_callback(t: &mut GCTask) -> Callback<()> {
+        let callback = match t {
+            GCTask::GC {
+                ref mut callback, ..
+            } => callback,
+            GCTask::UnsafeDestroyRange {
+                ref mut callback, ..
+            } => callback,
+        };
+        mem::replace(callback, Box::new(|_| {}))
+    }
 
     struct MockSafePointProvider {
         rx: Receiver<TimeStamp>,
@@ -1312,9 +1333,9 @@ mod tests {
         tx: Sender<GCTask>,
     }
 
-    impl Runnable<GCTask> for MockGCRunner {
-        fn run(&mut self, mut t: GCTask) {
-            let cb = t.take_callback();
+    impl FutureRunnable<GCTask> for MockGCRunner {
+        fn run(&mut self, mut t: GCTask, _handle: &Handle) {
+            let cb = take_callback(&mut t);
             self.tx.send(t).unwrap();
             cb(Ok(()));
         }
@@ -1324,14 +1345,14 @@ mod tests {
     /// The safe_point polling interval is set to 100 ms.
     struct GCManagerTestUtil {
         gc_manager: Option<GCManager<MockSafePointProvider, MockRegionInfoProvider>>,
-        worker: Worker<GCTask>,
+        worker: FutureWorker<GCTask>,
         safe_point_sender: Sender<TimeStamp>,
         gc_task_receiver: Receiver<GCTask>,
     }
 
     impl GCManagerTestUtil {
         pub fn new(regions: BTreeMap<Vec<u8>, RegionInfo>) -> Self {
-            let mut worker = WorkerBuilder::new("test-gc-worker").create();
+            let mut worker = FutureWorker::new("test-gc-worker");
             let (gc_task_sender, gc_task_receiver) = channel();
             worker.start(MockGCRunner { tx: gc_task_sender }).unwrap();
 
