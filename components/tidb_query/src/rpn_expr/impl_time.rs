@@ -5,9 +5,9 @@ use tidb_query_codegen::rpn_fn;
 use super::super::expr::EvalContext;
 
 use crate::codec::data_type::*;
-use crate::codec::Error;
 use crate::codec::mysql::time::extension::DateTimeExtension;
 use crate::codec::mysql::Time;
+use crate::codec::Error;
 use crate::Result;
 
 #[rpn_fn(capture = [ctx])]
