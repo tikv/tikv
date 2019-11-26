@@ -230,36 +230,27 @@ mod tests {
     #[test]
     fn test_to_days() {
         let cases = vec![
-            ("950501", Some(728779)),
-            ("2007-10-07", Some(733321)),
-            ("2008-10-07", Some(733687)),
-            ("08-10-07", Some(733687)),
-            ("0000-01-01", Some(1)),
-            ("2007-10-07 00:00:59", Some(733321)),
+            (Some("950501"), Some(728779)),
+            (Some("2007-10-07"), Some(733321)),
+            (Some("2008-10-07"), Some(733687)),
+            (Some("08-10-07"), Some(733687)),
+            (Some("0000-01-01"), Some(1)),
+            (Some("2007-10-07 00:00:59"), Some(733321)),
+            (Some("0000-00-00 00:00:00"), None),
+            (None, None),
         ];
+
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
-            let time = Some(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            let time = match arg {
+                Some(arg) => Some(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap()),
+                None => None,
+            };
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time.clone())
                 .evaluate(ScalarFuncSig::ToDays)
                 .unwrap();
             assert_eq!(output, exp);
         }
-
-        // test NULL case
-        let output = RpnFnScalarEvaluator::new()
-            .push_param(None::<Time>)
-            .evaluate::<Int>(ScalarFuncSig::ToDays)
-            .unwrap();
-        assert_eq!(output, None);
-
-        // test ZERO case
-        let time = Some(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 6, true).unwrap());
-        let output = RpnFnScalarEvaluator::new()
-            .push_param(time)
-            .evaluate::<Int>(ScalarFuncSig::ToDays)
-            .unwrap();
-        assert_eq!(output, None);
     }
 }
