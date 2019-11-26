@@ -23,7 +23,7 @@ use tikv_util::box_try;
 macro_rules! match_template_hashable {
     ($t:tt, $($tail:tt)*) => {
         match_template::match_template! {
-            $t = [Int, Real, Bytes, Duration],
+            $t = [Int, Real, Bytes, Duration, Decimal, DateTime],
             $($tail)*
         }
     };
@@ -81,7 +81,12 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         // Only a subset of all eval types are supported.
         let eval_type = box_try!(EvalType::try_from(def.get_field_type().as_accessor().tp()));
         match eval_type {
-            EvalType::Int | EvalType::Real | EvalType::Bytes | EvalType::Duration => {}
+            EvalType::Int
+            | EvalType::Real
+            | EvalType::Bytes
+            | EvalType::Duration
+            | EvalType::Decimal
+            | EvalType::DateTime => {}
             _ => return Err(other_err!("Eval type {} is not supported", eval_type)),
         }
 
@@ -185,6 +190,8 @@ enum Groups {
     Real(HashMap<Option<Real>, usize>),
     Bytes(HashMap<Option<Bytes>, usize>),
     Duration(HashMap<Option<Duration>, usize>),
+    Decimal(HashMap<Option<Decimal>, usize>),
+    DateTime(HashMap<Option<DateTime>, usize>),
 }
 
 impl Groups {

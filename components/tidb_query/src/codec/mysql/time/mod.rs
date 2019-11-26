@@ -11,6 +11,7 @@ pub use self::weekmode::WeekMode;
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Write;
+use std::hash::{Hash, Hasher};
 use std::mem;
 
 use codec::prelude::*;
@@ -1556,6 +1557,14 @@ impl Ord for Time {
         a.set_fsp_tt(0);
         b.set_fsp_tt(0);
         a.0.cmp(&b.0)
+    }
+}
+
+impl Hash for Time {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut a = *self;
+        a.set_fsp_tt(0);
+        a.0.hash(state);
     }
 }
 
