@@ -923,9 +923,8 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::kv::TestEngineBuilder;
+    use crate::storage::kv::{Snapshot, TestEngineBuilder};
     use crate::storage::{DummyLockManager, Mutation, Options};
-    use engine::Peekable;
 
     #[test]
     fn test_extract_lock_from_result() {
@@ -1042,9 +1041,7 @@ mod tests {
         commit(&engine, &mut statistic, keys.clone(), 104, 105).unwrap();
         let snap = engine.snapshot(&ctx).unwrap();
         for k in keys {
-            let v = snap
-                .get_value_cf(CF_WRITE, k.append_ts(105.into()).as_encoded())
-                .unwrap();
+            let v = snap.get_cf(CF_WRITE, &k.append_ts(105.into())).unwrap();
             assert!(v.is_some());
         }
     }
@@ -1052,7 +1049,10 @@ mod tests {
     #[test]
     fn test_process_write_impl_prewrite() {
         inner_test_process_write_impl_conflict(0, FORWARD_MIN_MUTATIONS_NUM + 1);
-        inner_test_process_write_impl_conflict(FORWARD_MIN_MUTATIONS_NUM as u8, FORWARD_MIN_MUTATIONS_NUM + 1);
+        inner_test_process_write_impl_conflict(
+            FORWARD_MIN_MUTATIONS_NUM as u8,
+            FORWARD_MIN_MUTATIONS_NUM + 1,
+        );
     }
 
     fn prewrite<E: Engine>(
