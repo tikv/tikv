@@ -263,6 +263,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CeilDecToDec => ceil_fn_meta::<CeilDecToDec>(),
         ScalarFuncSig::CeilDecToInt => ceil_fn_meta::<CeilDecToInt>(),
         ScalarFuncSig::CeilIntToInt => ceil_fn_meta::<CeilIntToInt>(),
+        ScalarFuncSig::CeilIntToDec => ceil_fn_meta::<CeilIntToDec>(),
         ScalarFuncSig::FloorReal => floor_fn_meta::<FloorReal>(),
         ScalarFuncSig::FloorDecToInt => floor_fn_meta::<FloorDecToInt>(),
         ScalarFuncSig::FloorDecToDec => floor_fn_meta::<FloorDecToDec>(),
