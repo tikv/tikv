@@ -91,6 +91,8 @@ pub struct Config {
     // Wait duration before each request batch is processed.
     pub request_batch_wait_duration: ReadableDuration,
 
+    pub coarsetime_update_rate_ms: u64,
+
     // Server labels to specify some attributes about this server.
     pub labels: HashMap<String, String>,
 
@@ -108,8 +110,6 @@ pub struct Config {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub end_point_max_tasks: Option<usize>,
-
-    pub coarsetime_update_rate_ms: u64,
 }
 
 impl Default for Config {
