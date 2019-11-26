@@ -493,6 +493,9 @@ pub struct Options {
     pub is_pessimistic_lock: Vec<bool>,
     // How many keys this transaction involved.
     pub txn_size: u64,
+    // Time to wait for lock released in milliseconds when encountering locks.
+    // 0 means using default timeout. Negative means no wait.
+    pub wait_timeout: i64,
 }
 
 impl Options {
@@ -501,11 +504,7 @@ impl Options {
             lock_ttl,
             skip_constraint_check,
             key_only,
-            reverse_scan: false,
-            is_first_lock: false,
-            for_update_ts: 0,
-            is_pessimistic_lock: vec![],
-            txn_size: 0,
+            ..Default::default()
         }
     }
 
@@ -2606,8 +2605,8 @@ mod tests {
                 ts(110, 0),
                 ts(120, 0),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { ttl, .. })) => {
-                        assert_eq!(ttl, 100)
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info))) => {
+                        assert_eq!(info.get_lock_ttl(), 100)
                     }
                     e => panic!("unexpected error chain: {:?}", e),
                 }),

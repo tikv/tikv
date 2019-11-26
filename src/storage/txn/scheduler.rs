@@ -68,6 +68,7 @@ pub enum Msg {
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
+        wait_timeout: i64,
     },
 }
 
@@ -461,17 +462,21 @@ impl<E: Engine, L: LockMgr> Scheduler<E, L> {
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
+        wait_timeout: i64,
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[tctx.tag, "lock_wait"])
             .inc();
-        self.inner
-            .lock_mgr
-            .as_ref()
-            .unwrap()
-            .wait_for(start_ts, tctx.cb, pr, lock, is_first_lock);
+        self.inner.lock_mgr.as_ref().unwrap().wait_for(
+            start_ts,
+            tctx.cb,
+            pr,
+            lock,
+            is_first_lock,
+            wait_timeout,
+        );
         self.release_lock(&tctx.lock, cid);
     }
 }
@@ -493,7 +498,8 @@ impl<E: Engine, L: LockMgr> MsgScheduler for Scheduler<E, L> {
                 pr,
                 lock,
                 is_first_lock,
-            } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock),
+                wait_timeout,
+            } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock, wait_timeout),
             _ => unreachable!(),
         }
     }

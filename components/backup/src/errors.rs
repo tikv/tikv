@@ -5,7 +5,7 @@ use std::{error, result};
 
 use kvproto::backup::Error as ErrorPb;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use kvproto::kvrpcpb::{KeyError, LockInfo};
+use kvproto::kvrpcpb::KeyError;
 use tikv::storage::kv::Error as EngineError;
 use tikv::storage::mvcc::Error as MvccError;
 use tikv::storage::txn::Error as TxnError;
@@ -59,22 +59,10 @@ impl Into<ErrorPb> for Error {
 
                 err.set_region_error(e);
             }
-            Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked {
-                primary,
-                ts,
-                key,
-                ttl,
-                txn_size,
-            })) => {
+            Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info))) => {
                 BACKUP_RANGE_ERROR_VEC
                     .with_label_values(&["key_is_locked"])
                     .inc();
-                let mut info = LockInfo::new();
-                info.set_primary_lock(primary);
-                info.set_lock_version(ts);
-                info.set_key(key);
-                info.set_lock_ttl(ttl);
-                info.set_txn_size(txn_size);
                 let mut e = KeyError::new();
                 e.set_locked(info);
                 err.set_kv_error(e);
