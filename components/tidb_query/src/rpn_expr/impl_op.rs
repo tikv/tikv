@@ -213,6 +213,7 @@ mod tests {
 
     use super::*;
     use crate::codec::mysql::TimeType;
+    use crate::expr::EvalContext;
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[test]
@@ -450,7 +451,9 @@ mod tests {
                 Some(1),
             ),
             (
-                DateTime::zero(0, TimeType::DateTime).unwrap().into(),
+                DateTime::zero(&mut EvalContext::default(), 0, TimeType::DateTime)
+                    .unwrap()
+                    .into(),
                 ScalarFuncSig::TimeIsNull,
                 Some(0),
             ),
