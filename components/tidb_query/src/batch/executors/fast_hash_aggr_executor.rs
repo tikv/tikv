@@ -23,7 +23,7 @@ use tikv_util::box_try;
 macro_rules! match_template_hashable {
     ($t:tt, $($tail:tt)*) => {
         match_template::match_template! {
-            $t = [Int, Real, Bytes, Duration],
+            $t = [Int, Real, Bytes, Duration, Decimal, DateTime],
             $($tail)*
         }
     };
@@ -185,6 +185,8 @@ enum Groups {
     Real(HashMap<Option<Real>, usize>),
     Bytes(HashMap<Option<Bytes>, usize>),
     Duration(HashMap<Option<Duration>, usize>),
+    Decimal(HashMap<Option<Decimal>, usize>),
+    DateTime(HashMap<Option<DateTime>, usize>),
 }
 
 impl Groups {
