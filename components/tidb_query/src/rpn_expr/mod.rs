@@ -113,6 +113,26 @@ fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     }
 }
 
+pub fn map_unary_minus_int_func(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 1 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    if children[0]
+        .get_field_type()
+        .as_accessor()
+        .flag()
+        .contains(FieldTypeFlag::UNSIGNED)
+    {
+        Ok(unary_minus_uint_fn_meta())
+    } else {
+        Ok(unary_minus_int_fn_meta())
+    }
+}
+
 #[rustfmt::skip]
 fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
     let value = expr.get_sig();
@@ -186,6 +206,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::UnaryNotInt => unary_not_int_fn_meta(),
         ScalarFuncSig::UnaryNotReal => unary_not_real_fn_meta(),
         ScalarFuncSig::UnaryNotDecimal => unary_not_decimal_fn_meta(),
+        ScalarFuncSig::UnaryMinusInt => map_unary_minus_int_func(value, children)?,
+        ScalarFuncSig::UnaryMinusReal => unary_minus_real_fn_meta(),
+        ScalarFuncSig::UnaryMinusDecimal => unary_minus_decimal_fn_meta(),
         ScalarFuncSig::BitAndSig => bit_and_fn_meta(),
         ScalarFuncSig::BitOrSig => bit_or_fn_meta(),
         ScalarFuncSig::BitXorSig => bit_xor_fn_meta(),
@@ -228,6 +251,11 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::WeekDay => week_day_fn_meta(),
         ScalarFuncSig::ToDays => to_days_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
+        ScalarFuncSig::Month => month_fn_meta(),
+        ScalarFuncSig::Hour => hour_fn_meta(),
+        ScalarFuncSig::Minute => minute_fn_meta(),
+        ScalarFuncSig::Second => second_fn_meta(),
+        ScalarFuncSig::MicroSecond => micro_second_fn_meta(),
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
         ScalarFuncSig::AbsReal => abs_real_fn_meta(),
@@ -236,6 +264,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CeilDecToDec => ceil_fn_meta::<CeilDecToDec>(),
         ScalarFuncSig::CeilDecToInt => ceil_fn_meta::<CeilDecToInt>(),
         ScalarFuncSig::CeilIntToInt => ceil_fn_meta::<CeilIntToInt>(),
+        ScalarFuncSig::CeilIntToDec => ceil_fn_meta::<CeilIntToDec>(),
         ScalarFuncSig::FloorReal => floor_fn_meta::<FloorReal>(),
         ScalarFuncSig::FloorDecToInt => floor_fn_meta::<FloorDecToInt>(),
         ScalarFuncSig::FloorDecToDec => floor_fn_meta::<FloorDecToDec>(),
@@ -298,6 +327,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::IsIPv4Compat => is_ipv4_compat_fn_meta(),
         ScalarFuncSig::IsIPv6 => is_ipv6_fn_meta(),
         ScalarFuncSig::Inet6Ntoa => inet6_ntoa_fn_meta(),
+        ScalarFuncSig::Inet6Aton => inet6_aton_fn_meta(),
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
         ScalarFuncSig::CastIntAsString |
@@ -353,10 +383,12 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
         ScalarFuncSig::Reverse => reverse_fn_meta(),
+        ScalarFuncSig::ReverseBinary => reverse_binary_fn_meta(),
         ScalarFuncSig::HexIntArg => hex_int_arg_fn_meta(),
         ScalarFuncSig::HexStrArg => hex_str_arg_fn_meta(),
         ScalarFuncSig::LTrim => ltrim_fn_meta(),
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
+        ScalarFuncSig::Replace => replace_fn_meta(),
         ScalarFuncSig::Left => left_fn_meta(),
         ScalarFuncSig::Right => right_fn_meta(),
         ScalarFuncSig::LocateBinary2Args => locate_binary_2_args_fn_meta(),
