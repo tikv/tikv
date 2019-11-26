@@ -17,7 +17,7 @@ use kvproto::tikvpb_grpc::*;
 use test_raftstore::*;
 use tikv::import::test_helpers::*;
 use tikv::pd::PdClient;
-use tikv_util::HandyRwLock;
+use tikv_util::{file::calc_crc32_bytes, HandyRwLock};
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 
@@ -59,7 +59,7 @@ fn test_upload_sst() {
     let (_cluster, ctx, _, import) = new_cluster_and_tikv_import_client();
 
     let data = vec![1; 1024];
-    let crc32 = calc_data_crc32(&data);
+    let crc32 = calc_crc32_bytes(&data);
     let length = data.len() as u64;
 
     // Mismatch crc32

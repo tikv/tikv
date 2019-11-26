@@ -163,7 +163,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        result = super::super::util::check_lock(&current_user_key, ts, &lock)
+                        result = super::super::util::check_lock(&current_user_key, ts, lock)
                             .map(|_| None);
                     }
                     IsolationLevel::RC => {}

@@ -215,8 +215,8 @@ mod tests {
             match scanner.next() {
                 Ok(None) => break,
                 Ok(Some((key, value))) => scan_result.push((key.to_raw().unwrap(), Some(value))),
-                Err(TxnError::Mvcc(MvccError::KeyIsLocked { key, .. })) => {
-                    scan_result.push((key, None))
+                Err(TxnError::Mvcc(MvccError::KeyIsLocked(mut info))) => {
+                    scan_result.push((info.take_key(), None))
                 }
                 e => panic!("got error while scanning: {:?}", e),
             }

@@ -3,10 +3,10 @@
 use std::borrow::Cow;
 use std::{f64, i64};
 
-use crc::{crc32, Hasher32};
 use num::traits::Pow;
 use rand::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
+use tikv_util::file::calc_crc32_bytes;
 use time;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
@@ -191,9 +191,7 @@ impl ScalarFunc {
     #[inline]
     pub fn crc32(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let d = try_opt!(self.children[0].eval_string(ctx, row));
-        let mut digest = crc32::Digest::new(crc32::IEEE);
-        digest.write(&d);
-        Ok(Some(i64::from(digest.sum32())))
+        Ok(Some(i64::from(calc_crc32_bytes(&d))))
     }
 
     #[inline]
