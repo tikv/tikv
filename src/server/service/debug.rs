@@ -4,7 +4,7 @@ use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
 use fail;
 use futures::{future, stream, Future, Stream};
-use futures_cpupool::{Builder, CpuPool};
+use futures_cpupool::CpuPool;
 use grpcio::{Error as GrpcError, WriteFlags};
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::{self, *};
@@ -53,11 +53,12 @@ pub struct Service<T: RaftStoreRouter, E: Engine> {
 
 impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
     /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GCWorker`.
-    pub fn new(engines: Engines, raft_router: T, gc_worker: GCWorker<E>) -> Service<T, E> {
-        let pool = Builder::new()
-            .name_prefix(thd_name!("debugger"))
-            .pool_size(1)
-            .create();
+    pub fn new(
+        engines: Engines,
+        pool: CpuPool,
+        raft_router: T,
+        gc_worker: GCWorker<E>,
+    ) -> Service<T, E> {
         let debugger = Debugger::new(engines, Some(gc_worker));
         Service {
             pool,
