@@ -389,6 +389,7 @@ dependencies = [
  "backup",
  "chrono",
  "clap",
+ "coarsetime",
  "engine",
  "fail",
  "fs2",
@@ -414,6 +415,16 @@ dependencies = [
  "toml",
  "url 2.1.0",
  "vlog",
+]
+
+[[package]]
+name = "coarsetime"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1c758a21328f0076afe9298601b9c7b6b73f8c892c8a8c2cc2e64dbf2c67da7"
+dependencies = [
+ "lazy_static",
+ "libc",
 ]
 
 [[package]]
@@ -3341,6 +3352,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
+ "coarsetime",
  "codec",
  "crc32fast",
  "crc64fast",

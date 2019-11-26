@@ -2,6 +2,7 @@
 
 use super::setup::*;
 use super::signal_handler;
+use coarsetime::Updater;
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
@@ -40,7 +41,6 @@ use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
 use tikv_util::worker::FutureWorker;
-
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 pub fn run_tikv(mut config: TiKvConfig) {
@@ -60,6 +60,10 @@ pub fn run_tikv(mut config: TiKvConfig) {
     config.write_into_metrics();
     // Do some prepare works before start.
     pre_start(&config);
+    // Use coarsetime for improve metrics performance
+    let coarsetime_updater = Updater::new(config.server.coarsetime_update_rate_ms)
+        .start()
+        .unwrap();
 
     let security_mgr = Arc::new(
         SecurityManager::new(&config.security)
@@ -81,6 +85,10 @@ pub fn run_tikv(mut config: TiKvConfig) {
 
     let _m = Monitor::default();
     run_raft_server(pd_client, &config, security_mgr);
+
+    if let Err(e) = coarsetime_updater.stop() {
+        error!("stop coarsetime failed"; "err" => ?e);
+    }
 }
 
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
