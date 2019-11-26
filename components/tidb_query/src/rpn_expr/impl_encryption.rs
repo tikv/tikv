@@ -5,7 +5,7 @@ use tidb_query_codegen::rpn_fn;
 use openssl::hash::{self, MessageDigest};
 
 use crate::codec::data_type::*;
-use crate::codec::{Error, Result};
+use crate::Result;
 
 #[rpn_fn]
 #[inline]
@@ -25,7 +25,7 @@ pub fn sha1(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Bytes> {
     hash::hash(hashtype, input)
         .map(|digest| hex::encode(digest).into_bytes())
-        .map_err(|e| Error::Other(box_err!("OpenSSL error: {:?}", e)))
+        .map_err(|e| box_err!("OpenSSL error: {:?}", e))
 }
 
 #[cfg(test)]
