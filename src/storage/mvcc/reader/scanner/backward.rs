@@ -156,7 +156,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                     IsolationLevel::Rc => {}
                 }
                 if let Some(lock_cursor) = self.lock_cursor.as_mut() {
-                    lock_cursor.next(&mut self.statistics.lock);
+                    lock_cursor.prev(&mut self.statistics.lock);
                 }
             }
             if has_write {
