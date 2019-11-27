@@ -273,7 +273,7 @@ impl RegionIterator {
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
         fail_point!("region_snapshot_seek", |_| {
-            return Err(box_err!("region seek error"));
+            Err(box_err!("region seek error"))
         });
         self.should_seekable(key)?;
         let key = keys::data_key(key);
