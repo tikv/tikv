@@ -1639,7 +1639,10 @@ fn test_cache() {
     let resp2 = handle_request(&endpoint, req2);
 
     assert!(!resp2.get_is_cache_hit());
-    assert_eq!(resp.get_cache_last_version(), resp2.get_cache_last_version());
+    assert_eq!(
+        resp.get_cache_last_version(),
+        resp2.get_cache_last_version()
+    );
     assert_eq!(resp.get_data(), resp2.get_data());
 
     // Send the request again using is_cached_enabled == true and a matching version.
@@ -1661,6 +1664,9 @@ fn test_cache() {
     let resp4 = handle_request(&endpoint, req4);
 
     assert!(!resp4.get_is_cache_hit());
-    assert_eq!(resp.get_cache_last_version(), resp4.get_cache_last_version());
+    assert_eq!(
+        resp.get_cache_last_version(),
+        resp4.get_cache_last_version()
+    );
     assert_eq!(resp.get_data(), resp4.get_data());
 }
