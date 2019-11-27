@@ -262,8 +262,8 @@ mod tests {
     use crate::raftstore::coprocessor::Config as CopConfig;
     use crate::server::resolve::Callback;
     use crate::storage::{
-        mvcc::Error as MvccError, txn::Error as TxnError, Error as StorageError,
-        Result as StorageResult,
+        mvcc::Error as MvccError, mvcc::ErrorInner as MvccErrorInner, txn::Error as TxnError,
+        Error as StorageError, Result as StorageResult,
     };
     use kvproto::kvrpcpb::LockInfo;
     use kvproto::metapb::Region;
@@ -309,7 +309,7 @@ mod tests {
             .unwrap();
 
         // Make sure the deadlock detector is the leader.
-        let mut leader_region = Region::new();
+        let mut leader_region = Region::default();
         leader_region.set_start_key(b"".to_vec());
         leader_region.set_end_key(b"foo".to_vec());
         coprocessor_host.on_role_change(&leader_region, StateRole::Leader);
@@ -368,9 +368,9 @@ mod tests {
             40.into(),
             storage_callback(tx.clone()),
             ProcessResult::MultiRes {
-                results: vec![Err(StorageError::from(TxnError::from(
-                    MvccError::KeyIsLocked(LockInfo::default()),
-                )))],
+                results: vec![Err(StorageError::from(TxnError::from(MvccError::from(
+                    MvccErrorInner::KeyIsLocked(LockInfo::default()),
+                ))))],
             },
             Lock {
                 ts: 30.into(),

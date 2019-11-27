@@ -39,17 +39,22 @@ use self::txn::scheduler::Scheduler as TxnScheduler;
 
 pub use self::commands::{Options, PointGetCommand};
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-pub use self::errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind};
+pub use self::errors::{
+    get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner,
+};
 pub use self::kv::{
-    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics,
-    FlowStatsReporter, Iterator, Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot,
-    Statistics, StatisticsSummary, TestEngineBuilder,
+    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
+    ErrorInner as EngineErrorInner, FlowStatistics, FlowStatsReporter, Iterator, Modify,
+    RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
+    TestEngineBuilder,
 };
 pub use self::lock_manager::{DummyLockManager, LockManager};
 pub use self::mvcc::{Scanner as StoreScanner, TimeStamp};
 pub use self::readpool_impl::*;
+pub use self::txn::{
+    Error as TxnError, ErrorInner as TxnErrorInner, Msg, Scanner, Scheduler, SnapshotStore, Store,
+};
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
-pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{
     Key, KvPair, Mutation, MvccInfo, ProcessResult, StorageCallback, TxnStatus, Value,
 };
@@ -209,7 +214,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let val = engine.async_snapshot(ctx, callback);
 
         future::result(val)
-            .and_then(|_| future.map_err(|cancel| EngineError::Other(box_err!(cancel))))
+            .and_then(|_| {
+                future
+                    .map_err(|cancel| EngineError::from(EngineErrorInner::Other(box_err!(cancel))))
+            })
             .and_then(|(_ctx, result)| result)
             // map storage::kv::Error -> storage::txn::Error -> storage::Error
             .map_err(txn::Error::from)
@@ -287,7 +295,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -344,7 +352,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             })
         });
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -411,7 +419,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -488,7 +496,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -526,7 +534,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         for m in &mutations {
             let key_size = m.key().as_encoded().len();
             if key_size > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
+                callback(Err(Error::from(ErrorInner::KeyTooLarge(
+                    key_size,
+                    self.max_key_size,
+                ))));
                 return Ok(());
             }
         }
@@ -556,14 +567,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         if !self.pessimistic_txn_enabled {
-            callback(Err(Error::PessimisticTxnNotEnabled));
+            callback(Err(Error::from(ErrorInner::PessimisticTxnNotEnabled)));
             return Ok(());
         }
 
         for k in &keys {
             let key_size = k.0.as_encoded().len();
             if key_size > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
+                callback(Err(Error::from(ErrorInner::KeyTooLarge(
+                    key_size,
+                    self.max_key_size,
+                ))));
                 return Ok(());
             }
         }
@@ -590,7 +604,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Key>,
         lock_ts: TimeStamp,
         commit_ts: TimeStamp,
-        callback: Callback<()>,
+        callback: Callback<TxnStatus>,
     ) -> Result<()> {
         let cmd = Command {
             ctx,
@@ -600,7 +614,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 commit_ts,
             },
         };
-        self.schedule(cmd, StorageCallback::Boolean(callback))?;
+        self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
         Ok(())
     }
@@ -696,7 +710,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         if !self.pessimistic_txn_enabled {
-            callback(Err(Error::PessimisticTxnNotEnabled));
+            callback(Err(Error::from(ErrorInner::PessimisticTxnNotEnabled)));
             return Ok(());
         }
 
@@ -905,7 +919,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -945,7 +959,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             })
         });
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -1006,7 +1020,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -1020,7 +1034,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         if key.len() > self.max_key_size {
-            callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+            callback(Err(Error::from(ErrorInner::KeyTooLarge(
+                key.len(),
+                self.max_key_size,
+            ))));
             return Ok(());
         }
         self.engine.async_write(
@@ -1047,7 +1064,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let cf = Self::rawkv_cf(&cf)?;
         for &(ref key, _) in &pairs {
             if key.len() > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+                callback(Err(Error::from(ErrorInner::KeyTooLarge(
+                    key.len(),
+                    self.max_key_size,
+                ))));
                 return Ok(());
             }
         }
@@ -1073,7 +1093,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         if key.len() > self.max_key_size {
-            callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+            callback(Err(Error::from(ErrorInner::KeyTooLarge(
+                key.len(),
+                self.max_key_size,
+            ))));
             return Ok(());
         }
         self.engine.async_write(
@@ -1095,10 +1118,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         if start_key.len() > self.max_key_size || end_key.len() > self.max_key_size {
-            callback(Err(Error::KeyTooLarge(
+            callback(Err(Error::from(ErrorInner::KeyTooLarge(
                 cmp::max(start_key.len(), end_key.len()),
                 self.max_key_size,
-            )));
+            ))));
             return Ok(());
         }
 
@@ -1126,7 +1149,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         let cf = Self::rawkv_cf(&cf)?;
         for key in &keys {
             if key.len() > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(key.len(), self.max_key_size)));
+                callback(Err(Error::from(ErrorInner::KeyTooLarge(
+                    key.len(),
+                    self.max_key_size,
+                ))));
                 return Ok(());
             }
         }
@@ -1294,7 +1320,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -1310,7 +1336,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 return Ok(c);
             }
         }
-        Err(Error::InvalidCf(cf.to_owned()))
+        Err(Error::from(ErrorInner::InvalidCf(cf.to_owned())))
     }
 
     /// Check if key range is valid
@@ -1420,7 +1446,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         });
 
         future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
+            .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
 
@@ -1558,7 +1584,7 @@ mod tests {
         Box::new(move |x: Result<T>| {
             expect_error(
                 |err| match err {
-                    Error::SchedTooBusy => {}
+                    Error(box ErrorInner::SchedTooBusy) => {}
                     e => panic!("unexpected error chain: {:?}, expect too busy", e),
                 },
                 x,
@@ -1600,7 +1626,9 @@ mod tests {
         rx.recv().unwrap();
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked { .. })) => (),
+                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                    box mvcc::ErrorInner::KeyIsLocked { .. },
+                ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1648,8 +1676,11 @@ mod tests {
                 1.into(),
                 Options::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                    }
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
+                            ..,
+                        ))),
+                    ))))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -1657,7 +1688,9 @@ mod tests {
         rx.recv().unwrap();
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1666,7 +1699,9 @@ mod tests {
         );
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1682,7 +1717,9 @@ mod tests {
         );
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => (),
+                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                    box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(..))),
+                ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             storage
@@ -1703,8 +1740,11 @@ mod tests {
         for v in x {
             expect_error(
                 |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                    }
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
+                            ..,
+                        ))),
+                    ))))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 },
                 v,
@@ -2029,7 +2069,9 @@ mod tests {
             .unwrap();
         expect_error(
             |e| match e {
-                Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(..))) => (),
+                Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                    box mvcc::ErrorInner::KeyIsLocked(..),
+                ))))) => (),
                 e => panic!("unexpected error chain: {:?}", e),
             },
             x.remove(0),
@@ -2104,7 +2146,7 @@ mod tests {
                 vec![Key::from_raw(b"x")],
                 100.into(),
                 110.into(),
-                expect_ok_callback(tx.clone(), 2),
+                expect_value_callback(tx.clone(), 2, TxnStatus::committed(110.into())),
             )
             .unwrap();
         storage
@@ -2113,7 +2155,7 @@ mod tests {
                 vec![Key::from_raw(b"y")],
                 101.into(),
                 111.into(),
-                expect_ok_callback(tx.clone(), 3),
+                expect_value_callback(tx.clone(), 3, TxnStatus::committed(111.into())),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -2138,7 +2180,9 @@ mod tests {
                 105.into(),
                 Options::default(),
                 expect_fail_callback(tx.clone(), 6, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => (),
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::WriteConflict { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -2249,9 +2293,9 @@ mod tests {
                 ts(110, 0),
                 ts(120, 0),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info))) => {
-                        assert_eq!(info.get_lock_ttl(), 100)
-                    }
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::KeyIsLocked(info),
+                    ))))) => assert_eq!(info.get_lock_ttl(), 100),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -3915,7 +3959,9 @@ mod tests {
                 10.into(),
                 100,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -3969,7 +4015,9 @@ mod tests {
                 11.into(),
                 150,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -4000,7 +4048,9 @@ mod tests {
                 ts(9, 1),
                 false,
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnNotFound { .. })) => (),
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::TxnNotFound { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -4031,7 +4081,9 @@ mod tests {
                 ts(9, 0),
                 Options::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => (),
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::WriteConflict { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
@@ -4126,7 +4178,9 @@ mod tests {
                 ts(25, 0),
                 ts(28, 0),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::TxnLockNotFound { .. })) => (),
+                    Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
+                        box mvcc::ErrorInner::TxnLockNotFound { .. },
+                    ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )

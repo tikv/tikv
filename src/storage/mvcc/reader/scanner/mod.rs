@@ -4,7 +4,7 @@ mod backward;
 mod forward;
 mod txn_entry;
 
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use self::backward::BackwardScanner;
@@ -12,8 +12,8 @@ use self::forward::ForwardScanner;
 use crate::storage::mvcc::{default_not_found_error, Result, TimeStamp, TsSet};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
-    Cursor, CursorBuilder, Iterator, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics,
-    Value,
+    CFStatistics, Cursor, CursorBuilder, Iterator, Key, ScanMode, Scanner as StoreScanner,
+    Snapshot, Statistics, Value,
 };
 
 pub use self::txn_entry::Scanner as EntryScanner;
@@ -254,13 +254,30 @@ where
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
+pub fn has_data_in_range<S: Snapshot>(
+    snapshot: S,
+    cf: CfName,
+    left: &Key,
+    right: &Key,
+    statistic: &mut CFStatistics,
+) -> Result<bool> {
+    let iter_opt = IterOption::new(None, None, true);
+    let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
+    if iter.seek(left, statistic)? {
+        if iter.key(statistic) < right.as_encoded().as_slice() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::Error as MvccError;
-    use crate::storage::txn::Error as TxnError;
+    use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+    use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
     use crate::storage::RocksEngine;
     use crate::storage::TestEngineBuilder;
     use kvproto::kvrpcpb::Context;
@@ -277,9 +294,9 @@ mod tests {
             match scanner.next() {
                 Ok(None) => break,
                 Ok(Some((key, value))) => scan_result.push((key.to_raw().unwrap(), Some(value))),
-                Err(TxnError::Mvcc(MvccError::KeyIsLocked(mut info))) => {
-                    scan_result.push((info.take_key(), None))
-                }
+                Err(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                    box MvccErrorInner::KeyIsLocked(mut info),
+                )))) => scan_result.push((info.take_key(), None)),
                 e => panic!("got error while scanning: {:?}", e),
             }
         }

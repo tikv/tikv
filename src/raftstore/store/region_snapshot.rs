@@ -1,10 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
-use engine::{
-    self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
-    SyncSnapshot,
-};
+use engine::rocks::{TablePropertiesCollection, DB};
+use engine::{self, IterOption};
+use engine_rocks::{RocksDBVector, RocksEngineIterator, RocksSnapshot, RocksSyncSnapshot};
+use engine_traits::{Peekable, ReadOptions, Result as EngineResult, Snapshot as SnapshotTrait};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,6 +14,7 @@ use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
+use engine_traits::{Error as EngineError, Iterable, Iterator};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -24,7 +24,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot {
-    snap: SyncSnapshot,
+    snap: RocksSyncSnapshot,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
 }
@@ -35,10 +35,10 @@ impl RegionSnapshot {
     }
 
     pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region)
+        RegionSnapshot::from_snapshot(RocksSnapshot::new(db).into_sync(), region)
     }
 
-    pub fn from_snapshot(snap: SyncSnapshot, region: Region) -> RegionSnapshot {
+    pub fn from_snapshot(snap: RocksSyncSnapshot, region: Region) -> RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
@@ -139,7 +139,12 @@ impl RegionSnapshot {
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
         let start = keys::enc_start_key(&self.region);
         let end = keys::enc_end_key(&self.region);
-        let prop = engine::util::get_range_properties_cf(&self.snap.get_db(), cf, &start, &end)?;
+        let prop = engine::util::get_range_properties_cf(
+            &self.snap.get_db().as_inner(),
+            cf,
+            &start,
+            &end,
+        )?;
         Ok(prop)
     }
 
@@ -165,7 +170,13 @@ impl Clone for RegionSnapshot {
 }
 
 impl Peekable for RegionSnapshot {
-    fn get_value(&self, key: &[u8]) -> EngineResult<Option<DBVector>> {
+    type DBVector = RocksDBVector;
+
+    fn get_value_opt(
+        &self,
+        opts: &ReadOptions,
+        key: &[u8],
+    ) -> EngineResult<Option<Self::DBVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),
@@ -174,29 +185,17 @@ impl Peekable for RegionSnapshot {
         )
         .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
-        self.snap.get_value(&data_key).map_err(|e| {
-            CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
-            if panic_when_unexpected_key_or_data() {
-                set_panic_mark();
-                panic!(
-                    "failed to get value of key {} in region {}: {:?}",
-                    hex::encode_upper(&key),
-                    self.region.get_id(),
-                    e,
-                );
-            } else {
-                error!(
-                    "failed to get value of key";
-                    "key" => hex::encode_upper(&key),
-                    "region" => self.region.get_id(),
-                    "error" => ?e,
-                );
-                e
-            }
-        })
+        self.snap
+            .get_value_opt(opts, &data_key)
+            .map_err(|e| self.handle_get_value_error(e, "", key))
     }
 
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
+    fn get_value_cf_opt(
+        &self,
+        opts: &ReadOptions,
+        cf: &str,
+        key: &[u8],
+    ) -> EngineResult<Option<Self::DBVector>> {
         check_key_in_range(
             key,
             self.region.get_id(),
@@ -205,27 +204,34 @@ impl Peekable for RegionSnapshot {
         )
         .map_err(|e| EngineError::Other(box_err!(e)))?;
         let data_key = keys::data_key(key);
-        self.snap.get_value_cf(cf, &data_key).map_err(|e| {
-            CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
-            if panic_when_unexpected_key_or_data() {
-                set_panic_mark();
-                panic!(
-                    "failed to get value of key {} in region {}: {:?}",
-                    hex::encode_upper(&key),
-                    self.region.get_id(),
-                    e,
-                );
-            } else {
-                error!(
-                    "failed to get value of key in cf";
-                    "key" => hex::encode_upper(&key),
-                    "region" => self.region.get_id(),
-                    "cf" => cf,
-                    "error" => ?e,
-                );
-                e
-            }
-        })
+        self.snap
+            .get_value_cf_opt(opts, cf, &data_key)
+            .map_err(|e| self.handle_get_value_error(e, cf, key))
+    }
+}
+
+impl RegionSnapshot {
+    #[inline(never)]
+    fn handle_get_value_error(&self, e: EngineError, cf: &str, key: &[u8]) -> EngineError {
+        CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
+        if panic_when_unexpected_key_or_data() {
+            set_panic_mark();
+            panic!(
+                "failed to get value of key {} in region {}: {:?}",
+                hex::encode_upper(&key),
+                self.region.get_id(),
+                e,
+            );
+        } else {
+            error!(
+                "failed to get value of key in cf";
+                "key" => hex::encode_upper(&key),
+                "region" => self.region.get_id(),
+                "cf" => cf,
+                "error" => ?e,
+            );
+            e
+        }
     }
 }
 
@@ -233,11 +239,8 @@ impl Peekable for RegionSnapshot {
 /// iterate in the region. It behaves as if underlying
 /// db only contains one region.
 pub struct RegionIterator {
-    iter: DBIterator<Arc<DB>>,
-    valid: bool,
+    iter: RocksEngineIterator,
     region: Arc<Region>,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
 }
 
 fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
@@ -266,155 +269,110 @@ fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
-    pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
+    pub fn new(
+        snap: &RocksSyncSnapshot,
+        region: Arc<Region>,
+        mut iter_opt: IterOption,
+    ) -> RegionIterator {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
-        let start_key = iter_opt.lower_bound().unwrap().to_vec();
-        let end_key = iter_opt.upper_bound().unwrap().to_vec();
-        let iter = snap.db_iterator(iter_opt);
-        RegionIterator {
-            iter,
-            valid: false,
-            start_key,
-            end_key,
-            region,
-        }
+        let iter = snap
+            .iterator_opt(iter_opt)
+            .expect("creating snapshot iterator"); // FIXME error handling
+        RegionIterator { iter, region }
     }
 
     pub fn new_cf(
-        snap: &Snapshot,
+        snap: &RocksSyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOption,
         cf: &str,
     ) -> RegionIterator {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
-        let start_key = iter_opt.lower_bound().unwrap().to_vec();
-        let end_key = iter_opt.upper_bound().unwrap().to_vec();
-        let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
-        RegionIterator {
-            iter,
-            valid: false,
-            start_key,
-            end_key,
-            region,
-        }
+        let iter = snap
+            .iterator_cf_opt(cf, iter_opt)
+            .expect("creating snapshot iterator"); // FIXME error handling
+        RegionIterator { iter, region }
     }
 
     pub fn seek_to_first(&mut self) -> bool {
-        self.valid = self.iter.seek(self.start_key.as_slice().into());
-
-        self.update_valid(true)
-    }
-
-    #[inline]
-    fn update_valid(&mut self, forward: bool) -> bool {
-        if self.valid {
-            let key = self.iter.key();
-            self.valid = if forward {
-                key < self.end_key.as_slice()
-            } else {
-                key >= self.start_key.as_slice()
-            };
-        }
-        self.valid
+        self.iter.seek_to_first()
     }
 
     pub fn seek_to_last(&mut self) -> bool {
-        if !self.iter.seek(self.end_key.as_slice().into()) && !self.iter.seek(SeekKey::End) {
-            self.valid = false;
-            return self.valid;
-        }
-
-        while self.iter.key() >= self.end_key.as_slice() && self.iter.prev() {}
-
-        self.valid = self.iter.valid();
-        self.update_valid(false)
+        self.iter.seek_to_last()
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
         fail_point!("region_snapshot_seek", |_| {
-            return Err(box_err!("region seek error"));
+            Err(box_err!("region seek error"))
         });
-
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        if key == self.end_key {
-            self.valid = false;
-        } else {
-            self.valid = self.iter.seek(key.as_slice().into());
-        }
-
-        Ok(self.update_valid(true))
+        Ok(self.iter.seek(key.as_slice().into()))
     }
 
     pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        self.valid = self.iter.seek_for_prev(key.as_slice().into());
-        if self.valid && self.iter.key() == self.end_key.as_slice() {
-            self.valid = self.iter.prev();
-        }
-        Ok(self.update_valid(false))
+        Ok(self.iter.seek_for_prev(key.as_slice().into()))
     }
 
     pub fn prev(&mut self) -> bool {
-        if !self.valid {
+        if !self.valid() {
             return false;
         }
-        self.valid = self.iter.prev();
-
-        self.update_valid(false)
+        self.iter.prev()
     }
 
     pub fn next(&mut self) -> bool {
-        if !self.valid {
+        if !self.valid() {
             return false;
         }
-        self.valid = self.iter.next();
-
-        self.update_valid(true)
+        self.iter.next()
     }
 
     #[inline]
     pub fn key(&self) -> &[u8] {
-        assert!(self.valid);
         keys::origin_key(self.iter.key())
     }
 
     #[inline]
     pub fn value(&self) -> &[u8] {
-        assert!(self.valid);
         self.iter.value()
     }
 
     #[inline]
     pub fn valid(&self) -> bool {
-        self.valid
+        self.iter.valid()
     }
 
     #[inline]
     pub fn status(&self) -> Result<()> {
-        self.iter
-            .status()
-            .map_err(|e| EngineError::RocksDb(e))
-            .map_err(From::from)
+        self.iter.status().map_err(From::from)
     }
 
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
-            CRITICAL_ERROR
-                .with_label_values(&["key not in region"])
-                .inc();
-            if panic_when_unexpected_key_or_data() {
-                set_panic_mark();
-                panic!("key exceed bound: {:?}", e);
-            } else {
-                return Err(e);
-            }
+            return handle_check_key_in_region_error(e);
         }
         Ok(())
+    }
+}
+
+#[inline(never)]
+fn handle_check_key_in_region_error(e: crate::raftstore::Error) -> Result<()> {
+    // Split out the error case to reduce hot-path code size.
+    CRITICAL_ERROR
+        .with_label_values(&["key not in region"])
+        .inc();
+    if panic_when_unexpected_key_or_data() {
+        set_panic_mark();
+        panic!("key exceed bound: {:?}", e);
+    } else {
+        Err(e)
     }
 }
 
@@ -439,13 +397,14 @@ mod tests {
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
-    use engine::rocks::{IngestExternalFileOptions, Snapshot, Writable};
+    use engine::rocks::{IngestExternalFileOptions, Writable};
     use engine::util::{delete_all_files_in_range, delete_all_in_range};
     use engine::Engines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
-    use engine_rocks::RocksSstWriterBuilder;
-    use engine_traits::{SstWriter, SstWriterBuilder};
+    use engine_rocks::RocksIOLimiter;
+    use engine_rocks::{RocksSnapshot, RocksSstWriterBuilder};
+    use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;
 
@@ -1080,18 +1039,18 @@ mod tests {
         // Generate a snapshot
         let default_sst_file_path = path.path().join("default.sst");
         let write_sst_file_path = path.path().join("write.sst");
-        build_sst_cf_file(
+        build_sst_cf_file::<RocksIOLimiter>(
             &default_sst_file_path.to_str().unwrap(),
-            &Snapshot::new(Arc::clone(&engines.kv)),
+            &RocksSnapshot::new(Arc::clone(&engines.kv)),
             CF_DEFAULT,
             b"",
             b"{",
             None,
         )
         .unwrap();
-        build_sst_cf_file(
+        build_sst_cf_file::<RocksIOLimiter>(
             &write_sst_file_path.to_str().unwrap(),
-            &Snapshot::new(Arc::clone(&engines.kv)),
+            &RocksSnapshot::new(Arc::clone(&engines.kv)),
             CF_WRITE,
             b"",
             b"{",

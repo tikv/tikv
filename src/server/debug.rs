@@ -1,7 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::iter::FromIterator;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
@@ -12,6 +14,7 @@ use engine::rocks::{
     CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
     SeekKey, Writable, WriteBatch, WriteOptions, DB,
 };
+use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, Db as DBType, Module};
@@ -479,7 +482,9 @@ impl<E: Engine> Debugger<E> {
         let fake_snap_worker = Worker::new("fake-snap-worker");
 
         let check_value = |value: Vec<u8>| -> Result<()> {
-            let local_state = box_try!(protobuf::parse_from_bytes::<RegionLocalState>(&value));
+            let mut local_state = RegionLocalState::default();
+            box_try!(local_state.merge_from_bytes(&value));
+
             match local_state.get_state() {
                 PeerState::Tombstone | PeerState::Applying => return Ok(()),
                 _ => {}
@@ -809,11 +814,14 @@ impl<E: Engine> Debugger<E> {
             Module::Server => {
                 if config_name == GC_IO_LIMITER_CONFIG_NAME {
                     if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
+                        let bps = i64::try_from(bytes_per_sec.0).unwrap_or_else(|_| {
+                            (panic!("{} > i64::max_value", GC_IO_LIMITER_CONFIG_NAME))
+                        });
                         return self
                             .gc_worker
                             .as_ref()
                             .expect("must be some")
-                            .change_io_limit(bytes_per_sec.0)
+                            .change_io_limit(bps)
                             .map_err(|e| Error::Other(e.into()));
                     }
                 }
@@ -881,6 +889,19 @@ impl<E: Engine> Debugger<E> {
         res.push((
             "middle_key_by_approximate_size".to_string(),
             escape(&middle_key),
+        ));
+        res.push((
+            "sst_files".to_string(),
+            collection
+                .into_iter()
+                .map(|(k, _)| {
+                    Path::new(k)
+                        .file_name()
+                        .map(|f| f.to_str().unwrap())
+                        .unwrap_or(k)
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
         ));
         Ok(res)
     }

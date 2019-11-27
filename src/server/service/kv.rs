@@ -14,15 +14,17 @@ use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::transport::RaftStoreRouter;
 use crate::server::Error;
-use crate::storage::kv::Error as EngineError;
+use crate::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use crate::storage::lock_manager::LockManager;
 use crate::storage::mvcc::{
-    Error as MvccError, LockType, TimeStamp, Write as MvccWrite, WriteType,
+    Error as MvccError, ErrorInner as MvccErrorInner, LockType, TimeStamp, Write as MvccWrite,
+    WriteType,
 };
-use crate::storage::txn::Error as TxnError;
+use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
     self, Engine, Key, Mutation, Options, PointGetCommand, Storage, TxnStatus, Value,
 };
+use crate::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
@@ -2098,8 +2100,14 @@ fn future_commit<E: Engine, L: LockManager>(
         let mut resp = CommitResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
-        } else if let Err(e) = v {
-            resp.set_error(extract_key_error(&e));
+        } else {
+            match v {
+                Ok(TxnStatus::Committed { commit_ts }) => {
+                    resp.set_commit_version(commit_ts.into_inner())
+                }
+                Ok(_) => unreachable!(),
+                Err(e) => resp.set_error(extract_key_error(&e)),
+            }
         }
         resp
     })
@@ -2637,29 +2645,31 @@ fn future_cop<E: Engine>(
 }
 
 fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
-    use crate::storage::Error;
+    use crate::storage::{Error, ErrorInner};
     match *res {
         // TODO: use `Error::cause` instead.
-        Err(Error::Engine(EngineError::Request(ref e)))
-        | Err(Error::Txn(TxnError::Engine(EngineError::Request(ref e))))
-        | Err(Error::Txn(TxnError::Mvcc(MvccError::Engine(EngineError::Request(ref e))))) => {
-            Some(e.to_owned())
-        }
-        Err(Error::SchedTooBusy) => {
+        Err(Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e)))))
+        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
+            box EngineErrorInner::Request(ref e),
+        ))))))
+        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e))),
+        )))))) => Some(e.to_owned()),
+        Err(Error(box ErrorInner::SchedTooBusy)) => {
             let mut err = RegionError::default();
             let mut server_is_busy_err = ServerIsBusy::default();
             server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
-        Err(Error::GCWorkerTooBusy) => {
+        Err(Error(box ErrorInner::GCWorkerTooBusy)) => {
             let mut err = RegionError::default();
             let mut server_is_busy_err = ServerIsBusy::default();
             server_is_busy_err.set_reason(GC_WORKER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
-        Err(Error::Closed) => {
+        Err(Error(box ErrorInner::Closed)) => {
             // TiKV is closing, return an RegionError to tell the client that this region is unavailable
             // temporarily, the client should retry the request in other TiKVs.
             let mut err = RegionError::default();
@@ -2670,9 +2680,11 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
     }
 }
 
-fn extract_committed(err: &storage::Error) -> Option<TimeStamp> {
+fn extract_committed(err: &StorageError) -> Option<TimeStamp> {
     match *err {
-        storage::Error::Txn(TxnError::Mvcc(MvccError::Committed { commit_ts })) => Some(commit_ts),
+        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::Committed { commit_ts },
+        ))))) => Some(commit_ts),
         _ => None,
     }
 }
@@ -2680,18 +2692,22 @@ fn extract_committed(err: &storage::Error) -> Option<TimeStamp> {
 fn extract_key_error(err: &storage::Error) -> KeyError {
     let mut key_error = KeyError::default();
     match err {
-        storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked(info))) => {
+        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::KeyIsLocked(info),
+        ))))) => {
             key_error.set_locked(info.clone());
         }
         // failed in prewrite or pessimistic lock
-        storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict {
-            start_ts,
-            conflict_start_ts,
-            conflict_commit_ts,
-            key,
-            primary,
-            ..
-        })) => {
+        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::WriteConflict {
+                start_ts,
+                conflict_start_ts,
+                conflict_commit_ts,
+                key,
+                primary,
+                ..
+            },
+        ))))) => {
             let mut write_conflict = WriteConflict::default();
             write_conflict.set_start_ts(start_ts.into_inner());
             write_conflict.set_conflict_ts(conflict_start_ts.into_inner());
@@ -2702,28 +2718,36 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             // for compatibility with older versions.
             key_error.set_retryable(format!("{:?}", err));
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { key })) => {
+        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::AlreadyExist { key },
+        ))))) => {
             let mut exist = AlreadyExist::default();
             exist.set_key(key.clone());
             key_error.set_already_exist(exist);
         }
         // failed in commit
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
+        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::TxnLockNotFound { .. },
+        ))))) => {
             warn!("txn conflicts"; "err" => ?err);
             key_error.set_retryable(format!("{:?}", err));
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::TxnNotFound { start_ts, key })) => {
+        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::TxnNotFound { start_ts, key },
+        ))))) => {
             let mut txn_not_found = TxnNotFound::default();
             txn_not_found.set_start_ts(start_ts.into_inner());
             txn_not_found.set_primary_key(key.to_owned());
             key_error.set_txn_not_found(txn_not_found);
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::Deadlock {
-            lock_ts,
-            lock_key,
-            deadlock_key_hash,
-            ..
-        })) => {
+        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::Deadlock {
+                lock_ts,
+                lock_key,
+                deadlock_key_hash,
+                ..
+            },
+        ))))) => {
             warn!("txn deadlocks"; "err" => ?err);
             let mut deadlock = Deadlock::default();
             deadlock.set_lock_ts(lock_ts.into_inner());
@@ -2731,12 +2755,14 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             deadlock.set_deadlock_key_hash(*deadlock_key_hash);
             key_error.set_deadlock(deadlock);
         }
-        storage::Error::Txn(TxnError::Mvcc(MvccError::CommitTsExpired {
-            start_ts,
-            commit_ts,
-            key,
-            min_commit_ts,
-        })) => {
+        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::CommitTsExpired {
+                start_ts,
+                commit_ts,
+                key,
+                min_commit_ts,
+            },
+        ))))) => {
             let mut commit_ts_expired = CommitTsExpired::default();
             commit_ts_expired.set_start_ts(start_ts.into_inner());
             commit_ts_expired.set_attempted_commit_ts(commit_ts.into_inner());
@@ -2844,6 +2870,7 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
     }
 }
 
+#[cfg(feature = "protobuf-codec")]
 mod batch_commands_response {
     pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
 
@@ -2852,6 +2879,7 @@ mod batch_commands_response {
     }
 }
 
+#[cfg(feature = "protobuf-codec")]
 mod batch_commands_request {
     pub type Request = kvproto::tikvpb::BatchCommandsRequestRequest;
 
@@ -2878,13 +2906,15 @@ mod tests {
         let conflict_commit_ts = 109.into();
         let key = b"key".to_vec();
         let primary = b"primary".to_vec();
-        let case = storage::Error::from(TxnError::from(MvccError::WriteConflict {
-            start_ts,
-            conflict_start_ts,
-            conflict_commit_ts,
-            key: key.clone(),
-            primary: primary.clone(),
-        }));
+        let case = storage::Error::from(TxnError::from(MvccError::from(
+            MvccErrorInner::WriteConflict {
+                start_ts,
+                conflict_start_ts,
+                conflict_commit_ts,
+                key: key.clone(),
+                primary: primary.clone(),
+            },
+        )));
         let mut expect = KeyError::default();
         let mut write_conflict = WriteConflict::default();
         write_conflict.set_start_ts(start_ts.into_inner());

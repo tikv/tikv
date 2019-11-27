@@ -16,6 +16,7 @@ pub use crate::new_txn;
 pub use keys::TimeStamp;
 
 use std::error;
+use std::fmt;
 use std::io;
 use std::sync::Arc;
 use tikv_util::collections::HashSet;
@@ -96,7 +97,7 @@ impl TsSet {
 
 quick_error! {
     #[derive(Debug)]
-    pub enum Error {
+    pub enum ErrorInner {
         Engine(err: crate::storage::kv::Error) {
             from()
             cause(err)
@@ -174,97 +175,142 @@ quick_error! {
     }
 }
 
-impl Error {
-    pub fn maybe_clone(&self) -> Option<Error> {
+impl ErrorInner {
+    pub fn maybe_clone(&self) -> Option<ErrorInner> {
         match self {
-            Error::Engine(e) => e.maybe_clone().map(Error::Engine),
-            Error::Codec(e) => e.maybe_clone().map(Error::Codec),
-            Error::KeyIsLocked(info) => Some(Error::KeyIsLocked(info.clone())),
-            Error::BadFormatLock => Some(Error::BadFormatLock),
-            Error::BadFormatWrite => Some(Error::BadFormatWrite),
-            Error::TxnLockNotFound {
+            ErrorInner::Engine(e) => e.maybe_clone().map(ErrorInner::Engine),
+            ErrorInner::Codec(e) => e.maybe_clone().map(ErrorInner::Codec),
+            ErrorInner::KeyIsLocked(info) => Some(ErrorInner::KeyIsLocked(info.clone())),
+            ErrorInner::BadFormatLock => Some(ErrorInner::BadFormatLock),
+            ErrorInner::BadFormatWrite => Some(ErrorInner::BadFormatWrite),
+            ErrorInner::TxnLockNotFound {
                 start_ts,
                 commit_ts,
                 key,
-            } => Some(Error::TxnLockNotFound {
+            } => Some(ErrorInner::TxnLockNotFound {
                 start_ts: *start_ts,
                 commit_ts: *commit_ts,
                 key: key.to_owned(),
             }),
-            Error::TxnNotFound { start_ts, key } => Some(Error::TxnNotFound {
+            ErrorInner::TxnNotFound { start_ts, key } => Some(ErrorInner::TxnNotFound {
                 start_ts: *start_ts,
                 key: key.to_owned(),
             }),
-            Error::LockTypeNotMatch {
+            ErrorInner::LockTypeNotMatch {
                 start_ts,
                 key,
                 pessimistic,
-            } => Some(Error::LockTypeNotMatch {
+            } => Some(ErrorInner::LockTypeNotMatch {
                 start_ts: *start_ts,
                 key: key.to_owned(),
                 pessimistic: *pessimistic,
             }),
-            Error::WriteConflict {
+            ErrorInner::WriteConflict {
                 start_ts,
                 conflict_start_ts,
                 conflict_commit_ts,
                 key,
                 primary,
-            } => Some(Error::WriteConflict {
+            } => Some(ErrorInner::WriteConflict {
                 start_ts: *start_ts,
                 conflict_start_ts: *conflict_start_ts,
                 conflict_commit_ts: *conflict_commit_ts,
                 key: key.to_owned(),
                 primary: primary.to_owned(),
             }),
-            Error::Deadlock {
+            ErrorInner::Deadlock {
                 start_ts,
                 lock_ts,
                 lock_key,
                 deadlock_key_hash,
-            } => Some(Error::Deadlock {
+            } => Some(ErrorInner::Deadlock {
                 start_ts: *start_ts,
                 lock_ts: *lock_ts,
                 lock_key: lock_key.to_owned(),
                 deadlock_key_hash: *deadlock_key_hash,
             }),
-            Error::AlreadyExist { key } => Some(Error::AlreadyExist { key: key.clone() }),
-            Error::DefaultNotFound { key } => Some(Error::DefaultNotFound {
+            ErrorInner::AlreadyExist { key } => Some(ErrorInner::AlreadyExist { key: key.clone() }),
+            ErrorInner::DefaultNotFound { key } => Some(ErrorInner::DefaultNotFound {
                 key: key.to_owned(),
             }),
-            Error::CommitTsExpired {
+            ErrorInner::CommitTsExpired {
                 start_ts,
                 commit_ts,
                 key,
                 min_commit_ts,
-            } => Some(Error::CommitTsExpired {
+            } => Some(ErrorInner::CommitTsExpired {
                 start_ts: *start_ts,
                 commit_ts: *commit_ts,
                 key: key.clone(),
                 min_commit_ts: *min_commit_ts,
             }),
-            Error::KeyVersion => Some(Error::KeyVersion),
-            Error::Committed { commit_ts } => Some(Error::Committed {
+            ErrorInner::KeyVersion => Some(ErrorInner::KeyVersion),
+            ErrorInner::Committed { commit_ts } => Some(ErrorInner::Committed {
                 commit_ts: *commit_ts,
             }),
-            Error::PessimisticLockRollbacked { start_ts, key } => {
-                Some(Error::PessimisticLockRollbacked {
+            ErrorInner::PessimisticLockRollbacked { start_ts, key } => {
+                Some(ErrorInner::PessimisticLockRollbacked {
                     start_ts: *start_ts,
                     key: key.to_owned(),
                 })
             }
-            Error::PessimisticLockNotFound { start_ts, key } => {
-                Some(Error::PessimisticLockNotFound {
+            ErrorInner::PessimisticLockNotFound { start_ts, key } => {
+                Some(ErrorInner::PessimisticLockNotFound {
                     start_ts: *start_ts,
                     key: key.to_owned(),
                 })
             }
-            Error::Io(_) | Error::Other(_) => None,
+            ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
 }
 
-impl From<codec::Error> for Error {
+pub struct Error(pub Box<ErrorInner>);
+
+impl Error {
+    pub fn maybe_clone(&self) -> Option<Error> {
+        self.0.maybe_clone().map(Error::from)
+    }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        std::error::Error::description(&self.0)
+    }
+
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(&self.0)
+    }
+}
+
+impl From<ErrorInner> for Error {
+    #[inline]
+    fn from(e: ErrorInner) -> Self {
+        Error(Box::new(e))
+    }
+}
+
+impl<T: Into<ErrorInner>> From<T> for Error {
+    #[inline]
+    default fn from(err: T) -> Self {
+        let err = err.into();
+        err.into()
+    }
+}
+
+impl From<codec::Error> for ErrorInner {
     fn from(err: codec::Error) -> Self {
         box_err!("{}", err)
     }
@@ -273,6 +319,7 @@ impl From<codec::Error> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Generates `DefaultNotFound` error or panic directly based on config.
+#[inline(never)]
 pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
     CRITICAL_ERROR
         .with_label_values(&["default value not found"])
@@ -290,7 +337,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
             "key" => log_wrappers::Key(&key),
             "hint" => hint,
         );
-        Error::DefaultNotFound { key }
+        Error::from(ErrorInner::DefaultNotFound { key })
     }
 }
 
@@ -849,7 +896,8 @@ pub mod tests {
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), true).unwrap();
+        let mut txn =
+            MvccTxn::for_scan(snapshot, Some(ScanMode::Forward), TimeStamp::zero(), true).unwrap();
         txn.gc(Key::from_raw(key), safe_point.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
