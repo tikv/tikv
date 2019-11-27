@@ -5,7 +5,6 @@ use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::Result;
-use hex::FromHex;
 
 const SPACE: u8 = 0o40u8;
 
@@ -273,17 +272,29 @@ pub fn strcmp(left: &Option<Bytes>, right: &Option<Bytes>) -> Result<Option<i64>
 #[rpn_fn]
 #[inline]
 pub fn un_hex(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
-    Ok(arg
-        .as_ref()
-        .map(|bytes| {
-            let mut bytes = bytes.clone();
-            if bytes.len() & 1 == 1 {
-                // Add a '0' to the front, if the length is not the multiple of 2
-                bytes.insert(0, b'0')
-            }
-            bytes
-        })
-        .and_then(|hex| Vec::from_hex(hex).map(Option::Some).unwrap_or(None)))
+    Ok(arg.as_ref().and_then(|bytes| {
+        let mut v = Vec::with_capacity(bytes.len() / 2);
+        let skip = if bytes.len() % 2 == 1 {
+            // Add a '0' to the front, if the length is not the multiple of 2
+            v.push(val(b'0')? << 4 | val(bytes[0])?);
+            1
+        } else {
+            0
+        };
+        for pair in bytes[skip..].chunks(2) {
+            v.push(val(pair[0])? << 4 | val(pair[1])?);
+        }
+        Some(v)
+    }))
+}
+
+fn val(c: u8) -> Option<u8> {
+    match c {
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'0'..=b'9' => Some(c - b'0'),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
