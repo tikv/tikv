@@ -160,10 +160,9 @@ fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<Compar
     assert!(!children.is_empty());
 
     let n = children.len();
-    let mut current_index = n - 1;
     let mut tail_index = n - 1;
-    // try to evaluate and remove all constant nodes.
-    while current_index > 0 {
+    // try to evaluate and remove all constant nodes except args[0].
+    for current_index in (n - 1)..0 {
         let tree_node = &mut children[current_index];
         let mut is_constant = true;
         match tree_node.get_tp() {
@@ -182,7 +181,6 @@ fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<Compar
             children.as_mut_slice().swap(current_index, tail_index);
             tail_index -= 1;
         }
-        current_index -= 1;
     }
     children.truncate(tail_index + 1);
 
