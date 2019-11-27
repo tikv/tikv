@@ -7,6 +7,7 @@ pub mod impl_cast;
 pub mod impl_compare;
 pub mod impl_compare_in;
 pub mod impl_control;
+pub mod impl_encryption;
 pub mod impl_json;
 pub mod impl_like;
 pub mod impl_math;
@@ -28,6 +29,7 @@ use self::impl_cast::*;
 use self::impl_compare::*;
 use self::impl_compare_in::*;
 use self::impl_control::*;
+use self::impl_encryption::*;
 use self::impl_json::*;
 use self::impl_like::*;
 use self::impl_math::*;
@@ -249,10 +251,15 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CaseWhenTime => case_when_fn_meta::<DateTime>(),
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
+        ScalarFuncSig::Sha1 => sha1_fn_meta(),
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::WeekDay => week_day_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::Month => month_fn_meta(),
+        ScalarFuncSig::Hour => hour_fn_meta(),
+        ScalarFuncSig::Minute => minute_fn_meta(),
+        ScalarFuncSig::Second => second_fn_meta(),
+        ScalarFuncSig::MicroSecond => micro_second_fn_meta(),
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
         ScalarFuncSig::AbsReal => abs_real_fn_meta(),
@@ -261,6 +268,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CeilDecToDec => ceil_fn_meta::<CeilDecToDec>(),
         ScalarFuncSig::CeilDecToInt => ceil_fn_meta::<CeilDecToInt>(),
         ScalarFuncSig::CeilIntToInt => ceil_fn_meta::<CeilIntToInt>(),
+        ScalarFuncSig::CeilIntToDec => ceil_fn_meta::<CeilIntToDec>(),
         ScalarFuncSig::FloorReal => floor_fn_meta::<FloorReal>(),
         ScalarFuncSig::FloorDecToInt => floor_fn_meta::<FloorDecToInt>(),
         ScalarFuncSig::FloorDecToDec => floor_fn_meta::<FloorDecToDec>(),
