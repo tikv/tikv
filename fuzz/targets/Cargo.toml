@@ -4,6 +4,9 @@ version = "0.0.1"
 publish = false
 edition = "2018"
 
+[features]
+prost-codec = ["tikv_util/prost-codec"]
+
 [lib]
 path = "mod.rs"
 
