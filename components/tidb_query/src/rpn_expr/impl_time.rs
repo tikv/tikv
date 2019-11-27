@@ -308,6 +308,9 @@ mod tests {
 
     #[test]
     fn test_date_diff() {
+        use crate::expr::{EvalConfig, EvalContext, Flag, SqlMode};
+        use std::sync::Arc;
+
         let cases = vec![
             (
                 "0000-01-01 00:00:00.000000",
@@ -341,14 +344,56 @@ mod tests {
             ),
         ];
 
-        let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
+            let mut ctx = EvalContext::default();
             let output = RpnFnScalarEvaluator::new()
-                .push_param(Time::parse_datetime(&mut ctx, lhs, 6, true).unwrap())
-                .push_param(Time::parse_datetime(&mut ctx, rhs, 6, true).unwrap())
+                .push_param(Some(Time::parse_datetime(&mut ctx, lhs, 6, true).unwrap()))
+                .push_param(Some(Time::parse_datetime(&mut ctx, rhs, 6, true).unwrap()))
                 .evaluate(ScalarFuncSig::DateDiff)
                 .unwrap();
             assert_eq!(output, Some(exp));
+        }
+
+        let invalid_zero_cases = vec![
+            (
+                Some("0000-00-00 23:59:59.999999"),
+                Some("2018-02-02 00:00:00.000000"),
+            ),
+            (
+                Some("2018-02-01 23:59:59.999999"),
+                Some("2018-00-00 23:59:59.999999"),
+            ),
+            (None, Some("2018-00-00 23:59:59.999999")),
+            (Some("2018-00-00 23:59:59.999999"), None),
+        ];
+
+        for (lhs, rhs) in invalid_zero_cases {
+            let mut ctx1 = EvalContext::default();
+            let output1 = RpnFnScalarEvaluator::new()
+                .push_param(
+                    lhs.map(|inner| Time::parse_datetime(&mut ctx1, inner, 6, true).unwrap()),
+                )
+                .push_param(
+                    rhs.map(|inner| Time::parse_datetime(&mut ctx1, inner, 6, true).unwrap()),
+                )
+                .evaluate::<Int>(ScalarFuncSig::DateDiff);
+            assert!(output1.is_err());
+
+            let mut cfg = EvalConfig::new();
+            cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+                .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
+
+            let mut ctx2 = EvalContext::new(Arc::new(cfg));
+            let output2 = RpnFnScalarEvaluator::new()
+                .push_param(
+                    lhs.map(|inner| Time::parse_datetime(&mut ctx2, inner, 6, true).unwrap()),
+                )
+                .push_param(
+                    rhs.map(|inner| Time::parse_datetime(&mut ctx2, inner, 6, true).unwrap()),
+                )
+                .evaluate::<Int>(ScalarFuncSig::DateDiff)
+                .unwrap();
+            assert_eq!(output2, None);
         }
 
         let l: Option<Time> = None;
