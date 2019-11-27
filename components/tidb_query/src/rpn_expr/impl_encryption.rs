@@ -1,8 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tidb_query_codegen::rpn_fn;
-
 use openssl::hash::{self, MessageDigest};
+use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::Result;
