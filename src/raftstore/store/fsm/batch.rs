@@ -356,7 +356,11 @@ pub trait HandlerBuilder<N, C> {
 /// To use the system, two type of FSMs and their PollHandlers need
 /// to be defined: Normal and Control. Normal FSM handles the general
 /// task while Control FSM creates normal FSM instances.
-pub struct BatchSystem<N: Fsm, C: Fsm> {
+pub struct BatchSystem<N: Fsm, C: Fsm>
+where
+    N: Fsm + Send + 'static,
+    C: Fsm + Send + 'static,
+{
     name_prefix: Option<String>,
     router: BatchRouter<N, C>,
     receiver: channel::Receiver<FsmTypes<N, C>>,
@@ -399,7 +403,7 @@ where
 
     /// Shutdown the batch system and wait till all background threads exit.
     pub fn shutdown(&mut self) {
-        if self.name_prefix.is_none() {
+        if self.is_shutdown() {
             return;
         }
         let name_prefix = self.name_prefix.take().unwrap();
@@ -410,6 +414,23 @@ where
             h.join().unwrap();
         }
         info!("batch system {} is stopped.", name_prefix);
+    }
+
+    fn is_shutdown(&self) -> bool {
+        self.name_prefix.is_none()
+    }
+}
+
+impl<N, C> Drop for BatchSystem<N, C>
+where
+    N: Fsm + Send + 'static,
+    C: Fsm + Send + 'static
+{
+    fn drop(&mut self) {
+        if !self.is_shutdown() {
+            warn!("shutting down batch system implicitly");
+        }
+        self.shutdown();
     }
 }
 
@@ -423,7 +444,11 @@ pub fn create_system<N: Fsm, C: Fsm>(
     max_batch_size: usize,
     sender: mpsc::LooseBoundedSender<C::Message>,
     controller: Box<C>,
-) -> (BatchRouter<N, C>, BatchSystem<N, C>) {
+) -> (BatchRouter<N, C>, BatchSystem<N, C>)
+where
+    N: Fsm + Send + 'static,
+    C: Fsm + Send + 'static,
+{
     let control_box = BasicMailbox::new(sender, controller);
     let (tx, rx) = channel::unbounded();
     let normal_scheduler = NormalScheduler { sender: tx.clone() };
