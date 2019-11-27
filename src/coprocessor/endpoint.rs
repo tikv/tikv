@@ -307,9 +307,8 @@ impl<E: Engine> Endpoint<E> {
                 let mut builder = handler_builder;
 
                 if let Some(version) = tracker.req_ctx.cache_match_version {
-                    // If cache version is specified, try to match it after successfully
-                    // retrieving a snapshot.
                     if snapshot.is_data_version_matches(version) {
+                        // Build a cached request handler instead if cache version is matching.
                         builder = CachedRequestHandler::builder();
                     }
                 }

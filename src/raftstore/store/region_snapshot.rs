@@ -42,7 +42,9 @@ impl RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
-            apply_index: Arc::new(AtomicU64::new(std::u64::MAX)),
+            // Use 0 to indicate that we the apply index is missing and we need to KvGet it,
+            // since apply index must be >= RAFT_INIT_LOG_INDEX.
+            apply_index: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -54,7 +56,7 @@ impl RegionSnapshot {
     #[inline]
     pub fn get_apply_index(&self) -> Result<u64> {
         let apply_index = self.apply_index.load(Ordering::SeqCst);
-        if apply_index == std::u64::MAX {
+        if apply_index == 0 {
             self.get_apply_index_from_storage()
         } else {
             Ok(apply_index)

@@ -108,6 +108,8 @@ pub struct ReqContext {
 
     /// The data version to match. If it matches the underlying data version,
     /// request will not be processed (i.e. cache hit).
+    ///
+    /// None means don't try to hit the cache.
     pub cache_match_version: Option<u64>,
 }
 
