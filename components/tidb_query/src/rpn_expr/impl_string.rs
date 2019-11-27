@@ -258,7 +258,7 @@ pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
 /// validate the arguments are `(&Option<Int>, &[&Option<Bytes>)])`
 fn elt_validator(expr: &tipb::Expr) -> Result<()> {
     let children = expr.get_children();
-    assert!(raw_args.len() >= 2);
+    assert!(children.len() >= 2);
     super::function::validate_expr_return_type(&children[0], EvalType::Int)?;
     for i in 1..children.len() {
         super::function::validate_expr_return_type(&children[i], EvalType::Bytes)?;
