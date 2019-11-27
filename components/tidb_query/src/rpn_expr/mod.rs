@@ -6,6 +6,7 @@ pub mod impl_arithmetic;
 pub mod impl_cast;
 pub mod impl_compare;
 pub mod impl_control;
+pub mod impl_encryption;
 pub mod impl_json;
 pub mod impl_like;
 pub mod impl_math;
@@ -26,6 +27,7 @@ use self::impl_arithmetic::*;
 use self::impl_cast::*;
 use self::impl_compare::*;
 use self::impl_control::*;
+use self::impl_encryption::*;
 use self::impl_json::*;
 use self::impl_like::*;
 use self::impl_math::*;
@@ -247,7 +249,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CaseWhenTime => case_when_fn_meta::<DateTime>(),
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
+        ScalarFuncSig::Sha1 => sha1_fn_meta(),
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
+        ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
         ScalarFuncSig::WeekDay => week_day_fn_meta(),
         ScalarFuncSig::FromDays => from_days_fn_meta(),
         ScalarFuncSig::Month => month_fn_meta(),
@@ -393,7 +397,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LocateBinary2Args => locate_binary_2_args_fn_meta(),
         ScalarFuncSig::LocateBinary3Args => locate_binary_3_args_fn_meta(),
         ScalarFuncSig::Elt => elt_fn_meta(),
+        ScalarFuncSig::Space => space_fn_meta(),
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
+        ScalarFuncSig::Year => year_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
