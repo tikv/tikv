@@ -14,10 +14,10 @@ use engine::rocks::{
 };
 use engine::Engines;
 use engine::Error as EngineError;
+use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine::{IterOption, Peekable};
-use engine_rocks::{Compat, RocksEngineIterator};
-use engine_traits::{Iterable, Iterator, SeekKey};
+use engine_rocks::RocksEngineIterator;
+use engine_traits::{Iterable, Iterator, Peekable, SeekKey};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 
@@ -30,7 +30,7 @@ use super::{
     Result, ScanMode, Snapshot,
 };
 
-pub use engine::SyncSnapshot as RocksSnapshot;
+pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
@@ -278,7 +278,7 @@ impl Engine for RocksEngine {
             "snapshot failed"
         )));
         let not_leader = {
-            let mut header = kvproto::errorpb::Error::new();
+            let mut header = kvproto::errorpb::Error::default();
             header.mut_not_leader().set_region_id(100);
             header
         };
@@ -311,7 +311,7 @@ impl Snapshot for RocksSnapshot {
 
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
-        let iter = self.c().iterator_opt(iter_opt)?;
+        let iter = self.iterator_opt(iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 
@@ -322,7 +322,7 @@ impl Snapshot for RocksSnapshot {
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
-        let iter = self.c().iterator_cf_opt(cf, iter_opt)?;
+        let iter = self.iterator_cf_opt(cf, iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 }

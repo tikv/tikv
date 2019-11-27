@@ -3,6 +3,7 @@
 use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
@@ -481,7 +482,9 @@ impl<E: Engine> Debugger<E> {
         let fake_snap_worker = Worker::new("fake-snap-worker");
 
         let check_value = |value: Vec<u8>| -> Result<()> {
-            let local_state = box_try!(protobuf::parse_from_bytes::<RegionLocalState>(&value));
+            let mut local_state = RegionLocalState::default();
+            box_try!(local_state.merge_from_bytes(&value));
+
             match local_state.get_state() {
                 PeerState::Tombstone | PeerState::Applying => return Ok(()),
                 _ => {}
@@ -886,6 +889,19 @@ impl<E: Engine> Debugger<E> {
         res.push((
             "middle_key_by_approximate_size".to_string(),
             escape(&middle_key),
+        ));
+        res.push((
+            "sst_files".to_string(),
+            collection
+                .into_iter()
+                .map(|(k, _)| {
+                    Path::new(k)
+                        .file_name()
+                        .map(|f| f.to_str().unwrap())
+                        .unwrap_or(k)
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
         ));
         Ok(res)
     }
