@@ -24,6 +24,13 @@ pub fn sha1(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     })
 }
 
+#[inline]
+fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Bytes> {
+    hash::hash(hashtype, input)
+        .map(|digest| hex::encode(digest).into_bytes())
+        .map_err(|e| box_err!("OpenSSL error: {:?}", e))
+}
+
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn uncompress(ctx: &mut EvalContext, arg: &Option<Bytes>) -> Result<Option<Bytes>> {
