@@ -240,6 +240,23 @@ pub fn locate_binary_3_args(
 
 #[rpn_fn]
 #[inline]
+pub fn space(len: &Option<Int>) -> Result<Option<Bytes>> {
+    Ok(match *len {
+        Some(len) => {
+            if len > i64::from(tidb_query_datatype::MAX_BLOB_WIDTH) {
+                None
+            } else if len <= 0 {
+                Some(Vec::new())
+            } else {
+                Some(vec![SPACE; len as usize])
+            }
+        }
+        None => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
 pub fn strcmp(left: &Option<Bytes>, right: &Option<Bytes>) -> Result<Option<i64>> {
     use std::cmp::Ordering::*;
     Ok(match (left, right) {
@@ -925,6 +942,37 @@ mod tests {
                 .evaluate(ScalarFuncSig::LocateBinary3Args)
                 .unwrap();
             assert_eq!(output, exp)
+        }
+    }
+
+    #[test]
+    fn test_space() {
+        let test_cases = vec![
+            (None, None),
+            (Some(0), Some(b"".to_vec())),
+            (Some(0), Some(b"".to_vec())),
+            (Some(3), Some(b"   ".to_vec())),
+            (Some(-1), Some(b"".to_vec())),
+            (Some(i64::max_value()), None),
+            (
+                Some(i64::from(tidb_query_datatype::MAX_BLOB_WIDTH) + 1),
+                None,
+            ),
+            (
+                Some(i64::from(tidb_query_datatype::MAX_BLOB_WIDTH)),
+                Some(vec![
+                    super::SPACE;
+                    tidb_query_datatype::MAX_BLOB_WIDTH as usize
+                ]),
+            ),
+        ];
+
+        for (len, exp) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(len)
+                .evaluate(ScalarFuncSig::Space)
+                .unwrap();
+            assert_eq!(output, exp);
         }
     }
 

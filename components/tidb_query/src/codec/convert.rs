@@ -616,8 +616,8 @@ pub fn produce_float_with_specified_tp(
     tp: &FieldType,
     num: f64,
 ) -> Result<f64> {
-    let flen = tp.flen();
-    let decimal = tp.decimal();
+    let flen = tp.as_accessor().flen();
+    let decimal = tp.as_accessor().decimal();
     let ul = tidb_query_datatype::UNSPECIFIED_LENGTH;
 
     let res = if flen != ul && decimal != ul {
@@ -629,7 +629,7 @@ pub fn produce_float_with_specified_tp(
     };
 
     if tp.is_unsigned() && res < 0f64 {
-        ctx.handle_overflow_err(overflow(res, tp.tp()))?;
+        ctx.handle_overflow_err(overflow(res, tp.as_accessor().tp()))?;
         return Ok(0f64);
     }
 
