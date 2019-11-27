@@ -19,8 +19,20 @@ impl HistogramReader {
         }
     }
 
-    // Returns histogram average value since last read.
-    pub fn read_latest_avg(&mut self) -> f64 {
+    // Returns histogram average value since last reset.
+    pub fn read_latest_avg(&self) -> f64 {
+        let (sum, count) = (
+            self.histogram.get_sample_sum(),
+            self.histogram.get_sample_count(),
+        );
+        if count == self.count {
+            return 0.0;
+        }
+        (sum - self.sum) / (count - self.count) as f64
+    }
+
+    // Returns histogram average value since last call, reset reader afterwards.
+    pub fn consume_latest_avg(&mut self) -> f64 {
         let (sum, count) = (
             self.histogram.get_sample_sum(),
             self.histogram.get_sample_count(),

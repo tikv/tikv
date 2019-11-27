@@ -6,8 +6,10 @@ use prometheus_static_metric::*;
 make_static_metric! {
     pub label_enum CommandKind {
         prewrite,
+        batch_prewrite,
         acquire_pessimistic_lock,
         commit,
+        batch_commit,
         cleanup,
         rollback,
         pessimistic_rollback,
@@ -31,6 +33,7 @@ make_static_metric! {
         raw_delete,
         raw_delete_range,
         raw_batch_delete,
+        batch,
     }
 
     pub label_enum CommandStageKind {

@@ -77,10 +77,11 @@ fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
         KvError(box KvErrorInner::Request(ref header)) => {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
         }
-
         KvError(box KvErrorInner::Timeout(_)) => RequestStatusKind::err_timeout,
         KvError(box KvErrorInner::EmptyRequest) => RequestStatusKind::err_empty_request,
-        KvError(box KvErrorInner::Other(_)) => RequestStatusKind::err_other,
+        KvError(box KvErrorInner::Other(_)) | KvError(box KvErrorInner::OtherFlattened(_)) => {
+            RequestStatusKind::err_other
+        }
     }
 }
 
