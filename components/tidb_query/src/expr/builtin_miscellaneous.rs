@@ -6,6 +6,7 @@ use crate::codec::mysql::{Decimal, Json, Time};
 use crate::codec::Datum;
 use crate::expr_util;
 use std::borrow::Cow;
+use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -138,14 +139,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_int(ctx, row));
-        if input < 0 || input > i64::from(u32::max_value()) {
-            Ok(None)
-        } else {
-            let v = input as u32;
-            let ipv4_addr =
-                Ipv4Addr::new((v >> 24) as u8, (v >> 16) as u8, (v >> 8) as u8, v as u8);
-            Ok(Some(Cow::Owned(format!("{}", ipv4_addr).into_bytes())))
-        }
+        Ok(u32::try_from(input)
+            .ok()
+            .map(|input| Cow::Owned(format!("{}", Ipv4Addr::from(input)).into_bytes())))
     }
 
     pub fn inet6_aton<'a, 'b: 'a>(

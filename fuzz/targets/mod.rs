@@ -144,6 +144,35 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
+#[inline(always)]
+pub fn fuzz_hash_decimal(data: &[u8]) -> Result<(), Error> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use tidb_query::codec::data_type::Decimal;
+    use tidb_query::codec::mysql::DecimalDecoder;
+
+    fn fuzz_eq_then_hash(lhs: &Decimal, rhs: &Decimal) -> Result<(), Error> {
+        if lhs == rhs {
+            let mut lhasher = DefaultHasher::new();
+            lhs.hash(&mut lhasher);
+            let mut rhasher = DefaultHasher::new();
+            rhs.hash(&mut rhasher);
+            if lhasher.finish() == rhasher.finish() {
+                Ok(())
+            } else {
+                panic!("eq but not hash eq");
+            }
+        } else {
+            Ok(())
+        }
+    }
+    let mut cursor = Cursor::new(data);
+    let decimal1 = cursor.read_decimal()?;
+    let decimal2 = cursor.read_decimal()?;
+
+    fuzz_eq_then_hash(&decimal1, &decimal2)
+}
+
 trait ReadAsTimeType: ReadLiteralExt {
     fn read_as_time_type(&mut self) -> Result<::tidb_query::codec::mysql::TimeType, Error> {
         Ok(match self.read_as_u8()? % 3 {
