@@ -7,7 +7,9 @@ use futures::sync::mpsc;
 use futures::{future, stream, Future, Stream};
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
-use protobuf::{CodedInputStream, Message};
+#[cfg(feature = "protobuf-codec")]
+use protobuf::CodedInputStream;
+use protobuf::Message;
 use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
 use tipb::{DagRequest, ExecType};
@@ -31,6 +33,8 @@ pub struct Endpoint<E: Engine> {
     read_pool_low: FuturePool,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
+    ///
+    /// Note that this limit is ignored if we are using Prost.
     recursion_limit: u32,
 
     batch_row_limit: usize,
@@ -93,6 +97,45 @@ impl<E: Engine> Endpoint<E> {
         peer: Option<String>,
         is_streaming: bool,
     ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
+        // This `Parser` is here because rust-proto supports customising its
+        // recursion limit and Prost does not. Therefore we end up doing things
+        // a bit differently for the two codecs.
+        #[cfg(feature = "protobuf-codec")]
+        struct Parser<'a> {
+            input: CodedInputStream<'a>,
+        }
+
+        #[cfg(feature = "protobuf-codec")]
+        impl<'a> Parser<'a> {
+            fn new(data: &'a [u8], recursion_limit: u32) -> Parser<'a> {
+                let mut input = CodedInputStream::from_bytes(data);
+                input.set_recursion_limit(recursion_limit);
+                Parser { input }
+            }
+
+            fn merge_to(&mut self, target: &mut impl Message) -> Result<()> {
+                box_try!(target.merge_from(&mut self.input));
+                Ok(())
+            }
+        }
+
+        #[cfg(feature = "prost-codec")]
+        struct Parser<'a> {
+            input: &'a [u8],
+        }
+
+        #[cfg(feature = "prost-codec")]
+        impl<'a> Parser<'a> {
+            fn new(input: &'a [u8], _: u32) -> Parser<'a> {
+                Parser { input }
+            }
+
+            fn merge_to(&self, target: &mut impl Message) -> Result<()> {
+                box_try!(target.merge_from_bytes(&self.input));
+                Ok(())
+            }
+        }
+
         fail_point!("coprocessor_parse_request", |_| Err(box_err!(
             "unsupported tp (failpoint)"
         )));
@@ -103,16 +146,16 @@ impl<E: Engine> Endpoint<E> {
             req.take_ranges().to_vec(),
         );
 
-        let mut is = CodedInputStream::from_bytes(&data);
-        is.set_recursion_limit(self.recursion_limit);
-
+        // Prost and rust-proto require different mutability.
+        #[allow(unused_mut)]
+        let mut parser = Parser::new(&data, self.recursion_limit);
         let req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
 
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
-                box_try!(dag.merge_from(&mut is));
+                parser.merge_to(&mut dag)?;
                 let mut table_scan = false;
                 let mut is_desc_scan = false;
                 if let Some(scan) = dag.get_executors().iter().next() {
@@ -156,7 +199,7 @@ impl<E: Engine> Endpoint<E> {
             }
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::default();
-                box_try!(analyze.merge_from(&mut is));
+                parser.merge_to(&mut analyze)?;
                 let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
                 req_ctx = ReqContext::new(
                     make_tag(table_scan),
@@ -175,7 +218,7 @@ impl<E: Engine> Endpoint<E> {
             }
             REQ_TYPE_CHECKSUM => {
                 let mut checksum = ChecksumRequest::default();
-                box_try!(checksum.merge_from(&mut is));
+                parser.merge_to(&mut checksum)?;
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
                 req_ctx = ReqContext::new(
                     make_tag(table_scan),
@@ -678,17 +721,12 @@ mod tests {
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(
-            &Config {
-                end_point_recursion_limit: 5,
-                ..Config::default()
-            },
-            read_pool,
-        );
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         let req = {
             let mut expr = Expr::default();
-            for _ in 0..10 {
+            // The recursion limit in Prost and rust-protobuf (by default) is 100.
+            for _ in 0..101 {
                 let mut e = Expr::default();
                 e.mut_children().push(expr);
                 expr = e;
