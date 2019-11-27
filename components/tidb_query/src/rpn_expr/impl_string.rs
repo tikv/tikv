@@ -275,7 +275,7 @@ pub fn un_hex(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().and_then(|bytes| {
         let mut v = Vec::with_capacity(bytes.len() / 2);
         let skip = if bytes.len() % 2 == 1 {
-            // if the length is not the multiple of 2, just ignore first value
+            // if the length is not the multiple of 2, first value can ignore upper byte with no effect
             v.push(val(bytes[0])?);
             1
         } else {
