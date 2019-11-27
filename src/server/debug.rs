@@ -482,7 +482,9 @@ impl<E: Engine> Debugger<E> {
         let fake_snap_worker = Worker::new("fake-snap-worker");
 
         let check_value = |value: Vec<u8>| -> Result<()> {
-            let local_state = box_try!(protobuf::parse_from_bytes::<RegionLocalState>(&value));
+            let mut local_state = RegionLocalState::default();
+            box_try!(local_state.merge_from_bytes(&value));
+
             match local_state.get_state() {
                 PeerState::Tombstone | PeerState::Applying => return Ok(()),
                 _ => {}
