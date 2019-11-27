@@ -258,7 +258,7 @@ pub fn field_string(args: &[&Option<Bytes>]) -> Result<Option<Int>> {
 
 #[inline]
 fn field<T: PartialEq>(args: &[&Option<T>]) -> Result<Option<Int>> {
-    assert!(args.len() >= 1);
+    assert!(!args.is_empty());
     Ok(Some(match args[0] {
         // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
         None => 0,
