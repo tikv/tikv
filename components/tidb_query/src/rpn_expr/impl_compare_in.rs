@@ -110,7 +110,7 @@ impl InByHash for Bytes {}
 impl InByHash for Decimal {}
 impl InByHash for Duration {}
 // DateTime requires TZInfo in context, and we cannot acquire it during metadata_ctor.
-// TODO: implemnet InByHash for DateTime.
+// TODO: implement InByHash for DateTime.
 impl InByCompare for DateTime {}
 // Implement Hash for Json is impossible, due to equality of Json depends on an epsilon.
 impl InByCompare for Json {}
