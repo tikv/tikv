@@ -6,7 +6,7 @@ publish = false
 description = "TiKV query engine data types"
 
 [dependencies]
-tipb = { git = "https://github.com/wshwsh12/tipb.git" ,branch = "endian"}
+tipb = { git = "https://github.com/pingcap/tipb.git" }
 bitflags = "1.0"
 num-traits = "0.2"
 failure = "0.1"
