@@ -23,7 +23,6 @@ pub struct GcInfo {
 
 pub struct MvccTxn<S: Snapshot> {
     reader: MvccReader<S>,
-    gc_reader: MvccReader<S>,
     start_ts: TimeStamp,
     writes: Vec<Modify>,
     write_size: usize,
@@ -48,12 +47,24 @@ impl<S: Snapshot> MvccTxn<S> {
             // IsolationLevel is `Si`, actually the method we use in MvccTxn does not rely on
             // isolation level, so it can be any value.
             reader: MvccReader::new(snapshot.clone(), None, fill_cache, IsolationLevel::Si),
-            gc_reader: MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
-                fill_cache,
-                IsolationLevel::Si,
-            ),
+            start_ts,
+            writes: vec![],
+            write_size: 0,
+            collapse_rollback: true,
+        })
+    }
+    pub fn for_scan(
+        snapshot: S,
+        scan_mode: Option<ScanMode>,
+        start_ts: TimeStamp,
+        fill_cache: bool,
+    ) -> Result<Self> {
+        Ok(Self {
+            // Use `ScanMode::Forward` when gc or prewrite with multiple `Mutation::Insert`,
+            // which would seek less times.
+            // When `scan_mode` is `Some(ScanMode::Forward)`, all keys must be writte by
+            // in ascending order.
+            reader: MvccReader::new(snapshot.clone(), scan_mode, fill_cache, IsolationLevel::Si),
             start_ts,
             writes: vec![],
             write_size: 0,
@@ -741,7 +752,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let mut deleted_versions = 0;
         let mut latest_delete = None;
         let mut is_completed = true;
-        while let Some((commit, write)) = self.gc_reader.seek_write(&key, ts)? {
+        while let Some((commit, write)) = self.reader.seek_write(&key, ts)? {
             ts = commit.prev();
             found_versions += 1;
 
