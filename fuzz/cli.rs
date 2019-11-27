@@ -199,7 +199,10 @@ fn run_afl(target: &str) -> Result<(), Error> {
     let seed_dir = get_seed_dir(target);
     let corpus_dir = create_corpus_dir(fuzzer.directory(), target)?;
 
-    pre_check(Command::new("cargo").args(&["afl"]), "cargo install afl")?;
+    pre_check(
+        Command::new("cargo").args(&["afl", "--version"]),
+        "cargo install afl",
+    )?;
 
     // 1. cargo afl build (in fuzzer-afl directory)
     let fuzzer_build = Command::new("cargo")

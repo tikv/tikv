@@ -14,6 +14,14 @@ pub trait Iterator {
     fn seek(&mut self, key: SeekKey) -> bool;
     fn seek_for_prev(&mut self, key: SeekKey) -> bool;
 
+    fn seek_to_first(&mut self) -> bool {
+        self.seek(SeekKey::Start)
+    }
+
+    fn seek_to_last(&mut self) -> bool {
+        self.seek(SeekKey::End)
+    }
+
     fn prev(&mut self) -> bool;
     fn next(&mut self) -> bool;
 

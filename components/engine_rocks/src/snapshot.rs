@@ -4,26 +4,22 @@ use std::fmt::{self, Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use engine::rocks::Snapshot as RawSnapshot;
-use engine::rocks::SyncSnapshot as RawSyncSnapshot;
-use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot};
+use engine_traits::{
+    self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot, SyncSnapshot,
+};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
 
 use crate::db_vector::RocksDBVector;
+use crate::engine::RocksEngine;
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
 use crate::RocksEngineIterator;
 
-#[repr(C)] // Guarantee same representation as in engine/rocks
 pub struct RocksSnapshot {
-    // TODO: use &DB.
     db: Arc<DB>,
     snap: UnsafeSnap,
 }
-
-static_assertions::assert_eq_size!(RocksSnapshot, RawSnapshot);
-static_assertions::assert_eq_align!(RocksSnapshot, RawSnapshot);
 
 unsafe impl Send for RocksSnapshot {}
 unsafe impl Sync for RocksSnapshot {}
@@ -37,23 +33,22 @@ impl RocksSnapshot {
             }
         }
     }
-
-    pub fn from_ref(raw: &RawSnapshot) -> &RocksSnapshot {
-        unsafe { &*(raw as *const _ as *const _) }
-    }
-
-    pub fn into_sync(self) -> RocksSyncSnapshot {
-        RocksSyncSnapshot(Arc::new(self))
-    }
-
-    pub fn get_db(&self) -> &DB {
-        self.db.as_ref()
-    }
 }
 
 impl Snapshot for RocksSnapshot {
+    type SyncSnapshot = RocksSyncSnapshot;
+    type KvEngine = RocksEngine;
+
     fn cf_names(&self) -> Vec<&str> {
         self.db.cf_names()
+    }
+
+    fn into_sync(self) -> RocksSyncSnapshot {
+        RocksSyncSnapshot(Arc::new(self))
+    }
+
+    fn get_db(&self) -> &RocksEngine {
+        RocksEngine::from_ref(&self.db)
     }
 }
 
@@ -147,8 +142,6 @@ impl RocksSyncSnapshot {
     pub fn new(db: Arc<DB>) -> RocksSyncSnapshot {
         RocksSyncSnapshot(Arc::new(RocksSnapshot::new(db)))
     }
-
-    pub fn from_ref(raw: &RawSyncSnapshot) -> &RocksSyncSnapshot {
-        unsafe { &*(raw as *const _ as *const _) }
-    }
 }
+
+impl SyncSnapshot<RocksSnapshot> for RocksSyncSnapshot {}
