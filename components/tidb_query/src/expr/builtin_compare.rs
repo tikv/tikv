@@ -5,7 +5,7 @@ use std::cmp::{max, min, Ordering};
 use std::{f64, i64};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use crate::codec::mysql::{Decimal, Duration, Json, Time, TimeType};
+use crate::codec::mysql::{Decimal, Duration, Json, Time};
 use crate::codec::{datum, mysql, Datum};
 use crate::expr::Expression;
 
@@ -168,12 +168,12 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let mut greatest = Time::zero(0, TimeType::DateTime)?;
+        let mut greatest = None;
 
         for exp in &self.children {
             let s = try_opt!(exp.eval_string_and_decode(ctx, row));
             match Time::parse_datetime(ctx, &s, Time::parse_fsp(&s), true) {
-                Ok(t) => greatest = max(greatest, t),
+                Ok(t) => greatest = max(greatest, Some(t)),
                 Err(_) => {
                     if let Err(e) = ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                         return Err(e);
@@ -184,7 +184,7 @@ impl ScalarFunc {
             }
         }
 
-        Ok(Some(Cow::Owned(greatest.to_string().into_bytes())))
+        Ok(greatest.map(|time| Cow::Owned(time.to_string().into_bytes())))
     }
 
     pub fn greatest_string<'a, 'b: 'a>(

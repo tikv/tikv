@@ -14,11 +14,11 @@ Supported fuzzers:
 ### Honggfuzz
 
 ```sh
-cargo install honggfuzz --version 0.5.34
+cargo install honggfuzz --version 0.5.45
 ```
 
 Note that the version of the cargo plugin installed must be the same as the
-library linked by the `fuzzer-honggfuzz` project template, here 0.5.34.
+library linked by the `fuzzer-honggfuzz` project template, here 0.5.45.
 
 Building honggfuzz test cases with `cargo run -p fuzz -- run Honggfuzz <test>`
 requires additional development libraries that will differ from system to

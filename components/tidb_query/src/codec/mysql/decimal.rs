@@ -3,6 +3,7 @@
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::string::ToString;
@@ -308,7 +309,7 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
         }
         // here l_end is the last nonzero index in l.word_buf, attention:it may in the range of (0,l_int_word_cnt)
         l_frac_word_cnt = cmp::max(0, l_end + 1 - l_stop as isize) as u8;
-        // here r_end is the last nonzero index in r.word_buf, attention:it may in the range of (0,l_int_word_cnt)
+        // here r_end is the last nonzero index in r.word_buf, attention:it may in the range of (0,r_int_word_cnt)
         r_frac_word_cnt = cmp::max(0, r_end + 1 - r_stop as isize) as u8;
         while l_idx as isize <= l_end
             && r_idx as isize <= r_end
@@ -2233,10 +2234,13 @@ pub trait DecimalDecoder: NumberDecoder {
         }
         if trailing_digits > 0 {
             let x = read_word(self, DIG_2_BYTES[trailing_digits] as usize, &mut is_first)? ^ mask;
-            d.word_buf[word_idx] = x * TEN_POW[DIGITS_PER_WORD as usize - trailing_digits];
-            if d.word_buf[word_idx] > WORD_MAX {
-                return Err(box_err!("invalid trailing digits for decimal number"));
-            }
+            d.word_buf[word_idx] =
+                match x.checked_mul(TEN_POW[DIGITS_PER_WORD as usize - trailing_digits]) {
+                    Some(v) if v <= WORD_MAX => v,
+                    _ => {
+                        return Err(box_err!("invalid trailing digits for decimal number"));
+                    }
+                }
         }
         if d.int_cnt == 0 && d.frac_cnt == 0 {
             d.reset_to_zero();
@@ -2379,6 +2383,32 @@ impl Neg for Decimal {
     }
 }
 
+impl Hash for Decimal {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let (int_word_cnt, frac_word_cnt) = (word_cnt!(self.int_cnt), word_cnt!(self.frac_cnt));
+
+        let (stop, mut idx) = (int_word_cnt as usize, 0usize);
+        while idx < stop && self.word_buf[idx] == 0 {
+            idx += 1;
+        }
+        let start = idx as usize;
+        let int_word_cnt = stop - idx;
+
+        int_word_cnt.hash(state);
+        let mut end = (stop + frac_word_cnt as usize - 1) as isize;
+        // trims suffix 0(also trims the suffix 0 before the point
+        // when there is no digit after point).
+        while start as isize <= end && self.word_buf[end as usize] == 0 {
+            end -= 1;
+        }
+
+        self.word_buf[start..((end + 1) as usize)].hash(state);
+        // -0 should be not negative.
+        let negative = self.negative && (start as isize <= end);
+        negative.hash(state);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2387,6 +2417,7 @@ mod tests {
     use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
     use crate::expr::{EvalConfig, Flag};
     use std::cmp::Ordering;
+    use std::collections::hash_map::DefaultHasher;
     use std::f64::EPSILON;
     use std::iter::repeat;
     use std::sync::Arc;
@@ -3133,6 +3164,27 @@ mod tests {
             let lhs = lhs_str.parse::<Decimal>().unwrap();
             let rhs = rhs_str.parse::<Decimal>().unwrap();
             assert_eq!(lhs.cmp(&rhs), exp);
+        }
+    }
+
+    #[test]
+    fn test_hash() {
+        let cases = vec![
+            ("1.00", "1"),
+            ("-1.11", "-1.11000000"),
+            ("30.20", "30.2"),
+            ("0", "-0"),
+            ("0.001", "0.001000"),
+        ];
+
+        for (lhs_str, rhs_str) in cases {
+            let lhs = lhs_str.parse::<Decimal>().unwrap();
+            let rhs = rhs_str.parse::<Decimal>().unwrap();
+            let mut lhasher = DefaultHasher::new();
+            lhs.hash(&mut lhasher);
+            let mut rhasher = DefaultHasher::new();
+            rhs.hash(&mut rhasher);
+            assert_eq!(lhasher.finish(), rhasher.finish());
         }
     }
 
