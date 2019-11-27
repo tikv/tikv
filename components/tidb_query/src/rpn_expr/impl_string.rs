@@ -238,6 +238,38 @@ pub fn locate_binary_3_args(
     }
 }
 
+#[rpn_fn(varg, min_args = 1)]
+#[inline]
+pub fn field_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
+    field(args)
+}
+
+#[rpn_fn(varg, min_args = 1)]
+#[inline]
+pub fn field_real(args: &[&Option<Real>]) -> Result<Option<Int>> {
+    field(args)
+}
+
+#[rpn_fn(varg, min_args = 1)]
+#[inline]
+pub fn field_string(args: &[&Option<Bytes>]) -> Result<Option<Int>> {
+    field(args)
+}
+
+#[inline]
+fn field<T: PartialEq>(args: &[&Option<T>]) -> Result<Option<Int>> {
+    assert!(args.len() >= 1);
+    Ok(Some(match args[0] {
+        // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
+        None => 0,
+        Some(val) => args
+            .iter()
+            .skip(1)
+            .position(|&i| i.as_ref() == Some(val))
+            .map_or(0, |pos| (pos + 1) as i64),
+    }))
+}
+
 #[rpn_fn]
 #[inline]
 pub fn space(len: &Option<Int>) -> Result<Option<Bytes>> {
@@ -273,6 +305,7 @@ pub fn strcmp(left: &Option<Bytes>, right: &Option<Bytes>) -> Result<Option<i64>
 mod tests {
     use super::*;
 
+    use std::{f64, i64};
     use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
@@ -942,6 +975,115 @@ mod tests {
                 .evaluate(ScalarFuncSig::LocateBinary3Args)
                 .unwrap();
             assert_eq!(output, exp)
+        }
+    }
+
+    #[test]
+    fn test_field_int() {
+        let test_cases = vec![
+            (vec![Some(1), Some(-2), Some(3)], Some(0)),
+            (vec![Some(-1), Some(2), Some(-1), Some(2)], Some(2)),
+            (
+                vec![Some(i64::MAX), Some(0), Some(i64::MIN), Some(i64::MAX)],
+                Some(3),
+            ),
+            (vec![None, Some(0), Some(0)], Some(0)),
+            (vec![None, None, Some(0)], Some(0)),
+            (vec![Some(100)], Some(0)),
+        ];
+
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::FieldInt)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_field_real() {
+        let test_cases = vec![
+            (vec![Some(1.0), Some(-2.0), Some(9.0)], Some(0)),
+            (vec![Some(-1.0), Some(2.0), Some(-1.0), Some(2.0)], Some(2)),
+            (
+                vec![Some(f64::MAX), Some(0.0), Some(f64::MIN), Some(f64::MAX)],
+                Some(3),
+            ),
+            (vec![None, Some(1.0), Some(1.0)], Some(0)),
+            (vec![None, None, Some(0.0)], Some(0)),
+            (vec![Some(10.0)], Some(0)),
+        ];
+
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::FieldReal)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_field_string() {
+        let test_cases = vec![
+            (
+                vec![
+                    Some(b"foo".to_vec()),
+                    Some(b"foo".to_vec()),
+                    Some(b"bar".to_vec()),
+                    Some(b"baz".to_vec()),
+                ],
+                Some(1),
+            ),
+            (
+                vec![
+                    Some(b"foo".to_vec()),
+                    Some(b"bar".to_vec()),
+                    Some(b"baz".to_vec()),
+                    Some(b"hello".to_vec()),
+                ],
+                Some(0),
+            ),
+            (
+                vec![
+                    Some(b"hello".to_vec()),
+                    Some(b"world".to_vec()),
+                    Some(b"world".to_vec()),
+                    Some(b"hello".to_vec()),
+                ],
+                Some(3),
+            ),
+            (
+                vec![
+                    Some(b"Hello".to_vec()),
+                    Some(b"Hola".to_vec()),
+                    Some("Cześć".as_bytes().to_vec()),
+                    Some("你好".as_bytes().to_vec()),
+                    Some("Здравствуйте".as_bytes().to_vec()),
+                    Some(b"Hello World!".to_vec()),
+                    Some(b"Hello".to_vec()),
+                ],
+                Some(6),
+            ),
+            (
+                vec![
+                    None,
+                    Some(b"DataBase".to_vec()),
+                    Some(b"Hello World!".to_vec()),
+                ],
+                Some(0),
+            ),
+            (vec![None, None, Some(b"Hello World!".to_vec())], Some(0)),
+            (vec![Some(b"Hello World!".to_vec())], Some(0)),
+        ];
+
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::FieldString)
+                .unwrap();
+            assert_eq!(output, expect_output);
         }
     }
 
