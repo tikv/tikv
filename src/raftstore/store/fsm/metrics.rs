@@ -1,9 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use coarsetime::Instant;
 use prometheus::local::LocalHistogram;
 use prometheus::{exponential_buckets, Histogram};
-use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -18,7 +16,6 @@ lazy_static! {
 
 thread_local!(
     pub static APPLY_PROPOSAL_LOCAL: LocalHistogram = APPLY_PROPOSAL.local();
-    pub static THREAD_LAST_TICK_TIME: Cell<Instant> = Cell::new(Instant::recent());
 );
 
 #[derive(Default)]

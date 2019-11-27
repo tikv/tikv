@@ -3461,6 +3461,7 @@ dependencies = [
  "backtrace",
  "byteorder",
  "chrono",
+ "coarsetime",
  "crc32fast",
  "crossbeam",
  "fail",

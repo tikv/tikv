@@ -41,14 +41,13 @@ use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::{cmd_resp, keys, util, Config};
 use crate::raftstore::{Error, Result};
-use coarsetime::Instant as CoarseInstant;
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
 use tikv_util::MustConsumeVec;
-
+use tikv_util::timer::tick_per_second;
 use super::metrics::*;
 use super::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 
@@ -2454,17 +2453,11 @@ impl ApplyFsm {
             hist.observe(propose_num as f64);
         });
 
-        THREAD_LAST_TICK_TIME.with(|last_tick_cell| {
-            let now = CoarseInstant::recent();
-            let last_tick = last_tick_cell.get();
-            if now.duration_since(last_tick).as_f64() < 1.0 {
-                return;
-            };
-            last_tick_cell.set(now);
+        tick_per_second(&|| {
             APPLY_PROPOSAL_LOCAL.with(|hist| {
                 hist.flush();
             })
-        })
+        });
     }
 
     fn destroy(&mut self, ctx: &mut ApplyContext) {

@@ -1,14 +1,16 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::time::{monotonic_raw_now, Instant};
+use crate::time::{monotonic_raw_now,Instant};
 use std::cmp::{Ord, Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::sync::{mpsc, Arc};
-use std::thread::Builder;
+use std::thread::{Builder, LocalKey};
 use std::time::Duration;
 use time::Timespec;
 use tokio_executor::park::ParkThread;
 use tokio_timer::{self, clock::Clock, clock::Now, timer::Handle, Delay};
+use std::cell::Cell;
+use coarsetime::Instant as CoarseInstant;
 
 pub struct Timer<T> {
     pending: BinaryHeap<Reverse<TimeoutTask<T>>>,
@@ -197,6 +199,26 @@ fn start_global_steady_timer() -> SteadyTimer {
         clock,
         handle: rx.recv().unwrap(),
     }
+}
+
+thread_local!(
+    pub static THREAD_LAST_TICK_PER_SEC: Cell<CoarseInstant> = Cell::new(CoarseInstant::recent());
+);
+
+fn tick_per_duration(key: &'static LocalKey<Cell<CoarseInstant>>, f: &dyn Fn() -> ()) -> () {
+    key.with(|last_tick_cell| {
+        let now = CoarseInstant::recent();
+        let last_tick = last_tick_cell.get();
+        if now.duration_since(last_tick).as_f64() < 1.0 {
+            return;
+        };
+        last_tick_cell.set(now);
+        f()
+    })
+}
+
+pub fn tick_per_second(f: &dyn Fn() -> ()) -> () {
+    tick_per_duration(&THREAD_LAST_TICK_PER_SEC,f)
 }
 
 #[cfg(test)]

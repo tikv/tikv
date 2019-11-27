@@ -46,7 +46,7 @@ fxhash = "0.2.1"
 zeroize = { version = "0.10", features = [ "alloc" ] }
 openssl = { version = "0.10" }
 hex = "0.3"
-
+coarsetime = "0.1.11"
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
 rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
