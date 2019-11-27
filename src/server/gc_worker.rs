@@ -214,7 +214,10 @@ impl<S: Snapshot> Stream for LockScanner<S> {
         };
 
         if is_remain {
-            self.next_key = Some(locks.last().unwrap().0.clone())
+            let mut next_key = locks.last().unwrap().0.clone().into_encoded();
+            // Move to the next key
+            next_key.push(0);
+            self.next_key = Some(Key::from_encoded(next_key));
         } else {
             self.is_finished = true;
         }
@@ -1436,10 +1439,12 @@ mod tests {
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
     use futures::Future;
+    use kvproto::kvrpcpb::Op;
     use kvproto::metapb;
     use std::collections::BTreeMap;
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
+    use tikv_util::codec::number::NumberEncoder;
 
     fn take_callback(t: &mut GCTask) -> Callback<()> {
         let callback = match t {
@@ -2012,5 +2017,64 @@ mod tests {
         // Disable io limit
         gc_worker.change_io_limit(0).unwrap();
         assert!(gc_worker.limiter.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_physical_scan_lock() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let storage = TestStorageBuilder::from_engine(engine.clone())
+            .build()
+            .unwrap();
+        let db = engine.get_rocksdb();
+        let mut gc_worker = GCWorker::new(engine, Some(db), None, GCConfig::default());
+        gc_worker.start().unwrap();
+
+        let mut expected_lock_info = Vec::new();
+
+        // Put locks into the storage.
+        for i in 0..(SCAN_LOCK_BATCH_SIZE as u64 * 3) {
+            let mut k = vec![];
+            k.encode_u64(i).unwrap();
+            let v = k.clone();
+
+            let mutation = Mutation::Put((Key::from_raw(&k), v));
+
+            let lock_ts = 10 + i % 3;
+
+            // Collect all locks with ts < 11 to check the result of physical_scan_lock.
+            if lock_ts <= 11 {
+                let mut info = LockInfo::default();
+                info.set_primary_lock(k.clone());
+                info.set_lock_version(lock_ts);
+                info.set_key(k.clone());
+                info.set_lock_type(Op::Put);
+                expected_lock_info.push(info)
+            }
+
+            let (tx, rx) = channel();
+            storage
+                .async_prewrite(
+                    Context::default(),
+                    vec![mutation],
+                    k,
+                    lock_ts.into(),
+                    Options::default(),
+                    Box::new(move |res| tx.send(res).unwrap()),
+                )
+                .unwrap();
+            rx.recv()
+                .unwrap()
+                .unwrap()
+                .into_iter()
+                .for_each(|r| r.unwrap());
+        }
+
+        let res: Vec<_> = gc_worker
+            .async_physical_scan_lock(Context::default(), 11.into())
+            .wait()
+            .map(|r| r.unwrap())
+            .flatten()
+            .collect();
+        assert_eq!(res, expected_lock_info);
     }
 }
