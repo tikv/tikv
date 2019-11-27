@@ -252,6 +252,7 @@ impl ScalarFunc {
             | ScalarFuncSig::CharLength
             | ScalarFuncSig::Reverse
             | ScalarFuncSig::ReverseBinary
+            | ScalarFuncSig::Quote
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
             | ScalarFuncSig::Length
@@ -290,7 +291,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
-            | ScalarFuncSig::ToDays => (1, 1),
+            | ScalarFuncSig::ToDays
+            | ScalarFuncSig::FromDays => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -413,7 +415,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Format
             | ScalarFuncSig::FormatWithLocale
             | ScalarFuncSig::FoundRows
-            | ScalarFuncSig::FromDays
             | ScalarFuncSig::FromUnixTime1Arg
             | ScalarFuncSig::FromUnixTime2Arg
             | ScalarFuncSig::GetFormat
@@ -435,7 +436,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
             | ScalarFuncSig::Quarter
-            | ScalarFuncSig::Quote
             | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
@@ -515,7 +515,7 @@ impl ScalarFunc {
 
             // PbCode is unspecified
             ScalarFuncSig::Unspecified => {
-                return Err(box_err!("TiDB internal error (unspecified PbCode)"))
+                return Err(box_err!("TiDB internal error (unspecified PbCode)"));
             }
         };
         if args < min_args || args > max_args {
@@ -986,6 +986,7 @@ dispatch_call! {
         ToBase64 => to_base64,
         Compress => compress,
         Uncompress => uncompress,
+        Quote => quote,
 
         Conv => conv,
         Trim1Arg => trim_1_arg,
@@ -1024,6 +1025,7 @@ dispatch_call! {
         SubDatetimeAndDuration => sub_datetime_and_duration,
         SubDatetimeAndString => sub_datetime_and_string,
         SubTimeDateTimeNull => sub_time_datetime_null,
+        FromDays => from_days,
 
         IfNullTime => if_null_time,
         IfTime => if_time,
@@ -1277,6 +1279,7 @@ mod tests {
                     ScalarFuncSig::WeekDay,
                     ScalarFuncSig::WeekOfYear,
                     ScalarFuncSig::Year,
+                    ScalarFuncSig::FromDays,
                     ScalarFuncSig::UnaryNotInt,
                     ScalarFuncSig::UnaryNotReal,
                     ScalarFuncSig::UnaryNotDecimal,
@@ -1359,6 +1362,7 @@ mod tests {
                     ScalarFuncSig::Compress,
                     ScalarFuncSig::Uncompress,
                     ScalarFuncSig::UncompressedLength,
+                    ScalarFuncSig::Quote,
                 ],
                 1,
                 1,
@@ -1532,7 +1536,6 @@ mod tests {
             ScalarFuncSig::Format,
             ScalarFuncSig::FormatWithLocale,
             ScalarFuncSig::FoundRows,
-            ScalarFuncSig::FromDays,
             ScalarFuncSig::FromUnixTime1Arg,
             ScalarFuncSig::FromUnixTime2Arg,
             ScalarFuncSig::GetFormat,
@@ -1554,7 +1557,6 @@ mod tests {
             ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
             ScalarFuncSig::Quarter,
-            ScalarFuncSig::Quote,
             ScalarFuncSig::RandomBytes,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,

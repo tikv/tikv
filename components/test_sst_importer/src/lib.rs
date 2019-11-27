@@ -3,7 +3,6 @@
 use std::fs;
 use std::path::Path;
 
-use crc::crc32::{self, Hasher32};
 use engine_rocks::RocksEngine;
 use engine_rocks::RocksSstReader;
 use engine_rocks::RocksSstWriter;
@@ -36,9 +35,9 @@ pub fn new_sst_writer(path: &str) -> RocksSstWriter {
 }
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
-    let mut digest = crc32::Digest::new(crc32::IEEE);
-    digest.write(data);
-    digest.sum32()
+    let mut digest = crc32fast::Hasher::new();
+    digest.update(data);
+    digest.finalize()
 }
 
 pub fn check_db_range<E>(db: &E, range: (u8, u8))
@@ -47,7 +46,7 @@ where
 {
     for i in range.0..range.1 {
         let k = keys::data_key(&[i]);
-        assert_eq!(db.get(&k).unwrap().unwrap(), &[i]);
+        assert_eq!(db.get_value(&k).unwrap().unwrap(), &[i]);
     }
 }
 
