@@ -4,7 +4,7 @@ mod backward;
 mod forward;
 mod txn_entry;
 
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use self::backward::BackwardScanner;
@@ -12,8 +12,8 @@ use self::forward::ForwardScanner;
 use crate::storage::mvcc::{default_not_found_error, Result, TimeStamp, TsSet};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
-    Cursor, CursorBuilder, Iterator, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics,
-    Value,
+    CFStatistics, Cursor, CursorBuilder, Iterator, Key, ScanMode, Scanner as StoreScanner,
+    Snapshot, Statistics, Value,
 };
 
 pub use self::txn_entry::Scanner as EntryScanner;
@@ -252,6 +252,23 @@ where
     }
     statistics.data.processed += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
+}
+
+pub fn has_data_in_range<S: Snapshot>(
+    snapshot: S,
+    cf: CfName,
+    left: &Key,
+    right: &Key,
+    statistic: &mut CFStatistics,
+) -> Result<bool> {
+    let iter_opt = IterOption::new(None, None, true);
+    let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
+    if iter.seek(left, statistic)? {
+        if iter.key(statistic) < right.as_encoded().as_slice() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
