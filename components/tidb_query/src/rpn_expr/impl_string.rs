@@ -2,7 +2,6 @@
 
 use std::str;
 use tidb_query_codegen::rpn_fn;
-use tidb_query_datatype;
 
 use crate::codec::data_type::*;
 use crate::Result;
@@ -247,7 +246,7 @@ pub fn space(len: &Option<Int>) -> Result<Option<Bytes>> {
             if len > i64::from(tidb_query_datatype::MAX_BLOB_WIDTH) {
                 None
             } else if len <= 0 {
-                Some(b"".to_vec())
+                Some(Vec::new())
             } else {
                 Some(vec![SPACE; len as usize])
             }
@@ -274,7 +273,6 @@ pub fn strcmp(left: &Option<Bytes>, right: &Option<Bytes>) -> Result<Option<i64>
 mod tests {
     use super::*;
 
-    use tidb_query_datatype;
     use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
