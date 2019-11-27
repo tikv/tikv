@@ -30,6 +30,8 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
 use uuid::Builder as UuidBuilder;
 
+use super::metrics::*;
+use super::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
@@ -44,12 +46,10 @@ use crate::raftstore::{Error, Result};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
+use tikv_util::timer::tick_per_second;
 use tikv_util::worker::Scheduler;
 use tikv_util::Either;
 use tikv_util::MustConsumeVec;
-use tikv_util::timer::tick_per_second;
-use super::metrics::*;
-use super::{BasicMailbox, BatchRouter, BatchSystem, Fsm, HandlerBuilder, PollHandler};
 
 use super::super::RegionTask;
 
