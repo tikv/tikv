@@ -1429,8 +1429,7 @@ pub fn do_snapshot(
         &mut stat,
         Box::new(mgr.clone()),
     )?;
-    let mut v = vec![];
-    snap_data.write_to_vec(&mut v)?;
+    let v = snap_data.write_to_bytes()?;
     snapshot.set_data(v);
 
     SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
