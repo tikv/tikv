@@ -5,6 +5,7 @@ use tidb_query_codegen::rpn_fn;
 use super::super::expr::EvalContext;
 
 use crate::codec::data_type::*;
+use crate::codec::mysql::time::extension::DateTimeExtension;
 use crate::codec::mysql::Time;
 use crate::codec::Error;
 use crate::expr::SqlMode;
@@ -51,6 +52,22 @@ pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<In
     }
     let day = t.weekday().num_days_from_monday();
     Ok(Some(i64::from(day)))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn day_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    if t.is_none() {
+        return Ok(None);
+    }
+    let t = t.as_ref().unwrap();
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
+            .map(|_| Ok(None))?;
+    }
+    let day = t.days();
+    Ok(Some(Int::from(day)))
 }
 
 #[rpn_fn(capture = [ctx])]
@@ -266,6 +283,34 @@ mod tests {
         let output = RpnFnScalarEvaluator::new()
             .push_param(None::<DateTime>)
             .evaluate::<Int>(ScalarFuncSig::WeekDay)
+            .unwrap();
+        assert_eq!(output, None);
+    }
+
+    #[test]
+    fn test_day_of_year() {
+        let cases = vec![
+            ("2018-11-11 00:00:00.000000", Some(315)),
+            ("2018-11-12 00:00:00.000000", Some(316)),
+            ("2018-11-30 00:00:00.000000", Some(334)),
+            ("2018-12-31 00:00:00.000000", Some(365)),
+            ("2016-12-31 00:00:00.000000", Some(366)),
+            ("0000-00-00 00:00:00.000000", None),
+            ("2018-11-00 00:00:00.000000", None),
+            ("2018-00-11 00:00:00.000000", None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(datetime.clone())
+                .evaluate(ScalarFuncSig::DayOfYear)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<DateTime>)
+            .evaluate::<Int>(ScalarFuncSig::DayOfYear)
             .unwrap();
         assert_eq!(output, None);
     }
