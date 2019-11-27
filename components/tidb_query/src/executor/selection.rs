@@ -23,9 +23,9 @@ impl<Src: Executor> SelectionExecutor<Src> {
         let conditions: Vec<_> = meta.take_conditions().into();
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&conditions)?;
-        let ctx = EvalContext::new(eval_cfg);
+        let mut ctx = EvalContext::new(eval_cfg);
         Ok(SelectionExecutor {
-            conditions: Expression::batch_build(&ctx, conditions)?,
+            conditions: Expression::batch_build(&mut ctx, conditions)?,
             related_cols_offset: visitor.column_offsets(),
             ctx,
             src,
@@ -39,7 +39,7 @@ impl<Src: Executor> Executor for SelectionExecutor<Src> {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
             let row = row.take_origin()?;
-            let cols = row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)?;
+            let cols = row.inflate_cols_with_offsets(&mut self.ctx, &self.related_cols_offset)?;
             for filter in &self.conditions {
                 let val = filter.eval(&mut self.ctx, &cols)?;
                 if !val.into_bool(&mut self.ctx)?.unwrap_or(false) {

@@ -102,7 +102,7 @@ zipf = "5.0.1"
 bitflags = "1.0.1"
 fail = "0.3"
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
-grpcio = { version = "0.5.0-alpha.3", features = [ "openssl-vendored" ] }
+grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ] }
 raft = "0.6.0-alpha"
 crossbeam = "0.7.2"
 derive_more = "0.15.0"
