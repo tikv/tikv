@@ -160,13 +160,11 @@ fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<Compar
     assert!(!children.is_empty());
 
     let n = children.len();
-    // i point to current node.
-    let mut i = n - 1;
-    // j point to last valid node.
-    let mut j = n - 1;
+    let mut current_index = n - 1;
+    let mut tail_index = n - 1;
     // try to evaluate and remove all constant nodes.
-    while i > 0 {
-        let tree_node = &mut children[i];
+    while current_index > 0 {
+        let tree_node = &mut children[current_index];
         let mut is_constant = true;
         match tree_node.get_tp() {
             ExprType::ScalarFunc | ExprType::ColumnRef => {
@@ -188,12 +186,12 @@ fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<Compar
             }
         }
         if is_constant {
-            children.as_mut_slice().swap(i, j);
-            j -= 1;
+            children.as_mut_slice().swap(current_index, tail_index);
+            tail_index -= 1;
         }
-        i -= 1;
+        current_index -= 1;
     }
-    children.truncate(j + 1);
+    children.truncate(tail_index + 1);
 
     Ok(CompareInMeta {
         lookup_set,
