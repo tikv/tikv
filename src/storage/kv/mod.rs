@@ -11,6 +11,7 @@ use engine::{CfName, CF_DEFAULT};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 
+use crate::into_other::IntoOther;
 use crate::raftstore::coprocessor::SeekRegionCallback;
 use crate::storage::{Key, Value};
 
@@ -183,6 +184,12 @@ quick_error! {
 impl From<engine::Error> for ErrorInner {
     fn from(err: engine::Error) -> ErrorInner {
         ErrorInner::Request(err.into())
+    }
+}
+
+impl From<engine_traits::Error> for ErrorInner {
+    fn from(err: engine_traits::Error) -> ErrorInner {
+        ErrorInner::Request(err.into_other())
     }
 }
 

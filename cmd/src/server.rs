@@ -7,11 +7,14 @@ use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
+use futures_cpupool::Builder;
 use kvproto::backup::create_backup;
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::create_debug;
+use kvproto::diagnosticspb::create_diagnostics;
 use kvproto::import_sstpb::create_import_sst;
 use pd_client::{PdClient, RpcClient};
+use std::convert::TryFrom;
 use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -27,7 +30,7 @@ use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
 use tikv::server::gc_worker::{AutoGCConfig, GCWorker};
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve;
-use tikv::server::service::DebugService;
+use tikv::server::service::{DebugService, DiagnosticsService};
 use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
@@ -205,9 +208,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
+    let bps = i64::try_from(cfg.server.snap_max_write_bytes_per_sec.0)
+        .unwrap_or_else(|_| fatal!("snap_max_write_bytes_per_sec > i64::max_value"));
+
     // Create snapshot manager, server.
     let snap_mgr = SnapManagerBuilder::default()
-        .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0)
+        .max_write_bytes_per_sec(bps)
         .max_total_size(cfg.server.snap_max_total_size.0)
         .build(
             snap_path.as_path().to_str().unwrap().to_owned(),
@@ -232,8 +238,21 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Arc::clone(&importer),
     );
 
+    // The `DebugService` and `DiagnosticsService` will share the same thread pool
+    let pool = Builder::new()
+        .name_prefix(thd_name!("debugger"))
+        .pool_size(1)
+        .create();
     // Create Debug service.
-    let debug_service = DebugService::new(engines.clone(), raft_router.clone(), gc_worker.clone());
+    let debug_service = DebugService::new(
+        engines.clone(),
+        pool.clone(),
+        raft_router.clone(),
+        gc_worker.clone(),
+    );
+
+    // Create Diagnostics service
+    let diag_service = DiagnosticsService::new(pool, cfg.log_file.clone());
 
     // Create Backup service.
     let mut backup_worker = tikv_util::worker::Worker::new("backup-endpoint");
@@ -265,6 +284,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .is_some()
     {
         fatal!("failed to register debug service");
+    }
+    if server
+        .register_service(create_diagnostics(diag_service))
+        .is_some()
+    {
+        fatal!("failed to register diagnostics service");
     }
     if let Some(lm) = lock_mgr.as_ref() {
         if server

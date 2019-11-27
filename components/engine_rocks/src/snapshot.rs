@@ -4,55 +4,61 @@ use std::fmt::{self, Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use engine_traits::{self, IterOptions, Iterable, Peekable, ReadOptions, Result};
+use engine_traits::{
+    self, IterOptions, Iterable, Peekable, ReadOptions, Result, Snapshot, SyncSnapshot,
+};
 use rocksdb::rocksdb_options::UnsafeSnap;
 use rocksdb::{DBIterator, DB};
 
+use crate::db_vector::RocksDBVector;
+use crate::engine::RocksEngine;
 use crate::options::RocksReadOptions;
 use crate::util::get_cf_handle;
 use crate::RocksEngineIterator;
 
-pub struct Snapshot {
-    // TODO: use &DB.
+pub struct RocksSnapshot {
     db: Arc<DB>,
     snap: UnsafeSnap,
 }
 
-unsafe impl Send for Snapshot {}
-unsafe impl Sync for Snapshot {}
+unsafe impl Send for RocksSnapshot {}
+unsafe impl Sync for RocksSnapshot {}
 
-impl Snapshot {
+impl RocksSnapshot {
     pub fn new(db: Arc<DB>) -> Self {
         unsafe {
-            Snapshot {
+            RocksSnapshot {
                 snap: db.unsafe_snap(),
                 db,
             }
         }
     }
-
-    pub fn into_sync(self) -> SyncSnapshot {
-        SyncSnapshot(Arc::new(self))
-    }
-
-    pub fn get_db(&self) -> &DB {
-        self.db.as_ref()
-    }
 }
 
-impl engine_traits::Snapshot for Snapshot {
+impl Snapshot for RocksSnapshot {
+    type SyncSnapshot = RocksSyncSnapshot;
+    type KvEngine = RocksEngine;
+
     fn cf_names(&self) -> Vec<&str> {
         self.db.cf_names()
     }
+
+    fn into_sync(self) -> RocksSyncSnapshot {
+        RocksSyncSnapshot(Arc::new(self))
+    }
+
+    fn get_db(&self) -> &RocksEngine {
+        RocksEngine::from_ref(&self.db)
+    }
 }
 
-impl Debug for Snapshot {
+impl Debug for RocksSnapshot {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         write!(fmt, "Engine Snapshot Impl")
     }
 }
 
-impl Drop for Snapshot {
+impl Drop for RocksSnapshot {
     fn drop(&mut self) {
         unsafe {
             self.db.release_snap(&self.snap);
@@ -60,10 +66,10 @@ impl Drop for Snapshot {
     }
 }
 
-impl Iterable for Snapshot {
+impl Iterable for RocksSnapshot {
     type Iterator = RocksEngineIterator;
 
-    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
@@ -75,7 +81,7 @@ impl Iterable for Snapshot {
         )))
     }
 
-    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iterator> {
+    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
@@ -90,18 +96,25 @@ impl Iterable for Snapshot {
     }
 }
 
-impl Peekable for Snapshot {
-    fn get_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Vec<u8>>> {
+impl Peekable for RocksSnapshot {
+    type DBVector = RocksDBVector;
+
+    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
         let v = self.db.get_opt(key, &opt)?;
-        Ok(v.map(|v| v.to_vec()))
+        Ok(v.map(RocksDBVector::from_raw))
     }
 
-    fn get_cf_opt(&self, opts: &ReadOptions, cf: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+    fn get_value_cf_opt(
+        &self,
+        opts: &ReadOptions,
+        cf: &str,
+        key: &[u8],
+    ) -> Result<Option<RocksDBVector>> {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
@@ -109,23 +122,26 @@ impl Peekable for Snapshot {
         }
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         let v = self.db.get_cf_opt(handle, key, &opt)?;
-        Ok(v.map(|v| v.to_vec()))
+        Ok(v.map(RocksDBVector::from_raw))
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct SyncSnapshot(Arc<Snapshot>);
+#[repr(transparent)] // Guarantee same representation as in engine/rocks
+pub struct RocksSyncSnapshot(Arc<RocksSnapshot>);
 
-impl Deref for SyncSnapshot {
-    type Target = Snapshot;
+impl Deref for RocksSyncSnapshot {
+    type Target = RocksSnapshot;
 
-    fn deref(&self) -> &Snapshot {
+    fn deref(&self) -> &RocksSnapshot {
         &self.0
     }
 }
 
-impl SyncSnapshot {
-    pub fn new(db: Arc<DB>) -> SyncSnapshot {
-        SyncSnapshot(Arc::new(Snapshot::new(db)))
+impl RocksSyncSnapshot {
+    pub fn new(db: Arc<DB>) -> RocksSyncSnapshot {
+        RocksSyncSnapshot(Arc::new(RocksSnapshot::new(db)))
     }
 }
+
+impl SyncSnapshot<RocksSnapshot> for RocksSyncSnapshot {}

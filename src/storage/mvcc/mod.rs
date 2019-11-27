@@ -319,6 +319,7 @@ impl From<codec::Error> for ErrorInner {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Generates `DefaultNotFound` error or panic directly based on config.
+#[inline(never)]
 pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
     CRITICAL_ERROR
         .with_label_values(&["default value not found"])
@@ -895,7 +896,8 @@ pub mod tests {
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), true).unwrap();
+        let mut txn =
+            MvccTxn::for_scan(snapshot, Some(ScanMode::Forward), TimeStamp::zero(), true).unwrap();
         txn.gc(Key::from_raw(key), safe_point.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
