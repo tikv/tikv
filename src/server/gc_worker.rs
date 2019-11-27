@@ -15,8 +15,10 @@ use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_rocks::RocksIOLimiter;
 use engine_traits::IOLimiter;
-use futures::Future;
-use kvproto::kvrpcpb::Context;
+use futures::sink::Sink;
+use futures::sync::mpsc as future_mpsc;
+use futures::{future, Async, Future, Poll, Stream};
+use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use kvproto::metapb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
@@ -27,11 +29,11 @@ use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
 use crate::storage::kv::{
-    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
-    Statistics,
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider,
+    RocksSnapshot, ScanMode, Snapshot, Statistics,
 };
 use crate::storage::metrics::*;
-use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
+use crate::storage::mvcc::{Error as MvccError, MvccReader, MvccTxn, TimeStamp};
 use crate::storage::{Callback, Error, ErrorInner, Key, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
@@ -62,6 +64,9 @@ const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
+
+const FUTURE_STREAM_BUFFER_SIZE: usize = 16;
+const SCAN_LOCK_BATCH_SIZE: usize = 128;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -120,6 +125,11 @@ enum GCTask {
         end_key: Key,
         callback: Callback<()>,
     },
+    PhysicalScanLock {
+        ctx: Context,
+        max_ts: TimeStamp,
+        sender: future_mpsc::Sender<Result<Vec<LockInfo>>>,
+    },
 }
 
 impl GCTask {
@@ -127,6 +137,7 @@ impl GCTask {
         match self {
             GCTask::GC { .. } => "gc",
             GCTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
+            GCTask::PhysicalScanLock { .. } => "physical_scan_lock",
         }
     }
 }
@@ -151,7 +162,78 @@ impl Display for GCTask {
                 .field("start_key", &format!("{}", start_key))
                 .field("end_key", &format!("{}", end_key))
                 .finish(),
+            GCTask::PhysicalScanLock { max_ts, .. } => f
+                .debug_struct("PhysicalScanLock")
+                .field("max_ts", max_ts)
+                .finish(),
         }
+    }
+}
+
+struct LockScanner<S: Snapshot> {
+    reader: MvccReader<S>,
+    max_ts: TimeStamp,
+    next_key: Option<Key>,
+    batch_size: usize,
+    is_finished: bool,
+}
+
+impl<S: Snapshot> LockScanner<S> {
+    pub fn new(snapshot: S, max_ts: TimeStamp) -> Self {
+        let reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false, IsolationLevel::Si);
+        Self {
+            reader,
+            max_ts,
+            next_key: None,
+            batch_size: SCAN_LOCK_BATCH_SIZE,
+            is_finished: false,
+        }
+    }
+}
+
+impl<S: Snapshot> Stream for LockScanner<S> {
+    type Item = Vec<LockInfo>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        if self.is_finished {
+            return Ok(Async::Ready(None));
+        }
+        let max_ts = self.max_ts;
+
+        let scan_lock_res =
+            self.reader
+                .scan_locks(self.next_key.as_ref(), |l| l.ts <= max_ts, self.batch_size);
+        let (locks, is_remain) = match scan_lock_res {
+            Ok(res) => res,
+            Err(e) => {
+                // Do not scan more elements once error happens.
+                self.is_finished = true;
+                return Err(e.into());
+            }
+        };
+
+        if is_remain {
+            self.next_key = Some(locks.last().unwrap().0.clone())
+        } else {
+            self.is_finished = true;
+        }
+
+        let mut lock_infos = Vec::with_capacity(locks.len());
+
+        for (key, lock) in locks {
+            let raw_key = match key.to_raw() {
+                Ok(k) => k,
+                Err(e) => {
+                    self.is_finished = true;
+                    let e = Error::from(MvccError::from(e));
+                    return Err(e);
+                }
+            };
+            lock_infos.push(lock.into_lock_info(raw_key))
+        }
+
+        Ok(Async::Ready(Some(lock_infos)))
     }
 }
 
@@ -414,6 +496,36 @@ impl<E: Engine> GCRunner<E> {
         Ok(())
     }
 
+    fn handle_physical_scan_lock(
+        &self,
+        handle: &Handle,
+        _: &Context,
+        max_ts: TimeStamp,
+        sender: future_mpsc::Sender<Result<Vec<LockInfo>>>,
+    ) {
+        let db = match &self.local_storage {
+            Some(db) => Arc::clone(&db),
+            None => {
+                let e = box_err!("local storage not set, physical scan lock not supported");
+                handle.spawn(sender.send(Err(e)).map(|_| ()).map_err(|e| {
+                    error!("send physical scan lock result from GCRunner failed"; "err" => ?e);
+                }));
+                return;
+            }
+        };
+
+        let lock_scanner = LockScanner::new(RocksSnapshot::new(db), max_ts);
+
+        let future = sender
+            .send_all(lock_scanner.then(|res| Ok(res)))
+            .map_err(|e| {
+                error!("send physical scan lock result from GCRunner failed"; "err" => ?e);
+            })
+            .map(|_| ());
+
+        handle.spawn(future);
+    }
+
     fn update_statistics_metrics(&mut self) {
         let stats = mem::replace(&mut self.stats, Statistics::default());
         for (cf, details) in stats.details().iter() {
@@ -428,7 +540,7 @@ impl<E: Engine> GCRunner<E> {
 
 impl<E: Engine> FutureRunnable<GCTask> for GCRunner<E> {
     #[inline]
-    fn run(&mut self, task: GCTask, _handle: &Handle) {
+    fn run(&mut self, task: GCTask, handle: &Handle) {
         let label = task.get_label();
         GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
 
@@ -464,6 +576,11 @@ impl<E: Engine> FutureRunnable<GCTask> for GCRunner<E> {
                 update_metrics(res.is_err());
                 callback(res);
             }
+            GCTask::PhysicalScanLock {
+                ctx,
+                max_ts,
+                sender,
+            } => self.handle_physical_scan_lock(handle, &ctx, max_ts, sender),
         };
     }
 }
@@ -1263,6 +1380,39 @@ impl<E: Engine> GCWorker<E> {
         })
     }
 
+    pub fn async_physical_scan_lock(
+        &self,
+        ctx: Context,
+        max_ts: TimeStamp,
+    ) -> impl Stream<Item = Vec<LockInfo>, Error = Error> {
+        // TODO: Metrics
+        let (tx, rx) = future_mpsc::channel(FUTURE_STREAM_BUFFER_SIZE);
+        let res = self
+            .worker_scheduler
+            .schedule(GCTask::PhysicalScanLock {
+                ctx,
+                max_ts,
+                sender: tx.clone(),
+            })
+            .or_else(handle_gc_task_schedule_error);
+
+        future::result(res)
+            .and_then(move |_| {
+                let stream = rx
+                    .map_err(move |_| {
+                        error!(
+                            "failed to receive physical scan lock results from GCRunner";
+                            "max_ts" => %max_ts
+                        );
+                        box_err!("failed to receive physical scan lock results from GCRunner")
+                    })
+                    .and_then(|res| res);
+                Ok(stream)
+            })
+            .into_stream()
+            .flatten()
+    }
+
     pub fn change_io_limit(&self, limit: i64) -> Result<()> {
         let mut limiter = self.limiter.lock().unwrap();
         if limit == 0 {
@@ -1299,6 +1449,7 @@ mod tests {
             GCTask::UnsafeDestroyRange {
                 ref mut callback, ..
             } => callback,
+            GCTask::PhysicalScanLock { .. } => unreachable!(),
         };
         mem::replace(callback, Box::new(|_| {}))
     }
