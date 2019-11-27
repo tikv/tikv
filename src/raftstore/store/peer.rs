@@ -1817,7 +1817,7 @@ impl Peer {
                     "peer_id" => self.peer.get_id(),
                     "request" => ?change_peer,
                 );
-                return Err(box_err!("invalid conf change request"));
+                return Err(box_err!("{} invalid conf change request", self.tag));
             }
             _ => {}
         }
@@ -1832,7 +1832,7 @@ impl Peer {
                 "peer_id" => self.peer.get_id(),
                 "request" => ?change_peer,
             );
-            return Err(box_err!("ignore remove leader"));
+            return Err(box_err!("{} ignore remove leader", self.tag));
         }
 
         let status = self.raft_group.status_ref();
@@ -1947,16 +1947,19 @@ impl Peer {
             |s| if s.map_or(true, |s| s.parse().unwrap_or(true)) {
                 Ok(())
             } else {
-                Err(box_err!("can not read due to injected failure"))
+                Err(box_err!(
+                    "{} can not read due to injected failure",
+                    self.tag
+                ))
             }
         );
 
         // See more in ready_to_handle_read().
         if self.is_splitting() {
-            return Err(box_err!("can not read index due to split"));
+            return Err(box_err!("{} can not read index due to split", self.tag));
         }
         if self.is_merging() {
-            return Err(box_err!("can not read index due to merge"));
+            return Err(box_err!("{} can not read index due to merge", self.tag));
         }
         Ok(())
     }
@@ -2016,7 +2019,7 @@ impl Peer {
         if !self.is_leader() && self.leader_id() == INVALID_ID {
             cmd_resp::bind_error(
                 &mut err_resp,
-                box_err!("can not read index due to no leader"),
+                box_err!("{} can not read index due to no leader", self.tag),
             );
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             cb.invoke_with_response(err_resp);
@@ -2116,7 +2119,10 @@ impl Peer {
         for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
             entry_size += entry.get_data().len();
             if entry.get_entry_type() == EntryType::EntryConfChange {
-                return Err(box_err!("log gap contains conf change, skip merging."));
+                return Err(box_err!(
+                    "{} log gap contains conf change, skip merging.",
+                    self.tag
+                ));
             }
             if entry.get_data().is_empty() {
                 continue;
@@ -2188,7 +2194,10 @@ impl Peer {
         if self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
         {
-            return Err(box_err!("peer in merging mode, can't do proposal."));
+            return Err(box_err!(
+                "{} peer in merging mode, can't do proposal.",
+                self.tag
+            ));
         }
 
         poll_ctx.raft_metrics.propose.normal += 1;
@@ -2279,7 +2288,10 @@ impl Peer {
         req: &RaftCmdRequest,
     ) -> Result<u64> {
         if self.pending_merge_state.is_some() {
-            return Err(box_err!("peer in merging mode, can't do proposal."));
+            return Err(box_err!(
+                "{} peer in merging mode, can't do proposal.",
+                self.tag
+            ));
         }
         if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!(
@@ -2532,7 +2544,7 @@ pub trait RequestInspector {
             }
 
             if has_read && has_write {
-                return Err(box_err!("read and write can't be mixed in one batch."));
+                return Err(box_err!("read and write can't be mixed in one batch"));
             }
         }
 
