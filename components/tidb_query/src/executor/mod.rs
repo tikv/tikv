@@ -528,6 +528,7 @@ pub mod tests {
                 key_ranges,
                 storage,
                 false,
+                false,
             )
             .unwrap(),
         )

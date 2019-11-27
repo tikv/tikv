@@ -277,6 +277,7 @@ pub mod tests {
             wrapper.store,
             false,
             false,
+            false,
         )
         .unwrap();
 
@@ -336,6 +337,7 @@ pub mod tests {
             wrapper.store,
             unique,
             false,
+            false,
         )
         .unwrap();
         for handle in 0..KEY_NUMBER {
@@ -392,6 +394,7 @@ pub mod tests {
             wrapper.store,
             unique,
             false,
+            false,
         )
         .unwrap();
 
@@ -419,6 +422,7 @@ pub mod tests {
             EvalContext::default(),
             wrapper.ranges,
             wrapper.store,
+            false,
             false,
             false,
         )

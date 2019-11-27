@@ -210,6 +210,7 @@ impl TestSuite {
             scan_backward_in_range: false,
             is_key_only: false,
             is_scanned_range_aware: false,
+            scan_locks_first: false,
         });
         let digest = crc64fast::Digest::new();
         while let Some((k, v)) = scanner.next().unwrap() {

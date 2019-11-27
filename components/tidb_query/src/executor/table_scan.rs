@@ -145,6 +145,7 @@ mod tests {
             wrapper.ranges,
             wrapper.store,
             false,
+            false,
         )
         .unwrap();
 
@@ -190,6 +191,7 @@ mod tests {
             wrapper.ranges,
             wrapper.store,
             false,
+            false,
         )
         .unwrap();
 
@@ -234,6 +236,7 @@ mod tests {
             wrapper.ranges,
             wrapper.store,
             true,
+            false,
         )
         .unwrap();
 

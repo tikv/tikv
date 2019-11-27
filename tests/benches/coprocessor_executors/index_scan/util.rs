@@ -52,6 +52,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
             black_box(TiKVStorage::from(ToTxnStore::<Self::T>::to_store(store))),
             black_box(unique),
             black_box(false),
+            black_box(false),
         )
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,
@@ -83,6 +84,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
             black_box(ranges.to_vec()),
             black_box(false),
             black_box(unique),
+            black_box(false),
         )
         .unwrap();
         // There is a step of building scanner in the first `next()` which cost time,

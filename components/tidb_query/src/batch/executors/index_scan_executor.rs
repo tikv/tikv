@@ -322,6 +322,7 @@ mod tests {
                 key_ranges,
                 true,
                 false,
+                false,
             )
             .unwrap();
 
@@ -374,6 +375,7 @@ mod tests {
                     columns_info[2].clone(),
                 ],
                 key_ranges,
+                false,
                 false,
                 false,
             )
@@ -451,6 +453,7 @@ mod tests {
                 key_ranges,
                 false,
                 false,
+                false,
             )
             .unwrap();
 
@@ -506,6 +509,7 @@ mod tests {
                 key_ranges,
                 false,
                 true,
+                false,
             )
             .unwrap();
 

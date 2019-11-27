@@ -4,8 +4,8 @@ use kvproto::kvrpcpb::{IsolationLevel, LockInfo};
 
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{
-    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, Scanner as MvccScanner,
-    ScannerBuilder, WriteRef, PointGetter, PointGetterBuilder, TsSet, Lock,
+    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, Lock, PointGetter,
+    PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder, TsSet, WriteRef,
 };
 use crate::storage::{CursorBuilder, Key, KvPair, Snapshot, Statistics, Value};
 use engine::CF_LOCK;
@@ -310,7 +310,9 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                                 match lock.check_ts_conflict(key, self.start_ts, &self.bypass_locks)
                                 {
                                     Ok(()) => continue,
-                                    Err(MvccError(box MvccErrorInner::KeyIsLocked(lock))) => locks.push(lock),
+                                    Err(MvccError(box MvccErrorInner::KeyIsLocked(lock))) => {
+                                        locks.push(lock)
+                                    }
                                     Err(e) => return Err(Error::from(e)),
                                 }
                             }
@@ -337,7 +339,9 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
                                         &self.bypass_locks,
                                     ) {
                                         Ok(()) => {}
-                                        Err(MvccError(box MvccErrorInner::KeyIsLocked(lock))) => locks.push(lock),
+                                        Err(MvccError(box MvccErrorInner::KeyIsLocked(lock))) => {
+                                            locks.push(lock)
+                                        }
                                         Err(e) => return Err(Error::from(e)),
                                     }
                                     lock_cursor.next(&mut statistics.lock);
@@ -1345,6 +1349,7 @@ mod benches {
                 .scanner(
                     test::black_box(true),
                     test::black_box(false),
+                    test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),
                 )
@@ -1366,6 +1371,7 @@ mod benches {
             let mut scanner = store
                 .scanner(
                     test::black_box(true),
+                    test::black_box(false),
                     test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),
@@ -1391,6 +1397,7 @@ mod benches {
             let mut scanner = store
                 .scanner(
                     test::black_box(true),
+                    test::black_box(false),
                     test::black_box(false),
                     test::black_box(None),
                     test::black_box(None),

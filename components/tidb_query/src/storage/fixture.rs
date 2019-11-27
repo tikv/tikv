@@ -54,6 +54,7 @@ impl super::Storage for FixtureStorage {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
+        _ignore_lock: bool,
         range: IntervalRange,
     ) -> Result<()> {
         let data_view = self
@@ -103,6 +104,10 @@ impl super::Storage for FixtureStorage {
     }
 
     fn collect_statistics(&mut self, _dest: &mut Self::Statistics) {}
+
+    fn find_locks(&mut self, ranges: Vec<Range>) -> Result<()> {
+        unimplemented!();
+    }
 }
 
 #[cfg(test)]
@@ -137,7 +142,7 @@ mod tests {
 
         // Scan Backward = false, Key only = false
         storage
-            .begin_scan(false, false, IntervalRange::from(("foo", "foo_3")))
+            .begin_scan(false, false, false, IntervalRange::from(("foo", "foo_3")))
             .unwrap();
 
         assert_eq!(
@@ -163,7 +168,7 @@ mod tests {
 
         // Scan Backward = false, Key only = false
         storage
-            .begin_scan(false, false, IntervalRange::from(("bar", "bar_2")))
+            .begin_scan(false, false, false, IntervalRange::from(("bar", "bar_2")))
             .unwrap();
 
         assert_eq!(
@@ -174,7 +179,7 @@ mod tests {
 
         // Scan Backward = false, Key only = true
         storage
-            .begin_scan(false, true, IntervalRange::from(("bar", "foo_")))
+            .begin_scan(false, true, false, IntervalRange::from(("bar", "foo_")))
             .unwrap();
 
         assert_eq!(
@@ -193,7 +198,7 @@ mod tests {
 
         // Scan Backward = true, Key only = false
         storage
-            .begin_scan(true, false, IntervalRange::from(("foo", "foo_3")))
+            .begin_scan(true, false, false, IntervalRange::from(("foo", "foo_3")))
             .unwrap();
 
         assert_eq!(
@@ -209,12 +214,12 @@ mod tests {
 
         // Scan empty range
         storage
-            .begin_scan(false, false, IntervalRange::from(("faa", "fab")))
+            .begin_scan(false, false, false, IntervalRange::from(("faa", "fab")))
             .unwrap();
         assert_eq!(storage.scan_next().unwrap(), None);
 
         storage
-            .begin_scan(false, false, IntervalRange::from(("foo", "foo")))
+            .begin_scan(false, false, false, IntervalRange::from(("foo", "foo")))
             .unwrap();
         assert_eq!(storage.scan_next().unwrap(), None);
     }

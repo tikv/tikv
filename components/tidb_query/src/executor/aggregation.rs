@@ -516,6 +516,7 @@ mod tests {
             wrapper.store,
             unique,
             false,
+            false,
         )
         .unwrap();
         // init the stream aggregation executor
@@ -551,6 +552,7 @@ mod tests {
             wrapper.ranges,
             wrapper.store,
             unique,
+            false,
             false,
         )
         .unwrap();
@@ -605,6 +607,7 @@ mod tests {
             wrapper.ranges,
             wrapper.store,
             unique,
+            false,
             false,
         )
         .unwrap();
