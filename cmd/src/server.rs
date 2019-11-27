@@ -10,11 +10,8 @@
 
 use crate::{setup::*, signal_handler};
 use engine::{
-    rocks,
-    rocks::util::{
-        metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL},
-        security::encrypted_env_from_cipher_file,
-    },
+    rocks::util::{metrics_flusher::MetricsFlusher, security::encrypted_env_from_cipher_file},
+    rocks::{self, util::metrics_flusher::DEFAULT_FLUSHER_INTERVAL},
 };
 use fs2::FileExt;
 use futures_cpupool::Builder;
@@ -37,17 +34,24 @@ use tikv::{
     config::{ConfigController, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
-    raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor},
-    raftstore::store::fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
-    raftstore::store::{fsm, LocalReader},
-    raftstore::store::{new_compaction_listener, SnapManagerBuilder},
-    server::gc_worker::{AutoGcConfig, GcWorker},
-    server::lock_manager::LockManager,
-    server::resolve,
-    server::service::{DebugService, DiagnosticsService},
-    server::status_server::StatusServer,
-    server::DEFAULT_CLUSTER_ID,
-    server::{create_raft_storage, Node, RaftKv, Server},
+    raftstore::{
+        coprocessor::{CoprocessorHost, RegionInfoAccessor},
+        store::{
+            fsm,
+            fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
+            new_compaction_listener, LocalReader, SnapManagerBuilder,
+        },
+    },
+    server::{
+        config::Config as ServerConfig,
+        create_raft_storage,
+        gc_worker::{AutoGcConfig, GcWorker},
+        lock_manager::LockManager,
+        resolve,
+        service::{DebugService, DiagnosticsService},
+        status_server::StatusServer,
+        Node, RaftKv, Server, DEFAULT_CLUSTER_ID,
+    },
     storage,
 };
 use tikv_util::{
@@ -68,11 +72,11 @@ pub fn run_tikv(config: TiKvConfig) {
     tikv.init_fs();
     tikv.init_engines();
     let gc_worker = tikv.init_gc_worker();
-    tikv.init_servers(&gc_worker);
+    let server_config = tikv.init_servers(&gc_worker);
     tikv.register_services(gc_worker);
     tikv.init_metrics_flusher();
 
-    tikv.run_server();
+    tikv.run_server(server_config);
 
     signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
 
@@ -303,7 +307,10 @@ impl TiKV {
         gc_worker
     }
 
-    fn init_servers(&mut self, gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>) {
+    fn init_servers(
+        &mut self,
+        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
+    ) -> Arc<ServerConfig> {
         // Create CoprocessorHost.
         let mut coprocessor_host =
             CoprocessorHost::new(self.config.coprocessor.clone(), self.router.clone());
@@ -360,10 +367,11 @@ impl TiKV {
             engines.engine.clone(),
         );
 
-        // Create server
         let server_config = Arc::new(self.config.server.clone());
+
+        // Create server
         let server = Server::new(
-            &self.config.server,
+            &server_config,
             &self.security_mgr,
             storage.clone(),
             coprocessor::Endpoint::new(&server_config, cop_read_pool),
@@ -414,6 +422,8 @@ impl TiKV {
             node,
             importer,
         });
+
+        server_config
     }
 
     fn register_services(&mut self, gc_worker: GcWorker<RaftKv<ServerRaftStoreRouter>>) {
@@ -530,13 +540,13 @@ impl TiKV {
         self.to_stop.push(metrics_flusher);
     }
 
-    fn run_server(&mut self) {
+    fn run_server(&mut self, server_config: Arc<ServerConfig>) {
         let server = &mut self.servers.as_mut().unwrap().server;
         server
             .build_and_bind()
             .unwrap_or_else(|e| fatal!("failed to build server: {}", e));
         server
-            .start(self.security_mgr.clone())
+            .start(server_config, self.security_mgr.clone())
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
 
         // Create a status server.
@@ -545,7 +555,7 @@ impl TiKV {
         // FIXME: How to keep config updated?
         if status_enabled {
             let mut status_server = Box::new(StatusServer::new(
-                self.config.server.clone().status_thread_pool_size,
+                self.config.server.status_thread_pool_size,
                 self.config.clone(),
             ));
             // Start the status server.

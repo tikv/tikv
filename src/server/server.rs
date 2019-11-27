@@ -44,13 +44,12 @@ pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
-    pub cfg: Arc<Config>,
     env: Arc<Environment>,
     /// A GrpcServer builder or a GrpcServer.
     ///
     /// If the listening port is configured, the server will be started lazily.
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
-    local_addr: SocketAddr,
+    pub local_addr: SocketAddr,
     // Transport.
     trans: ServerTransport<T, S>,
     raft_router: T,
@@ -69,7 +68,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<E: Engine, L: LockManager>(
-        cfg: &Config,
+        cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
         cop: Endpoint<E>,
@@ -113,10 +112,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         );
 
         let addr = SocketAddr::from_str(&cfg.addr)?;
-        let mut cfg = cfg.clone();
-        cfg.addr = addr.to_string();
-        let cfg = Arc::new(cfg);
-
         let ip = format!("{}", addr.ip());
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(cfg.grpc_memory_pool_quota.0 as usize);
@@ -138,7 +133,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
         let raft_client = Arc::new(RwLock::new(RaftClient::new(
             Arc::clone(&env),
-            Arc::clone(&cfg),
+            Arc::clone(cfg),
             Arc::clone(security_mgr),
             raft_router.clone(),
             Arc::clone(&grpc_thread_load),
@@ -153,7 +148,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         );
 
         let svr = Server {
-            cfg,
             env: Arc::clone(&env),
             builder_or_server: Some(builder),
             local_addr: addr,
@@ -205,13 +199,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
     /// Starts the TiKV server.
     /// Notice: Make sure call `build_and_bind` first.
-    pub fn start(&mut self, security_mgr: Arc<SecurityManager>) -> Result<()> {
+    pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
         let snap_runner = SnapHandler::new(
             Arc::clone(&self.env),
             self.snap_mgr.clone(),
             self.raft_router.clone(),
             security_mgr,
-            self.cfg.clone(),
+            Arc::clone(&cfg),
         );
         box_try!(self.snap_worker.start(snap_runner));
 
@@ -385,7 +379,7 @@ mod tests {
         .unwrap();
 
         server.build_and_bind().unwrap();
-        server.start(security_mgr).unwrap();
+        server.start(cfg, security_mgr).unwrap();
 
         let mut trans = server.transport();
         trans.report_unreachable(RaftMessage::default());
