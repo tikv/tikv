@@ -2,6 +2,7 @@
 
 //! Common utility implementations for time expression
 
+/// used to convert period to month
 pub fn period_to_month(period: u64) -> u64 {
     if period == 0 {
         return 0;
@@ -16,6 +17,7 @@ pub fn period_to_month(period: u64) -> u64 {
     }
 }
 
+/// used to convert month to period
 pub fn month_to_period(month: u64) -> u64 {
     if month == 0 {
         return 0;
