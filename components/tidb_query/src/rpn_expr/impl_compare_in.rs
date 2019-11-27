@@ -13,7 +13,7 @@ use crate::codec::mysql::{Decimal, MAX_FSP};
 use crate::{Error, Result};
 
 pub trait Extract: std::marker::Sized {
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Option<Self>>;
+    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self>;
 }
 
 #[inline]
@@ -27,19 +27,19 @@ fn type_error(eval_type: EvalType, expr_type: ExprType) -> Error {
 
 impl Extract for Int {
     #[inline]
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Option<Self>> {
+    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
         if expr_tp == ExprType::Int64 {
             let value = val
                 .as_slice()
                 .read_i64()
                 .map_err(|_| other_err!("Unable to decode int64 from the request"))?;
-            Ok(Some(value))
+            Ok(value)
         } else if expr_tp == ExprType::Uint64 {
             let value = val
                 .as_slice()
                 .read_u64()
                 .map_err(|_| other_err!("Unable to decode uint64 from the request"))?;
-            Ok(Some(value as i64))
+            Ok(value as i64)
         } else {
             Err(type_error(Int::EVAL_TYPE, expr_tp))
         }
@@ -48,7 +48,7 @@ impl Extract for Int {
 
 impl Extract for Real {
     #[inline]
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Option<Self>> {
+    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
         if expr_tp != ExprType::MysqlDecimal {
             return Err(type_error(Real::EVAL_TYPE, expr_tp));
         }
@@ -56,23 +56,23 @@ impl Extract for Real {
             .as_slice()
             .read_f64()
             .map_err(|_| other_err!("Unable to decode float from the request"))?;
-        Ok(Real::new(value).ok())
+        Real::new(value).map_err(|_| other_err!("Unable to convert float to real"))
     }
 }
 
 impl Extract for Bytes {
     #[inline]
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Option<Self>> {
+    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
         if expr_tp != ExprType::Bytes {
             return Err(type_error(Bytes::EVAL_TYPE, expr_tp));
         }
-        Ok(Some(val))
+        Ok(val)
     }
 }
 
 impl Extract for Decimal {
     #[inline]
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Option<Self>> {
+    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
         if expr_tp != ExprType::Float32 || expr_tp != ExprType::Float64 {
             return Err(type_error(Decimal::EVAL_TYPE, expr_tp));
         }
@@ -81,13 +81,13 @@ impl Extract for Decimal {
             .as_slice()
             .read_decimal()
             .map_err(|_| other_err!("Unable to decode decimal from the request"))?;
-        Ok(Some(value))
+        Ok(value)
     }
 }
 
 impl Extract for Duration {
     #[inline]
-    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Option<Self>> {
+    fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
         if expr_tp != ExprType::MysqlDuration {
             return Err(type_error(Duration::EVAL_TYPE, expr_tp));
         }
@@ -97,7 +97,7 @@ impl Extract for Duration {
             .map_err(|_| other_err!("Unable to decode duration from the request"))?;
         let value = Duration::from_nanos(n, MAX_FSP)
             .map_err(|_| other_err!("Unable to decode duration from the request"))?;
-        Ok(Some(value))
+        Ok(value)
     }
 }
 
@@ -175,14 +175,7 @@ fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<Compar
             }
             expr_type => {
                 let val = T::extract(expr_type, tree_node.take_val())?;
-                match val {
-                    Some(v) => {
-                        lookup_set.insert(v);
-                    }
-                    None => {
-                        has_null = true;
-                    }
-                }
+                lookup_set.insert(val);
             }
         }
         if is_constant {
