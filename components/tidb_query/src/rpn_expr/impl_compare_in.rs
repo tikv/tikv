@@ -109,6 +109,12 @@ impl InByHash for Real {}
 impl InByHash for Bytes {}
 impl InByHash for Decimal {}
 impl InByHash for Duration {}
+
+impl InByCompare for Int {}
+impl InByCompare for Real {}
+impl InByCompare for Bytes {}
+impl InByCompare for Decimal {}
+impl InByCompare for Duration {}
 // DateTime requires TZInfo in context, and we cannot acquire it during metadata_ctor.
 // TODO: implement InByHash for DateTime.
 impl InByCompare for DateTime {}
@@ -228,45 +234,59 @@ mod tests {
 
     use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
     use crate::expr::EvalContext;
+    use crate::rpn_expr::types::RpnFnMeta;
     use crate::rpn_expr::RpnExpressionBuilder;
 
     #[test]
     fn test_in() {
-        let cases = vec![
-            (vec![Some(1)], Some(0)),
-            (vec![Some(1), Some(2)], Some(0)),
-            (vec![Some(1), Some(2), Some(1)], Some(1)),
-            (vec![Some(1), Some(2), None], None),
-            (vec![Some(1), Some(2), None, Some(1)], Some(1)),
-            (vec![None, Some(2), Some(1)], None),
-        ];
-        for (args, expected) in cases {
-            let mut builder =
-                ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong);
-            for arg in args {
-                builder = builder.push_child(match arg {
-                    Some(v) => ExprDefBuilder::constant_int(v),
-                    None => ExprDefBuilder::constant_null(FieldTypeTp::LongLong),
-                });
+        // mapper to test compare_in_by_compare.
+        fn by_compare_mapper(expr: &Expr) -> Result<RpnFnMeta> {
+            match expr.get_sig() {
+                ScalarFuncSig::InInt => Ok(compare_in_by_compare_fn_meta::<Int>()),
+                _ => map_expr_node_to_rpn_func(expr),
             }
-            let node = builder.build();
-            let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
-                node,
-                map_expr_node_to_rpn_func,
-                1,
-            )
-            .unwrap();
-            let mut ctx = EvalContext::default();
-            let schema = &[FieldTypeTp::LongLong.into()];
-            let mut columns = LazyBatchColumnVec::empty();
-            let result = exp.eval(&mut ctx, schema, &mut columns, &[], 1);
-            let val = result.unwrap();
-            assert!(val.is_vector());
-            assert_eq!(
-                val.vector_value().unwrap().as_ref().as_int_slice(),
-                &[expected]
-            );
         }
+
+        fn test_with_mapper<F>(mapper: F)
+        where
+            F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
+        {
+            let cases = vec![
+                (vec![Some(1)], Some(0)),
+                (vec![Some(1), Some(2)], Some(0)),
+                (vec![Some(1), Some(2), Some(1)], Some(1)),
+                (vec![Some(1), Some(2), None], None),
+                (vec![Some(1), Some(2), None, Some(1)], Some(1)),
+                (vec![None, Some(2), Some(1)], None),
+            ];
+            for (args, expected) in cases {
+                let mut builder =
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::InInt, FieldTypeTp::LongLong);
+                for arg in args {
+                    builder = builder.push_child(match arg {
+                        Some(v) => ExprDefBuilder::constant_int(v),
+                        None => ExprDefBuilder::constant_null(FieldTypeTp::LongLong),
+                    });
+                }
+                let node = builder.build();
+                let exp =
+                    RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, mapper, 1)
+                        .unwrap();
+                let mut ctx = EvalContext::default();
+                let schema = &[FieldTypeTp::LongLong.into()];
+                let mut columns = LazyBatchColumnVec::empty();
+                let result = exp.eval(&mut ctx, schema, &mut columns, &[], 1);
+                let val = result.unwrap();
+                assert!(val.is_vector());
+                assert_eq!(
+                    val.vector_value().unwrap().as_ref().as_int_slice(),
+                    &[expected]
+                );
+            }
+        }
+
+        test_with_mapper(map_expr_node_to_rpn_func);
+        test_with_mapper(by_compare_mapper);
     }
 
     #[test]
