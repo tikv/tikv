@@ -49,7 +49,7 @@ impl Extract for Int {
 impl Extract for Real {
     #[inline]
     fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
-        if expr_tp != ExprType::Float32 || expr_tp != ExprType::Float64 {
+        if expr_tp != ExprType::Float32 && expr_tp != ExprType::Float64 {
             return Err(type_error(Real::EVAL_TYPE, expr_tp));
         }
         let value = val
@@ -63,7 +63,7 @@ impl Extract for Real {
 impl Extract for Bytes {
     #[inline]
     fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
-        if expr_tp != ExprType::Bytes {
+        if expr_tp != ExprType::Bytes && expr_tp != ExprType::String {
             return Err(type_error(Bytes::EVAL_TYPE, expr_tp));
         }
         Ok(val)
