@@ -49,7 +49,7 @@ impl Extract for Int {
 impl Extract for Real {
     #[inline]
     fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
-        if expr_tp != ExprType::MysqlDecimal {
+        if expr_tp != ExprType::Float32 || expr_tp != ExprType::Float64 {
             return Err(type_error(Real::EVAL_TYPE, expr_tp));
         }
         let value = val
@@ -73,7 +73,7 @@ impl Extract for Bytes {
 impl Extract for Decimal {
     #[inline]
     fn extract(expr_tp: ExprType, val: Vec<u8>) -> Result<Self> {
-        if expr_tp != ExprType::Float32 || expr_tp != ExprType::Float64 {
+        if expr_tp != ExprType::MysqlDecimal {
             return Err(type_error(Decimal::EVAL_TYPE, expr_tp));
         }
         use crate::codec::mysql::DecimalDecoder;
