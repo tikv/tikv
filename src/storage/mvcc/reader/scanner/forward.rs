@@ -58,7 +58,6 @@ impl<S: Snapshot> ForwardScanner<S> {
         std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
-    #[inline(never)]
     fn init_cursor(&mut self) -> Result<()> {
         assert!(!self.is_started);
 
@@ -192,7 +191,6 @@ impl<S: Snapshot> ForwardScanner<S> {
         }
     }
 
-    #[inline(never)]
     fn process_lock_and_may_finalize(&mut self, user_key: &Key) -> Result<Option<Error>> {
         let mut lock_error = None;
         match self.cfg.isolation_level {
@@ -268,7 +266,6 @@ impl<S: Snapshot> ForwardScanner<S> {
     ///
     /// Returns false if the move attempt is failed, i.e. key space is ended or moved to another
     /// user key.
-    #[inline(never)]
     fn move_write_cursor_to_ts(&mut self, user_key: &Key) -> Result<bool> {
         for _ in 0..SEEK_BOUND {
             if !self.write_cursor.next(&mut self.statistics.write) {
@@ -314,7 +311,6 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// be accessed via `value()`.
     ///
     /// Returns error if the move attempt failed.
-    #[inline(never)]
     fn move_default_cursor_and_load_value(
         &mut self,
         user_key: &Key,
@@ -339,7 +335,6 @@ impl<S: Snapshot> ForwardScanner<S> {
         Ok(())
     }
 
-    #[inline(never)]
     fn move_write_cursor_and_process_write(&mut self, user_key: &Key) -> Result<bool> {
         loop {
             if !self.write_cursor.next(&mut self.statistics.write) {
@@ -414,7 +409,6 @@ impl<S: Snapshot> ForwardScanner<S> {
         self.move_write_cursor_to_next_user_key(user_key)
     }
 
-    #[inline(never)]
     fn move_write_cursor_to_next_user_key(&mut self, user_key: &Key) -> Result<()> {
         self.need_read_next_finalize = false;
 
