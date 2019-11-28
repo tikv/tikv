@@ -1271,13 +1271,13 @@ mod tests {
             (i64::MAX, i64::MAX as u64, false),
         ];
         for (input, expect, in_union) in cs {
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: true,
                 ..RetFieldTypeConfig::default()
             }
             .into();
             let ia = make_implicit_args(in_union);
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_signed_int_as_unsigned_int(&extra, &Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1330,13 +1330,13 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: true,
                 ..RetFieldTypeConfig::default()
             }
             .into();
             let ia = make_implicit_args(true);
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1365,12 +1365,12 @@ mod tests {
             }
             .into();
             let ia = make_implicit_args(false);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: true,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Real::new(input).ok());
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1393,12 +1393,12 @@ mod tests {
             }
             .into();
             let ia = make_implicit_args(false);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: true,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1536,12 +1536,12 @@ mod tests {
             }
             .into();
             let ia = make_implicit_args(cond.in_union());
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: cond.is_unsigned(),
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
 
             let val = Some(Vec::from(input.as_bytes()));
             let r = cast_string_as_int_or_uint(&mut ctx, &extra, &val);
@@ -1638,12 +1638,12 @@ mod tests {
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
             let ia = make_implicit_args(true);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: true,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
 
             let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
@@ -1682,12 +1682,12 @@ mod tests {
             }
             .into();
             let ia = make_implicit_args(false);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: true,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
 
             let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
@@ -1923,12 +1923,12 @@ mod tests {
         ];
         for (input, expect, in_union) in cs {
             let ia = make_implicit_args(in_union);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: true,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_signed_int_as_unsigned_real(&extra, &Some(input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
@@ -2007,12 +2007,12 @@ mod tests {
 
         for (input, expect, in_union) in cs {
             let ia = make_implicit_args(in_union);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: true,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_real_as_unsigned_real(&extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
@@ -2069,14 +2069,14 @@ mod tests {
             }
             .into();
             let ia = make_implicit_args(false);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: false,
                 flen,
                 decimal,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_string_as_signed_real(&mut ctx, &extra, &Some(input.clone().into_bytes()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
@@ -2253,14 +2253,14 @@ mod tests {
             }
             .into();
             let ia = make_implicit_args(in_union);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: true,
                 flen,
                 decimal,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
 
             let p = Some(input.clone().into_bytes());
             let r = cast_string_as_unsigned_real(&mut ctx, &extra, &p);
@@ -2369,14 +2369,14 @@ mod tests {
             }
             .into();
             let ia = make_implicit_args(false);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: true,
                 flen,
                 decimal,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
 
             let p = Some(input.clone().into_bytes());
             let r = cast_string_as_unsigned_real(&mut ctx, &extra, &p);
@@ -2486,12 +2486,12 @@ mod tests {
             }
             .into();
             let ia = make_implicit_args(in_union);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 unsigned: true,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_decimal_as_unsigned_real(&mut ctx, &extra, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
@@ -2842,7 +2842,7 @@ mod tests {
                     FlenType::ExtraOne => (res_len + 1) as isize,
                     FlenType::Unspecified => UNSPECIFIED_LENGTH,
                 };
-                let rtf = RetFieldTypeConfig {
+                let rft = RetFieldTypeConfig {
                     flen,
                     charset: Some(charset),
                     tp: Some(*tp),
@@ -2850,7 +2850,7 @@ mod tests {
                     ..RetFieldTypeConfig::default()
                 }
                 .into();
-                let extra = make_extra(&rtf, &ia);
+                let extra = make_extra(&rft, &ia);
 
                 let r = cast_func(&mut ctx, &extra, &Some(input.clone()));
 
@@ -3529,7 +3529,7 @@ mod tests {
                 let ctx_in_dml_flag = vec![Flag::IN_INSERT_STMT, Flag::IN_UPDATE_OR_DELETE_STMT];
                 for in_dml_flag in ctx_in_dml_flag {
                     let (res_flen, res_decimal) = (res_flen as isize, res_decimal as isize);
-                    let rtf = RetFieldTypeConfig {
+                    let rft = RetFieldTypeConfig {
                         unsigned: is_unsigned,
                         flen: res_flen,
                         decimal: res_decimal,
@@ -3537,7 +3537,7 @@ mod tests {
                     }
                     .into();
                     let ia = make_implicit_args(in_union);
-                    let extra = make_extra(&rtf, &ia);
+                    let extra = make_extra(&rft, &ia);
 
                     let mut ctx = CtxConfig {
                         overflow_as_warning,
@@ -3557,7 +3557,7 @@ mod tests {
                         ..CtxConfig::default()
                     }
                     .into();
-                    let pd_res = produce_dec_with_specified_tp(&mut ctx, base_res.clone(), &rtf);
+                    let pd_res = produce_dec_with_specified_tp(&mut ctx, base_res.clone(), &rft);
 
                     // make log
                     let cast_func_res_log = cast_func_res
@@ -4577,12 +4577,12 @@ mod tests {
             }
             .into();
             let ia = make_implicit_args(false);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 decimal: fsp,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
 
             let result = cast_int_as_duration(&mut ctx, &extra, &Some(input));
 
@@ -4634,12 +4634,12 @@ mod tests {
                 }
                 .into();
                 let ia = make_implicit_args(false);
-                let rtf = RetFieldTypeConfig {
+                let rft = RetFieldTypeConfig {
                     decimal: fsp as isize,
                     ..RetFieldTypeConfig::default()
                 }
                 .into();
-                let extra = make_extra(&rtf, &ia);
+                let extra = make_extra(&rft, &ia);
 
                 let result = func_cast(&mut ctx, &extra, &Some(val.clone()));
 
@@ -4830,12 +4830,12 @@ mod tests {
             let mut ctx = EvalContext::default();
 
             let ia = make_implicit_args(false);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 decimal: expect_fsp,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
 
             let input_time = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
             let expect_time = Duration::parse(expect.as_bytes(), expect_fsp as i8).unwrap();
@@ -4865,12 +4865,12 @@ mod tests {
 
         for (input, input_fsp, output_fsp, expect) in cs {
             let ia = make_implicit_args(false);
-            let rtf = RetFieldTypeConfig {
+            let rft = RetFieldTypeConfig {
                 decimal: output_fsp as isize,
                 ..RetFieldTypeConfig::default()
             }
             .into();
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
 
             let dur = Duration::parse(input.as_bytes(), input_fsp).unwrap();
             let expect = Duration::parse(expect.as_bytes(), output_fsp).unwrap();
@@ -5051,12 +5051,12 @@ mod tests {
         ];
         for (input, expect, parse_to_json) in cs {
             let ia = make_implicit_args(false);
-            let mut rtf = FieldType::default();
+            let mut rft = FieldType::default();
             if parse_to_json {
-                let fta = rtf.as_mut_accessor();
+                let fta = rft.as_mut_accessor();
                 fta.set_flag(FieldTypeFlag::PARSE_TO_JSON);
             }
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let result = cast_string_as_json(&extra, &Some(input.clone().into_bytes()));
             let result_str = result.as_ref().map(|x| x.as_ref().map(|x| x.to_string()));
             let log = format!(
