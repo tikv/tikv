@@ -11,6 +11,7 @@ use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use protobuf::Message;
 use raft::{Ready, StateRole};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -727,7 +728,9 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
             total_count += 1;
 
-            let local_state = protobuf::parse_from_bytes::<RegionLocalState>(value)?;
+            let mut local_state = RegionLocalState::default();
+            local_state.merge_from_bytes(value)?;
+
             let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
                 tombstone_count += 1;

@@ -309,7 +309,7 @@ mod tests {
             .unwrap();
 
         // Make sure the deadlock detector is the leader.
-        let mut leader_region = Region::new();
+        let mut leader_region = Region::default();
         leader_region.set_start_key(b"".to_vec());
         leader_region.set_end_key(b"foo".to_vec());
         coprocessor_host.on_role_change(&leader_region, StateRole::Leader);
