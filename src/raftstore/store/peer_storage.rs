@@ -1396,7 +1396,7 @@ pub fn do_snapshot(
     let state: RegionLocalState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
         .and_then(|res| match res {
-            None => Err(box_err!("could not find region info")),
+            None => Err(box_err!("region {} could not find region info", region_id)),
             Some(state) => Ok(state),
         })
         .map_err(into_other::<_, raft::Error>)?;
@@ -1429,8 +1429,7 @@ pub fn do_snapshot(
         &mut stat,
         Box::new(mgr.clone()),
     )?;
-    let mut v = vec![];
-    snap_data.write_to_vec(&mut v)?;
+    let v = snap_data.write_to_bytes()?;
     snapshot.set_data(v);
 
     SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);

@@ -5,8 +5,10 @@ use tidb_query_codegen::rpn_fn;
 use super::super::expr::EvalContext;
 
 use crate::codec::data_type::*;
+use crate::codec::mysql::time::extension::DateTimeExtension;
 use crate::codec::mysql::Time;
 use crate::codec::Error;
+use crate::expr::SqlMode;
 use crate::Result;
 
 #[rpn_fn(capture = [ctx])]
@@ -54,6 +56,22 @@ pub fn week_day(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<In
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
+pub fn day_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    if t.is_none() {
+        return Ok(None);
+    }
+    let t = t.as_ref().unwrap();
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
+            .map(|_| Ok(None))?;
+    }
+    let day = t.days();
+    Ok(Some(Int::from(day)))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
 pub fn from_days(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Time>> {
     arg.map_or(Ok(None), |daynr: Int| {
         let time = Time::from_days(ctx, daynr as u32)?;
@@ -65,6 +83,49 @@ pub fn from_days(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Time
 #[inline]
 pub fn month(t: &Option<DateTime>) -> Result<Option<Int>> {
     t.map_or(Ok(None), |time| Ok(Some(Int::from(time.month()))))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn hour(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.hours())))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn minute(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.minutes())))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn second(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.secs())))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn micro_second(t: &Option<Duration>) -> Result<Option<Int>> {
+    Ok(t.as_ref().map(|t| i64::from(t.subsec_micros())))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    let t = match t {
+        Some(v) => v,
+        _ => return Ok(None),
+    };
+
+    if t.is_zero() {
+        if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .map(|_| Ok(None))?;
+        }
+        return Ok(Some(0));
+    }
+    Ok(Some(Int::from(t.year())))
 }
 
 #[cfg(test)]
@@ -227,6 +288,34 @@ mod tests {
     }
 
     #[test]
+    fn test_day_of_year() {
+        let cases = vec![
+            ("2018-11-11 00:00:00.000000", Some(315)),
+            ("2018-11-12 00:00:00.000000", Some(316)),
+            ("2018-11-30 00:00:00.000000", Some(334)),
+            ("2018-12-31 00:00:00.000000", Some(365)),
+            ("2016-12-31 00:00:00.000000", Some(366)),
+            ("0000-00-00 00:00:00.000000", None),
+            ("2018-11-00 00:00:00.000000", None),
+            ("2018-00-11 00:00:00.000000", None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let datetime = Some(DateTime::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(datetime.clone())
+                .evaluate(ScalarFuncSig::DayOfYear)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+        let output = RpnFnScalarEvaluator::new()
+            .push_param(None::<DateTime>)
+            .evaluate::<Int>(ScalarFuncSig::DayOfYear)
+            .unwrap();
+        assert_eq!(output, None);
+    }
+
+    #[test]
     fn test_from_days() {
         let cases = vec![
             (ScalarValue::Int(Some(-140)), Some("0000-00-00")), // mysql FROM_DAYS returns 0000-00-00 for any day <= 365.
@@ -282,6 +371,86 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::Month)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_hour_min_sec_micro_sec() {
+        // test hour, minute, second, micro_second
+        let cases: Vec<(&str, i8, i64, i64, i64, i64)> = vec![
+            ("0 00:00:00.0", 0, 0, 0, 0, 0),
+            ("31 11:30:45", 0, 31 * 24 + 11, 30, 45, 0),
+            ("11:30:45.123345", 3, 11, 30, 45, 123000),
+            ("11:30:45.123345", 5, 11, 30, 45, 123350),
+            ("11:30:45.123345", 6, 11, 30, 45, 123345),
+            ("11:30:45.1233456", 6, 11, 30, 45, 123346),
+            ("11:30:45.000010", 6, 11, 30, 45, 10),
+            ("11:30:45.00010", 5, 11, 30, 45, 100),
+            ("-11:30:45.9233456", 0, 11, 30, 46, 0),
+            ("-11:30:45.9233456", 1, 11, 30, 45, 900000),
+            ("272:59:59.94", 2, 272, 59, 59, 940000),
+            ("272:59:59.99", 1, 273, 0, 0, 0),
+            ("272:59:59.99", 0, 273, 0, 0, 0),
+        ];
+
+        for (arg, fsp, h, m, s, ms) in cases {
+            let duration = Some(Duration::parse(arg.as_bytes(), fsp).unwrap());
+            let test_case_func = |sig, res| {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param(duration.clone())
+                    .evaluate::<Int>(sig)
+                    .unwrap();
+                assert_eq!(output, Some(res));
+            };
+            test_case_func(ScalarFuncSig::Hour, h);
+            test_case_func(ScalarFuncSig::Minute, m);
+            test_case_func(ScalarFuncSig::Second, s);
+            test_case_func(ScalarFuncSig::MicroSecond, ms);
+        }
+
+        // test NULL case
+        let test_null_case = |sig| {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(None::<Duration>)
+                .evaluate::<Int>(sig)
+                .unwrap();
+            assert_eq!(output, None);
+        };
+
+        test_null_case(ScalarFuncSig::Hour);
+        test_null_case(ScalarFuncSig::Minute);
+        test_null_case(ScalarFuncSig::Second);
+        test_null_case(ScalarFuncSig::MicroSecond);
+    }
+
+    #[test]
+    fn test_year() {
+        let cases = vec![
+            (Some("0000-00-00 00:00:00"), Some(0i64)),
+            (Some("1-01-01 01:01:01"), Some(1i64)),
+            (Some("2018-01-01 01:01:01"), Some(2018i64)),
+            (Some("2019-01-01 01:01:01"), Some(2019i64)),
+            (Some("2020-01-01 01:01:01"), Some(2020i64)),
+            (Some("2021-01-01 01:01:01"), Some(2021i64)),
+            (Some("2022-01-01 01:01:01"), Some(2022i64)),
+            (Some("2023-01-01 01:01:01"), Some(2023i64)),
+            (Some("2024-01-01 01:01:01"), Some(2024i64)),
+            (Some("2025-01-01 01:01:01"), Some(2025i64)),
+            (Some("2026-01-01 01:01:01"), Some(2026i64)),
+            (Some("2027-01-01 01:01:01"), Some(2027i64)),
+            (Some("2028-01-01 01:01:01"), Some(2028i64)),
+            (Some("2029-01-01 01:01:01"), Some(2029i64)),
+            (None, None),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (time, expect) in cases {
+            let time = time.map(|t| DateTime::parse_datetime(&mut ctx, t, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(time)
+                .evaluate(ScalarFuncSig::Year)
                 .unwrap();
             assert_eq!(output, expect);
         }
