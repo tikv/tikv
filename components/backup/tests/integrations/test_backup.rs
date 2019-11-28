@@ -17,7 +17,7 @@ use kvproto::backup::*;
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
@@ -176,7 +176,7 @@ impl TestSuite {
         backup_ts: TimeStamp,
         path: String,
     ) -> future_mpsc::UnboundedReceiver<BackupResponse> {
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(start_key);
         req.set_end_key(end_key);
         req.start_version = backup_ts.into_inner();
@@ -246,7 +246,7 @@ fn test_backup_and_import() {
             // Prewrite
             let start_ts = suite.alloc_ts();
             let mut mutation = Mutation::default();
-            mutation.op = Op::Put;
+            mutation.set_op(Op::Put);
             mutation.key = k.clone().into_bytes();
             mutation.value = v.clone().into_bytes();
             suite.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
@@ -296,7 +296,7 @@ fn test_backup_and_import() {
     // Use importer to restore backup files.
     let storage = create_storage(&storage_path).unwrap();
     let region = suite.cluster.get_region(b"");
-    let mut sst_meta = SstMeta::new();
+    let mut sst_meta = SstMeta::default();
     sst_meta.region_id = region.get_id();
     sst_meta.set_region_epoch(region.get_region_epoch().clone());
     sst_meta.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
@@ -369,7 +369,7 @@ fn test_backup_meta() {
             // Prewrite
             let start_ts = suite.alloc_ts();
             let mut mutation = Mutation::default();
-            mutation.op = Op::Put;
+            mutation.set_op(Op::Put);
             mutation.key = k.clone().into_bytes();
             mutation.value = v.clone().into_bytes();
             suite.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);

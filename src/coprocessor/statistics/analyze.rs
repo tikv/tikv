@@ -287,7 +287,9 @@ impl SampleCollector {
         }
         if self.rng.gen_range(0, self.count) < self.max_sample_size as u64 {
             let idx = self.rng.gen_range(0, self.max_sample_size);
-            self.samples[idx] = data;
+            // https://github.com/pingcap/tidb/blob/master/statistics/sample.go#L173
+            self.samples.remove(idx);
+            self.samples.push(data);
         }
     }
 }
