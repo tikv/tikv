@@ -856,8 +856,8 @@ impl Snapshot for Snap {
             if plain_file_used(cf_file.cf) {
                 let path = cf_file.path.to_str().unwrap();
                 let batch_size = options.write_batch_size;
-                let cb = |key: &[u8]| {
-                    coprocessor_host.pre_apply_plain_key_from_snapshot(&region, cf, key)
+                let cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
+                    coprocessor_host.pre_apply_plain_keys_from_snapshot(&region, cf, kv)
                 };
                 snap_io::apply_plain_cf_file(
                     path,

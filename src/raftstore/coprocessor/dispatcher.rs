@@ -226,11 +226,16 @@ impl CoprocessorHost {
         }
     }
 
-    pub fn pre_apply_plain_key_from_snapshot(&self, region: &Region, cf: CfName, key: &[u8]) {
+    pub fn pre_apply_plain_keys_from_snapshot(
+        &self,
+        region: &Region,
+        cf: CfName,
+        key: &[(Vec<u8>, Vec<u8>)],
+    ) {
         loop_ob!(
             region,
             &self.registry.apply_snapshot_observers,
-            pre_apply_plain_key,
+            pre_apply_plain_keys,
             cf,
             key
         );
@@ -381,7 +386,12 @@ mod tests {
     }
 
     impl ApplySnapshotObserver for TestCoprocessor {
-        fn pre_apply_plain_key(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &[u8]) {
+        fn pre_apply_plain_keys(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: CfName,
+            _: &[(Vec<u8>, Vec<u8>)],
+        ) {
             self.called.fetch_add(9, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -449,7 +459,7 @@ mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!(&[&ob.called], &[36]);
 
-        host.pre_apply_plain_key_from_snapshot(&region, "default", &[]);
+        host.pre_apply_plain_keys_from_snapshot(&region, "default", &[]);
         assert_all!(&[&ob.called], &[45]);
         host.pre_apply_sst_from_snapshot(&region, "default");
         assert_all!(&[&ob.called], &[55]);

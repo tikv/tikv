@@ -87,7 +87,15 @@ pub trait QueryObserver: Coprocessor {
 
 pub trait ApplySnapshotObserver: Coprocessor {
     /// Hook to call before applying key from plain file.
-    fn pre_apply_plain_key(&self, _: &mut ObserverContext<'_>, _: CfName, _: &[u8]) {}
+    /// This may be invoked multiple times for each plain file, and each time a batch of key-value
+    /// pairs will be passed to the function.
+    fn pre_apply_plain_keys(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: CfName,
+        _: &[(Vec<u8>, Vec<u8>)],
+    ) {
+    }
 
     /// Hook to call before applying sst file. Currently the content of the snapshot can't be
     /// passed to the observer.

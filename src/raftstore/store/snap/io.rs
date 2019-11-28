@@ -104,29 +104,41 @@ pub fn apply_plain_cf_file<F>(
     db: &DB,
     cf: &str,
     batch_size: usize,
-    mut key_callback: F,
+    mut callback: F,
 ) -> Result<(), Error>
 where
-    F: for<'r> FnMut(&'r [u8]),
+    F: for<'r> FnMut(&'r [(Vec<u8>, Vec<u8>)]),
 {
     let mut decoder = BufReader::new(box_try!(File::open(path)));
     let cf_handle = box_try!(get_cf_handle(&db, cf));
+
+    let mut write_to_wb = |batch: &mut Vec<_>, wb: &WriteBatch| {
+        callback(batch);
+        batch
+            .drain(..)
+            .try_for_each(|(k, v)| wb.put_cf(cf_handle, &k, &v))
+    };
+
     let wb = WriteBatch::default();
+    // Collect keys to a vec rather than wb so that we can invoke the callback less times.
+    let mut batch = Vec::with_capacity(batch_size);
+
     loop {
         if stale_detector.is_stale() {
             return Err(Error::Abort);
         }
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
-            if !wb.is_empty() {
+            if !batch.is_empty() {
+                box_try!(write_to_wb(&mut batch, &wb));
                 box_try!(db.write(&wb));
             }
             return Ok(());
         }
         let value = box_try!(decoder.decode_compact_bytes());
-        key_callback(&key);
-        box_try!(wb.put_cf(cf_handle, &key, &value));
-        if wb.data_size() >= batch_size {
+        batch.push((key, value));
+        if batch.len() >= batch_size {
+            box_try!(write_to_wb(&mut batch, &wb));
             box_try!(db.write(&wb));
             wb.clear();
         }
@@ -214,7 +226,11 @@ mod tests {
                         &db1,
                         cf,
                         16,
-                        |k| applied_keys.entry(cf).or_default().push(k.to_owned()),
+                        |v| {
+                            v.to_owned()
+                                .into_iter()
+                                .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))
+                        },
                     )
                     .unwrap();
                 }
@@ -229,8 +245,11 @@ mod tests {
                         &keys::data_key(b"a"),
                         &keys::data_end_key(b"z"),
                         true,
-                        |k, _| {
-                            keys_in_db.entry(cf).or_default().push(k.to_owned());
+                        |k, v| {
+                            keys_in_db
+                                .entry(cf)
+                                .or_default()
+                                .push((k.to_owned(), v.to_owned()));
                             Ok(true)
                         },
                     )
