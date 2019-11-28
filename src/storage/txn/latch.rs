@@ -7,7 +7,8 @@ use std::usize;
 
 use spin::{Mutex, MutexGuard};
 
-const WAITING_LIST_SHRINK_SIZE: usize = 16;
+const WAITING_LIST_SHRINK_SIZE: usize = 8;
+const WAITING_LIST_MAX_CAPACITY: usize = 32;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
@@ -19,7 +20,6 @@ const WAITING_LIST_SHRINK_SIZE: usize = 16;
 #[derive(Clone)]
 struct Latch {
     // store waiting commands
-    // pub waiting: HashMap<usize, VecDeque<u64>>,
     pub waiting: VecDeque<Option<(usize, u64)>>,
 }
 
@@ -27,7 +27,7 @@ impl Latch {
     /// Creates a latch with an empty waiting queue.
     pub fn new() -> Latch {
         Latch {
-            waiting: VecDeque::default(),
+            waiting: VecDeque::new(),
         }
     }
 
@@ -54,16 +54,11 @@ impl Latch {
     }
 
     pub fn wait_for_wake(&mut self, s: usize, cid: u64) {
-        if let Some(item) = self.waiting.back_mut() {
-            if item.is_none() {
-                item.replace((s, cid));
-                return;
-            }
-        }
         self.waiting.push_back(Some((s, cid)));
     }
 
-    pub fn maybe_shrink(&mut self, limit: usize) {
+    pub fn maybe_shrink(&mut self) {
+        // Pop item which is none to make queue not too long.
         while !self.waiting.is_empty() {
             let item = self.waiting.front().unwrap();
             if item.is_none() {
@@ -72,7 +67,7 @@ impl Latch {
                 break;
             }
         }
-        if self.waiting.capacity() > limit * 2 && self.waiting.len() < limit {
+        if self.waiting.capacity() > WAITING_LIST_MAX_CAPACITY && self.waiting.len() < WAITING_LIST_SHRINK_SIZE {
             self.waiting.shrink_to_fit();
         }
     }
@@ -181,7 +176,7 @@ impl Latches {
             }
             // For some hot keys, the waiting list maybe very long, so we should shrink the waiting
             // VecDeque after pop.
-            latch.maybe_shrink(WAITING_LIST_SHRINK_SIZE);
+            latch.maybe_shrink();
         }
         wakeup_list
     }
@@ -191,9 +186,10 @@ impl Latches {
     where
         H: Hash,
     {
+        // TODO: avoid Hasher construct
         let mut s = DefaultHasher::new();
         key.hash(&mut s);
-        // (s.finish() as usize) & (self.size - 1)
+
         s.finish() as usize
     }
 
