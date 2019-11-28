@@ -261,6 +261,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Minute => minute_fn_meta(),
         ScalarFuncSig::Second => second_fn_meta(),
         ScalarFuncSig::MicroSecond => micro_second_fn_meta(),
+        ScalarFuncSig::MonthName => month_name_fn_meta(),
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
         ScalarFuncSig::AbsReal => abs_real_fn_meta(),
