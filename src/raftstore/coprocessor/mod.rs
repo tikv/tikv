@@ -89,7 +89,8 @@ pub trait ApplySnapshotObserver: Coprocessor {
     /// Hook to call before applying key from plain file.
     fn pre_apply_plain_key(&self, _: &mut ObserverContext<'_>, _: CfName, _: &[u8]) {}
 
-    /// Hook to call before applying sst file.
+    /// Hook to call before applying sst file. Currently the content of the snapshot can't be
+    /// passed to the observer.
     fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName) {}
 }
 
