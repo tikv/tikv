@@ -49,7 +49,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     ///
     /// If the listening port is configured, the server will be started lazily.
     builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
-    pub local_addr: SocketAddr,
+    local_addr: SocketAddr,
     // Transport.
     trans: ServerTransport<T, S>,
     raft_router: T,
@@ -251,6 +251,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         }
         Ok(())
     }
+
+    // Return listening address, this may only be used for outer test
+    // to get the real address because we may use "127.0.0.1:0"
+    // in test to avoid port conflict.
+    pub fn listening_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
 }
 
 #[cfg(test)]
@@ -393,7 +400,7 @@ mod tests {
         resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 1, 0), "{:?}", resp);
 
-        *addr.lock().unwrap() = Some(format!("{}", server.local_addr));
+        *addr.lock().unwrap() = Some(format!("{}", server.listening_addr()));
 
         trans.send(msg.clone()).unwrap();
         trans.flush();

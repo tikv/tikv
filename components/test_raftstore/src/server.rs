@@ -223,7 +223,7 @@ impl Simulator for ServerCluster {
             }
         }
         let mut server = server.unwrap();
-        let addr = server.local_addr;
+        let addr = server.listening_addr();
         cfg.server.addr = format!("{}", addr);
         let trans = server.transport();
         let simulate_trans = SimulateTransport::new(trans.clone());

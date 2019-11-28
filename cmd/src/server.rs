@@ -6,7 +6,7 @@
 //! The entry point is `run_tikv`.
 //!
 //! Components are often used to initialize other components, and/or must be explicitly stopped.
-//! We keep these components in the `TiKV` struct.
+//! We keep these components in the `TiKVServer` struct.
 
 use crate::{setup::*, signal_handler};
 use engine::{
@@ -29,7 +29,7 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
-use tikv::raftstore::router::ServerRaftStoreRouter,
+use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::{
     config::{ConfigController, TiKvConfig},
     coprocessor,
@@ -64,8 +64,10 @@ use tikv_util::{
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
 pub fn run_tikv(config: TiKvConfig) {
-    let mut tikv = TiKV::init(config);
-    tikv.connect_to_pd();
+    // Do some prepare works before start.
+    pre_start(&config);
+
+    let mut tikv = TiKVServer::init(config);
 
     let _m = Monitor::default();
 
@@ -86,7 +88,7 @@ pub fn run_tikv(config: TiKvConfig) {
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 /// A complete TiKV server.
-struct TiKV {
+struct TiKVServer {
     config: TiKvConfig,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
@@ -114,55 +116,8 @@ struct Servers {
     importer: Arc<SSTImporter>,
 }
 
-/// A small trait for components which can be trivially stopped. Lets us keep
-/// a list of these in `TiKV`, rather than storing each component individually.
-trait Stop {
-    fn stop(self: Box<Self>);
-}
-
-impl Stop for StatusServer {
-    fn stop(self: Box<Self>) {
-        (*self).stop()
-    }
-}
-
-impl Stop for MetricsFlusher {
-    fn stop(mut self: Box<Self>) {
-        (*self).stop()
-    }
-}
-
-impl<T: fmt::Display + Send + 'static> Stop for Worker<T> {
-    fn stop(mut self: Box<Self>) {
-        if let Some(Err(e)) = Worker::stop(&mut *self).map(JoinHandle::join) {
-            info!(
-                "ignore failure when stopping worker";
-                "err" => ?e
-            );
-        }
-    }
-}
-
-impl TiKV {
-    fn init(config: TiKvConfig) -> TiKV {
-        // Sets the global logger ASAP.
-        // It is okay to use the config w/o `validate()`,
-        // because `initial_logger()` handles various conditions.
-        initial_logger(&config);
-        tikv_util::set_panic_hook(false, &config.storage.data_dir);
-
-        // Print version information.
-        tikv::log_tikv_info();
-        info!(
-            "using config";
-            "config" => serde_json::to_string(&config).unwrap(),
-        );
-
-        config.write_into_metrics();
-
-        // Do some prepare works before start.
-        pre_start(&config);
-
+impl TiKVServer {
+    fn init(mut config: TiKvConfig) -> TiKVServer {
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
         let security_mgr =
@@ -170,10 +125,7 @@ impl TiKV {
                 fatal!("failed to create security manager: {}", e.description())
             }));
 
-        let pd_client = Arc::new(
-            RpcClient::new(&config.pd, security_mgr.clone())
-                .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
-        );
+        let pd_client = Self::connect_to_pd_cluster(&mut config, security_mgr.clone());
 
         let (resolve_worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
             .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
@@ -181,7 +133,7 @@ impl TiKV {
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
 
-        TiKV {
+        TiKVServer {
             config,
             security_mgr,
             pd_client,
@@ -195,19 +147,28 @@ impl TiKV {
         }
     }
 
-    fn connect_to_pd(&mut self) {
-        let cluster_id = self
-            .pd_client
+    fn connect_to_pd_cluster(
+        config: &mut TiKvConfig,
+        security_mgr: Arc<SecurityManager>,
+    ) -> Arc<RpcClient> {
+        let pd_client = Arc::new(
+            RpcClient::new(&config.pd, security_mgr.clone())
+                .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
+        );
+
+        let cluster_id = pd_client
             .get_cluster_id()
             .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
         if cluster_id == DEFAULT_CLUSTER_ID {
             fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
         }
-        self.config.server.cluster_id = cluster_id;
+        config.server.cluster_id = cluster_id;
         info!(
             "connect to PD cluster";
             "cluster_id" => cluster_id
         );
+
+        pd_client
     }
 
     fn init_fs(&self) {
@@ -390,7 +351,7 @@ impl TiKV {
             &self.config.raft_store,
             self.pd_client.clone(),
         );
-        let cfg_controller = ConfigController::new(cfg.clone());
+        let cfg_controller = ConfigController::new(self.config.clone());
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -612,7 +573,21 @@ impl TiKV {
 /// If the max open file descriptor limit is not high enough to support
 /// the main database and the raft database.
 fn pre_start(config: &TiKvConfig) {
-    // Before any startup, check system configuration and environment variables.
+    // Sets the global logger ASAP.
+    // It is okay to use the config w/o `validate()`,
+    // because `initial_logger()` handles various conditions.
+    initial_logger(&config);
+    tikv_util::set_panic_hook(false, &config.storage.data_dir);
+
+    // Print version information.
+    tikv::log_tikv_info();
+    info!(
+        "using config";
+        "config" => serde_json::to_string(&config).unwrap(),
+    );
+
+    config.write_into_metrics();
+
     check_system_config(&config);
     check_environment_variables();
 
@@ -659,5 +634,34 @@ fn check_system_config(config: &TiKvConfig) {
             "path" => &config.raft_store.raftdb_path,
             "err" => %e
         );
+    }
+}
+
+/// A small trait for components which can be trivially stopped. Lets us keep
+/// a list of these in `TiKV`, rather than storing each component individually.
+trait Stop {
+    fn stop(self: Box<Self>);
+}
+
+impl Stop for StatusServer {
+    fn stop(self: Box<Self>) {
+        (*self).stop()
+    }
+}
+
+impl Stop for MetricsFlusher {
+    fn stop(mut self: Box<Self>) {
+        (*self).stop()
+    }
+}
+
+impl<T: fmt::Display + Send + 'static> Stop for Worker<T> {
+    fn stop(mut self: Box<Self>) {
+        if let Some(Err(e)) = Worker::stop(&mut *self).map(JoinHandle::join) {
+            info!(
+                "ignore failure when stopping worker";
+                "err" => ?e
+            );
+        }
     }
 }
