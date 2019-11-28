@@ -411,7 +411,7 @@ dependencies = [
  "slog-global",
  "tikv",
  "tikv_util",
- "toml",
+ "toml 0.4.10",
  "url 2.1.0",
  "vlog",
 ]
@@ -429,6 +429,24 @@ dependencies = [
  "rand 0.7.2",
  "static_assertions 1.1.0",
  "tikv_alloc",
+]
+
+[[package]]
+name = "config_derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
+]
+
+[[package]]
+name = "config_template"
+version = "0.1.0"
+dependencies = [
+ "config_derive",
+ "tikv_util",
+ "toml 0.5.5",
 ]
 
 [[package]]
@@ -747,7 +765,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time",
- "toml",
+ "toml 0.4.10",
 ]
 
 [[package]]
@@ -774,7 +792,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "time",
- "toml",
+ "toml 0.4.10",
 ]
 
 [[package]]
@@ -3494,7 +3512,7 @@ dependencies = [
  "tokio-sync",
  "tokio-threadpool",
  "tokio-timer",
- "toml",
+ "toml 0.5.5",
  "url 2.1.0",
  "utime",
  "uuid",
@@ -3560,7 +3578,7 @@ dependencies = [
  "tokio-sync",
  "tokio-threadpool",
  "tokio-timer",
- "toml",
+ "toml 0.4.10",
  "url 2.1.0",
  "utime",
  "zeroize",
@@ -3826,6 +3844,15 @@ name = "toml"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "758664fc71a3a69038656bee8b6be6477d2a6c315a6b81f7081f591bffa4111f"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "toml"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01d1404644c8b12b16bfcffa4322403a91a451584daaaa7c28d3152e6cbc98cf"
 dependencies = [
  "serde",
 ]

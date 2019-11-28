@@ -12,8 +12,10 @@ use std::i32;
 use std::io::Error as IoError;
 use std::io::Write;
 use std::path::Path;
+use std::str::FromStr;
 use std::usize;
 
+use config_template::{ConfigValue, Configable, PartialChange};
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -1323,28 +1325,45 @@ impl ReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configable)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
+    #[config(not_support)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
+    #[config(not_support)]
     pub log_file: String,
+    #[config(not_support)]
     pub log_rotation_timespan: ReadableDuration,
+    #[config(not_support)]
     pub panic_when_unexpected_key_or_data: bool,
+    #[config(not_support)]
     pub readpool: ReadPoolConfig,
+    #[config(not_support)]
     pub server: ServerConfig,
+    #[config(not_support)]
     pub storage: StorageConfig,
+    #[config(not_support)]
     pub pd: PdConfig,
+    #[config(not_support)]
     pub metric: MetricConfig,
+    #[config(sub_module)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
+    #[config(sub_module)]
     pub coprocessor: CopConfig,
+    #[config(not_support)]
     pub rocksdb: DbConfig,
+    #[config(not_support)]
     pub raftdb: RaftDbConfig,
+    #[config(not_support)]
     pub security: SecurityConfig,
+    #[config(not_support)]
     pub import: ImportConfig,
+    #[config(sub_module)]
     pub pessimistic_txn: PessimisticTxnConfig,
+    #[config(sub_module)]
     pub gc: GCConfig,
 }
 
@@ -1649,6 +1668,99 @@ pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
     Ok(())
 }
 
+pub trait ConfigManager {
+    fn dispatch(&mut self, _: PartialChange);
+}
+
+#[derive(Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub enum Module {
+    Raftstore,
+    Rocksdb,
+    Raftdb,
+    SplitChecker,
+    Coprocessor,
+    GcWorker,
+    PessimisticTxn,
+    ReadPool,
+    Server,
+    Storage,
+    Unknown,
+}
+
+impl FromStr for Module {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let res = match s {
+            "raftstore" => Module::Raftstore,
+            "rocksdb" => Module::Rocksdb,
+            "raftdb" => Module::Raftdb,
+            "coprocessor" => Module::SplitChecker,
+            "server" => Module::Server,
+            "pessimistic_txn" => Module::PessimisticTxn,
+            "gc" => Module::GcWorker,
+            // TODO: add more
+            _ => Module::Unknown,
+        };
+        Ok(res)
+    }
+}
+
+// TODO: Error handle
+
+pub struct ConfigController {
+    cluster_id: u64,
+    component_id: u64,
+    version_local: u64,
+    version_global: u64,
+    current_config: TiKvConfig,
+    config_mgrs: HashMap<Module, Box<dyn ConfigManager>>,
+}
+
+impl ConfigController {
+    pub fn new(cluster_id: u64, component_id: u64, cfg: TiKvConfig) -> Self {
+        ConfigController {
+            cluster_id,
+            component_id,
+            version_local: 0,
+            version_global: 0,
+            current_config: cfg,
+            config_mgrs: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, module: Module, cfg_mgr: Box<dyn ConfigManager>) {
+        self.config_mgrs.insert(module, cfg_mgr);
+    }
+
+    pub fn dispatch_update(&mut self, incomming: String) -> Result<(), toml::de::Error> {
+        let mut tikv_cfg = toml::from_str::<TiKvConfig>(&incomming)?;
+        let _ = tikv_cfg.validate();
+        let mut iter = self.current_config.diff(tikv_cfg).into_iter();
+        while let Some((module, ConfigValue::Module(diff))) = iter.next() {
+            if diff.len() != 0 {
+                if let Some(mgr) = self
+                    .config_mgrs
+                    .get_mut(&Module::from_str(&module).unwrap())
+                {
+                    mgr.dispatch(diff.clone());
+                    self.update_sub_module(&module, diff);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn update_sub_module(&mut self, module: &str, diff: PartialChange) {
+        match module {
+            "raftstore" => self.current_config.raft_store.update(diff),
+            "coprocessor" => self.current_config.coprocessor.update(diff),
+            "pessimistic_txn" => self.current_config.pessimistic_txn.update(diff),
+            "gc" => self.current_config.gc.update(diff),
+            _ => unimplemented!(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::Builder;
@@ -1656,6 +1768,15 @@ mod tests {
     use super::*;
     use slog::Level;
     use toml;
+
+    #[test]
+    fn test_config_controller_update() {
+        let mut cfg_control = ConfigController::new(TiKvConfig::default());
+        let mut cfg = TiKvConfig::default();
+        cfg.raft_store.raftdb_path = "abc".to_owned();
+        let cfg_str = toml::to_string(&cfg.raft_store).unwrap();
+        cfg_control.update(cfg_str);
+    }
 
     #[test]
     fn test_check_critical_cfg_with() {

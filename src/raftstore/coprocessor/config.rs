@@ -1,9 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::Result;
+use config_template::Configable;
 use tikv_util::config::ReadableSize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configable)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {

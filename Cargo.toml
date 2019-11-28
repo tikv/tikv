@@ -160,6 +160,7 @@ members = [
   "components/tikv_alloc",
   "components/match_template",
   "components/codec",
+  "components/config_template",
   "components/panic_hook",
   "components/tipb_helper",
   "components/log_wrappers",

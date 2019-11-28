@@ -1,0 +1,14 @@
+[package]
+name = "config_template"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[lib]
+name = "config_template"
+
+[dependencies]
+toml = "0.5.5"
+
+config_derive = { path = "./config_derive" }
+tikv_util = { path = "../tikv_util" }

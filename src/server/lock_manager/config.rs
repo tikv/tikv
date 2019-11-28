@@ -1,11 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use config_template::Configable;
 use std::error::Error;
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configable)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    #[config(not_support)]
     pub enabled: bool,
     pub wait_for_lock_timeout: u64,
     pub wake_up_delay_duration: u64,

@@ -12,7 +12,7 @@ use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
 use engine::*;
-use tikv::config::TiKvConfig;
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
@@ -217,6 +217,7 @@ impl Simulator for NodeCluster {
             store_meta,
             coprocessor_host,
             importer,
+            ConfigController::new(TiKvConfig::default()),
         )?;
         assert!(engines
             .kv
