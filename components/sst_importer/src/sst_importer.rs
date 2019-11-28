@@ -7,12 +7,11 @@ use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
 use engine_traits::Iterator;
+use engine_traits::{IOLimiter, LimitReader};
 use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::{SeekKey, SstReader, SstWriter, SstWriterBuilder};
 use external_storage::create_storage;
@@ -92,16 +91,16 @@ impl SSTImporter {
         url: &str,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limit: u64,
+        speed_limiter: Option<Arc<E::IOLimiter>>,
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
             "url" => url,
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
-            "speed_limit" => speed_limit,
+            "speed_limit" => speed_limiter.as_ref().map_or(0, |l| l.get_bytes_per_second()),
         );
-        match self.do_download::<E>(meta, url, name, rewrite_rule, speed_limit) {
+        match self.do_download::<E>(meta, url, name, rewrite_rule, speed_limiter) {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "range" => ?r);
                 Ok(r)
@@ -119,23 +118,16 @@ impl SSTImporter {
         url: &str,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limit: u64,
+        speed_limiter: Option<Arc<E::IOLimiter>>,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
-
-        // open the external storage and limit the read speed.
-        let limiter = if speed_limit > 0 {
-            Some(Arc::new(IOLimiter::new(speed_limit)))
-        } else {
-            None
-        };
 
         // prepare to download the file from the external_storage
         let ext_storage = create_storage(url)?;
         let mut ext_reader = ext_storage
             .read(name)
             .map_err(|e| Error::CannotReadExternalStorage(url.to_owned(), name.to_owned(), e))?;
-        let mut ext_reader = LimitReader::new(limiter, &mut ext_reader);
+        let mut ext_reader = LimitReader::new(speed_limiter, &mut ext_reader);
 
         // do the I/O copy from external_storage to the local file.
         {
@@ -196,7 +188,7 @@ impl SSTImporter {
                 // the SST is empty, so no need to iterate at all (should be impossible?)
                 return Ok(Some(meta.get_range().clone()));
             }
-            let start_key = keys::origin_key(iter.key()?);
+            let start_key = keys::origin_key(iter.key());
             if is_before_start_bound(start_key, &range_start) {
                 // SST's start is before the range to consume, so needs to iterate to skip over
                 return Ok(None);
@@ -205,7 +197,7 @@ impl SSTImporter {
 
             // seek to end and fetch the last (inclusive) key of the SST.
             iter.seek(SeekKey::End);
-            let last_key = keys::origin_key(iter.key()?);
+            let last_key = keys::origin_key(iter.key());
             if is_after_end_bound(last_key, &range_end) {
                 // SST's end is after the range to consume
                 return Ok(None);
@@ -236,7 +228,7 @@ impl SSTImporter {
             Bound::Excluded(_) => unreachable!(),
         };
         while iter.valid() {
-            let old_key = keys::origin_key(iter.key()?);
+            let old_key = keys::origin_key(iter.key());
             if is_after_end_bound(old_key, &range_end) {
                 break;
             }
@@ -250,7 +242,7 @@ impl SSTImporter {
 
             key.truncate(new_prefix_data_key_len);
             key.extend_from_slice(&old_key[old_prefix.len()..]);
-            sst_writer.put(&key, iter.value()?)?;
+            sst_writer.put(&key, iter.value())?;
             iter.next();
             if first_key.is_none() {
                 first_key = Some(keys::origin_key(&key).to_vec());
@@ -409,7 +401,7 @@ pub struct ImportFile {
     meta: SstMeta,
     path: ImportPath,
     file: Option<File>,
-    digest: crc32::Digest,
+    digest: crc32fast::Hasher,
 }
 
 impl ImportFile {
@@ -422,13 +414,13 @@ impl ImportFile {
             meta,
             path,
             file: Some(file),
-            digest: crc32::Digest::new(crc32::IEEE),
+            digest: crc32fast::Hasher::new(),
         })
     }
 
     pub fn append(&mut self, data: &[u8]) -> Result<()> {
         self.file.as_mut().unwrap().write_all(data)?;
-        self.digest.write(data);
+        self.digest.update(data);
         Ok(())
     }
 
@@ -451,7 +443,7 @@ impl ImportFile {
     }
 
     fn validate(&self) -> Result<()> {
-        let crc32 = self.digest.sum32();
+        let crc32 = self.digest.clone().finalize();
         let expect = self.meta.get_crc32();
         if crc32 != expect {
             let reason = format!("crc32 {}, expect {}", crc32, expect);
@@ -714,7 +706,7 @@ mod tests {
     }
 
     fn new_rewrite_rule(old_key_prefix: &[u8], new_key_prefix: &[u8]) -> RewriteRule {
-        let mut rule = RewriteRule::new();
+        let mut rule = RewriteRule::default();
         rule.set_old_key_prefix(old_key_prefix.to_vec());
         rule.set_new_key_prefix(new_key_prefix.to_vec());
         rule
@@ -735,7 +727,7 @@ mod tests {
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
                 &RewriteRule::default(),
-                0,
+                None,
             )
             .unwrap()
             .unwrap();
@@ -782,7 +774,7 @@ mod tests {
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t567"),
-                0,
+                None,
             )
             .unwrap()
             .unwrap();
@@ -826,7 +818,7 @@ mod tests {
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t9102"),
-                0,
+                None,
             )
             .unwrap()
             .unwrap();
@@ -872,7 +864,7 @@ mod tests {
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
                 &RewriteRule::default(),
-                0,
+                None,
             )
             .unwrap()
             .unwrap();
@@ -914,7 +906,7 @@ mod tests {
                 &format!("local://{}", ext_sst_dir.path().display()),
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t5"),
-                0,
+                None,
             )
             .unwrap()
             .unwrap();
@@ -948,7 +940,7 @@ mod tests {
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir).unwrap();
 
-        let mut meta = SstMeta::new();
+        let mut meta = SstMeta::default();
         meta.set_uuid(vec![0u8; 16]);
 
         let result = importer.download::<TestEngine>(
@@ -956,7 +948,7 @@ mod tests {
             &format!("local://{}", ext_sst_dir.path().display()),
             "sample.sst",
             &RewriteRule::default(),
-            0,
+            None,
         );
         match &result {
             Err(Error::EngineTraits(TraitError::Engine(msg))) if msg.starts_with("Corruption:") => {
@@ -979,7 +971,7 @@ mod tests {
             &format!("local://{}", ext_sst_dir.path().display()),
             "sample.sst",
             &RewriteRule::default(),
-            0,
+            None,
         );
 
         match result {
@@ -999,7 +991,7 @@ mod tests {
             &format!("local://{}", ext_sst_dir.path().display()),
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy"),
-            0,
+            None,
         );
 
         match &result {
