@@ -132,15 +132,6 @@ pub trait Snapshot: Send + Clone {
     fn get_data_version(&self) -> Option<u64> {
         None
     }
-
-    /// Checks whether underlying data is unchanged according to a previously retrieved version.
-    /// If data is unchanged, returns `true`.
-    ///
-    /// If the engine does not support data version, `false` is always returned.
-    #[inline]
-    fn is_data_version_matches(&self, _version: u64) -> bool {
-        false
-    }
 }
 
 pub trait Iterator: Send {

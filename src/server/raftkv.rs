@@ -420,15 +420,6 @@ impl Snapshot for RegionSnapshot {
     fn get_data_version(&self) -> Option<u64> {
         self.get_apply_index().ok()
     }
-
-    #[inline]
-    fn is_data_version_matches(&self, target_version: u64) -> bool {
-        if let Ok(version) = self.get_apply_index() {
-            target_version == version
-        } else {
-            false
-        }
-    }
 }
 
 impl EngineIterator for RegionIterator {
