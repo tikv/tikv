@@ -97,7 +97,8 @@ pub fn build_sst_cf_file(
     Ok(stats)
 }
 
-/// Apply the given snapshot file into a column family.
+/// Apply the given snapshot file into a column family. `callback` will be invoked for each batch of
+/// key value pairs written to db.
 pub fn apply_plain_cf_file<F>(
     path: &str,
     stale_detector: &impl StaleDetector,
