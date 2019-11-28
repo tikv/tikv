@@ -10,6 +10,8 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
+use engine_traits::KvEngine;
+use engine_rocks::RocksEngine;
 
 use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::raftstore::store::fsm::PeerFsm;
@@ -21,9 +23,9 @@ use tikv_util::escape;
 use super::RegionSnapshot;
 
 #[derive(Debug, Clone)]
-pub struct ReadResponse {
+pub struct ReadResponse<E: KvEngine> {
     pub response: RaftCmdResponse,
-    pub snapshot: Option<RegionSnapshot>,
+    pub snapshot: Option<RegionSnapshot<E>>,
 }
 
 #[derive(Debug)]
@@ -31,7 +33,7 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
-pub type ReadCallback = Box<dyn FnOnce(ReadResponse) + Send>;
+pub type ReadCallback<E> = Box<dyn FnOnce(ReadResponse<E>) + Send>;
 pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 
 /// Variants of callbacks for `Msg`.
@@ -39,16 +41,16 @@ pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 ///         `GetRequest` and `SnapRequest`
 ///  - `Write`: a callback for write only requests including `AdminRequest`
 ///          `PutRequest`, `DeleteRequest` and `DeleteRangeRequest`.
-pub enum Callback {
+pub enum Callback<E: KvEngine> {
     /// No callback.
     None,
     /// Read callback.
-    Read(ReadCallback),
+    Read(ReadCallback<E>),
     /// Write callback.
     Write(WriteCallback),
 }
 
-impl Callback {
+impl<E> Callback<E> where E: KvEngine {
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
@@ -66,7 +68,7 @@ impl Callback {
         }
     }
 
-    pub fn invoke_read(self, args: ReadResponse) {
+    pub fn invoke_read(self, args: ReadResponse<E>) {
         match self {
             Callback::Read(read) => read(args),
             other => panic!("expect Callback::Read(..), got {:?}", other),
@@ -81,7 +83,7 @@ impl Callback {
     }
 }
 
-impl fmt::Debug for Callback {
+impl<E> fmt::Debug for Callback<E> where E: KvEngine {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Callback::None => write!(fmt, "Callback::None"),
@@ -171,7 +173,7 @@ pub enum CasualMessage {
         // It's an encoded key.
         // TODO: support meta key.
         split_keys: Vec<Vec<u8>>,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     },
 
     /// Hash result of ComputeHash command.
@@ -266,12 +268,12 @@ impl fmt::Debug for CasualMessage {
 pub struct RaftCommand {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
-    pub callback: Callback,
+    pub callback: Callback<RocksEngine>,
 }
 
 impl RaftCommand {
     #[inline]
-    pub fn new(request: RaftCmdRequest, callback: Callback) -> RaftCommand {
+    pub fn new(request: RaftCmdRequest, callback: Callback<RocksEngine>) -> RaftCommand {
         RaftCommand {
             request,
             callback,

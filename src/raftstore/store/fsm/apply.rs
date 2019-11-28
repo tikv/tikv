@@ -61,11 +61,11 @@ const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 pub struct PendingCmd {
     pub index: u64,
     pub term: u64,
-    pub cb: Option<Callback>,
+    pub cb: Option<Callback<RocksEngine>>,
 }
 
 impl PendingCmd {
-    fn new(index: u64, term: u64, cb: Callback) -> PendingCmd {
+    fn new(index: u64, term: u64, cb: Callback<RocksEngine>) -> PendingCmd {
         PendingCmd {
             index,
             term,
@@ -231,7 +231,7 @@ impl ExecContext {
 
 struct ApplyCallback {
     region: Region,
-    cbs: Vec<(Option<Callback>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<RocksEngine>>, RaftCmdResponse)>,
 }
 
 impl ApplyCallback {
@@ -249,7 +249,7 @@ impl ApplyCallback {
         }
     }
 
-    fn push(&mut self, cb: Option<Callback>, resp: RaftCmdResponse) {
+    fn push(&mut self, cb: Option<Callback<RocksEngine>>, resp: RaftCmdResponse) {
         self.cbs.push((cb, resp));
     }
 }
@@ -489,7 +489,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
 }
 
-pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
+pub fn notify_req_region_removed(region_id: u64, cb: Callback<RocksEngine>) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
     cb.invoke_with_response(resp);
@@ -507,7 +507,7 @@ fn notify_stale_command(region_id: u64, peer_id: u64, term: u64, mut cmd: Pendin
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback) {
+pub fn notify_stale_req(term: u64, cb: Callback<RocksEngine>) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
     cb.invoke_with_response(resp);
 }
@@ -832,7 +832,7 @@ impl ApplyDelegate {
         }
     }
 
-    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback> {
+    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback<RocksEngine>> {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
@@ -2165,11 +2165,11 @@ pub struct Proposal {
     is_conf_change: bool,
     index: u64,
     term: u64,
-    pub cb: Callback,
+    pub cb: Callback<RocksEngine>,
 }
 
 impl Proposal {
-    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback) -> Proposal {
+    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<RocksEngine>) -> Proposal {
         Proposal {
             is_conf_change,
             index,

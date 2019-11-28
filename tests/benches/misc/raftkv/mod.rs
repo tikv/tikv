@@ -14,7 +14,7 @@ use engine;
 use engine::rocks;
 use engine::rocks::DB;
 use engine::{ALL_CFS, CF_DEFAULT};
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksSnapshot, RocksEngine};
 use engine_traits::Snapshot;
 use tikv::raftstore::store::{
     cmd_resp, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
@@ -69,7 +69,7 @@ impl RaftStoreRouter for SyncBenchRouter {
         Ok(())
     }
 
-    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> Result<()> {
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback<RocksEngine>) -> Result<()> {
         self.invoke(RaftCommand::new(req, cb));
         Ok(())
     }
@@ -106,8 +106,8 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     };
 
     b.iter(|| {
-        let cb1: EngineCallback<RegionSnapshot> =
-            Box::new(move |(_, res): (CbContext, EngineResult<RegionSnapshot>)| {
+        let cb1: EngineCallback<RegionSnapshot<RocksEngine>> =
+            Box::new(move |(_, res): (CbContext, EngineResult<RegionSnapshot<RocksEngine>>)| {
                 assert!(res.is_ok());
             });
         let cb2: EngineCallback<CmdRes> =
@@ -116,7 +116,7 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
                     cb1((ctx, Ok(snap)));
                 }
             });
-        let cb: Callback = Callback::Read(Box::new(move |resp: ReadResponse| {
+        let cb: Callback<RocksEngine> = Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
             let res = CmdRes::Snap(resp.snapshot.unwrap());
             cb2((CbContext::new(), Ok(res)));
         }));
@@ -142,7 +142,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     ctx.set_region_epoch(region.get_region_epoch().clone());
     ctx.set_peer(leader.clone());
     b.iter(|| {
-        let on_finished: EngineCallback<RegionSnapshot> = Box::new(move |results| {
+        let on_finished: EngineCallback<RegionSnapshot<RocksEngine>> = Box::new(move |results| {
             let _ = test::black_box(results);
         });
         kv.async_snapshot(&ctx, on_finished).unwrap();
