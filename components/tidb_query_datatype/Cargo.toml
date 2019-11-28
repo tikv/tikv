@@ -6,8 +6,8 @@ publish = false
 description = "TiKV query engine data types"
 
 [dependencies]
-tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
 bitflags = "1.0"
-num-traits = "0.2"
 failure = "0.1"
+num-traits = "0.2"
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
+tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
