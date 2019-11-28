@@ -25,7 +25,7 @@ impl DetectGenerator {
     fn generate(&mut self, n: u64) -> Vec<WaitForEntry> {
         let mut entries = Vec::with_capacity(n as usize);
         (0..n).for_each(|_| {
-            let mut entry = WaitForEntry::new();
+            let mut entry = WaitForEntry::default();
             entry.set_txn(self.timestamp);
             let mut wait_for_txn = self.timestamp;
             while wait_for_txn == self.timestamp {

@@ -3,9 +3,8 @@ use std::sync::atomic::*;
 use futures::future::*;
 use futures::prelude::*;
 use futures::sync::mpsc;
-use grpcio::*;
-use kvproto::backup::{BackupRequest, BackupResponse};
-use kvproto::backup_grpc::*;
+use grpcio::{self, *};
+use kvproto::backup::*;
 use tikv_util::worker::*;
 
 use super::Task;
@@ -56,7 +55,7 @@ impl Backup for Service {
             Ok(resp) => Ok((resp, WriteFlags::default())),
             Err(e) => {
                 error!("backup send failed"; "error" => ?e);
-                Err(Error::RpcFailure(RpcStatus::new(
+                Err(grpcio::Error::RpcFailure(RpcStatus::new(
                     RpcStatusCode::UNKNOWN,
                     Some(format!("{:?}", e)),
                 )))
@@ -132,7 +131,7 @@ mod tests {
         }
 
         let now = alloc_ts();
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![b'5']);
         req.set_start_version(now.into_inner());

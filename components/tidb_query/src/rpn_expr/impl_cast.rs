@@ -101,7 +101,7 @@ fn get_cast_fn_rpn_meta(
             }
         }
         (EvalType::Real, EvalType::Bytes) => {
-            if from_field_type.tp() == FieldTypeTp::Float {
+            if from_field_type.as_accessor().tp() == FieldTypeTp::Float {
                 cast_float_real_as_string_fn_meta()
             } else {
                 cast_any_as_string_fn_meta::<Real>()
@@ -923,6 +923,7 @@ fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: &Option<Bytes>) -> Resul
         Some(val) => {
             if extra
                 .ret_field_type
+                .as_accessor()
                 .flag()
                 .contains(FieldTypeFlag::PARSE_TO_JSON)
             {
