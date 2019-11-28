@@ -67,7 +67,9 @@ impl Latch {
                 break;
             }
         }
-        if self.waiting.capacity() > WAITING_LIST_MAX_CAPACITY && self.waiting.len() < WAITING_LIST_SHRINK_SIZE {
+        if self.waiting.capacity() > WAITING_LIST_MAX_CAPACITY
+            && self.waiting.len() < WAITING_LIST_SHRINK_SIZE
+        {
             self.waiting.shrink_to_fit();
         }
     }
