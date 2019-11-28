@@ -13,5 +13,5 @@ path = "mod.rs"
 [dependencies]
 byteorder = "1"
 failure = "0.1"
-tikv_util = { path = "../../components/tikv_util" }
 tidb_query = { path = "../../components/tidb_query" }
+tikv_util = { path = "../../components/tikv_util" }

@@ -5,9 +5,9 @@ edition = "2018"
 publish = false
 
 [dependencies]
-libc = "0.2"
 byteorder = "1.2"
 failure = "0.1"
+libc = "0.2"
 static_assertions = { version = "1.0", features = ["nightly"] }
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
 

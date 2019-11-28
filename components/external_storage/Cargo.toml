@@ -5,10 +5,10 @@ edition = "2018"
 publish = false
 
 [dependencies]
+rand = "0.7"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tempfile = "3.0"
-rand = "0.7"
-url = "2.0"
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
+url = "2.0"
