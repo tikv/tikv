@@ -399,6 +399,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Right => right_fn_meta(),
         ScalarFuncSig::LocateBinary2Args => locate_binary_2_args_fn_meta(),
         ScalarFuncSig::LocateBinary3Args => locate_binary_3_args_fn_meta(),
+        ScalarFuncSig::Elt => elt_fn_meta(),
         ScalarFuncSig::Space => space_fn_meta(),
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
