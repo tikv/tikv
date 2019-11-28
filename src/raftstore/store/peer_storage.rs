@@ -1635,6 +1635,7 @@ pub fn maybe_upgrade_from_2_to_3(
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::coprocessor::CoprocessorHost;
     use crate::raftstore::store::fsm::apply::compact_raft_log;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
@@ -1960,7 +1961,14 @@ mod tests {
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
-        let runner = RegionRunner::new(s.engines.clone(), mgr, 0, true, Duration::from_secs(0));
+        let runner = RegionRunner::new(
+            s.engines.clone(),
+            mgr,
+            0,
+            true,
+            Duration::from_secs(0),
+            Arc::new(CoprocessorHost::default()),
+        );
         worker.start(runner).unwrap();
         let snap = s.snapshot(0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -2283,6 +2291,7 @@ mod tests {
             0,
             true,
             Duration::from_secs(0),
+            Arc::new(CoprocessorHost::default()),
         );
         worker.start(runner).unwrap();
         assert!(s1.snapshot(0).is_err());
