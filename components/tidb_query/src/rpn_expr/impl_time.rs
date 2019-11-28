@@ -433,24 +433,16 @@ mod tests {
         ];
 
         let modes = vec![
-            // Vec<[(Flag, SqlMode, is_ok(bool), has_warning(bool))]>
-            (Flag::empty(), SqlMode::empty(), true, true),
+            (Flag::empty(), SqlMode::empty(), true),
             (
                 Flag::IN_UPDATE_OR_DELETE_STMT,
                 SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES,
-                false,
-                false,
-            ),
-            (
-                Flag::IN_UPDATE_OR_DELETE_STMT,
-                SqlMode::STRICT_ALL_TABLES,
-                true,
                 false,
             ),
         ];
 
         for (lhs, rhs) in invalid_zero_cases {
-            for (flag, sql_mode, is_ok, has_warning) in modes {
+            for &(flag, sql_mode, is_ok) in &modes {
                 let mut cfg = EvalConfig::new();
                 cfg.set_flag(flag).set_sql_mode(sql_mode);
 
@@ -466,12 +458,10 @@ mod tests {
                     .evaluate::<Int>(ScalarFuncSig::DateDiff);
 
                 if is_ok {
-                    assert_eq!(result.unwrap(), None);
+                    assert!(result.unwrap().is_none());
                 } else {
                     assert!(result.is_err());
                 }
-
-                assert_eq!(!ctx.take_warnings().warnings.is_empty(), has_warning);
             }
         }
 
