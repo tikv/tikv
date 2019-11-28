@@ -420,10 +420,10 @@ mod tests {
         }
 
         let invalid_zero_cases = vec![
-            (
-                Some("0000-00-00 23:59:59.999999"),
-                Some("2018-02-02 00:00:00.000000"),
-            ),
+            // (
+            //     Some("0000-00-00 23:59:59.999999"),
+            //     Some("2018-02-02 00:00:00.000000"),
+            // ),
             (
                 Some("2018-02-01 23:59:59.999999"),
                 Some("2018-00-00 23:59:59.999999"),
@@ -433,16 +433,24 @@ mod tests {
         ];
 
         let modes = vec![
-            (Flag::empty(), SqlMode::empty(), true),
+            // Vec<(flag, sql_mode, result_is_ok, has_warnings)>
+            (Flag::empty(), SqlMode::empty(), true, false),
             (
                 Flag::IN_UPDATE_OR_DELETE_STMT,
-                SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES,
+                SqlMode::NO_ZERO_IN_DATE | SqlMode::STRICT_ALL_TABLES,
                 false,
+                false,
+            ),
+            (
+                Flag::IN_UPDATE_OR_DELETE_STMT,
+                SqlMode::NO_ZERO_IN_DATE,
+                true,
+                true,
             ),
         ];
 
         for (lhs, rhs) in invalid_zero_cases {
-            for &(flag, sql_mode, is_ok) in &modes {
+            for &(flag, sql_mode, is_ok, has_warnings) in &modes {
                 let mut cfg = EvalConfig::new();
                 cfg.set_flag(flag).set_sql_mode(sql_mode);
 
@@ -451,17 +459,19 @@ mod tests {
                 let arg0 = lhs.map(|inner| Time::parse_datetime(&mut ctx, inner, 6, true).unwrap());
                 let arg1 = rhs.map(|inner| Time::parse_datetime(&mut ctx, inner, 6, true).unwrap());
 
-                let result = RpnFnScalarEvaluator::new()
+                let (result, mut ctx) = RpnFnScalarEvaluator::new()
                     .context(ctx)
                     .push_param(arg0)
                     .push_param(arg1)
-                    .evaluate::<Int>(ScalarFuncSig::DateDiff);
+                    .evaluate_and_barf_context::<Int>(ScalarFuncSig::DateDiff);
 
                 if is_ok {
                     assert!(result.unwrap().is_none());
                 } else {
                     assert!(result.is_err());
                 }
+
+                assert!(!ctx.take_warnings().warnings.is_empty(), has_warnings);
             }
         }
 

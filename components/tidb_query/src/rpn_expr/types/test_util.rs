@@ -133,8 +133,11 @@ impl RpnFnScalarEvaluator {
         (result, context)
     }
 
-    /// Evaluates the given function by using collected parameters.
-    pub fn evaluate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>>
+    /// Like `evaluate`, but return a tuple (result, context)
+    pub fn evaluate_and_barf_context<T: Evaluable>(
+        self,
+        sig: ScalarFuncSig,
+    ) -> (Result<Option<T>>, EvalContext)
     where
         Option<T>: From<ScalarValue>,
     {
@@ -142,7 +145,15 @@ impl RpnFnScalarEvaluator {
             Some(ft) => ft.clone(),
             None => T::EVAL_TYPE.into_certain_field_type_tp_for_test().into(),
         };
-        let result = self.evaluate_raw(return_field_type, sig).0;
-        result.map(|v| v.into())
+        let (result, ctx) = self.evaluate_raw(return_field_type, sig);
+        (result.map(|v| v.into()), ctx)
+    }
+
+    /// Evaluates the given function by using collected parameters.
+    pub fn evaluate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>>
+    where
+        Option<T>: From<ScalarValue>,
+    {
+        self.evaluate_and_barf_context(sig).0
     }
 }
