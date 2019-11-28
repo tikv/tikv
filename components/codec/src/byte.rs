@@ -109,23 +109,23 @@ impl MemComparableByteCodec {
     /// Panics if the encoded length overflows usize.
     pub fn encode_all_in_place(src: &mut Vec<u8>) -> usize {
         // Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
+        let src_len = src.len();
+        let dest_len = Self::encoded_len(src_len);
+        src.reserve_exact(dest_len - src_len);
+
+        // There must be 0 or more zero padding groups and 1 non-zero padding groups
+        // in the output.
+        let zero_padding_groups = src_len / MEMCMP_GROUP_SIZE;
+
+        // To avoid overwriting un-copied bytes, we write the last group first,
+        // then write zero padding groups backward.
+
+        // First, write the last group, which should never be zero padding.
+        let remaining_size = src_len - MEMCMP_GROUP_SIZE * zero_padding_groups;
+        let padding_size = MEMCMP_GROUP_SIZE - remaining_size;
+        let padding_marker = !(padding_size as u8);
+
         unsafe {
-            let src_len = src.len();
-            let dest_len = Self::encoded_len(src_len);
-            src.reserve_exact(dest_len - src_len);
-
-            // There must be 0 or more zero padding groups and 1 non-zero padding groups
-            // in the output.
-            let zero_padding_groups = src_len / MEMCMP_GROUP_SIZE;
-
-            // To avoid overwriting un-copied bytes, we write the last group first,
-            // then write zero padding groups backward.
-
-            // First, write the last group, which should never be zero padding.
-            let remaining_size = src_len - MEMCMP_GROUP_SIZE * zero_padding_groups;
-            let padding_size = MEMCMP_GROUP_SIZE - remaining_size;
-            let padding_marker = !(padding_size as u8);
-
             let mut src_ptr = src.as_ptr().add(src_len - remaining_size);
             let mut dest_ptr = src.as_mut_ptr().add(dest_len - (MEMCMP_GROUP_SIZE + 1));
 
@@ -143,9 +143,9 @@ impl MemComparableByteCodec {
             }
 
             src.set_len(dest_len);
-
-            dest_len
         }
+
+        dest_len
     }
 
     /// Performs in place bitwise NOT for specified memory region.
@@ -188,7 +188,7 @@ impl MemComparableByteCodec {
     /// # Panics
     ///
     /// Panics if the encoded length overflows usize.
-    pub fn encode_all_desc_in_place(src: &mut Vec<u8>) -> usize {
+    pub fn encode_all_in_place_desc(src: &mut Vec<u8>) -> usize {
         let encoded_len = Self::encode_all_in_place(src);
         Self::flip_bytes_in_place(src, encoded_len);
         encoded_len
@@ -1006,7 +1006,7 @@ mod tests {
 
             // Test encode descending
             let mut buffer: Vec<u8> = src.clone();
-            let output_len = MemComparableByteCodec::encode_all_desc_in_place(&mut buffer);
+            let output_len = MemComparableByteCodec::encode_all_in_place_desc(&mut buffer);
             assert_eq!(output_len, encoded_len);
             assert_eq!(buffer.len(), encoded_len);
             assert_eq!(output_len, expect_encoded_desc.len());
@@ -1531,7 +1531,7 @@ mod benches {
     fn bench_memcmp_encode_all_in_place_desc_small(b: &mut test::Bencher) {
         let src: Vec<u8> = vec![b'x'; 100];
         b.iter(|| {
-            let encoded = super::MemComparableByteCodec::encode_all_desc_in_place(test::black_box(
+            let encoded = super::MemComparableByteCodec::encode_all_in_place_desc(test::black_box(
                 &mut src.clone(),
             ));
             test::black_box(encoded);
@@ -1605,7 +1605,7 @@ mod benches {
     fn bench_memcmp_encode_all_in_place_desc_large(b: &mut test::Bencher) {
         let src: Vec<u8> = vec![b'x'; 1000];
         b.iter(|| {
-            let encoded = super::MemComparableByteCodec::encode_all_desc_in_place(test::black_box(
+            let encoded = super::MemComparableByteCodec::encode_all_in_place_desc(test::black_box(
                 &mut src.clone(),
             ));
             test::black_box(encoded);
