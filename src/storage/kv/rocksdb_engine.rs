@@ -10,7 +10,7 @@ use std::time::Duration;
 use engine::rocks;
 use engine::rocks::util::CFOptions;
 use engine::rocks::{
-    ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, WriteBatchBase, DB,
+    ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, WriteBatch, WriteBatchBase, DB,
 };
 use engine::Engines;
 use engine::Error as EngineError;

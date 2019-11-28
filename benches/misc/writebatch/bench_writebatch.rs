@@ -1,13 +1,13 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{Writable, WriteBatch, DB};
+use engine::rocks::{WriteBatch, WriteBatchBase, DB};
 use tempfile::Builder;
 use test::Bencher;
 
 fn writebatch(db: &DB, round: usize, batch_keys: usize) {
     let v = b"operators are syntactic sugar for calls to methods of built-in traits";
     for r in 0..round {
-        let batch = WriteBatch::default();
+        let mut batch = WriteBatch::default();
         for i in 0..batch_keys {
             let k = format!("key_round{}_key{}", r, i);
             batch.put(k.as_bytes(), v).unwrap();
@@ -84,7 +84,7 @@ fn bench_writebatch_1024(b: &mut Bencher) {
     bench_writebatch_impl(b, 1024);
 }
 
-fn fill_writebatch(wb: &WriteBatch, target_size: usize) {
+fn fill_writebatch(wb: &mut WriteBatch, target_size: usize) {
     let (k, v) = (b"this is the key", b"this is the value");
     loop {
         wb.put(k, v).unwrap();
@@ -98,7 +98,7 @@ fn fill_writebatch(wb: &WriteBatch, target_size: usize) {
 fn bench_writebatch_without_capacity(b: &mut Bencher) {
     b.iter(|| {
         let mut wb = WriteBatch::default();
-        fill_writebatch(&wb, 4096);
+        fill_writebatch(&mut wb, 4096);
     });
 }
 
@@ -106,6 +106,6 @@ fn bench_writebatch_without_capacity(b: &mut Bencher) {
 fn bench_writebatch_with_capacity(b: &mut Bencher) {
     b.iter(|| {
         let mut wb = WriteBatch::with_capacity(4096);
-        fill_writebatch(&wb, 4096);
+        fill_writebatch(&mut wb, 4096);
     });
 }

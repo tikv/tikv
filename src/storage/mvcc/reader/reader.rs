@@ -7,7 +7,7 @@ use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{default_not_found_error, WriteRef};
 use crate::storage::mvcc::{Result, TimeStamp};
 use crate::storage::{Key, Value};
-use engine::IterOption;
+use engine::{IterOption, WriteBatchBase};
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
@@ -440,7 +440,7 @@ mod tests {
     use crate::storage::{Key, Mutation, Options};
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
-    use engine::rocks::{Writable, WriteBatch, DB};
+    use engine::rocks::{Writable, WriteBatch, WriteBatchBase, DB};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};

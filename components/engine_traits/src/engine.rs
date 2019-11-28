@@ -6,7 +6,7 @@ use crate::*;
 
 pub trait KvEngine:
     Peekable
-    + Mutable
+    + SafeMutable
     + Iterable
     + DBOptionsExt
     + CFHandleExt

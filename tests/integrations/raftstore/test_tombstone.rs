@@ -10,7 +10,7 @@ use protobuf::Message;
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::Writable;
 use engine::CF_RAFT;
-use engine::{Iterable, Mutable, Peekable};
+use engine::{Immutable, Iterable, Peekable};
 use test_raftstore::*;
 use tikv::raftstore::store::keys;
 

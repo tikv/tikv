@@ -11,7 +11,7 @@ use std::u64;
 
 use engine::rocks;
 use engine::CF_RAFT;
-use engine::{util as engine_util, Engines, Immutable, Mutable, Peekable};
+use engine::{util as engine_util, Engines, Mutable, Peekable};
 use engine::{WriteBatch, WriteBatchBase};
 use engine_rocks::RocksSnapshot;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};

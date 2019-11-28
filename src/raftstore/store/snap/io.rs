@@ -4,7 +4,7 @@ use std::io::{self, BufReader};
 use std::{fs, usize};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::{IngestExternalFileOptions, Writable, WriteBatch, WriteBatchBase, DB};
+use engine::rocks::{IngestExternalFileOptions, WriteBatch, WriteBatchBase, DB};
 use engine::CfName;
 use engine_rocks::{RocksSnapshot, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::IOLimiter;

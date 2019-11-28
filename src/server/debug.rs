@@ -12,7 +12,7 @@ use std::{error, result};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{
     CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
-    SeekKey, Writable, WriteBatch, WriteBatchBase, WriteOptions, DB,
+    SeekKey, WriteBatch, WriteBatchBase, WriteOptions, DB,
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
@@ -1541,10 +1541,10 @@ mod tests {
     use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
-    use engine::Mutable;
+    use engine::{Immutable, Mutable, WriteBatchBase};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_rocks::RocksEngine;
-    use engine_traits::CFHandleExt;
+    use engine_traits::{CFHandleExt, SafeMutable};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
@@ -2020,7 +2020,7 @@ mod tests {
         let handle2 = get_cf_handle(kv_engine, CF_RAFT).unwrap();
 
         {
-            let mock_region_state = |region_id: u64, peers: &[u64]| {
+            let mock_region_state = |region_id: u64, peers: &[u64], wb: &mut WriteBatch| {
                 let region_state_key = keys::region_state_key(region_id);
                 let mut region_state = RegionLocalState::default();
                 region_state.set_state(PeerState::Normal);
@@ -2039,40 +2039,41 @@ mod tests {
                         .collect::<Vec<_>>();
                     region.set_peers(peers.into());
                 }
-                wb2.put_msg_cf(handle2, &region_state_key, &region_state)
+                wb.put_msg_cf(handle2, &region_state_key, &region_state)
                     .unwrap();
             };
-            let mock_raft_state = |region_id: u64, last_index: u64, commit_index: u64| {
-                let raft_state_key = keys::raft_state_key(region_id);
-                let mut raft_state = RaftLocalState::default();
-                raft_state.set_last_index(last_index);
-                raft_state.mut_hard_state().set_commit(commit_index);
-                wb1.put_msg_cf(handle1, &raft_state_key, &raft_state)
-                    .unwrap();
-            };
-            let mock_apply_state = |region_id: u64, apply_index: u64| {
+            let mock_raft_state =
+                |region_id: u64, last_index: u64, commit_index: u64, wb: &mut WriteBatch| {
+                    let raft_state_key = keys::raft_state_key(region_id);
+                    let mut raft_state = RaftLocalState::default();
+                    raft_state.set_last_index(last_index);
+                    raft_state.mut_hard_state().set_commit(commit_index);
+                    wb.put_msg_cf(handle1, &raft_state_key, &raft_state)
+                        .unwrap();
+                };
+            let mock_apply_state = |region_id: u64, apply_index: u64, wb: &mut WriteBatch| {
                 let raft_apply_key = keys::apply_state_key(region_id);
                 let mut apply_state = RaftApplyState::default();
                 apply_state.set_applied_index(apply_index);
-                wb2.put_msg_cf(handle2, &raft_apply_key, &apply_state)
+                wb.put_msg_cf(handle2, &raft_apply_key, &apply_state)
                     .unwrap();
             };
 
             for &region_id in &[10, 11, 12] {
-                mock_region_state(region_id, &[store_id]);
+                mock_region_state(region_id, &[store_id], &mut wb2);
             }
 
             // last index < commit index
-            mock_raft_state(10, 100, 110);
+            mock_raft_state(10, 100, 110, &mut wb1);
 
             // commit index < last index < apply index, or commit index < apply index < last index.
-            mock_raft_state(11, 100, 90);
-            mock_apply_state(11, 110);
-            mock_raft_state(12, 100, 90);
-            mock_apply_state(12, 95);
+            mock_raft_state(11, 100, 90, &mut wb1);
+            mock_apply_state(11, 110, &mut wb2);
+            mock_raft_state(12, 100, 90, &mut wb1);
+            mock_apply_state(12, 95, &mut wb2);
 
             // region state doesn't contains the peer itself.
-            mock_region_state(13, &[]);
+            mock_region_state(13, &[], &mut wb2);
         }
 
         raft_engine.write_opt(&wb1, &WriteOptions::new()).unwrap();
@@ -2303,7 +2304,7 @@ mod tests {
         // Fix problems.
         let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
         let mut wb = WriteBatch::default();
-        checker.check_mvcc(&wb, None).unwrap();
+        checker.check_mvcc(&mut wb, None).unwrap();
         db.write(&wb).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {

@@ -5,7 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use engine_traits::{
-    Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions, Result, WriteOptions,
+    Error, IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SafeMutable,
+    WriteOptions,
 };
 use rocksdb::{DBIterator, Writable, DB};
 
@@ -127,21 +128,21 @@ impl Peekable for RocksEngine {
     }
 }
 
-impl Mutable for RocksEngine {
-    fn put_opt(&mut self, _: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
+impl SafeMutable for RocksEngine {
+    fn put_opt(&self, _: &WriteOptions, key: &[u8], value: &[u8]) -> Result<()> {
         self.0.put(key, value).map_err(Error::Engine)
     }
 
-    fn put_cf_opt(&mut self, _: &WriteOptions, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    fn put_cf_opt(&self, _: &WriteOptions, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.0, cf)?;
         self.0.put_cf(handle, key, value).map_err(Error::Engine)
     }
 
-    fn delete_opt(&mut self, _: &WriteOptions, key: &[u8]) -> Result<()> {
+    fn delete_opt(&self, _: &WriteOptions, key: &[u8]) -> Result<()> {
         self.0.delete(key).map_err(Error::Engine)
     }
 
-    fn delete_cf_opt(&mut self, _: &WriteOptions, cf: &str, key: &[u8]) -> Result<()> {
+    fn delete_cf_opt(&self, _: &WriteOptions, cf: &str, key: &[u8]) -> Result<()> {
         let handle = get_cf_handle(&self.0, cf)?;
         self.0.delete_cf(handle, key).map_err(Error::Engine)
     }
@@ -150,7 +151,7 @@ impl Mutable for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine::rocks::util;
-    use engine_traits::{Iterable, KvEngine, Mutable, Peekable};
+    use engine_traits::{Iterable, KvEngine, Peekable, SafeMutable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
     use tempfile::Builder;

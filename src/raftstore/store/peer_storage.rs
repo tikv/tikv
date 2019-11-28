@@ -9,8 +9,8 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine::rocks;
+use engine::rocks::DBOptions;
 use engine::rocks::{Cache, DB};
-use engine::rocks::{DBOptions, Writable};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Immutable, Iterable, Mutable, Peekable, WriteBatch, WriteBatchBase};
@@ -924,11 +924,10 @@ impl PeerStorage {
             ));
         }
 
-        let mut is_initial = false;
-        if self.is_initialized() {
+        let mut is_initial = self.is_initialized();
+        if is_initial {
             // we can only delete the old data when the peer is initialized.
             self.clear_kvdb_meta(kv_wb)?;
-            is_initial = true;
         }
         write_peer_state(&self.engines.kv, kv_wb, &region, PeerState::Applying, None)?;
 
@@ -953,7 +952,7 @@ impl PeerStorage {
             "state" => ?ctx.apply_state,
         );
 
-        fail_point!("before_apply_snap_update_region", |_| { Ok(()) });
+        fail_point!("before_apply_snap_update_region", |_| { Ok(is_initial) });
 
         ctx.snap_region = Some(region);
         Ok(is_initial)
@@ -1350,7 +1349,6 @@ pub fn clear_raftdb_meta(
 
 /// Delete all meta belong to the region. Results are stored in `wb`.
 pub fn clear_kvdb_meta(engines: &Engines, kv_wb: &mut WriteBatch, region_id: u64) -> Result<()> {
-    let t = Instant::now();
     let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
     box_try!(kv_wb.delete_cf(handle, &keys::region_state_key(region_id)));
     box_try!(kv_wb.delete_cf(handle, &keys::apply_state_key(region_id)));
@@ -2328,8 +2326,7 @@ mod tests {
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let mut kv_wb = WriteBatch::default();
         let mut raft_wb = WriteBatch::default();
-        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb, &mut raft_wb)
-            .unwrap();
+        s2.apply_snapshot(&mut ctx, &snap1, &mut kv_wb).unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
         assert_eq!(ctx.raft_state.get_last_index(), 6);
@@ -2345,9 +2342,8 @@ mod tests {
         let mut ctx = InvokeContext::new(&s3);
         assert_ne!(ctx.last_term, snap1.get_metadata().get_term());
         let mut kv_wb = WriteBatch::default();
-        let mut raft_wb = WriteBatch::default();
-        s3.apply_snapshot(&mut ctx, &snap1, &kv_wb, &raft_wb)
-            .unwrap();
+        let raft_wb = WriteBatch::default();
+        s3.apply_snapshot(&mut ctx, &snap1, &mut kv_wb).unwrap();
         assert_eq!(ctx.last_term, snap1.get_metadata().get_term());
         assert_eq!(ctx.apply_state.get_applied_index(), 6);
         assert_eq!(ctx.raft_state.get_last_index(), 6);
