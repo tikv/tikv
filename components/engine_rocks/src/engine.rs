@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::any::Any;
 
 use engine_traits::{
     Error, IterOptions, Iterable, KvEngine, Mutable, Peekable, ReadOptions, Result, WriteOptions,
@@ -80,6 +81,11 @@ impl KvEngine for RocksEngine {
 
     fn cf_names(&self) -> Vec<&str> {
         self.0.cf_names()
+    }
+
+    fn bad_downcast<T: 'static>(&self) -> &T {
+        let e: &dyn Any = &self.0;
+        e.downcast_ref().expect("bad engine downcast")
     }
 }
 
