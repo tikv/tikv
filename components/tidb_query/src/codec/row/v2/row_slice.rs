@@ -5,7 +5,7 @@ use crate::codec::{Error, Result};
 use codec::prelude::*;
 use num_traits::PrimInt;
 
-enum RowSlice<'a> {
+pub enum RowSlice<'a> {
     Small {
         non_null_ids: &'a [u8],
         null_ids: &'a [u8],
@@ -24,7 +24,7 @@ impl RowSlice<'_> {
     /// # Panics
     ///
     /// Panics if the value of first byte is not 128(v2 version code)
-    fn from_bytes(mut data: &[u8]) -> Result<RowSlice> {
+    pub fn from_bytes(mut data: &[u8]) -> Result<RowSlice> {
         assert_eq!(data.read_u8()?, super::CODEC_VERSION);
         let is_big = super::Flags::from_bits_truncate(data.read_u8()?) == super::Flags::BIG;
 
@@ -57,7 +57,7 @@ impl RowSlice<'_> {
     ///
     /// If the id is found with no offset(It will only happen when the row data is broken),
     /// `Error::ColumnOffset` will be returned.
-    fn search_in_non_null_ids(&self, id: i64) -> Result<Option<(usize, usize)>> {
+    pub fn search_in_non_null_ids(&self, id: i64) -> Result<Option<(usize, usize)>> {
         if !self.id_valid(id) {
             return Ok(None);
         }
@@ -99,7 +99,7 @@ impl RowSlice<'_> {
     /// Search `id` in null ids
     ///
     /// Returns true if found
-    fn search_in_null_ids(&self, id: i64) -> bool {
+    pub fn search_in_null_ids(&self, id: i64) -> bool {
         match self {
             RowSlice::Big { null_ids, .. } => null_ids.binary_search(&(id as u32)).is_ok(),
             RowSlice::Small { null_ids, .. } => null_ids.binary_search(&(id as u8)).is_ok(),
@@ -119,6 +119,13 @@ impl RowSlice<'_> {
         match self {
             RowSlice::Big { .. } => true,
             RowSlice::Small { .. } => false,
+        }
+    }
+
+    pub fn values(&self) -> &[u8] {
+        match self {
+            RowSlice::Big { values, .. } => values,
+            RowSlice::Small { values, .. } => values,
         }
     }
 }

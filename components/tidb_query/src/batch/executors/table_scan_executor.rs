@@ -13,6 +13,7 @@ use tipb::TableScan;
 use super::util::scan_executor::*;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::codec::row;
 use crate::codec::table::check_record_key;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::storage::{IntervalRange, Storage};
@@ -142,6 +143,83 @@ struct TableScanExecutorImpl {
     is_column_filled: Vec<bool>,
 }
 
+impl TableScanExecutorImpl {
+    fn process_v1(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+        columns_len: usize,
+        decoded_columns: &mut usize,
+    ) -> Result<()> {
+        use crate::codec::datum;
+        use codec::prelude::NumberDecoder;
+        // The layout of value is: [col_id_1, value_1, col_id_2, value_2, ...]
+        // where each element is datum encoded.
+        // The column id datum must be in var i64 type.
+        let mut remaining = value;
+        while !remaining.is_empty() && *decoded_columns < columns_len {
+            if remaining[0] != datum::VAR_INT_FLAG {
+                return Err(other_err!(
+                    "Unable to decode row: column id must be VAR_INT"
+                ));
+            }
+            remaining = &remaining[1..];
+            let column_id = box_try!(remaining.read_var_i64());
+            let (val, new_remaining) = datum::split_datum(remaining, false)?;
+            // Note: The produced columns may be not in the same length if there is error due
+            // to corrupted data. It will be handled in `ScanExecutor`.
+            let some_index = self.column_id_index.get(&column_id);
+            if let Some(index) = some_index {
+                let index = *index;
+                if !self.is_column_filled[index] {
+                    columns[index].mut_raw().push(val);
+                    *decoded_columns += 1;
+                    self.is_column_filled[index] = true;
+                } else {
+                    // This indicates that there are duplicated elements in the row, which is
+                    // unexpected. We won't abort the request or overwrite the previous element,
+                    // but will output a log anyway.
+                    warn!(
+                        "Ignored duplicated row datum in table scan";
+                        "key" => hex::encode_upper(&key),
+                        "value" => hex::encode_upper(&value),
+                        "dup_column_id" => column_id,
+                    );
+                }
+            }
+            remaining = new_remaining;
+        }
+        Ok(())
+    }
+
+    fn process_v2(
+        &mut self,
+        value: &[u8],
+        columns: &mut LazyBatchColumnVec,
+        decoded_columns: &mut usize,
+    ) -> Result<()> {
+        use crate::codec::datum;
+        use crate::codec::row::v2::RowSlice;
+
+        let row = RowSlice::from_bytes(value)?;
+        for (col_id, idx) in &self.column_id_index {
+            if let Some((start, offset)) = row.search_in_non_null_ids(*col_id)? {
+                columns[*idx]
+                    .mut_raw()
+                    .push_v2(&row.values()[start..offset], &self.schema[*idx])?;
+                *decoded_columns += 1;
+                self.is_column_filled[*idx] = true;
+            } else if row.search_in_null_ids(*col_id) {
+                columns[*idx].mut_raw().push(datum::DATUM_DATA_NULL);
+                *decoded_columns += 1;
+                self.is_column_filled[*idx] = true;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl ScanExecutorImpl for TableScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
@@ -205,7 +283,6 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use crate::codec::{datum, table};
-        use codec::prelude::NumberDecoder;
 
         check_record_key(&key)?;
         let columns_len = self.schema.len();
@@ -227,41 +304,9 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
             // Do nothing
         } else {
-            // The layout of value is: [col_id_1, value_1, col_id_2, value_2, ...]
-            // where each element is datum encoded.
-            // The column id datum must be in var i64 type.
-            let mut remaining = value;
-            while !remaining.is_empty() && decoded_columns < columns_len {
-                if remaining[0] != datum::VAR_INT_FLAG {
-                    return Err(other_err!(
-                        "Unable to decode row: column id must be VAR_INT"
-                    ));
-                }
-                remaining = &remaining[1..];
-                let column_id = box_try!(remaining.read_var_i64());
-                let (val, new_remaining) = datum::split_datum(remaining, false)?;
-                // Note: The produced columns may be not in the same length if there is error due
-                // to corrupted data. It will be handled in `ScanExecutor`.
-                let some_index = self.column_id_index.get(&column_id);
-                if let Some(index) = some_index {
-                    let index = *index;
-                    if !self.is_column_filled[index] {
-                        columns[index].mut_raw().push(val);
-                        decoded_columns += 1;
-                        self.is_column_filled[index] = true;
-                    } else {
-                        // This indicates that there are duplicated elements in the row, which is
-                        // unexpected. We won't abort the request or overwrite the previous element,
-                        // but will output a log anyway.
-                        warn!(
-                            "Ignored duplicated row datum in table scan";
-                            "key" => hex::encode_upper(&key),
-                            "value" => hex::encode_upper(&value),
-                            "dup_column_id" => column_id,
-                        );
-                    }
-                }
-                remaining = new_remaining;
+            match value[0] {
+                row::v2::CODEC_VERSION => self.process_v2(value, columns, &mut decoded_columns)?,
+                _ => self.process_v1(key, value, columns, columns_len, &mut decoded_columns)?,
             }
         }
 
@@ -314,6 +359,8 @@ mod tests {
 
     use crate::codec::batch::LazyBatchColumnVec;
     use crate::codec::data_type::*;
+    use crate::codec::row::v2;
+    use crate::codec::row::v2::encoder::RowEncoder;
     use crate::codec::{datum, table, Datum};
     use crate::execute_stats::*;
     use crate::expr::EvalConfig;
@@ -383,6 +430,13 @@ mod tests {
                     ],
                 ),
             ];
+            let data_v2 = vec![(
+                7,
+                vec![
+                    v2::encoder::Column::new(2, i64::from(u16::max_value())),
+                    v2::encoder::Column::new(4, 4.5),
+                ],
+            )];
 
             let expect_rows = vec![
                 (1, Some(10), Real::new(5.2).ok()),
@@ -390,6 +444,7 @@ mod tests {
                 (4, None, Real::new(4.5).ok()),
                 (5, None, Real::new(0.1).ok()),
                 (6, None, Real::new(4.5).ok()),
+                (7, Some(i64::from(u16::max_value())), Real::new(4.5).ok()),
             ];
 
             let mut ctx = EvalContext::default();
@@ -425,7 +480,7 @@ mod tests {
             ];
 
             let store = {
-                let kv: Vec<_> = data
+                let mut kv: Vec<_> = data
                     .iter()
                     .map(|(row_id, columns)| {
                         let key = table::encode_row_key(TABLE_ID, *row_id);
@@ -437,6 +492,16 @@ mod tests {
                         (key, value)
                     })
                     .collect();
+                let kv_v2: Vec<_> = data_v2
+                    .into_iter()
+                    .map(|(row_id, columns)| {
+                        let key = table::encode_row_key(TABLE_ID, row_id);
+                        let mut value = vec![];
+                        value.write_row(&mut ctx, columns).unwrap();
+                        (key, value)
+                    })
+                    .collect();
+                kv.extend(kv_v2);
                 FixtureStorage::from(kv)
             };
 
@@ -689,10 +754,10 @@ mod tests {
         executor.collect_exec_stats(&mut s);
 
         assert_eq!(s.scanned_rows_per_range.len(), 1);
-        assert_eq!(s.scanned_rows_per_range[0], 2);
+        assert_eq!(s.scanned_rows_per_range[0], 3);
         assert_eq!(s.summary_per_executor[0], ExecSummary::default());
         let exec_summary = s.summary_per_executor[1];
-        assert_eq!(2, exec_summary.num_produced_rows);
+        assert_eq!(3, exec_summary.num_produced_rows);
         assert_eq!(1, exec_summary.num_iterations);
     }
 

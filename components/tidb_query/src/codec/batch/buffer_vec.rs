@@ -1,6 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::codec::Result;
 use std::iter::*;
+use tipb::FieldType;
 
 /// A vector like container storing multiple buffers. Each buffer is a `[u8]` slice in
 /// arbitrary length.
@@ -84,6 +86,16 @@ impl BufferVec {
     pub fn push(&mut self, buffer: impl AsRef<[u8]>) {
         self.offsets.push(self.data.len());
         self.data.extend_from_slice(buffer.as_ref());
+    }
+
+    /// TODO: maybe move this logic to row_slice
+    #[inline]
+    pub fn push_v2(&mut self, buffer: impl AsRef<[u8]>, ft: &FieldType) -> Result<()> {
+        use crate::codec::row::v2;
+
+        self.offsets.push(self.data.len());
+        v2::encode_to_v1_binary(&mut self.data, buffer.as_ref(), ft)?;
+        Ok(())
     }
 
     /// Removes the last buffer if there is any.

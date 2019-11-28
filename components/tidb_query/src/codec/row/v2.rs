@@ -13,7 +13,11 @@ bitflags! {
     }
 }
 
+mod decoder;
 mod row_slice;
 
+pub use self::decoder::encode_to_v1_binary;
+pub use self::row_slice::RowSlice;
+
 #[cfg(test)]
-mod encoder;
+pub mod encoder;
