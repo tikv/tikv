@@ -92,12 +92,22 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         thread::sleep(Duration::from_secs(1));
     }
 
+    pub fn bind_addrs(&self) -> Vec<(String, u16)> {
+        self.server.as_ref().unwrap().bind_addrs().to_vec()
+    }
+}
+
+impl<C: PdMocker> Server<C> {
     pub fn stop(&mut self) {
         self.server.take();
     }
+}
 
-    pub fn bind_addrs(&self) -> Vec<(String, u16)> {
-        self.server.as_ref().unwrap().bind_addrs().to_vec()
+impl<C: PdMocker> Drop for Server<C> {
+    fn drop(&mut self) {
+        if self.server.is_some() {
+            self.stop()
+        }
     }
 }
 
