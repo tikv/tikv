@@ -241,25 +241,7 @@ pub fn locate_binary_3_args(
 
 #[rpn_fn(varg, min_args = 1)]
 #[inline]
-pub fn field_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
-    field(args)
-}
-
-#[rpn_fn(varg, min_args = 1)]
-#[inline]
-pub fn field_real(args: &[&Option<Real>]) -> Result<Option<Int>> {
-    field(args)
-}
-
-#[rpn_fn(varg, min_args = 1)]
-#[inline]
-pub fn field_string(args: &[&Option<Bytes>]) -> Result<Option<Int>> {
-    field(args)
-}
-
-#[inline]
-fn field<T: PartialEq>(args: &[&Option<T>]) -> Result<Option<Int>> {
-    assert!(!args.is_empty());
+fn field<T: Evaluable + PartialEq>(args: &[&Option<T>]) -> Result<Option<Int>> {
     Ok(Some(match args[0] {
         // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
         None => 0,
