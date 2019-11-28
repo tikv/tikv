@@ -6,48 +6,48 @@ publish = false
 description = "A query engine to run TiDB pushed down executors"
 
 [dependencies]
-failure = "0.1"
+base64 = "0.10"
+bitfield = "0.13.2"
+bitflags = "1.0.1"
+boolinator = "2.4.0"
 byteorder = "1.2"
+chrono = "0.4"
+chrono-tz = "0.5.1"
+codec = { path = "../codec" }
+derive_more = "0.15.0"
+failure = "0.1"
+flate2 = { version = "1.0", features = ["zlib"], default-features = false }
+hex = "0.3"
+indexmap = { version = "1.0", features = ["serde-1"] }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+lazy_static = "1.3"
+match_template = { path = "../match_template" }
+nom = "5.0.1"
+num = { version = "0.2", default-features = false }
+num-traits = "0.2"
+openssl = { version = "0.10" }
+ordered-float = "1.0"
+protobuf = "2"
+quick-error = "1.2.2"
 rand = "0.6.5"
 rand_xorshift = "0.1.1"
 regex = "1.1"
-serde = "1.0"
-serde_json = "1.0"
-serde_derive = "1.0"
-chrono = "0.4"
-chrono-tz = "0.5.1"
-lazy_static = "1.3"
-num = { version = "0.2", default-features = false }
-num-traits = "0.2"
-hex = "0.3"
-base64 = "0.10"
-twoway = "0.2.0"
-ordered-float = "1.0"
-nom = "5.0.1"
-servo_arc = "0.1.1"
-bitfield = "0.13.2"
-protobuf = "2"
-openssl = { version = "0.10" }
-time = "0.1"
-quick-error = "1.2.2"
-bitflags = "1.0.1"
-derive_more = "0.15.0"
-smallvec = "0.6"
-indexmap = { version = "1.0", features = ["serde-1"] }
 safemem = { version = "0.3", default-features = false }
-flate2 = { version = "1.0", features = ["zlib"], default-features = false }
+serde = "1.0"
+serde_derive = "1.0"
+serde_json = "1.0"
+servo_arc = "0.1.1"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
-boolinator = "2.4.0"
+smallvec = "0.6"
+tidb_query_codegen = { path = "../tidb_query_codegen" }
+tidb_query_datatype = { path = "../tidb_query_datatype" }
+tikv_util = { path = "../tikv_util" }
+time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 
 tipb_helper = { path = "../tipb_helper" }
-tikv_util = { path = "../tikv_util" }
-match_template = { path = "../match_template" }
-tidb_query_datatype = { path = "../tidb_query_datatype" }
-tidb_query_codegen = { path = "../tidb_query_codegen" }
-codec = { path = "../codec" }
+twoway = "0.2.0"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"

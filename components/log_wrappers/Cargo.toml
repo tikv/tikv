@@ -5,8 +5,8 @@ edition = "2018"
 publish = false
 
 [dependencies]
-slog = "2.3"
-slog-term = "2.4"
 hex = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+slog = "2.3"
+slog-term = "2.4"
 tikv_alloc = { path = "../tikv_alloc", default-features = false }

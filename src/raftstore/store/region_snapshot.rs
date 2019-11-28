@@ -5,12 +5,15 @@ use engine::{self, IterOption};
 use engine_rocks::{RocksDBVector, RocksEngineIterator, RocksSnapshot, RocksSyncSnapshot};
 use engine_traits::{Peekable, ReadOptions, Result as EngineResult, Snapshot as SnapshotTrait};
 use kvproto::metapb::Region;
+use kvproto::raft_serverpb::RaftApplyState;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
 use engine_traits::util::check_key_in_range;
+use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
@@ -23,6 +26,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 pub struct RegionSnapshot {
     snap: RocksSyncSnapshot,
     region: Arc<Region>,
+    apply_index: Arc<AtomicU64>,
 }
 
 impl RegionSnapshot {
@@ -38,11 +42,39 @@ impl RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
+            // Use 0 to indicate that the apply index is missing and we need to KvGet it,
+            // since apply index must be >= RAFT_INIT_LOG_INDEX.
+            apply_index: Arc::new(AtomicU64::new(0)),
         }
     }
 
+    #[inline]
     pub fn get_region(&self) -> &Region {
         &self.region
+    }
+
+    #[inline]
+    pub fn get_apply_index(&self) -> Result<u64> {
+        let apply_index = self.apply_index.load(Ordering::SeqCst);
+        if apply_index == 0 {
+            self.get_apply_index_from_storage()
+        } else {
+            Ok(apply_index)
+        }
+    }
+
+    fn get_apply_index_from_storage(&self) -> Result<u64> {
+        let apply_state: Option<RaftApplyState> = self
+            .snap
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(self.region.get_id()))?;
+        match apply_state {
+            Some(s) => {
+                let apply_index = s.get_applied_index();
+                self.apply_index.store(apply_index, Ordering::SeqCst);
+                Ok(apply_index)
+            }
+            None => Err(box_err!("Unable to get applied index")),
+        }
     }
 
     pub fn iter(&self, iter_opt: IterOption) -> RegionIterator {
@@ -118,10 +150,12 @@ impl RegionSnapshot {
         Ok(prop)
     }
 
+    #[inline]
     pub fn get_start_key(&self) -> &[u8] {
         self.region.get_start_key()
     }
 
+    #[inline]
     pub fn get_end_key(&self) -> &[u8] {
         self.region.get_end_key()
     }
@@ -132,6 +166,7 @@ impl Clone for RegionSnapshot {
         RegionSnapshot {
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
+            apply_index: Arc::clone(&self.apply_index),
         }
     }
 }
