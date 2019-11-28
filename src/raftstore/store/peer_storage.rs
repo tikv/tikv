@@ -1396,7 +1396,7 @@ pub fn do_snapshot(
     let state: RegionLocalState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
         .and_then(|res| match res {
-            None => Err(box_err!("could not find region info")),
+            None => Err(box_err!("region {} could not find region info", region_id)),
             Some(state) => Ok(state),
         })
         .map_err(into_other::<_, raft::Error>)?;
