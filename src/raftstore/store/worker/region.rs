@@ -568,6 +568,7 @@ impl Runner {
 
     /// Tries to apply pending tasks if there is some.
     fn handle_pending_applies(&mut self) {
+        fail_point!("apply_pending_snapshot", |_| {});
         while !self.pending_applies.is_empty() {
             // should not handle too many applies than the number of files that can be ingested.
             // check level 0 every time because we can not make sure how does the number of level 0 files change.

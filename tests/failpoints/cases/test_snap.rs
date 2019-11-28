@@ -309,7 +309,7 @@ fn test_destroy_peer_on_pending_snapshot() {
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
 
-    for i in 0..10 {
+    for i in 0..20 {
         cluster.must_put(format!("k1{}", i).as_bytes(), b"v1");
     }
 
@@ -329,11 +329,12 @@ fn test_destroy_peer_on_pending_snapshot() {
     pd_client.must_add_peer(r1, new_peer(3, 5));
 
     let destroy_peer_fp = "destroy_peer";
-    fail::cfg(destroy_peer_fp, "sleep(100)").unwrap();
+    fail::cfg(destroy_peer_fp, "pause").unwrap();
     cluster.clear_send_filters();
     // Wait for leader send msg to peer 3.
     // Then destroy peer 3 and create peer 5.
-    sleep_ms(200);
+    sleep_ms(100);
+    fail::remove(destroy_peer_fp);
 
     fail::remove(apply_snapshot_fp);
     // After peer 5 has applied snapshot, data should be got.
