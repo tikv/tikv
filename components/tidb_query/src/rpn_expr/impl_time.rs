@@ -128,6 +128,23 @@ pub fn year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> 
     Ok(Some(Int::from(t.year())))
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn day_name(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Bytes>> {
+    match t {
+        Some(t) => {
+            if t.invalid_zero() {
+                return ctx
+                    .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                    .map(|_| Ok(None))?;
+            }
+            use crate::codec::mysql::time::WeekdayExtension;
+            Ok(Some(t.weekday().name().to_string().into_bytes()))
+        }
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +470,36 @@ mod tests {
                 .evaluate(ScalarFuncSig::Year)
                 .unwrap();
             assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_day_name() {
+        let cases = vec![
+            (None, None),
+            (Some("0000-00-00 00:00:00.000000"), None),
+            (Some("2019-11-17 00:00:00.000000"), Some("Sunday")),
+            (Some("2019-11-18 00:00:00.000000"), Some("Monday")),
+            (Some("2019-11-19 00:00:00.000000"), Some("Tuesday")),
+            (Some("2019-11-20 00:00:00.000000"), Some("Wednesday")),
+            (Some("2019-11-21 00:00:00.000000"), Some("Thursday")),
+            (Some("2019-11-22 00:00:00.000000"), Some("Friday")),
+            (Some("2019-11-23 00:00:00.000000"), Some("Saturday")),
+            (Some("2019-11-24 00:00:00.000000"), Some("Sunday")),
+            (Some("2019-11-00 00:00:00.000000"), None),
+            (Some("2019-00-00 00:00:00.000000"), None),
+            (Some("2019-00-01 00:00:00.000000"), None),
+            (Some("2019-11-24"), Some("Sunday")),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let arg: Option<Time> = arg.map(|arg: &str| Time::parse_date(&mut ctx, arg).unwrap());
+            let output: Option<Bytes> = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::DayName)
+                .unwrap();
+            let exp = exp.map(|v| v.as_bytes().to_vec());
+            assert_eq!(output, exp);
         }
     }
 }
