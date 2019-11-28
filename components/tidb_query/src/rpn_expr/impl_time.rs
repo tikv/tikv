@@ -432,33 +432,47 @@ mod tests {
             (Some("2018-00-00 23:59:59.999999"), None),
         ];
 
+        let modes = vec![
+            // Vec<[(Flag, SqlMode, is_ok(bool), has_warning(bool))]>
+            (Flag::empty(), SqlMode::empty(), true, true),
+            (
+                Flag::IN_UPDATE_OR_DELETE_STMT,
+                SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES,
+                false,
+                false,
+            ),
+            (
+                Flag::IN_UPDATE_OR_DELETE_STMT,
+                SqlMode::STRICT_ALL_TABLES,
+                true,
+                false,
+            ),
+        ];
+
         for (lhs, rhs) in invalid_zero_cases {
-            let mut ctx1 = EvalContext::default();
-            let output1 = RpnFnScalarEvaluator::new()
-                .push_param(
-                    lhs.map(|inner| Time::parse_datetime(&mut ctx1, inner, 6, true).unwrap()),
-                )
-                .push_param(
-                    rhs.map(|inner| Time::parse_datetime(&mut ctx1, inner, 6, true).unwrap()),
-                )
-                .evaluate::<Int>(ScalarFuncSig::DateDiff);
-            assert!(output1.is_err());
+            for (flag, sql_mode, is_ok, has_warning) in modes {
+                let mut cfg = EvalConfig::new();
+                cfg.set_flag(flag).set_sql_mode(sql_mode);
 
-            let mut cfg = EvalConfig::new();
-            cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
-                .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
+                let mut ctx = EvalContext::new(Arc::new(cfg));
 
-            let mut ctx2 = EvalContext::new(Arc::new(cfg));
-            let output2 = RpnFnScalarEvaluator::new()
-                .push_param(
-                    lhs.map(|inner| Time::parse_datetime(&mut ctx2, inner, 6, true).unwrap()),
-                )
-                .push_param(
-                    rhs.map(|inner| Time::parse_datetime(&mut ctx2, inner, 6, true).unwrap()),
-                )
-                .evaluate::<Int>(ScalarFuncSig::DateDiff)
-                .unwrap();
-            assert_eq!(output2, None);
+                let arg0 = lhs.map(|inner| Time::parse_datetime(&mut ctx, inner, 6, true).unwrap());
+                let arg1 = rhs.map(|inner| Time::parse_datetime(&mut ctx, inner, 6, true).unwrap());
+
+                let result = RpnFnScalarEvaluator::new()
+                    .context(ctx)
+                    .push_param(arg0)
+                    .push_param(arg1)
+                    .evaluate::<Int>(ScalarFuncSig::DateDiff);
+
+                if is_ok {
+                    assert_eq!(result.unwrap(), None);
+                } else {
+                    assert!(result.is_err());
+                }
+
+                assert_eq!(!ctx.take_warnings().warnings.is_empty(), has_warning);
+            }
         }
 
         let l: Option<Time> = None;
