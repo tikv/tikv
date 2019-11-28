@@ -2355,7 +2355,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.peer.mut_store().check_applying_snap() {
             self.ctx.raft_metrics.invalid_proposal.is_applying_snapshot += 1;
             // TODO: replace to a more suitable error.
-            return Err(Error::Other(box_err!("peer is applying snapshot.")));
+            return Err(Error::Other(box_err!(
+                "{} peer is applying snapshot",
+                self.fsm.peer.tag
+            )));
         }
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg, self.fsm.peer.term()) {
@@ -2637,7 +2640,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
             match t {
                 PdTask::AskBatchSplit { callback, .. } => {
-                    callback.invoke_with_response(new_error(box_err!("failed to split: Stopped")));
+                    callback.invoke_with_response(new_error(box_err!(
+                        "{} failed to split: Stopped",
+                        self.fsm.peer.tag
+                    )));
                 }
                 _ => unreachable!(),
             }
@@ -3091,7 +3097,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut response = match cmd_type {
             StatusCmdType::RegionLeader => self.execute_region_leader(),
             StatusCmdType::RegionDetail => self.execute_region_detail(request),
-            StatusCmdType::InvalidStatus => Err(box_err!("invalid status command!")),
+            StatusCmdType::InvalidStatus => {
+                Err(box_err!("{} invalid status command!", self.fsm.peer.tag))
+            }
         }?;
         response.set_cmd_type(cmd_type);
 
