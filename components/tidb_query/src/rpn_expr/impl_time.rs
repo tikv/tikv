@@ -8,8 +8,8 @@ use crate::codec::data_type::*;
 use crate::codec::mysql::time::extension::DateTimeExtension;
 use crate::codec::mysql::Time;
 use crate::codec::Error;
-use crate::expr_util::time::{month_to_period, period_to_month};
 use crate::expr::SqlMode;
+use crate::expr_util::time::{month_to_period, period_to_month};
 use crate::Result;
 
 #[rpn_fn(capture = [ctx])]
