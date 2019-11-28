@@ -889,7 +889,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "grpcio"
 version = "0.4.6"
-source = "git+https://github.com/tikv/grpc-rs?branch=v0.4.x#825b591455ff0653063cb743d0753f37a713437b"
+source = "git+https://github.com/tikv/grpc-rs?branch=v0.4.x#0f561dcd923faa5e05f684bd1eccda0e4a0e5dfd"
 dependencies = [
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio-sys 0.4.6 (git+https://github.com/tikv/grpc-rs?branch=v0.4.x)",
@@ -916,7 +916,7 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.4.6"
-source = "git+https://github.com/tikv/grpc-rs?branch=v0.4.x#825b591455ff0653063cb743d0753f37a713437b"
+source = "git+https://github.com/tikv/grpc-rs?branch=v0.4.x#0f561dcd923faa5e05f684bd1eccda0e4a0e5dfd"
 dependencies = [
  "cc 1.0.45 (registry+https://github.com/rust-lang/crates.io-index)",
  "cmake 0.1.35 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1748,7 +1748,7 @@ name = "protoc"
 version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1812,7 +1812,7 @@ version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
