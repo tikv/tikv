@@ -45,14 +45,9 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        KeyIsLocked { key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64, txn_size: u64 } {
+        KeyIsLocked(info: kvproto::kvrpcpb::LockInfo) {
             description("key is locked (backoff or cleanup)")
-            display("key is locked (backoff or cleanup) {}-{}@{} ttl {} txn_size {}",
-                        hex::encode_upper(key),
-                        hex::encode_upper(primary),
-                        ts,
-                        ttl,
-                        txn_size)
+            display("key is locked (backoff or cleanup) {:?}", info)
         }
         BadFormatLock { description("bad format lock data") }
         BadFormatWrite { description("bad format write data") }
@@ -109,19 +104,7 @@ impl Error {
         match *self {
             Error::Engine(ref e) => e.maybe_clone().map(Error::Engine),
             Error::Codec(ref e) => e.maybe_clone().map(Error::Codec),
-            Error::KeyIsLocked {
-                ref key,
-                ref primary,
-                ts,
-                ttl,
-                txn_size,
-            } => Some(Error::KeyIsLocked {
-                key: key.clone(),
-                primary: primary.clone(),
-                ts,
-                ttl,
-                txn_size,
-            }),
+            Error::KeyIsLocked(ref info) => Some(Error::KeyIsLocked(info.clone())),
             Error::BadFormatLock => Some(Error::BadFormatLock),
             Error::BadFormatWrite => Some(Error::BadFormatWrite),
             Error::TxnLockNotFound {
@@ -293,7 +276,7 @@ pub mod tests {
         is_pessimistic_lock: bool,
         options: Options,
     ) {
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
@@ -462,6 +445,24 @@ pub mod tests {
         must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
     }
 
+    pub fn must_acquire_pessimistic_lock_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        start_ts: u64,
+        options: Options,
+    ) {
+        let ctx = Context::default();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
+            .unwrap();
+        let modifies = txn.into_modifies();
+        if !modifies.is_empty() {
+            engine.write(&ctx, modifies).unwrap();
+        }
+    }
+
     pub fn must_acquire_pessimistic_lock<E: Engine>(
         engine: &E,
         key: &[u8],
@@ -469,7 +470,7 @@ pub mod tests {
         start_ts: u64,
         for_update_ts: u64,
     ) {
-        let ctx = Context::new();
+        let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         let mut options = Options::default();

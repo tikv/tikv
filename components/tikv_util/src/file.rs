@@ -4,9 +4,6 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read};
 use std::path::Path;
 
-use crc::crc32::{self, Digest as CrcDigest, Hasher32};
-use sha2::{Digest, Sha256};
-
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     let meta = fs::metadata(path)?;
     Ok(meta.len())
@@ -58,16 +55,16 @@ const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// Calculates the given file's CRC32 checksum.
 pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
-    let mut digest = CrcDigest::new(crc32::IEEE);
+    let mut digest = crc32fast::Hasher::new();
     let mut f = OpenOptions::new().read(true).open(path)?;
     let mut buf = vec![0; DIGEST_BUFFER_SIZE];
     loop {
         match f.read(&mut buf[..]) {
             Ok(0) => {
-                return Ok(digest.sum32());
+                return Ok(digest.finalize());
             }
             Ok(n) => {
-                digest.write(&buf[..n]);
+                digest.update(&buf[..n]);
             }
             Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
             Err(err) => return Err(err),
@@ -77,15 +74,15 @@ pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
 
 /// Calculates the given content's CRC32 checksum.
 pub fn calc_crc32_bytes(contents: &[u8]) -> u32 {
-    let mut digest = CrcDigest::new(crc32::IEEE);
-    digest.write(contents);
-    digest.sum32()
+    let mut digest = crc32fast::Hasher::new();
+    digest.update(contents);
+    digest.finalize()
 }
 
-pub fn sha256(input: &[u8]) -> Result<Vec<u8>, ()> {
-    let mut hasher = Sha256::default();
-    hasher.input(input);
-    Ok(hex::encode(hasher.result()).into_bytes())
+/// Calculates the given content's SHA256 checksum.
+pub fn sha256(input: &[u8]) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+    openssl::hash::hash(openssl::hash::MessageDigest::sha256(), input)
+        .map(|digest| hex::encode(digest).into_bytes())
 }
 
 #[cfg(test)]

@@ -9,7 +9,6 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use std::sync::Arc;
 
-use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
 
 use kvproto::import_kvpb::*;
@@ -175,21 +174,21 @@ impl LazySSTInfo {
 
         // TODO: If we can compute the CRC simultaneously with upload, we don't
         // need to open() and read() the file twice.
-        let mut digest = crc32::Digest::new(crc32::IEEE);
+        let mut digest = crc32fast::Hasher::new();
         let mut length = 0u64;
         loop {
             let size = seq_file.read(&mut buf)?;
             if size == 0 {
                 break;
             }
-            digest.write(&buf[..size]);
+            digest.update(&buf[..size]);
             length += size as u64;
         }
 
         let mut meta = SSTMeta::new();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
         meta.set_range(self.range.clone());
-        meta.set_crc32(digest.sum32());
+        meta.set_crc32(digest.finalize());
         meta.set_length(length);
         meta.set_cf_name(self.cf_name.to_owned());
 

@@ -7,7 +7,6 @@ use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
@@ -404,7 +403,7 @@ pub struct ImportFile {
     meta: SSTMeta,
     path: ImportPath,
     file: Option<File>,
-    digest: crc32::Digest,
+    digest: crc32fast::Hasher,
 }
 
 impl ImportFile {
@@ -417,13 +416,13 @@ impl ImportFile {
             meta,
             path,
             file: Some(file),
-            digest: crc32::Digest::new(crc32::IEEE),
+            digest: crc32fast::Hasher::new(),
         })
     }
 
     pub fn append(&mut self, data: &[u8]) -> Result<()> {
         self.file.as_mut().unwrap().write_all(data)?;
-        self.digest.write(data);
+        self.digest.update(data);
         Ok(())
     }
 
@@ -446,7 +445,7 @@ impl ImportFile {
     }
 
     fn validate(&self) -> Result<()> {
-        let crc32 = self.digest.sum32();
+        let crc32 = self.digest.clone().finalize();
         let expect = self.meta.get_crc32();
         if crc32 != expect {
             let reason = format!("crc32 {}, expect {}", crc32, expect);
@@ -551,6 +550,7 @@ mod tests {
 
     use engine::rocks::util::new_engine;
     use tempdir::TempDir;
+    use tikv_util::file::calc_crc32_bytes;
 
     #[test]
     fn test_import_dir() {
@@ -629,7 +629,7 @@ mod tests {
         };
 
         let data = b"test_data";
-        let crc32 = calc_data_crc32(data);
+        let crc32 = calc_crc32_bytes(data);
 
         let mut meta = SSTMeta::new();
 

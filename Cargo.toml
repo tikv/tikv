@@ -73,7 +73,8 @@ tempdir = "0.3"
 time = "0.1"
 toml = "0.4"
 libc = "0.2"
-crc = "1.8"
+crc32fast = "1.2"
+crc64fast = "0.1"
 fs2 = "0.4"
 protobuf = "~2.0"
 nix = "0.11"
@@ -99,7 +100,7 @@ zipf = "5.0.1"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.4", features = [ "secure" ] }
+grpcio = { version = "0.4", features = [ "openssl-vendored" ] }
 raft = "0.4.3"
 crossbeam = "0.5"
 derive_more = "0.11.0"
@@ -152,6 +153,8 @@ default-features = false
 [replace]
 "log:0.3.9" = { git = "https://github.com/busyjay/log", branch = "use-static-module" }
 "log:0.4.6" = { git = "https://github.com/busyjay/log", branch = "revert-to-static" }
+# TODO: To reduce build time, we'd better to remove the replace once v0.4.7 is released.
+"grpcio:0.4.6" = { git = "https://github.com/tikv/grpc-rs", branch = "v0.4.x" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
