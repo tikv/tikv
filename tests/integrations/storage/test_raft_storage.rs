@@ -215,6 +215,7 @@ fn write_test_data<E: Engine>(
                 ts,
             )
             .unwrap()
+            .0
             .into_iter()
             .for_each(|res| res.unwrap());
         storage

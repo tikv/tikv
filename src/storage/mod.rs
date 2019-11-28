@@ -20,6 +20,8 @@ pub mod readpool_impl;
 pub mod txn;
 pub mod types;
 
+mod ts_cache;
+
 use std::cmp;
 use std::sync::{atomic, Arc};
 
@@ -35,6 +37,7 @@ use self::commands::{get_priority_tag, Command, CommandKind};
 use self::kv::with_tls_engine;
 use self::metrics::*;
 use self::mvcc::{Lock, TsSet};
+use self::ts_cache::{AtomicCache as AtomicTsCache, Cache};
 use self::txn::scheduler::Scheduler as TxnScheduler;
 
 pub use self::commands::{Options, PointGetCommand};
@@ -99,6 +102,8 @@ pub struct Storage<E: Engine, L: LockManager> {
 
     sched: TxnScheduler<E, L>,
 
+    ts_cache: Arc<AtomicTsCache>,
+
     /// The thread pool used to run most read operations.
     read_pool_low: FuturePool,
     read_pool_normal: FuturePool,
@@ -127,6 +132,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
         Self {
             engine: self.engine.clone(),
             sched: self.sched.clone(),
+            ts_cache: self.ts_cache.clone(),
             read_pool_low: self.read_pool_low.clone(),
             read_pool_normal: self.read_pool_normal.clone(),
             read_pool_high: self.read_pool_high.clone(),
@@ -185,6 +191,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(Storage {
             engine,
             sched,
+            ts_cache: Arc::new(AtomicTsCache::new()),
             read_pool_low,
             read_pool_normal,
             read_pool_high,
@@ -253,6 +260,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         const CMD: &str = "get";
         let priority = get_priority_tag(ctx.get_priority());
 
+        self.ts_cache.update(start_ts);
+
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
@@ -310,6 +319,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
+
+        let max_ts = gets.iter().fold(TimeStamp::zero(), |max, get| {
+            std::cmp::max(max, get.ts.as_ref().map_or(TimeStamp::zero(), |ts| *ts))
+        });
+        self.ts_cache.update(max_ts);
+
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
@@ -367,6 +382,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "batch_get";
         let priority = get_priority_tag(ctx.get_priority());
+
+        self.ts_cache.update(start_ts);
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
@@ -439,6 +456,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "scan";
         let priority = get_priority_tag(ctx.get_priority());
+
+        self.ts_cache.update(start_ts);
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
@@ -529,7 +548,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         primary: Vec<u8>,
         start_ts: TimeStamp,
         options: Options,
-        callback: Callback<Vec<Result<()>>>,
+        callback: Callback<(Vec<Result<()>>, TimeStamp)>,
     ) -> Result<()> {
         for m in &mutations {
             let key_size = m.key().as_encoded().len();
@@ -550,6 +569,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 options,
             },
         };
+        let ts_cache = self.ts_cache.clone();
+        let callback = Box::new(move |res: Result<Vec<Result<()>>>| {
+            callback(res.map(|res| (res, ts_cache.get())));
+        });
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
         Ok(())

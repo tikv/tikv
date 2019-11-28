@@ -434,7 +434,7 @@ impl<E: Engine> AssertionStorage<E> {
         start_ts: impl Into<TimeStamp>,
         expect_locks: Vec<(&[u8], &[u8], TimeStamp)>,
     ) {
-        let res = self
+        let (res, _) = self
             .store
             .prewrite(
                 self.ctx.clone(),

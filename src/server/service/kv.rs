@@ -2009,6 +2009,10 @@ fn future_prewrite<E: Engine, L: LockManager>(
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
+            let v = v.and_then(|(v, max_read_ts)| {
+                resp.set_max_read_ts(max_read_ts.into_inner());
+                Ok(v)
+            });
             resp.set_errors(extract_key_errors(v).into());
         }
         resp
