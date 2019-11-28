@@ -19,7 +19,6 @@ use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
-use tidb_query::codec::table::decode_table_id;
 use tikv::raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, RegionInfoProvider};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
@@ -378,11 +377,13 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     warn!("backup task has canceled"; "range" => ?brange);
                     return Ok(());
                 }
-                let table_id = brange
+                // TODO: make file_name unique and short
+                let key = brange
                     .start_key
                     .clone()
-                    .and_then(|k| decode_table_id(&k.into_raw().unwrap()).ok());
-                let name = backup_file_name(store_id, &brange.region, table_id);
+                    .map(|k| hex::encode(k.into_raw().unwrap()));
+
+                let name = backup_file_name(store_id, &brange.region, key);
                 let mut writer = match BackupWriter::new(db.clone(), &name, storage.limiter.clone())
                 {
                     Ok(w) => w,
@@ -566,14 +567,14 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
 
 /// Construct an backup file name based on the given store id and region.
 /// A name consists with three parts: store id, region_id and a epoch version.
-fn backup_file_name(store_id: u64, region: &Region, table_id: Option<i64>) -> String {
-    match table_id {
-        Some(t_id) => format!(
+fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+    match key {
+        Some(k) => format!(
             "{}_{}_{}_{}",
             store_id,
             region.get_id(),
             region.get_region_epoch().get_version(),
-            t_id
+            k
         ),
         None => format!(
             "{}_{}_{}",
