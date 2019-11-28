@@ -46,6 +46,12 @@ failpoints = ["tikv/failpoints"]
 profiling = ["profiler/profiling"]
 protobuf-codec = ["tikv/protobuf-codec"]
 prost-codec = ["tikv/prost-codec", "test_coprocessor/prost-codec"]
+tcmalloc = ["tikv/tcmalloc"]
+jemalloc = ["tikv/jemalloc"]
+mimalloc = ["tikv/mimalloc"]
+portable = ["tikv/portable"]
+sse = ["tikv/sse"]
+mem-profiling = ["tikv/mem-profiling"]
 
 [dependencies]
 crc32fast = "1.2"

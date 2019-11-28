@@ -226,8 +226,9 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  $(TEST_THREADS) && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --manifest-path tests/Cargo.toml ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --manifest-path tests/Cargo.toml --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  $(TEST_THREADS) && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
