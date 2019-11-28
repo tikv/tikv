@@ -304,14 +304,14 @@ impl<E: Engine> Endpoint<E> {
                     .map(|_| (tracker, snapshot))
             })
             .and_then(move |(tracker, snapshot)| {
-                let mut builder = handler_builder;
-
-                if tracker.req_ctx.cache_match_version.is_some()
+                let builder = if tracker.req_ctx.cache_match_version.is_some()
                     && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
                 {
                     // Build a cached request handler instead if cache version is matching.
-                    builder = CachedRequestHandler::builder();
-                }
+                    CachedRequestHandler::builder()
+                } else {
+                    handler_builder
+                };
 
                 future::result(builder(snapshot, &tracker.req_ctx))
                     .map(|handler| (tracker, handler))
