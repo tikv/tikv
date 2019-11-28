@@ -5,6 +5,7 @@ use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::Result;
+use tidb_query_datatype::EvalType;
 
 const SPACE: u8 = 0o40u8;
 
@@ -236,6 +237,50 @@ pub fn locate_binary_3_args(
     } else {
         Ok(None)
     }
+}
+
+#[rpn_fn(raw_varg, min_args = 2, extra_validator = elt_validator)]
+#[inline]
+pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
+    assert!(raw_args.len() >= 2);
+    let index = raw_args[0].as_int();
+    Ok(match *index {
+        None => None,
+        Some(i) => {
+            if i <= 0 || i + 1 > raw_args.len() as i64 {
+                return Ok(None);
+            }
+            raw_args[i as usize].as_bytes().to_owned()
+        }
+    })
+}
+
+/// validate the arguments are `(&Option<Int>, &[&Option<Bytes>)])`
+fn elt_validator(expr: &tipb::Expr) -> Result<()> {
+    let children = expr.get_children();
+    assert!(children.len() >= 2);
+    super::function::validate_expr_return_type(&children[0], EvalType::Int)?;
+    for i in 1..children.len() {
+        super::function::validate_expr_return_type(&children[i], EvalType::Bytes)?;
+    }
+    Ok(())
+}
+
+#[rpn_fn]
+#[inline]
+pub fn space(len: &Option<Int>) -> Result<Option<Bytes>> {
+    Ok(match *len {
+        Some(len) => {
+            if len > i64::from(tidb_query_datatype::MAX_BLOB_WIDTH) {
+                None
+            } else if len <= 0 {
+                Some(Vec::new())
+            } else {
+                Some(vec![SPACE; len as usize])
+            }
+        }
+        None => None,
+    })
 }
 
 #[rpn_fn]
@@ -925,6 +970,120 @@ mod tests {
                 .evaluate(ScalarFuncSig::LocateBinary3Args)
                 .unwrap();
             assert_eq!(output, exp)
+        }
+    }
+
+    #[test]
+    fn test_space() {
+        let test_cases = vec![
+            (None, None),
+            (Some(0), Some(b"".to_vec())),
+            (Some(0), Some(b"".to_vec())),
+            (Some(3), Some(b"   ".to_vec())),
+            (Some(-1), Some(b"".to_vec())),
+            (Some(i64::max_value()), None),
+            (
+                Some(i64::from(tidb_query_datatype::MAX_BLOB_WIDTH) + 1),
+                None,
+            ),
+            (
+                Some(i64::from(tidb_query_datatype::MAX_BLOB_WIDTH)),
+                Some(vec![
+                    super::SPACE;
+                    tidb_query_datatype::MAX_BLOB_WIDTH as usize
+                ]),
+            ),
+        ];
+
+        for (len, exp) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(len)
+                .evaluate(ScalarFuncSig::Space)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+    }
+
+    #[test]
+    fn test_elt() {
+        let test_cases: Vec<(Vec<ScalarValue>, _)> = vec![
+            (
+                vec![
+                    Some(1).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"DataBase".to_vec()),
+            ),
+            (
+                vec![
+                    Some(2).into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some(b"Hello World!".to_vec()),
+            ),
+            (
+                vec![
+                    None::<Int>.into(),
+                    Some(b"DataBase".to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                None,
+            ),
+            (vec![None::<Int>.into(), None::<Bytes>.into()], None),
+            (
+                vec![
+                    Some(1).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(3).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(0).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(-1).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(4).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello".to_vec()).into(),
+                    Some(b"Hola".to_vec()).into(),
+                    Some("Cześć".as_bytes().to_vec()).into(),
+                    Some("你好".as_bytes().to_vec()).into(),
+                    Some("Здравствуйте".as_bytes().to_vec()).into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                Some("Cześć".as_bytes().to_vec()),
+            ),
+        ];
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::Elt)
+                .unwrap();
+            assert_eq!(output, expect_output);
         }
     }
 

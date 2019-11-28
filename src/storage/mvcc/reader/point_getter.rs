@@ -277,7 +277,7 @@ mod tests {
     use crate::storage::{CFStatistics, Engine, Key, RocksEngine, TestEngineBuilder};
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
             .build()
@@ -285,7 +285,7 @@ mod tests {
     }
 
     fn new_single_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
             .multi(false)
@@ -608,7 +608,7 @@ mod tests {
     fn test_omit_value() {
         let engine = new_sample_engine_2();
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         let mut getter = PointGetterBuilder::new(snapshot.clone(), 4.into())
             .isolation_level(IsolationLevel::Si)
@@ -688,7 +688,7 @@ mod tests {
 
         must_prewrite_delete(&engine, key, key, 30);
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![30, 40, 50]))
@@ -696,7 +696,7 @@ mod tests {
             .unwrap();
         must_get_value(&mut getter, key, val);
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![31, 29]))

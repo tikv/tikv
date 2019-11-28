@@ -10,7 +10,7 @@ path = "cli.rs"
 [dependencies]
 cargo_metadata = "0.6"
 clap = "2.33"
-structopt = "0.2"
 failure = "0.1"
 lazy_static = "1.3"
 regex = "1.1"
+structopt = "0.2"
