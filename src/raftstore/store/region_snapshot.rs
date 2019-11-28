@@ -42,7 +42,7 @@ impl RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
-            // Use 0 to indicate that we the apply index is missing and we need to KvGet it,
+            // Use 0 to indicate that the apply index is missing and we need to KvGet it,
             // since apply index must be >= RAFT_INIT_LOG_INDEX.
             apply_index: Arc::new(AtomicU64::new(0)),
         }
