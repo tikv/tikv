@@ -6,7 +6,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 + Pessimistic Transaction: keep lock's ttl when receive a smaller ttl [#6056](https://github.com/tikv/tikv/pull/6056)
 + rust-rocksdb: fix titan options for cf when create cf [#6009](https://github.com/tikv/tikv/pull/6009)
 + Fix TiKV panic when aggregation expr type is not valid [#6002](https://github.com/tikv/tikv/pull/6002)
-+ Pessimistic Transaction:reduce clean up requests in lock_manager [#5965](https://github.com/tikv/tikv/pull/5965)
++ Pessimistic Transaction: reduce clean up requests in lock_manager [#5965](https://github.com/tikv/tikv/pull/5965)
 + Fix a region merge bug which may cause panic: set is_merging flag after restart in raftstore [#5892](https://github.com/tikv/tikv/pull/5892)
 + Generate flamegraph at runtime [#5961](https://github.com/tikv/tikv/pull/5961)
 + Support to change the config gc io limit dynamically [#5957](https://github.com/tikv/tikv/pull/5957)
