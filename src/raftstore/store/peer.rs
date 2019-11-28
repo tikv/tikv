@@ -1197,6 +1197,12 @@ impl Peer {
 
         self.add_ready_metric(&ready, &mut ctx.raft_metrics.ready);
 
+        if !ready.committed_entries.as_ref().map_or(true, Vec::is_empty)
+            && ctx.current_time.is_none()
+        {
+            ctx.current_time.replace(monotonic_raw_now());
+        }
+
         // The leader can write to disk and replicate to the followers concurrently
         // For more details, check raft thesis 10.2.1.
         if self.is_leader() {
@@ -1289,7 +1295,7 @@ impl Peer {
         } else {
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
-            let mut lease_to_be_updated = self.is_leader();
+            let lease_to_be_updated = self.is_leader();
             let mut split_to_be_updated = self.is_leader();
             let mut merge_to_be_update = self.is_leader();
             if !lease_to_be_updated {
@@ -1298,17 +1304,28 @@ impl Peer {
                 // have no effect.
                 self.proposals.clear();
             }
+            if lease_to_be_updated {
+                let first_propose_time = committed_entries
+                    .iter()
+                    .find_map(|entry| self.find_propose_time(entry.get_index(), entry.get_term()));
+                let last_propose_time = committed_entries
+                    .iter()
+                    .rev()
+                    .find_map(|entry| self.find_propose_time(entry.get_index(), entry.get_term()))
+                    .or(first_propose_time);
+                if let Some(propose_time) = first_propose_time {
+                    ctx.raft_metrics.commit_log.observe(duration_to_sec(
+                        (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
+                    ));
+                }
+                if let Some(propose_time) = last_propose_time {
+                    self.maybe_renew_leader_lease(propose_time, ctx, None);
+                }
+            }
+
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
-                if lease_to_be_updated {
-                    let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
-                    if let Some(propose_time) = propose_time {
-                        self.maybe_renew_leader_lease(propose_time, ctx, None);
-                        lease_to_be_updated = false;
-                    }
-                }
-
                 // We care about split/merge commands that are committed in the current term.
                 if entry.term == self.term() && (split_to_be_updated || merge_to_be_update) {
                     let ctx = ProposalContext::from_bytes(&entry.context);
@@ -1660,15 +1677,24 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: None,
                 };
-                self.post_propose(meta, is_conf_change, cb);
+                self.post_propose(ctx, meta, is_conf_change, cb);
                 true
             }
         }
     }
 
-    fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
+    fn post_propose<T, C>(
+        &mut self,
+        poll_ctx: &mut PollContext<T, C>,
+        mut meta: ProposalMeta,
+        is_conf_change: bool,
+        cb: Callback,
+    ) {
         // Try to renew leader lease on every consistent read/write request.
-        meta.renew_lease_time = Some(monotonic_raw_now());
+        if poll_ctx.current_time.is_none() {
+            poll_ctx.current_time = Some(monotonic_raw_now());
+        }
+        meta.renew_lease_time = poll_ctx.current_time;
 
         if !cb.is_none() {
             let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
@@ -1727,7 +1753,7 @@ impl Peer {
                     "peer_id" => self.peer.get_id(),
                     "request" => ?change_peer,
                 );
-                return Err(box_err!("invalid conf change request"));
+                return Err(box_err!("{} invalid conf change request", self.tag));
             }
             _ => {}
         }
@@ -1742,7 +1768,7 @@ impl Peer {
                 "peer_id" => self.peer.get_id(),
                 "request" => ?change_peer,
             );
-            return Err(box_err!("ignore remove leader"));
+            return Err(box_err!("{} ignore remove leader", self.tag));
         }
 
         let status = self.raft_group.status_ref();
@@ -1856,16 +1882,19 @@ impl Peer {
             |s| if s.map_or(true, |s| s.parse().unwrap_or(true)) {
                 Ok(())
             } else {
-                Err(box_err!("can not read due to injected failure"))
+                Err(box_err!(
+                    "{} can not read due to injected failure",
+                    self.tag
+                ))
             }
         );
 
         // See more in ready_to_handle_read().
         if self.is_splitting() {
-            return Err(box_err!("can not read index due to split"));
+            return Err(box_err!("{} can not read index due to split", self.tag));
         }
         if self.is_merging() {
-            return Err(box_err!("can not read index due to merge"));
+            return Err(box_err!("{} can not read index due to merge", self.tag));
         }
         Ok(())
     }
@@ -1925,7 +1954,7 @@ impl Peer {
         if !self.is_leader() && self.leader_id() == INVALID_ID {
             cmd_resp::bind_error(
                 &mut err_resp,
-                box_err!("can not read index due to no leader"),
+                box_err!("{} can not read index due to no leader", self.tag),
             );
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             cb.invoke_with_response(err_resp);
@@ -1971,7 +2000,7 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: Some(renew_lease_time),
                 };
-                self.post_propose(meta, false, Callback::None);
+                self.post_propose(poll_ctx, meta, false, Callback::None);
             }
         }
 
@@ -2003,7 +2032,10 @@ impl Peer {
         for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
             entry_size += entry.get_data().len();
             if entry.get_entry_type() == EntryType::EntryConfChange {
-                return Err(box_err!("log gap contains conf change, skip merging."));
+                return Err(box_err!(
+                    "{} log gap contains conf change, skip merging.",
+                    self.tag
+                ));
             }
             if entry.get_data().is_empty() {
                 continue;
@@ -2075,7 +2107,10 @@ impl Peer {
         if self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
         {
-            return Err(box_err!("peer in merging mode, can't do proposal."));
+            return Err(box_err!(
+                "{} peer in merging mode, can't do proposal.",
+                self.tag
+            ));
         }
 
         poll_ctx.raft_metrics.propose.normal += 1;
@@ -2162,7 +2197,10 @@ impl Peer {
         req: &RaftCmdRequest,
     ) -> Result<u64> {
         if self.pending_merge_state.is_some() {
-            return Err(box_err!("peer in merging mode, can't do proposal."));
+            return Err(box_err!(
+                "{} peer in merging mode, can't do proposal.",
+                self.tag
+            ));
         }
         if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!(
@@ -2414,7 +2452,7 @@ pub trait RequestInspector {
             }
 
             if has_read && has_write {
-                return Err(box_err!("read and write can't be mixed in one batch."));
+                return Err(box_err!("read and write can't be mixed in one batch"));
             }
         }
 
