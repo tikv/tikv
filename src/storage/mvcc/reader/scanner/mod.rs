@@ -13,8 +13,8 @@ use self::forward::ForwardScanner;
 use crate::storage::mvcc::{default_not_found_error, Result, TimeStamp, TsSet};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
-    CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Scanner as StoreScanner,
-    Snapshot, Statistics,
+    CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Scanner as StoreScanner, Snapshot,
+    Statistics,
 };
 
 pub use self::txn_entry::Scanner as EntryScanner;

@@ -11,7 +11,6 @@ use engine_traits::{SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
-
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{self, box_err};
 

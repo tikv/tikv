@@ -24,12 +24,7 @@ use raft::StateRole;
 use crate::raftstore::router::ServerRaftStoreRouter;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
-use crate::server::metrics::{
-    AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC, AUTO_GC_SAFE_POINT_GAUGE, AUTO_GC_STATUS_GAUGE_VEC,
-    GC_COMMAND_COUNTER_VEC_STATIC, GC_EMPTY_RANGE_COUNTER, GC_GCTASK_COUNTER_VEC,
-    GC_GCTASK_FAIL_COUNTER_VEC, GC_KEYS_COUNTER_VEC, GC_SKIPPED_COUNTER,
-    GC_TASK_DURATION_HISTOGRAM_VEC, GC_TOO_BUSY_COUNTER,
-};
+use crate::server::metrics::*;
 use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
     Statistics,
