@@ -8,7 +8,7 @@ use super::util::new_peer;
 use crate::raftstore::Result;
 use engine::rocks;
 use engine::rocks::Writable;
-use engine::{Engines, Iterable, Mutable, WriteBatch, DB};
+use engine::{Engines, Immutable, Iterable, Mutable, WriteBatch, WriteBatchBase, DB};
 use engine::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
@@ -65,16 +65,16 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     let mut state = RegionLocalState::default();
     state.set_region(region.clone());
 
-    let wb = WriteBatch::default();
+    let mut wb = WriteBatch::default();
     box_try!(wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region));
     let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
     box_try!(wb.put_msg_cf(handle, &keys::region_state_key(region.get_id()), &state));
-    write_initial_apply_state(&engines.kv, &wb, region.get_id())?;
+    write_initial_apply_state(&engines.kv, &mut wb, region.get_id())?;
     engines.write_kv(&wb)?;
     engines.sync_kv()?;
 
-    let raft_wb = WriteBatch::default();
-    write_initial_raft_state(&raft_wb, region.get_id())?;
+    let mut raft_wb = WriteBatch::default();
+    write_initial_raft_state(&mut raft_wb, region.get_id())?;
     engines.write_raft(&raft_wb)?;
     engines.sync_raft()?;
     Ok(())
@@ -85,7 +85,7 @@ pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Res
     box_try!(engines.raft.delete(&keys::raft_state_key(region_id)));
     engines.sync_raft()?;
 
-    let wb = WriteBatch::default();
+    let mut wb = WriteBatch::default();
     box_try!(wb.delete(keys::PREPARE_BOOTSTRAP_KEY));
     // should clear raft initial state too.
     let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;

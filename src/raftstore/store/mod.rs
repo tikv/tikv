@@ -31,7 +31,7 @@ pub use self::peer::{
     Peer, PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy,
 };
 pub use self::peer_storage::{
-    clear_meta, do_snapshot, init_apply_state, init_raft_state, maybe_upgrade_from_2_to_3,
+    clear_raftdb_meta, do_snapshot, init_apply_state, init_raft_state, maybe_upgrade_from_2_to_3,
     write_initial_apply_state, write_initial_raft_state, write_peer_state, CacheQueryStats,
     PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX,
     RAFT_INIT_LOG_TERM,

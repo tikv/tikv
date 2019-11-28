@@ -97,7 +97,7 @@ fn fill_writebatch(wb: &WriteBatch, target_size: usize) {
 #[bench]
 fn bench_writebatch_without_capacity(b: &mut Bencher) {
     b.iter(|| {
-        let wb = WriteBatch::default();
+        let mut wb = WriteBatch::default();
         fill_writebatch(&wb, 4096);
     });
 }
@@ -105,7 +105,7 @@ fn bench_writebatch_without_capacity(b: &mut Bencher) {
 #[bench]
 fn bench_writebatch_with_capacity(b: &mut Bencher) {
     b.iter(|| {
-        let wb = WriteBatch::with_capacity(4096);
+        let mut wb = WriteBatch::with_capacity(4096);
         fill_writebatch(&wb, 4096);
     });
 }

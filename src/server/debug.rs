@@ -12,7 +12,7 @@ use std::{error, result};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{
     CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
-    SeekKey, Writable, WriteBatch, WriteOptions, DB,
+    SeekKey, Writable, WriteBatch, WriteBatchBase, WriteOptions, DB,
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
@@ -333,12 +333,12 @@ impl<E: Engine> Debugger<E> {
     pub fn set_region_tombstone(&self, regions: Vec<Region>) -> Result<Vec<(u64, Error)>> {
         let store_id = self.get_store_id()?;
         let db = &self.engines.kv;
-        let wb = WriteBatch::default();
+        let mut wb = WriteBatch::default();
 
         let mut errors = Vec::with_capacity(regions.len());
         for region in regions {
             let region_id = region.get_id();
-            if let Err(e) = set_region_tombstone(db.as_ref(), store_id, region, &wb) {
+            if let Err(e) = set_region_tombstone(db.as_ref(), store_id, region, &mut wb) {
                 errors.push((region_id, e));
             }
         }
@@ -353,7 +353,7 @@ impl<E: Engine> Debugger<E> {
 
     pub fn set_region_tombstone_by_id(&self, regions: Vec<u64>) -> Result<Vec<(u64, Error)>> {
         let db = &self.engines.kv;
-        let wb = WriteBatch::default();
+        let mut wb = WriteBatch::default();
         let mut errors = Vec::with_capacity(regions.len());
         for region_id in regions {
             let key = keys::region_state_key(region_id);
@@ -375,7 +375,7 @@ impl<E: Engine> Debugger<E> {
                 continue;
             }
             let region = &region_state.get_region();
-            write_peer_state(db, &wb, region, PeerState::Tombstone, None).unwrap();
+            write_peer_state(db, &mut wb, region, PeerState::Tombstone, None).unwrap();
         }
 
         let mut write_opts = WriteOptions::new();
@@ -558,12 +558,12 @@ impl<E: Engine> Debugger<E> {
             let msg = format!("Store {} in the failed list", store_id);
             return Err(Error::Other(msg.into()));
         }
-        let wb = WriteBatch::default();
+        let mut wb = WriteBatch::default();
         let handle = box_try!(get_cf_handle(self.engines.kv.as_ref(), CF_RAFT));
         let store_ids = HashSet::<u64>::from_iter(store_ids);
 
         {
-            let remove_stores = |key: &[u8], value: &[u8]| {
+            let mut remove_stores = |key: &[u8], value: &[u8]| {
                 let (_, suffix_type) = box_try!(keys::decode_region_meta_key(key));
                 if suffix_type != keys::REGION_STATE_SUFFIX {
                     return Ok(());
@@ -625,8 +625,8 @@ impl<E: Engine> Debugger<E> {
         let kv = self.engines.kv.as_ref();
         let raft: &DB = self.engines.raft.as_ref();
 
-        let kv_wb = WriteBatch::default();
-        let raft_wb = WriteBatch::default();
+        let mut kv_wb = WriteBatch::default();
+        let mut raft_wb = WriteBatch::default();
         let kv_handle = box_try!(get_cf_handle(kv, CF_RAFT));
 
         if region.get_start_key() >= region.get_end_key() && !region.get_end_key().is_empty() {
@@ -682,14 +682,14 @@ impl<E: Engine> Debugger<E> {
         if box_try!(kv.get_msg_cf::<RaftApplyState>(CF_RAFT, &key)).is_some() {
             return Err(Error::Other("Store already has the RaftApplyState".into()));
         }
-        box_try!(write_initial_apply_state(kv, &kv_wb, region_id));
+        box_try!(write_initial_apply_state(kv, &mut kv_wb, region_id));
 
         // RaftLocalState.
         let key = keys::raft_state_key(region_id);
         if box_try!(raft.get_msg::<RaftLocalState>(&key)).is_some() {
             return Err(Error::Other("Store already has the RaftLocalState".into()));
         }
-        box_try!(write_initial_raft_state(&raft_wb, region_id));
+        box_try!(write_initial_raft_state(&mut raft_wb, region_id));
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
@@ -918,8 +918,8 @@ fn recover_mvcc_for_range(
     let wb_limit: usize = 10240;
 
     loop {
-        let wb = WriteBatch::default();
-        mvcc_checker.check_mvcc(&wb, Some(wb_limit))?;
+        let mut wb = WriteBatch::default();
+        mvcc_checker.check_mvcc(&mut wb, Some(wb_limit))?;
 
         let batch_size = wb.count();
 
@@ -1010,7 +1010,7 @@ impl MvccChecker {
         }
     }
 
-    pub fn check_mvcc(&mut self, wb: &WriteBatch, limit: Option<usize>) -> Result<()> {
+    pub fn check_mvcc(&mut self, wb: &mut WriteBatch, limit: Option<usize>) -> Result<()> {
         loop {
             // Find min key in the 3 CFs.
             let mut key = MvccChecker::min_key(None, &self.default_iter, |k| {
@@ -1032,7 +1032,7 @@ impl MvccChecker {
         }
     }
 
-    fn check_mvcc_key(&mut self, wb: &WriteBatch, key: &[u8]) -> Result<()> {
+    fn check_mvcc_key(&mut self, wb: &mut WriteBatch, key: &[u8]) -> Result<()> {
         self.scan_count += 1;
         if self.scan_count % 1_000_000 == 0 {
             v1!(
@@ -1192,7 +1192,7 @@ impl MvccChecker {
 
     fn delete(
         &mut self,
-        wb: &WriteBatch,
+        wb: &mut WriteBatch,
         cf: &str,
         key: &[u8],
         ts: Option<TimeStamp>,
@@ -1406,7 +1406,7 @@ fn validate_db_and_cf(db: DBType, cf: &str) -> Result<()> {
     }
 }
 
-fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch) -> Result<()> {
+fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &mut WriteBatch) -> Result<()> {
     let id = region.get_id();
     let key = keys::region_state_key(id);
 
@@ -2013,10 +2013,10 @@ mod tests {
         let raft_engine = debugger.engines.raft.as_ref();
         let store_id = 1; // It's a fake id.
 
-        let wb1 = WriteBatch::default();
+        let mut wb1 = WriteBatch::default();
         let handle1 = get_cf_handle(raft_engine, CF_DEFAULT).unwrap();
 
-        let wb2 = WriteBatch::default();
+        let mut wb2 = WriteBatch::default();
         let handle2 = get_cf_handle(kv_engine, CF_RAFT).unwrap();
 
         {
@@ -2290,7 +2290,7 @@ mod tests {
             .collect();
         let db = Arc::new(new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap());
         // Write initial KVs.
-        let wb = WriteBatch::default();
+        let mut wb = WriteBatch::default();
         for &(cf, ref k, ref v, _) in &kv {
             wb.put_cf(
                 get_cf_handle(&db, cf).unwrap(),
@@ -2302,7 +2302,7 @@ mod tests {
         db.write(&wb).unwrap();
         // Fix problems.
         let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
-        let wb = WriteBatch::default();
+        let mut wb = WriteBatch::default();
         checker.check_mvcc(&wb, None).unwrap();
         db.write(&wb).unwrap();
         // Check result.
@@ -2342,7 +2342,7 @@ mod tests {
 
         let debugger = new_debugger();
 
-        let wb = WriteBatch::default();
+        let mut wb = WriteBatch::default();
         for key in keys {
             let data_key = keys::data_key(key);
             let value = key.to_vec();

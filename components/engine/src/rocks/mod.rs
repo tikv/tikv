@@ -16,14 +16,14 @@ pub use rocksdb::{
     IngestExternalFileOptions, IngestionInfo, Kv, LRUCacheOptions, MapProperty, MemoryAllocator,
     PerfContext, Range, RateLimiter, ReadOptions, SeekKey, SequentialFile, SliceTransform,
     TablePropertiesCollection, TablePropertiesCollector, TablePropertiesCollectorFactory,
-    TitanBlobIndex, TitanDBOptions, UserCollectedProperties, Writable, WriteBatch, WriteOptions,
-    WriteStallCondition, WriteStallInfo, DB,
+    TitanBlobIndex, TitanDBOptions, UserCollectedProperties, Writable, WriteBatch, WriteBatchBase,
+    WriteOptions, WriteStallCondition, WriteStallInfo, DB,
 };
 
 #[cfg(test)]
 mod tests {
     use crate::rocks::{util, Writable};
-    use crate::{Iterable, Mutable, Peekable};
+    use crate::{Immutable, Iterable, Mutable, Peekable};
     use kvproto::metapb::Region;
     use std::sync::Arc;
     use tempfile::Builder;

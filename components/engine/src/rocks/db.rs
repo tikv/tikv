@@ -2,9 +2,9 @@
 
 use std::option::Option;
 
-use super::{util, DBIterator, DBVector, WriteBatch, DB};
+use super::{util, CFHandle, DBIterator, DBVector, WriteBatch, WriteBatchBase, DB};
 use crate::iterable::IterOptionsExt;
-use crate::{IterOption, Iterable, Mutable, Peekable, Result};
+use crate::{Immutable, IterOption, Iterable, Mutable, Peekable, Result};
 
 impl Peekable for DB {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
@@ -31,5 +31,6 @@ impl Iterable for DB {
     }
 }
 
-impl Mutable for DB {}
+impl Immutable for DB {}
+
 impl Mutable for WriteBatch {}

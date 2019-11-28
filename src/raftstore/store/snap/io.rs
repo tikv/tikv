@@ -4,7 +4,7 @@ use std::io::{self, BufReader};
 use std::{fs, usize};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::{IngestExternalFileOptions, Writable, WriteBatch, DB};
+use engine::rocks::{IngestExternalFileOptions, Writable, WriteBatch, WriteBatchBase, DB};
 use engine::CfName;
 use engine_rocks::{RocksSnapshot, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::IOLimiter;
@@ -107,7 +107,7 @@ pub fn apply_plain_cf_file(
 ) -> Result<(), Error> {
     let mut decoder = BufReader::new(box_try!(File::open(path)));
     let cf_handle = box_try!(get_cf_handle(&db, cf));
-    let wb = WriteBatch::default();
+    let mut wb = WriteBatch::default();
     loop {
         if stale_detector.is_stale() {
             return Err(Error::Abort);

@@ -6,10 +6,9 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use crate::raftstore::store::keys;
-use engine::rocks::Writable;
 use engine::util::MAX_DELETE_BATCH_SIZE;
 use engine::Iterable;
-use engine::{WriteBatch, DB};
+use engine::{WriteBatch, WriteBatchBase, DB};
 use tikv_util::worker::Runnable;
 
 pub struct Task {
@@ -74,7 +73,7 @@ impl Runner {
             info!("no need to gc"; "region_id" => region_id);
             return Ok(0);
         }
-        let raft_wb = WriteBatch::default();
+        let mut raft_wb = WriteBatch::default();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
@@ -148,7 +147,7 @@ mod tests {
 
         // generate raft logs
         let region_id = 1;
-        let raft_wb = WriteBatch::default();
+        let mut raft_wb = WriteBatch::default();
         for i in 0..100 {
             let k = keys::raft_log_key(region_id, i);
             raft_wb.put(&k, b"entry").unwrap();

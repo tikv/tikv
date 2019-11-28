@@ -10,10 +10,9 @@ use std::time::{Duration, Instant};
 use std::u64;
 
 use engine::rocks;
-use engine::rocks::Writable;
-use engine::WriteBatch;
 use engine::CF_RAFT;
-use engine::{util as engine_util, Engines, Mutable, Peekable};
+use engine::{util as engine_util, Engines, Immutable, Mutable, Peekable};
+use engine::{WriteBatch, WriteBatchBase};
 use engine_rocks::RocksSnapshot;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
@@ -331,7 +330,7 @@ impl SnapContext {
         };
         s.apply(options)?;
 
-        let wb = WriteBatch::default();
+        let mut wb = WriteBatch::default();
         region_state.set_state(PeerState::Normal);
         let handle = box_try!(rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
@@ -838,7 +837,7 @@ mod tests {
             s3.save().unwrap();
 
             // set applying state
-            let wb = WriteBatch::default();
+            let mut wb = WriteBatch::default();
             let handle = engine.kv.cf_handle(CF_RAFT).unwrap();
             let region_key = keys::region_state_key(id);
             let mut region_state = engine

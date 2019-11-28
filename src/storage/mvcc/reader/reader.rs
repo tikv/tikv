@@ -568,7 +568,7 @@ mod tests {
 
         fn write(&mut self, modifies: Vec<Modify>) {
             let db = &self.db;
-            let wb = WriteBatch::default();
+            let mut wb = WriteBatch::default();
             for rev in modifies {
                 match rev {
                     Modify::Put(cf, k, v) => {

@@ -3,7 +3,7 @@
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
-use engine::{WriteBatch, WriteOptions, DB};
+use engine::{WriteBatch, WriteBatchBase, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
@@ -740,7 +740,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 // but not write raft_local_state to raft rocksdb in time.
                 box_try!(peer_storage::recover_from_applying_state(
                     &self.engines,
-                    &raft_wb,
+                    &mut raft_wb,
                     region_id
                 ));
                 applying_count += 1;
@@ -828,8 +828,9 @@ impl<T, C> RaftPollerBuilder<T, C> {
             Some(value) => value,
         };
 
-        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, region.get_id(), &raft_state)
+        peer_storage::clear_raftdb_meta(&self.engines, raft_wb, region.get_id(), &raft_state)
             .unwrap();
+        peer_storage::clear_kvdb_meta(&self.engines, kv_wb, region.get_id()).unwrap();
         let key = keys::region_state_key(region.get_id());
         let handle = rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT).unwrap();
         kv_wb.put_msg_cf(handle, &key, origin_state).unwrap();

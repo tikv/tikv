@@ -10,7 +10,7 @@ use std::time::Duration;
 use engine::rocks;
 use engine::rocks::util::CFOptions;
 use engine::rocks::{
-    ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, DB,
+    ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, WriteBatchBase, DB,
 };
 use engine::Engines;
 use engine::Error as EngineError;
@@ -214,7 +214,7 @@ impl TestEngineBuilder {
 }
 
 fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
-    let wb = WriteBatch::default();
+    let mut wb = WriteBatch::default();
     for rev in modifies {
         let res = match rev {
             Modify::Delete(cf, k) => {

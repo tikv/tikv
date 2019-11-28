@@ -11,7 +11,7 @@ use tikv::raftstore::store::keys;
 const DEFAULT_DATA_SIZE: usize = 100_000;
 
 fn enc_write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
-    let wb = WriteBatch::default();
+    let mut wb = WriteBatch::default();
     for &(ref k, ref v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
     }
