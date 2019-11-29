@@ -200,7 +200,7 @@ fn fuzz_time(t: tidb_query::codec::mysql::Time, mut cursor: Cursor<&[u8]>) -> Re
     let _ = t.last_day_of_month();
     let _ = t.to_string();
     let mut v = Vec::new();
-    let _ = v.write_time(t);
+    let _ = v.write_time_le(t);
 
     let _: i64 = t.convert(&mut ctx)?;
     let _: u64 = t.convert(&mut ctx)?;

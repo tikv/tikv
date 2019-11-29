@@ -315,7 +315,8 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
         let encode_type = req.get_encode_type();
-        let encode_endian = req.get_tidb_system_endian();
+        let chunk_memory_layout = req.get_chunk_memory_layout();
+        let encode_endian = chunk_memory_layout.get_endian();
 
         let out_most_executor = if collect_exec_summary {
             build_executors::<_, ExecSummaryCollectorEnabled>(
