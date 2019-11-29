@@ -27,13 +27,15 @@ pub struct BuildStatistics {
 /// Build a snapshot file for the given column family in plain format.
 /// If there are no key-value pairs fetched, no files will be created at `path`,
 /// otherwise the file will be created and synchronized.
-pub fn build_plain_cf_file(
+pub fn build_plain_cf_file<S>(
     path: &str,
-    snap: &RocksSnapshot,
+    snap: &S,
     cf: &str,
     start_key: &[u8],
     end_key: &[u8],
-) -> Result<BuildStatistics, Error> {
+) -> Result<BuildStatistics, Error>
+where S: SnapshotTrait
+{
     let mut file = box_try!(OpenOptions::new().write(true).create_new(true).open(path));
     let mut stats = BuildStatistics::default();
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
