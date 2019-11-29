@@ -338,5 +338,5 @@ fn test_destroy_peer_on_pending_snapshot() {
 
     fail::remove(apply_snapshot_fp);
     // After peer 5 has applied snapshot, data should be got.
-    must_get_equal(&cluster.get_engine(3), b"k19", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k119", b"v1");
 }
