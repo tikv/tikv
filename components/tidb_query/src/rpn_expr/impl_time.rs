@@ -154,7 +154,11 @@ mod tests {
 
     use tipb::ScalarFuncSig;
 
+    use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
+    use crate::expr::{EvalConfig, EvalContext, SqlMode};
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+    use std::sync::Arc;
+    use tidb_query_datatype::FieldTypeTp;
 
     #[test]
     fn test_date_format() {
@@ -506,5 +510,20 @@ mod tests {
             let exp = exp.map(|v| v.as_bytes().to_vec());
             assert_eq!(output, exp);
         }
+
+        // case SqlMode::NO_ZERO_DATE
+        let mut cfg = EvalConfig::new();
+        cfg.set_sql_mode(SqlMode::NO_ZERO_DATE);
+        let ctx = EvalContext::new(Arc::new(cfg));
+        let (output, ctx) = RpnFnScalarEvaluator::new()
+            .context(ctx)
+            .push_param(Some(Time(0)))
+            .evaluate_raw(FieldTypeTp::String, ScalarFuncSig::MonthName);
+
+        assert_eq!(
+            ctx.warnings.warnings[0].get_code(),
+            ERR_TRUNCATE_WRONG_VALUE
+        );
+        assert!(output.unwrap().is_none());
     }
 }
