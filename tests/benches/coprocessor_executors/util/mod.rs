@@ -46,6 +46,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
         black_box(dag),
         black_box(ranges.to_vec()),
         black_box(ToTxnStore::<TargetTxnStore>::to_store(store)),
+        None,
         tikv_util::deadline::Deadline::from_now(std::time::Duration::from_secs(10)),
         64,
         false,
