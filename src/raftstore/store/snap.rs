@@ -13,10 +13,9 @@ use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 use std::marker::PhantomData;
 
-use engine::rocks::DB;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_rocks::{RocksEngine, RocksSnapshot, Compat};
-use engine_traits::{CFHandleExt, ImportExt, Snapshot as EngineSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{CFHandleExt, ImportExt, Snapshot as EngineSnapshot, KvEngine};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
@@ -152,8 +151,8 @@ impl SnapshotStatistics {
     }
 }
 
-pub struct ApplyOptions {
-    pub db: Arc<DB>,
+pub struct ApplyOptions<E> where E: KvEngine {
+    pub db: E,
     pub region: Region,
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
@@ -181,7 +180,7 @@ pub trait Snapshot: Read + Write + Send {
     fn meta(&self) -> io::Result<Metadata>;
     fn total_size(&self) -> io::Result<u64>;
     fn save(&mut self) -> io::Result<()>;
-    fn apply(&mut self, options: ApplyOptions) -> Result<()>;
+    fn apply(&mut self, options: ApplyOptions<RocksEngine>) -> Result<()>;
 }
 
 // A helper function to copy snapshot.
@@ -837,8 +836,8 @@ impl<S> Snapshot for Snap<S> where S: EngineSnapshot {
         Ok(())
     }
 
-    fn apply(&mut self, options: ApplyOptions) -> Result<()> {
-        box_try!(self.validate(options.db.c()));
+    fn apply(&mut self, options: ApplyOptions<RocksEngine>) -> Result<()> {
+        box_try!(self.validate(&options.db));
 
         let abort_checker = ApplyAbortChecker(options.abort);
         for cf_file in &mut self.cf_files {
@@ -850,11 +849,11 @@ impl<S> Snapshot for Snap<S> where S: EngineSnapshot {
             if plain_file_used(cf_file.cf) {
                 let path = cf_file.path.to_str().unwrap();
                 let batch_size = options.write_batch_size;
-                snap_io::apply_plain_cf_file(path, &abort_checker, options.db.c(), cf, batch_size)?;
+                snap_io::apply_plain_cf_file(path, &abort_checker, &options.db, cf, batch_size)?;
             } else {
                 let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
                 let path = cf_file.clone_path.to_str().unwrap();
-                snap_io::apply_sst_cf_file(path, options.db.c(), cf)?
+                snap_io::apply_sst_cf_file(path, &options.db, cf)?
             }
         }
         Ok(())
@@ -1363,7 +1362,7 @@ pub mod tests {
     use engine::rocks::{DBOptions, Env, DB};
     use engine::{Engines, Mutable, Peekable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::{RocksSnapshot, Compat};
     use engine_traits::Iterable;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
@@ -1705,7 +1704,7 @@ pub mod tests {
         let dst_db =
             Arc::new(rocks::util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap());
         let options = ApplyOptions {
-            db: Arc::clone(&dst_db),
+            db: dst_db.c().clone(),
             region: region.clone(),
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
@@ -2019,7 +2018,7 @@ pub mod tests {
             .unwrap();
         let dst_db = open_test_empty_db(&dst_db_dir.path(), None, None).unwrap();
         let options = ApplyOptions {
-            db: Arc::clone(&dst_db),
+            db: dst_db.c().clone(),
             region: region.clone(),
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,

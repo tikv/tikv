@@ -14,7 +14,7 @@ use engine::rocks::Writable;
 use engine::WriteBatch;
 use engine::CF_RAFT;
 use engine::{util as engine_util, Engines, Mutable, Peekable};
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksSnapshot, Compat};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -324,7 +324,7 @@ impl SnapContext {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: Arc::clone(&self.engines.kv),
+            db: self.engines.kv.c().clone(),
             region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
