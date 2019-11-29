@@ -135,7 +135,7 @@ pub fn month_name(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<
         Some(t) => {
             let month = t.month() as usize;
             if t.is_zero() && ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
-                ctx.handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                ctx.handle_invalid_time_error(Error::incorrect_datetime_value(t))
                     .map(|_| Ok(None))?
             } else if month == 0 || t.is_zero() {
                 Ok(None)
