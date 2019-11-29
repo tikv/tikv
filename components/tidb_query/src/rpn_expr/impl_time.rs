@@ -77,7 +77,7 @@ pub fn to_days(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int
         return Ok(None);
     }
     let t = t.as_ref().unwrap();
-      if t.is_zero() {
+    if t.is_zero() {
         return ctx
             .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
             .map(|_| Ok(None))?;
@@ -302,7 +302,7 @@ mod tests {
             .unwrap();
         assert_eq!(output, None);
     }
-  
+
     #[test]
     fn test_day_of_year() {
         let cases = vec![
@@ -330,7 +330,7 @@ mod tests {
             .unwrap();
         assert_eq!(output, None);
     }
-  
+
     #[test]
     fn test_to_days() {
         let cases = vec![
