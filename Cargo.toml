@@ -12,6 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -38,79 +39,79 @@ protobuf-codec = [
 name = "tikv"
 
 [dependencies]
+backtrace = "0.3.9"
+bitflags = "1.0.1"
+byteorder = "1.2"
+bytes = "0.4.12"
+chrono = "0.4"
+codec = { path = "components/codec" }
+crc32fast = "1.2"
+crc64fast = "0.1"
+crossbeam = "0.7.2"
+derive-new = "0.5"
+derive_more = "0.15.0"
+engine = { path = "components/engine" }
+engine_rocks = { path = "components/engine_rocks" }
+engine_traits = { path = "components/engine_traits" }
+fail = "0.3"
+failure = "0.1"
+fs2 = "0.4"
+futures = "0.1"
+futures-cpupool = "0.1"
+futures-locks = "0.1"
+grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
+hex = "0.3"
+hyper = { version = "0.12", default-features = false, features = ["runtime"] }
+keys = { path = "components/keys" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+lazy_static = "1.3"
+libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log_wrappers = { path = "components/log_wrappers" }
+mime = "0.3.13"
+more-asserts = "0.1"
+nix = "0.11"
+nom = "5.0.1"
+pd_client = { path = "components/pd_client" }
+prost = "0.5.0"
+protobuf = "2.8"
+quick-error = "1.2.2"
+raft = { version = "0.6.0-alpha" , default-features = false }
+rand = "0.6.5"
+regex = "1.3"
+rev_lines = "0.2.1"
+serde = "1.0"
+serde_derive = "1.0"
+serde_json = "1.0"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = { version = "2.3", default-features = false }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 slog-term = "2.4"
 slog_derive = "0.1"
-byteorder = "1.2"
-bytes = "0.4.12"
-rand = "0.6.5"
-quick-error = "1.2.2"
-tempfile = "3.0"
-time = "0.1"
-toml = "0.4"
-libc = "0.2"
-crc32fast = "1.2"
-crc64fast = "0.1"
-fs2 = "0.4"
 spin = "0.5"
-protobuf = "2.8"
-nix = "0.11"
-utime = "0.2"
-chrono = "0.4"
-lazy_static = "1.3"
-backtrace = "0.3.9"
-url = "2"
+sst_importer = { path = "components/sst_importer" }
 sys-info = "0.5.7"
-futures = "0.1"
-futures-cpupool = "0.1"
-futures-locks = "0.1"
-tokio-core = "0.1"
-tokio-timer = "0.2"
-tokio-executor = "0.1"
-tokio-sync = "0.1.7"
-serde = "1.0"
-serde_json = "1.0"
-serde_derive = "1.0"
-zipf = "5.0.1"
-bitflags = "1.0.1"
-fail = "0.3"
-uuid = { version = "0.7", features = [ "serde", "v4" ] }
-grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
-raft = { version = "0.6.0-alpha" , default-features = false }
-crossbeam = "0.7.2"
-derive_more = "0.15.0"
-hex = "0.3"
-more-asserts = "0.1"
-hyper = { version = "0.12", default-features = false, features = ["runtime"] }
-tokio-threadpool = "0.1.13"
-tokio-fs = "0.1.6"
-tokio-io = "0.1.12"
-vlog = "0.1.4"
-mime = "0.3.13"
-failure = "0.1"
-prost = "0.5.0"
-regex = "1.3"
-rev_lines = "0.2.1"
-nom = "5.0.1"
-derive-new = "0.5"
-tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+tempfile = "3.0"
+test_util = { path = "components/test_util" }
+tidb_query = { path = "components/tidb_query" }
 
 tikv_alloc = { path = "components/tikv_alloc", default-features = false }
 tikv_util = { path = "components/tikv_util" }
-test_util = { path = "components/test_util" }
-log_wrappers = { path = "components/log_wrappers" }
-engine = { path = "components/engine" }
-tidb_query = { path = "components/tidb_query" }
-pd_client = { path = "components/pd_client" }
-keys = { path = "components/keys" }
-engine_traits = { path = "components/engine_traits" }
-sst_importer = { path = "components/sst_importer" }
-engine_rocks = { path = "components/engine_rocks" }
-codec = { path = "components/codec" }
+time = "0.1"
+tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+tokio-core = "0.1"
+tokio-executor = "0.1"
+tokio-fs = "0.1.6"
+tokio-io = "0.1.12"
+tokio-sync = "0.1.7"
+tokio-threadpool = "0.1.13"
+tokio-timer = "0.2"
+toml = "0.4"
+url = "2"
+utime = "0.2"
+uuid = { version = "0.7", features = [ "serde", "v4" ] }
+vlog = "0.1.4"
+zipf = "5.0.1"
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"

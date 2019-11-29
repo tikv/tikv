@@ -10,10 +10,10 @@ test = false
 
 [dependencies]
 crc32fast = "1.2"
-uuid = { version = "0.7", features = [ "serde", "v4" ] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 
 engine = { path = "../engine" }
-engine_traits = { path = "../engine_traits" }
 engine_rocks = { path = "../engine_rocks" }
+engine_traits = { path = "../engine_traits" }
 keys = { path = "../keys" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+uuid = { version = "0.7", features = [ "serde", "v4" ] }
