@@ -4,14 +4,14 @@ use std::io::{self, BufReader};
 use std::{fs, usize};
 use std::sync::Arc;
 
-use engine::rocks::util::get_cf_handle;
-use engine::rocks::{Writable, WriteBatch, DB};
+use engine::rocks::{DB};
 use engine::CfName;
 use engine_rocks::{RocksSnapshot, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::IOLimiter;
 use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
 use engine_traits::{ImportExt, CFHandleExt, IngestExternalFileOptions};
 use engine_rocks::{RocksEngine, Compat};
+use engine_traits::{WriteBatch, KvEngine, Mutable};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
 use super::Error;
@@ -108,9 +108,9 @@ pub fn apply_plain_cf_file(
     cf: &str,
     batch_size: usize,
 ) -> Result<(), Error> {
+    let db = db.c();
     let mut decoder = BufReader::new(box_try!(File::open(path)));
-    let cf_handle = box_try!(get_cf_handle(&db, cf));
-    let wb = WriteBatch::default();
+    let wb = db.write_batch();
     loop {
         if stale_detector.is_stale() {
             return Err(Error::Abort);
@@ -123,7 +123,7 @@ pub fn apply_plain_cf_file(
             return Ok(());
         }
         let value = box_try!(decoder.decode_compact_bytes());
-        box_try!(wb.put_cf(cf_handle, &key, &value));
+        box_try!(wb.put_cf(cf, &key, &value));
         if wb.data_size() >= batch_size {
             box_try!(db.write(&wb));
             wb.clear();
