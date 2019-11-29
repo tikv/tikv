@@ -73,10 +73,11 @@ pub fn day_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn to_days(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
-    if t.is_none() {
-        return Ok(None);
-    }
-    let t = t.as_ref().unwrap();
+    let t = match t {
+        Some(v) => v,
+        _ => return Ok(None),
+    };
+
     if t.is_zero() {
         if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
             return ctx
@@ -85,7 +86,7 @@ pub fn to_days(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int
         }
         return Ok(Some(0));
     }
-    Ok(Some(i64::from(t.day_number())))
+    Ok(Some(Int::from(t.day_number())))
 }
 
 #[rpn_fn(capture = [ctx])]
