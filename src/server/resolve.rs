@@ -143,9 +143,8 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use crate::pd::{PdClient, PdFuture, RegionStat, Result};
+    use crate::pd::{PdClient, Result};
     use kvproto::metapb;
-    use kvproto::pdpb;
     use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
@@ -156,21 +155,6 @@ mod tests {
     }
 
     impl PdClient for MockPdClient {
-        fn get_cluster_id(&self) -> Result<u64> {
-            unimplemented!();
-        }
-        fn bootstrap_cluster(&self, _: metapb::Store, _: metapb::Region) -> Result<()> {
-            unimplemented!();
-        }
-        fn is_cluster_bootstrapped(&self) -> Result<bool> {
-            unimplemented!();
-        }
-        fn alloc_id(&self) -> Result<u64> {
-            unimplemented!();
-        }
-        fn put_store(&self, _: metapb::Store) -> Result<()> {
-            unimplemented!();
-        }
         fn get_store(&self, _: u64) -> Result<metapb::Store> {
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
@@ -178,57 +162,6 @@ mod tests {
             sock.set_port(tikv_util::time::duration_to_ms(self.start.elapsed()) as u16);
             store.set_address(format!("{}:{}", sock.ip(), sock.port()));
             Ok(store)
-        }
-        fn get_cluster_config(&self) -> Result<metapb::Cluster> {
-            unimplemented!();
-        }
-        fn get_region(&self, _: &[u8]) -> Result<metapb::Region> {
-            unimplemented!();
-        }
-        fn get_region_by_id(&self, _: u64) -> PdFuture<Option<metapb::Region>> {
-            unimplemented!();
-        }
-        fn region_heartbeat(
-            &self,
-            _: metapb::Region,
-            _: metapb::Peer,
-            _: RegionStat,
-        ) -> PdFuture<()> {
-            unimplemented!();
-        }
-
-        fn handle_region_heartbeat_response<F>(&self, _: u64, _: F) -> PdFuture<()>
-        where
-            F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
-        {
-            unimplemented!()
-        }
-
-        fn ask_split(&self, _: metapb::Region) -> PdFuture<pdpb::AskSplitResponse> {
-            unimplemented!();
-        }
-
-        fn ask_batch_split(
-            &self,
-            _: metapb::Region,
-            _: usize,
-        ) -> PdFuture<pdpb::AskBatchSplitResponse> {
-            unimplemented!();
-        }
-        fn store_heartbeat(&self, _: pdpb::StoreStats) -> PdFuture<()> {
-            unimplemented!();
-        }
-        fn report_batch_split(&self, _: Vec<metapb::Region>) -> PdFuture<()> {
-            unimplemented!();
-        }
-        fn get_gc_safe_point(&self) -> PdFuture<u64> {
-            unimplemented!();
-        }
-        fn get_store_stats(&self, _: u64) -> Result<pdpb::StoreStats> {
-            unimplemented!()
-        }
-        fn get_operator(&self, _: u64) -> Result<pdpb::GetOperatorResponse> {
-            unimplemented!()
         }
     }
 
