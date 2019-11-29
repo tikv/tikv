@@ -15,7 +15,7 @@ use std::marker::PhantomData;
 
 use engine::rocks::DB;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot, Compat};
 use engine_traits::{CFHandleExt, ImportExt, Snapshot as EngineSnapshot};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -550,7 +550,7 @@ impl<S> Snap<S> where S: EngineSnapshot {
         )
     }
 
-    fn validate(&self, kv_engine: Arc<DB>) -> RaftStoreResult<()> {
+    fn validate(&self, engine: &RocksEngine) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
@@ -560,7 +560,6 @@ impl<S> Snap<S> where S: EngineSnapshot {
             if plain_file_used(cf_file.cf) {
                 check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
             } else {
-                let engine = RocksEngine::from_ref(&kv_engine);
                 let cf = engine
                     .cf_handle(cf_file.cf)
                     .ok_or_else(|| Error::Other(box_err!("bad cf handle")))?;
@@ -621,7 +620,7 @@ impl<S> Snap<S> where S: EngineSnapshot {
     ) -> RaftStoreResult<()> {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(kv_snap.get_db().as_inner().clone()) {
+            match self.validate(kv_snap.get_db()) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(
@@ -840,7 +839,7 @@ impl<S> Snapshot for Snap<S> where S: EngineSnapshot {
     }
 
     fn apply(&mut self, options: ApplyOptions) -> Result<()> {
-        box_try!(self.validate(Arc::clone(&options.db)));
+        box_try!(self.validate(options.db.c()));
 
         let abort_checker = ApplyAbortChecker(options.abort);
         for cf_file in &mut self.cf_files {
