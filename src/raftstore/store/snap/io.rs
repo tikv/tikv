@@ -2,16 +2,13 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader};
 use std::{fs, usize};
-use std::sync::Arc;
 
-use engine::rocks::{DB};
 use engine::CfName;
 use engine_rocks::{RocksSnapshot, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::IOLimiter;
 use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
-use engine_traits::{ImportExt, CFHandleExt, IngestExternalFileOptions};
-use engine_rocks::{RocksEngine, Compat};
-use engine_traits::{WriteBatch, KvEngine, Mutable};
+use engine_traits::{ImportExt, IngestExternalFileOptions, KvEngine};
+use engine_traits::{WriteBatch, Mutable};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
 use super::Error;
@@ -101,14 +98,15 @@ pub fn build_sst_cf_file<L: IOLimiter>(
 }
 
 /// Apply the given snapshot file into a column family.
-pub fn apply_plain_cf_file(
+pub fn apply_plain_cf_file<E>(
     path: &str,
     stale_detector: &impl StaleDetector,
-    db: &Arc<DB>,
+    db: &E,
     cf: &str,
     batch_size: usize,
-) -> Result<(), Error> {
-    let db = db.c();
+) -> Result<(), Error>
+where E: KvEngine
+{
     let mut decoder = BufReader::new(box_try!(File::open(path)));
     let wb = db.write_batch();
     loop {
@@ -131,10 +129,9 @@ pub fn apply_plain_cf_file(
     }
 }
 
-pub fn apply_sst_cf_file(path: &str, db: &Arc<DB>, cf: &str) -> Result<(), Error> {
-    let db = db.c();
+pub fn apply_sst_cf_file<E>(path: &str, db: &E, cf: &str) -> Result<(), Error> where E: KvEngine {
     let cf_handle = box_try!(db.cf_handle(cf));
-    let mut ingest_opt = <RocksEngine as ImportExt>::IngestExternalFileOptions::new();
+    let mut ingest_opt = <E as ImportExt>::IngestExternalFileOptions::new();
     ingest_opt.move_files(true);
     box_try!(db.ingest_external_file_optimized(cf_handle, &ingest_opt, &[path]));
     Ok(())
@@ -158,7 +155,7 @@ mod tests {
     use super::*;
     use crate::raftstore::store::snap::tests::*;
     use engine::CF_DEFAULT;
-    use engine_rocks::RocksIOLimiter;
+    use engine_rocks::{RocksIOLimiter, Compat};
     use tempfile::Builder;
 
     struct TestStaleDetector;
@@ -204,7 +201,7 @@ mod tests {
                 apply_plain_cf_file(
                     &plain_file_path.to_str().unwrap(),
                     &detector,
-                    &db1,
+                    db1.c(),
                     CF_DEFAULT,
                     16,
                 )
@@ -246,7 +243,7 @@ mod tests {
                     .tempdir()
                     .unwrap();
                 let db1 = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
-                apply_sst_cf_file(&sst_file_path.to_str().unwrap(), &db1, CF_DEFAULT).unwrap();
+                apply_sst_cf_file(&sst_file_path.to_str().unwrap(), db1.c(), CF_DEFAULT).unwrap();
                 assert_eq_db(&db, &db1);
             }
         }

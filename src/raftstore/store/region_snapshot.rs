@@ -410,7 +410,7 @@ mod tests {
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
     use engine_rocks::RocksIOLimiter;
-    use engine_rocks::{RocksSnapshot, RocksSstWriterBuilder};
+    use engine_rocks::{RocksSnapshot, RocksSstWriterBuilder, Compat};
     use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;
@@ -1073,13 +1073,13 @@ mod tests {
         let engines1 = new_temp_engine(&dir1);
         apply_sst_cf_file(
             &default_sst_file_path.to_str().unwrap(),
-            &engines1.kv,
+            engines1.kv.c(),
             CF_DEFAULT,
         )
         .unwrap();
         apply_sst_cf_file(
             &write_sst_file_path.to_str().unwrap(),
-            &engines1.kv,
+            engines1.kv.c(),
             CF_WRITE,
         )
         .unwrap();

@@ -850,11 +850,11 @@ impl<S> Snapshot for Snap<S> where S: EngineSnapshot {
             if plain_file_used(cf_file.cf) {
                 let path = cf_file.path.to_str().unwrap();
                 let batch_size = options.write_batch_size;
-                snap_io::apply_plain_cf_file(path, &abort_checker, &options.db, cf, batch_size)?;
+                snap_io::apply_plain_cf_file(path, &abort_checker, options.db.c(), cf, batch_size)?;
             } else {
                 let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
                 let path = cf_file.clone_path.to_str().unwrap();
-                snap_io::apply_sst_cf_file(path, &options.db, cf)?
+                snap_io::apply_sst_cf_file(path, options.db.c(), cf)?
             }
         }
         Ok(())
