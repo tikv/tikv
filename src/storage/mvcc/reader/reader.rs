@@ -450,14 +450,14 @@ mod tests {
     }
 
     impl RegionEngine {
-        pub fn new(db: Arc<DB>, region: Region) -> RegionEngine {
+        fn new(db: &Arc<DB>, region: &Region) -> RegionEngine {
             RegionEngine {
                 db: Arc::clone(&db),
-                region,
+                region: region.clone(),
             }
         }
 
-        pub fn put(
+        fn put(
             &mut self,
             pk: &[u8],
             start_ts: impl Into<TimeStamp>,
@@ -469,7 +469,7 @@ mod tests {
             self.commit(pk, start_ts, commit_ts);
         }
 
-        pub fn lock(
+        fn lock(
             &mut self,
             pk: &[u8],
             start_ts: impl Into<TimeStamp>,
@@ -481,7 +481,7 @@ mod tests {
             self.commit(pk, start_ts, commit_ts);
         }
 
-        pub fn delete(
+        fn delete(
             &mut self,
             pk: &[u8],
             start_ts: impl Into<TimeStamp>,
@@ -661,7 +661,7 @@ mod tests {
 
     fn test_without_properties(path: &str, region: &Region) {
         let db = open_db(path, false);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         // Put 2 keys.
         engine.put(&[1], 1, 1);
@@ -675,7 +675,7 @@ mod tests {
 
     fn test_with_properties(path: &str, region: &Region) {
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         // Put 2 keys.
         engine.put(&[2], 3, 3);
@@ -756,7 +756,7 @@ mod tests {
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
@@ -842,7 +842,7 @@ mod tests {
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
         let key = Key::from_raw(k);
@@ -877,7 +877,7 @@ mod tests {
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
@@ -985,7 +985,7 @@ mod tests {
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
@@ -1076,7 +1076,7 @@ mod tests {
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         let (k1, k2, k3, k4, v) = (b"k1", b"k2", b"k3", b"k4", b"v");
         engine.prewrite(Mutation::Put((Key::from_raw(k1), v.to_vec())), k1, 5);
@@ -1131,7 +1131,7 @@ mod tests {
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         // Put some locks to the db.
         engine.prewrite(

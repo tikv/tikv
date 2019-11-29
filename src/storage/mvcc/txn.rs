@@ -24,16 +24,10 @@ pub struct GcInfo {
 pub struct MvccTxn<S: Snapshot> {
     reader: MvccReader<S>,
     start_ts: TimeStamp,
-    writes: Vec<Modify>,
     write_size: usize,
+    writes: Vec<Modify>,
     // collapse continuous rollbacks.
     collapse_rollback: bool,
-}
-
-impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "txn @{}", self.start_ts)
-    }
 }
 
 impl<S: Snapshot> MvccTxn<S> {
@@ -71,8 +65,8 @@ impl<S: Snapshot> MvccTxn<S> {
         MvccTxn {
             reader,
             start_ts,
-            writes: vec![],
             write_size: 0,
+            writes: vec![],
             collapse_rollback: true,
         }
     }
@@ -96,9 +90,9 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     fn put_lock(&mut self, key: Key, lock: &Lock) {
-        let lock = lock.to_bytes();
-        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
-        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+        let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
     fn lock(
@@ -135,32 +129,33 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     fn unlock_key(&mut self, key: Key) {
-        self.write_size += CF_LOCK.len() + key.as_encoded().len();
-        self.writes.push(Modify::Delete(CF_LOCK, key));
+        let write = Modify::Delete(CF_LOCK, key);
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
     fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
-        let key = key.append_ts(ts);
-        self.write_size += key.as_encoded().len() + value.len();
-        self.writes.push(Modify::Put(CF_DEFAULT, key, value));
+        let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value);
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
     fn delete_value(&mut self, key: Key, ts: TimeStamp) {
-        let key = key.append_ts(ts);
-        self.write_size += key.as_encoded().len();
-        self.writes.push(Modify::Delete(CF_DEFAULT, key));
+        let write = Modify::Delete(CF_DEFAULT, key.append_ts(ts));
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
     fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
-        let key = key.append_ts(ts);
-        self.write_size += CF_WRITE.len() + key.as_encoded().len() + value.len();
-        self.writes.push(Modify::Put(CF_WRITE, key, value));
+        let write = Modify::Put(CF_WRITE, key.append_ts(ts), value);
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
     fn delete_write(&mut self, key: Key, ts: TimeStamp) {
-        let key = key.append_ts(ts);
-        self.write_size += CF_WRITE.len() + key.as_encoded().len();
-        self.writes.push(Modify::Delete(CF_WRITE, key));
+        let write = Modify::Delete(CF_WRITE, key.append_ts(ts));
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
     fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
@@ -822,6 +817,12 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 }
 
+impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "txn @{}", self.start_ts)
+    }
+}
+
 /// Create a new MvccTxn using a u64 literal for the timestamp.
 ///
 /// Intended to only be used in test code.
@@ -1389,7 +1390,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = new_txn!(snapshot, 10, true);
         let key = Key::from_raw(k);
-        assert_eq!(txn.write_size, 0);
+        assert_eq!(txn.write_size(), 0);
 
         txn.prewrite(
             Mutation::Put((key.clone(), v.to_vec())),
