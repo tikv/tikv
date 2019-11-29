@@ -5,11 +5,13 @@ use std::{fs, usize};
 use std::sync::Arc;
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::{IngestExternalFileOptions, Writable, WriteBatch, DB};
+use engine::rocks::{Writable, WriteBatch, DB};
 use engine::CfName;
 use engine_rocks::{RocksSnapshot, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::IOLimiter;
 use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
+use engine_traits::{ImportExt, CFHandleExt, IngestExternalFileOptions};
+use engine_rocks::{RocksEngine, Compat};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
 use super::Error;
@@ -130,8 +132,9 @@ pub fn apply_plain_cf_file(
 }
 
 pub fn apply_sst_cf_file(path: &str, db: &Arc<DB>, cf: &str) -> Result<(), Error> {
-    let cf_handle = box_try!(get_cf_handle(&db, cf));
-    let mut ingest_opt = IngestExternalFileOptions::new();
+    let db = db.c();
+    let cf_handle = box_try!(db.cf_handle(cf));
+    let mut ingest_opt = <RocksEngine as ImportExt>::IngestExternalFileOptions::new();
     ingest_opt.move_files(true);
     box_try!(db.ingest_external_file_optimized(cf_handle, &ingest_opt, &[path]));
     Ok(())
