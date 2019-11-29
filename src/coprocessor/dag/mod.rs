@@ -17,6 +17,7 @@ pub fn build_handler<S: Store + 'static>(
     req: DagRequest,
     ranges: Vec<KeyRange>,
     store: S,
+    data_version: Option<u64>,
     deadline: Deadline,
     batch_row_limit: usize,
     is_streaming: bool,
@@ -37,89 +38,114 @@ pub fn build_handler<S: Store + 'static>(
 
     if is_batch {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        Ok(BatchDAGHandler::new(req, ranges, store, deadline)?.into_boxed())
+        Ok(BatchDAGHandler::new(req, ranges, store, data_version, deadline)?.into_boxed())
     } else {
         COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
-        Ok(
-            DAGHandler::new(req, ranges, store, deadline, batch_row_limit, is_streaming)?
-                .into_boxed(),
-        )
+        Ok(DAGHandler::new(
+            req,
+            ranges,
+            store,
+            data_version,
+            deadline,
+            batch_row_limit,
+            is_streaming,
+        )?
+        .into_boxed())
     }
 }
 
-pub struct DAGHandler(tidb_query::executor::ExecutorsRunner<Statistics>);
+pub struct DAGHandler {
+    runner: tidb_query::executor::ExecutorsRunner<Statistics>,
+    data_version: Option<u64>,
+}
 
 impl DAGHandler {
     pub fn new<S: Store + 'static>(
         req: DagRequest,
         ranges: Vec<KeyRange>,
         store: S,
+        data_version: Option<u64>,
         deadline: Deadline,
         batch_row_limit: usize,
         is_streaming: bool,
     ) -> Result<Self> {
-        Ok(Self(tidb_query::executor::ExecutorsRunner::from_request(
-            req,
-            ranges,
-            TiKVStorage::from(store),
-            deadline,
-            batch_row_limit,
-            is_streaming,
-        )?))
+        Ok(Self {
+            runner: tidb_query::executor::ExecutorsRunner::from_request(
+                req,
+                ranges,
+                TiKVStorage::from(store),
+                deadline,
+                batch_row_limit,
+                is_streaming,
+            )?,
+            data_version,
+        })
     }
 }
 
 impl RequestHandler for DAGHandler {
     fn handle_request(&mut self) -> Result<Response> {
-        handle_qe_response(self.0.handle_request())
+        handle_qe_response(self.runner.handle_request(), self.data_version)
     }
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
-        handle_qe_stream_response(self.0.handle_streaming_request())
+        handle_qe_stream_response(self.runner.handle_streaming_request())
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
-        self.0.collect_storage_stats(dest);
+        self.runner.collect_storage_stats(dest);
     }
 }
 
-pub struct BatchDAGHandler(tidb_query::batch::runner::BatchExecutorsRunner<Statistics>);
+pub struct BatchDAGHandler {
+    runner: tidb_query::batch::runner::BatchExecutorsRunner<Statistics>,
+    data_version: Option<u64>,
+}
 
 impl BatchDAGHandler {
     pub fn new<S: Store + 'static>(
         req: DagRequest,
         ranges: Vec<KeyRange>,
         store: S,
+        data_version: Option<u64>,
         deadline: Deadline,
     ) -> Result<Self> {
-        Ok(Self(
-            tidb_query::batch::runner::BatchExecutorsRunner::from_request(
+        Ok(Self {
+            runner: tidb_query::batch::runner::BatchExecutorsRunner::from_request(
                 req,
                 ranges,
                 TiKVStorage::from(store),
                 deadline,
             )?,
-        ))
+            data_version,
+        })
     }
 }
 
 impl RequestHandler for BatchDAGHandler {
     fn handle_request(&mut self) -> Result<Response> {
-        handle_qe_response(self.0.handle_request())
+        handle_qe_response(self.runner.handle_request(), self.data_version)
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
-        self.0.collect_storage_stats(dest);
+        self.runner.collect_storage_stats(dest);
     }
 }
 
-fn handle_qe_response(result: tidb_query::Result<SelectResponse>) -> Result<Response> {
+fn handle_qe_response(
+    result: tidb_query::Result<SelectResponse>,
+    data_version: Option<u64>,
+) -> Result<Response> {
     use tidb_query::error::ErrorInner;
 
     match result {
         Ok(sel_resp) => {
             let mut resp = Response::default();
             resp.set_data(box_try!(sel_resp.write_to_bytes()));
+            resp.set_is_cache_hit(false);
+            if let Some(v) = data_version {
+                resp.set_cache_last_version(v);
+            }
             Ok(resp)
         }
         Err(err) => match *err.0 {
@@ -130,6 +156,7 @@ fn handle_qe_response(result: tidb_query::Result<SelectResponse>) -> Result<Resp
                 sel_resp.mut_error().set_code(err.code());
                 sel_resp.mut_error().set_msg(err.to_string());
                 resp.set_data(box_try!(sel_resp.write_to_bytes()));
+                resp.set_is_cache_hit(false);
                 Ok(resp)
             }
         },
