@@ -78,9 +78,12 @@ pub fn to_days(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int
     }
     let t = t.as_ref().unwrap();
     if t.is_zero() {
-        return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
-            .map(|_| Ok(None))?;
+        if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .map(|_| Ok(None))?;
+        }
+        return Ok(Some(0));
     }
     Ok(Some(i64::from(t.day_number())))
 }
