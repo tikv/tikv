@@ -1404,19 +1404,23 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 .unwrap();
         }
 
+        let mut region = metapb::Region::default();
+        region.set_id(region_id);
+        region.set_start_key(msg.get_start_key().to_owned());
+        region.set_end_key(msg.get_end_key().to_owned());
+
         // New created peers should know it's learner or not.
         let (tx, peer) = PeerFsm::replicate(
             self.ctx.store_id(),
             &self.ctx.cfg,
             self.ctx.region_scheduler.clone(),
             self.ctx.engines.clone(),
-            region_id,
+            &region,
             target.clone(),
         )?;
         // following snapshot may overlap, should insert into region_ranges after
         // snapshot is applied.
-        meta.regions
-            .insert(region_id, peer.get_peer().region().to_owned());
+        meta.regions.insert(region_id, region);
         let mailbox = BasicMailbox::new(tx, peer);
         self.ctx.router.register(region_id, mailbox);
         self.ctx

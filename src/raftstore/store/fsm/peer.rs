@@ -171,24 +171,21 @@ impl PeerFsm {
         cfg: &Config,
         sched: Scheduler<RegionTask>,
         engines: Engines,
-        region_id: u64,
+        region: &metapb::Region,
         peer: metapb::Peer,
     ) -> Result<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)> {
         // We will remove tombstone key when apply snapshot
         info!(
             "replicate peer";
-            "region_id" => region_id,
+            "region_id" => region.get_id(),
             "peer_id" => peer.get_id(),
         );
-
-        let mut region = metapb::Region::default();
-        region.set_id(region_id);
 
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         Ok((
             tx,
             Box::new(PeerFsm {
-                peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
+                peer: Peer::new(store_id, cfg, sched, engines, region, peer)?,
                 tick_registry: PeerTicks::empty(),
                 missing_ticks: 0,
                 group_state: GroupState::Ordered,
