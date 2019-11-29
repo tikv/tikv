@@ -37,39 +37,44 @@ impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
 }
 
 impl<S: Snapshot> MvccTxn<S> {
-    pub fn new(snapshot: S, start_ts: TimeStamp, fill_cache: bool) -> Result<Self> {
-        Ok(Self {
-            // FIXME: use session variable to indicate fill cache or not.
+    pub fn new(snapshot: S, start_ts: TimeStamp, fill_cache: bool) -> MvccTxn<S> {
+        // FIXME: use session variable to indicate fill cache or not.
 
-            // ScanMode is `None`, since in prewrite and other operations, keys are not given in
-            // order and we use prefix seek for each key. An exception is GC, which uses forward
-            // scan only.
-            // IsolationLevel is `Si`, actually the method we use in MvccTxn does not rely on
-            // isolation level, so it can be any value.
-            reader: MvccReader::new(snapshot.clone(), None, fill_cache, IsolationLevel::Si),
+        // ScanMode is `None`, since in prewrite and other operations, keys are not given in
+        // order and we use prefix seek for each key. An exception is GC, which uses forward
+        // scan only.
+        // IsolationLevel is `Si`, actually the method we use in MvccTxn does not rely on
+        // isolation level, so it can be any value.
+        Self::from_reader(
+            MvccReader::new(snapshot.clone(), None, fill_cache, IsolationLevel::Si),
             start_ts,
-            writes: vec![],
-            write_size: 0,
-            collapse_rollback: true,
-        })
+        )
     }
+
+    // Use `ScanMode::Forward` when gc or prewrite with multiple `Mutation::Insert`,
+    // which would seek less times.
+    // When `scan_mode` is `Some(ScanMode::Forward)`, all keys must be written by
+    // in ascending order.
     pub fn for_scan(
         snapshot: S,
         scan_mode: Option<ScanMode>,
         start_ts: TimeStamp,
         fill_cache: bool,
-    ) -> Result<Self> {
-        Ok(Self {
-            // Use `ScanMode::Forward` when gc or prewrite with multiple `Mutation::Insert`,
-            // which would seek less times.
-            // When `scan_mode` is `Some(ScanMode::Forward)`, all keys must be writte by
-            // in ascending order.
-            reader: MvccReader::new(snapshot.clone(), scan_mode, fill_cache, IsolationLevel::Si),
+    ) -> MvccTxn<S> {
+        Self::from_reader(
+            MvccReader::new(snapshot.clone(), scan_mode, fill_cache, IsolationLevel::Si),
+            start_ts,
+        )
+    }
+
+    fn from_reader(reader: MvccReader<S>, start_ts: TimeStamp) -> MvccTxn<S> {
+        MvccTxn {
+            reader,
             start_ts,
             writes: vec![],
             write_size: 0,
             collapse_rollback: true,
-        })
+        }
     }
 
     pub fn collapse_rollback(&mut self, collapse: bool) {
@@ -823,7 +828,7 @@ impl<S: Snapshot> MvccTxn<S> {
 #[macro_export]
 macro_rules! new_txn {
     ($ss: expr, $ts: literal, $fill_cache: expr) => {
-        $crate::storage::mvcc::MvccTxn::new($ss, $ts.into(), $fill_cache).unwrap()
+        $crate::storage::mvcc::MvccTxn::new($ss, $ts.into(), $fill_cache)
     };
 }
 
