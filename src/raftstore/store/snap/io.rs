@@ -2,6 +2,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader};
 use std::{fs, usize};
+use std::sync::Arc;
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{IngestExternalFileOptions, Writable, WriteBatch, DB};
@@ -101,7 +102,7 @@ pub fn build_sst_cf_file<L: IOLimiter>(
 pub fn apply_plain_cf_file(
     path: &str,
     stale_detector: &impl StaleDetector,
-    db: &DB,
+    db: &Arc<DB>,
     cf: &str,
     batch_size: usize,
 ) -> Result<(), Error> {
@@ -128,7 +129,7 @@ pub fn apply_plain_cf_file(
     }
 }
 
-pub fn apply_sst_cf_file(path: &str, db: &DB, cf: &str) -> Result<(), Error> {
+pub fn apply_sst_cf_file(path: &str, db: &Arc<DB>, cf: &str) -> Result<(), Error> {
     let cf_handle = box_try!(get_cf_handle(&db, cf));
     let mut ingest_opt = IngestExternalFileOptions::new();
     ingest_opt.move_files(true);
