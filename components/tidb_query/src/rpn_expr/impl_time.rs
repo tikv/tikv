@@ -135,7 +135,7 @@ pub fn day_name(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<By
         Some(t) => {
             if t.invalid_zero() {
                 return ctx
-                    .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                    .handle_invalid_time_error(Error::incorrect_datetime_value(t))
                     .map(|_| Ok(None))?;
             }
             use crate::codec::mysql::time::WeekdayExtension;
