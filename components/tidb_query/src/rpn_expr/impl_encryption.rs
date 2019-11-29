@@ -57,16 +57,10 @@ mod tests {
     fn test_md5() {
         let test_cases = vec![
             (vec![], "d41d8cd98f00b204e9800998ecf8427e"),
-            ("a".as_bytes().to_vec(), "0cc175b9c0f1b6a831c399e269772661"),
-            ("ab".as_bytes().to_vec(), "187ef4436122d1cc2f40dc2b92f0eba0"),
-            (
-                "abc".as_bytes().to_vec(),
-                "900150983cd24fb0d6963f7d28e17f72",
-            ),
-            (
-                "123".as_bytes().to_vec(),
-                "202cb962ac59075b964b07152d234b70",
-            ),
+            (b"a".to_vec(), "0cc175b9c0f1b6a831c399e269772661"),
+            (b"ab".to_vec(), "187ef4436122d1cc2f40dc2b92f0eba0"),
+            (b"abc".to_vec(), "900150983cd24fb0d6963f7d28e17f72"),
+            (b"123".to_vec(), "202cb962ac59075b964b07152d234b70"),
             (
                 "你好".as_bytes().to_vec(),
                 "7eca689f0d3389d9dea66ae112e5cfd7",
@@ -94,22 +88,10 @@ mod tests {
     fn test_sha1() {
         let test_cases = vec![
             (vec![], "da39a3ee5e6b4b0d3255bfef95601890afd80709"),
-            (
-                "a".as_bytes().to_vec(),
-                "86f7e437faa5a7fce15d1ddcb9eaeaea377667b8",
-            ),
-            (
-                "ab".as_bytes().to_vec(),
-                "da23614e02469a0d7c7bd1bdab5c9c474b1904dc",
-            ),
-            (
-                "abc".as_bytes().to_vec(),
-                "a9993e364706816aba3e25717850c26c9cd0d89d",
-            ),
-            (
-                "123".as_bytes().to_vec(),
-                "40bd001563085fc35165329ea1ff5c5ecbdbbeef",
-            ),
+            (b"a".to_vec(), "86f7e437faa5a7fce15d1ddcb9eaeaea377667b8"),
+            (b"ab".to_vec(), "da23614e02469a0d7c7bd1bdab5c9c474b1904dc"),
+            (b"abc".to_vec(), "a9993e364706816aba3e25717850c26c9cd0d89d"),
+            (b"123".to_vec(), "40bd001563085fc35165329ea1ff5c5ecbdbbeef"),
             (
                 "你好".as_bytes().to_vec(),
                 "440ee0853ad1e99f962b63e459ef992d7c211722",
