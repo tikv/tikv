@@ -742,11 +742,13 @@ mod tests {
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        cop.recursion_limit = 100;
 
         let req = {
             let mut expr = Expr::default();
-            // The recursion limit in Prost and rust-protobuf (by default) is 100.
+            // The recursion limit in Prost and rust-protobuf (by default) is 100 (for rust-protobuf,
+            // that limit is set to 1000 as a configuration default).
             for _ in 0..101 {
                 let mut e = Expr::default();
                 e.mut_children().push(expr);
