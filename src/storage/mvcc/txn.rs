@@ -96,26 +96,37 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.push(Modify::Put(CF_LOCK, key, lock));
     }
 
-    fn lock_key(
-        &mut self,
-        key: Key,
+    fn lock(
+        &self,
         lock_type: LockType,
-        primary: Vec<u8>,
+        primary: &[u8],
         short_value: Option<Value>,
         lock_ttl: u64,
         options: &Options,
-    ) {
-        let lock = Lock::new(
+    ) -> Lock {
+        Lock::new(
             lock_type,
-            primary,
+            primary.to_vec(),
             self.start_ts,
             lock_ttl,
             short_value,
             options.for_update_ts,
             options.txn_size,
             options.min_commit_ts,
-        );
-        self.put_lock(key, &lock);
+        )
+    }
+
+    fn pessimistic_lock(&self, primary: &[u8], options: &Options) -> Lock {
+        Lock::new(
+            LockType::Pessimistic,
+            primary.to_vec(),
+            self.start_ts,
+            options.lock_ttl,
+            None,
+            options.for_update_ts,
+            options.txn_size,
+            options.min_commit_ts,
+        )
     }
 
     fn unlock_key(&mut self, key: Key) {
@@ -155,25 +166,27 @@ impl<S: Snapshot> MvccTxn<S> {
         &mut self,
         key: Key,
         lock_type: LockType,
-        primary: Vec<u8>,
+        primary: &[u8],
         value: Option<Value>,
         lock_ttl: u64,
         options: &Options,
     ) {
+        // If there is a value we must store it in the lock or as a regular value.
         if let Some(value) = value {
             if is_short_value(&value) {
-                // If the value is short, embed it in Lock.
-                self.lock_key(key, lock_type, primary, Some(value), lock_ttl, options);
+                // If the value is short, embed it in the lock.
+                let lock = self.lock(lock_type, primary, Some(value), lock_ttl, options);
+                self.put_lock(key, &lock);
+                return;
             } else {
                 // value is long
                 let ts = self.start_ts;
                 self.put_value(key.clone(), ts, value);
-
-                self.lock_key(key, lock_type, primary, None, lock_ttl, options);
             }
-        } else {
-            self.lock_key(key, lock_type, primary, None, lock_ttl, options);
         }
+
+        let lock = self.lock(lock_type, primary, None, lock_ttl, options);
+        self.put_lock(key, &lock);
     }
 
     fn rollback_lock(&mut self, key: Key, lock: &Lock, is_pessimistic_txn: bool) -> Result<()> {
@@ -265,14 +278,8 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             // Overwrite the lock with small for_update_ts
             if for_update_ts > lock.for_update_ts {
-                self.lock_key(
-                    key,
-                    LockType::Pessimistic,
-                    primary.to_vec(),
-                    None,
-                    options.lock_ttl,
-                    options,
-                );
+                let lock = self.pessimistic_lock(primary, options);
+                self.put_lock(key, &lock);
             } else {
                 MVCC_DUPLICATE_CMD_COUNTER_VEC
                     .acquire_pessimistic_lock
@@ -331,14 +338,8 @@ impl<S: Snapshot> MvccTxn<S> {
             self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
         }
 
-        self.lock_key(
-            key,
-            LockType::Pessimistic,
-            primary.to_vec(),
-            None,
-            options.lock_ttl,
-            options,
-        );
+        let lock = self.pessimistic_lock(primary, options);
+        self.put_lock(key, &lock);
 
         Ok(())
     }
@@ -399,7 +400,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.prewrite_key_value(
             key,
             lock_type,
-            primary.to_vec(),
+            primary,
             value,
             ::std::cmp::max(last_lock_ttl, options.lock_ttl),
             options,
@@ -458,14 +459,7 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
-        self.prewrite_key_value(
-            key,
-            lock_type,
-            primary.to_vec(),
-            value,
-            options.lock_ttl,
-            options,
-        );
+        self.prewrite_key_value(key, lock_type, primary, value, options.lock_ttl, options);
         Ok(())
     }
 
