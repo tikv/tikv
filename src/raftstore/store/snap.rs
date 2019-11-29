@@ -561,8 +561,7 @@ impl<S> Snap<S> where S: EngineSnapshot {
                 check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
             } else {
                 let cf = engine
-                    .cf_handle(cf_file.cf)
-                    .ok_or_else(|| Error::Other(box_err!("bad cf handle")))?;
+                    .cf_handle(cf_file.cf)?;
                 engine.prepare_sst_for_ingestion(&cf_file.path, &cf_file.clone_path)?;
                 engine.validate_sst_for_ingestion(
                     &cf,
