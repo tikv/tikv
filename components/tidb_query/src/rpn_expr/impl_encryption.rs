@@ -3,6 +3,8 @@
 use openssl::hash::{self, MessageDigest};
 use tidb_query_codegen::rpn_fn;
 
+use super::super::expr::{Error, EvalContext};
+
 use crate::codec::data_type::*;
 use crate::Result;
 
@@ -27,11 +29,29 @@ fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Bytes> {
         .map_err(|e| box_err!("OpenSSL error: {:?}", e))
 }
 
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn uncompressed_length(ctx: &mut EvalContext, arg: &Option<Bytes>) -> Result<Option<Int>> {
+    use byteorder::{ByteOrder, LittleEndian};
+    Ok(arg.as_ref().map(|s| {
+        if s.is_empty() {
+            0
+        } else if s.len() <= 4 {
+            ctx.warnings.append_warning(Error::zlib_data_corrupted());
+            0
+        } else {
+            Int::from(LittleEndian::read_u32(&s[0..4]))
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
     use tipb::ScalarFuncSig;
+
+    use hex;
 
     #[test]
     fn test_sha1() {
@@ -59,6 +79,39 @@ mod tests {
                 .evaluate(ScalarFuncSig::Sha1)
                 .unwrap();
             assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_uncompressed_length() {
+        let cases = vec![
+            (Some(""), Some(0)),
+            (
+                Some("0B000000789CCB48CDC9C95728CF2FCA4901001A0B045D"),
+                Some(11),
+            ),
+            (
+                Some("0C000000789CCB48CDC9C95728CF2F32303402001D8004202E"),
+                Some(12),
+            ),
+            (Some("020000000000"), Some(2)),
+            (Some("0000000001"), Some(0)),
+            (
+                Some("02000000789CCB48CDC9C95728CF2FCA4901001A0B045D"),
+                Some(2),
+            ),
+            (Some("010203"), Some(0)),
+            (Some("01020304"), Some(0)),
+            (None, None),
+        ];
+
+        for (s, exp) in cases {
+            let s = s.map(|inner| hex::decode(inner.as_bytes().to_vec()).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .evaluate(ScalarFuncSig::UncompressedLength)
+                .unwrap();
+            assert_eq!(output, exp);
         }
     }
 }
