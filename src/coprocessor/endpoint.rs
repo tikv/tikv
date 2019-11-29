@@ -17,10 +17,11 @@ use tipb::{DagRequest, ExecType};
 use crate::server::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
-use crate::storage::{self, Engine, SnapshotStore};
+use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 use tikv_util::future_pool::FuturePool;
 use tikv_util::Either;
 
+use crate::coprocessor::cache::CachedRequestHandler;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
@@ -145,6 +146,11 @@ impl<E: Engine> Endpoint<E> {
             req.take_data(),
             req.take_ranges().to_vec(),
         );
+        let cache_match_version = if req.get_is_cache_enabled() {
+            Some(req.get_cache_if_match_version())
+        } else {
+            None
+        };
 
         // Prost and rust-proto require different mutability.
         #[allow(unused_mut)]
@@ -174,11 +180,13 @@ impl<E: Engine> Endpoint<E> {
                     peer,
                     Some(is_desc_scan),
                     Some(dag.get_start_ts()),
+                    cache_match_version,
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
                 let enable_batch_if_possible = self.enable_batch_if_possible;
                 builder = Box::new(move |snap, req_ctx: &ReqContext| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
+                    let data_version = snap.get_data_version();
                     let store = SnapshotStore::new(
                         snap,
                         dag.get_start_ts().into(),
@@ -190,6 +198,7 @@ impl<E: Engine> Endpoint<E> {
                         dag,
                         ranges,
                         store,
+                        data_version,
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
@@ -209,6 +218,7 @@ impl<E: Engine> Endpoint<E> {
                     peer,
                     None,
                     Some(analyze.get_start_ts()),
+                    cache_match_version,
                 );
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
@@ -228,6 +238,7 @@ impl<E: Engine> Endpoint<E> {
                     peer,
                     None,
                     Some(checksum.get_start_ts()),
+                    cache_match_version,
                 );
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
@@ -293,7 +304,16 @@ impl<E: Engine> Endpoint<E> {
                     .map(|_| (tracker, snapshot))
             })
             .and_then(move |(tracker, snapshot)| {
-                future::result(handler_builder(snapshot, &tracker.req_ctx))
+                let builder = if tracker.req_ctx.cache_match_version.is_some()
+                    && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
+                {
+                    // Build a cached request handler instead if cache version is matching.
+                    CachedRequestHandler::builder()
+                } else {
+                    handler_builder
+                };
+
+                future::result(builder(snapshot, &tracker.req_ctx))
                     .map(|handler| (tracker, handler))
             })
             .and_then(|(mut tracker, mut handler)| {
@@ -709,6 +729,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(cop
             .handle_unary_request(outdated_req_ctx, handler_builder)
@@ -721,11 +742,13 @@ mod tests {
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        cop.recursion_limit = 100;
 
         let req = {
             let mut expr = Expr::default();
-            // The recursion limit in Prost and rust-protobuf (by default) is 100.
+            // The recursion limit in Prost and rust-protobuf (by default) is 100 (for rust-protobuf,
+            // that limit is set to 1000 as a configuration default).
             for _ in 0..101 {
                 let mut e = Expr::default();
                 e.mut_children().push(expr);
