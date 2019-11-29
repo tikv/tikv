@@ -34,6 +34,18 @@ impl ImportExt for RocksEngine {
         Ok(())
     }
 
+    fn ingest_external_file_optimized(
+        &self,
+        cf: &Self::CFHandle,
+        opts: &Self::IngestExternalFileOptions,
+        files: &[&str],
+    ) -> Result<bool> {
+        let cf = cf.as_inner();
+        let r = self.as_inner()
+            .ingest_external_file_optimized(&cf, &opts.0, files)?;
+        Ok(r)
+    }
+
     fn validate_sst_for_ingestion<P: AsRef<Path>>(
         &self,
         cf: &Self::CFHandle,
