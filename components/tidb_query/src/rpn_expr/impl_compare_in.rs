@@ -313,6 +313,9 @@ mod tests {
             2,
         )
         .unwrap();
+        if let RpnExpressionNode::FnCall { args_len, .. } = exp[0] {
+            assert_eq!(args_len, 3);
+        }
         let mut ctx = EvalContext::default();
         let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
         let mut columns = LazyBatchColumnVec::from(vec![
