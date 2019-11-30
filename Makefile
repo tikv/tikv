@@ -85,6 +85,7 @@ CARGO_TARGET_DIR ?= $(CURDIR)/target
 # Build-time environment, captured for reporting by the application binary
 BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
+export TIKV_BUILD_VERSION = $(shell awk -F ' = ' '$$1 ~ /version/ { gsub(/[\"]/, "", $$2); printf("%s",$$2) }' Cargo.toml)
 export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
 export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_TAG := $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
@@ -146,6 +147,59 @@ fail_release:
 
 ## Distribution builds (true release builds)
 ## -------------------
+# This process is done via a series of `docker` builds for repeatability.
+BINARY_DIR=bin
+BINARY_SERVER=${BINARY_DIR}/tikv-server
+BINARY_CTL=${BINARY_DIR}/tikv-ctl
+BINARIES=${BINARY_SERVER} ${BINARY_CTL}
+DOCKER_IMAGE_NAME=pingcap/tikv:${TIKV_BUILD_VERSION}
+
+${BINARY_DIR}:
+	mkdir -p ${BINARY_DIR}
+
+${BINARY_SERVER}: ${BINARY_DIR} ${ARTIFACT_TARBALL}
+	docker load -i ${ARTIFACT_DOCKER}
+	docker run --rm --entrypoint=/bin/cat ${DOCKER_IMAGE_NAME} /tikv-server > ${BINARY_SERVER}
+
+${BINARY_CTL}: ${BINARY_DIR} ${ARTIFACT_TARBALL}
+	docker load -i ${ARTIFACT_DOCKER}
+	docker run --rm --entrypoint=/bin/cat ${DOCKER_IMAGE_NAME} /tikv-ctl > ${BINARY_CTL}
+
+ARTIFACT_DIR=dist
+ARTIFACT_TARBALL=${ARTIFACT_DIR}/tikv.tar.gz
+# RPM packaging prohibits `-` in names.
+ARTIFACT_PACKAGE_VERSION=${subst -,.,${TIKV_BUILD_VERSION}}
+ARTIFACT_PACKAGE=${ARTIFACT_DIR}/tikv-${ARTIFACT_PACKAGE_VERSION}.tar.gz
+ARTIFACT_DOCKER=${ARTIFACT_DIR}/tikv-docker.tar.gz
+ARTIFACT_RPM=${ARTIFACT_DIR}/tikv.rpm
+ARTIFACT_DEB=${ARTIFACT_DIR}/tikv.deb
+
+.PHONY: dist_artifacts
+dist_artifacts: ${ARTIFACT_DOCKER} ${ARTIFACT_TARBALL} ${ARTIFACT_RPM} ${ARTIFACT_DEB}
+
+${ARTIFACT_DIR}:
+	mkdir -p ${ARTIFACT_DIR}
+
+${ARTIFACT_TARBALL}: ${ARTIFACT_DIR} ${BINARY_SERVER} ${BINARY_CTL}
+	tar czf ${ARTIFACT_TARBALL} ${BINARY_SERVER} ${BINARY_CTL}
+
+${ARTIFACT_DOCKER}: docker
+
+${ARTIFACT_RPM}: ${BINARY_SERVER} ${BINARY_CTL}
+	docker build -t tikv-rpm-builder:${TIKV_BUILD_VERSION} -f scripts/docker/rpm-builder.dockerfile scripts
+	tar czf ${ARTIFACT_PACKAGE} --transform 's,^,tikv-${ARTIFACT_PACKAGE_VERSION}/,' ${BINARY_SERVER} ${BINARY_CTL} etc/tikv.service etc/tikv.sysconfig etc/config-template.toml 
+	tar tvf ${ARTIFACT_PACKAGE}
+	docker run \
+		--rm \
+		-v $(CURDIR)/${ARTIFACT_DIR}:/root/rpmbuild/SOURCES/ \
+		-v $(CURDIR)/etc/rpm/tikv.spec:/root/rpmbuild/SPECS/tikv.spec \
+		-v $(CURDIR)/dist:/root/rpmbuild/RPMS/x86_64/ \
+		tikv-rpm-builder:${TIKV_BUILD_VERSION} rpmbuild -bb /root/rpmbuild/SPECS/tikv.spec 
+	mv ${ARTIFACT_DIR}/tikv-${ARTIFACT_PACKAGE_VERSION}-1.el7.x86_64.rpm ${ARTIFACT_RPM}
+
+${ARTIFACT_DEB}:
+	docker build -t tikv-rpm-builder:${TIKV_BUILD_VERSION} -f scripts/docker/rpm-builder.dockerfile .
+	docker run --rm -ti -v $(CURDIR):/tikv tikv-rpm-builder:${TIKV_BUILD_VERSION}
 
 # These builds are fully optimized, with LTO, and they contain
 # debuginfo. They take a very long time to build, so it is recommended
@@ -178,22 +232,13 @@ endif
 dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make dist_release
 
-# Create distributable artifacts. Binaries and Docker image tarballs.
-.PHONY: dist_artifacts
-dist_artifacts: dist_tarballs
 
 # Build gzipped tarballs of the binaries and docker images.
 # Used to build a `dist/` folder containing the release artifacts.
-.PHONY: dist_tarballs
-dist_tarballs: docker
-	docker rm -f tikv-binary-extraction-dummy || true
-	docker create --name tikv-binary-extraction-dummy pingcap/tikv
-	mkdir -p dist bin
-	docker cp tikv-binary-extraction-dummy:/tikv-server bin/tikv-server
-	docker cp tikv-binary-extraction-dummy:/tikv-ctl bin/tikv-ctl
-	tar -czf dist/tikv.tar.gz bin/*
-	docker save pingcap/tikv | gzip > dist/tikv-docker.tar.gz
-	docker rm tikv-binary-extraction-dummy
+# .PHONY: dist_tarballs
+# dist_tarballs: dist/tikv-${TIKV_BUILD_VERSION}.tar.gz
+# dist/tikv-${TIKV_BUILD_VERSION}.tar: bin/ dist/ dist/tikv-${TIKV_BUILD_VERSION}-docker.tar.gz
+
 
 # Create tags of the docker images
 .PHONY: docker-tag
@@ -208,6 +253,27 @@ docker-tag-with-git-hash:
 .PHONY: docker-tag-with-git-tag
 docker-tag-with-git-tag:
 	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_TAG}
+
+# This builds an RPM on the host system, expecting a standard rpmbuild toolchain.
+.PHONY: rpm
+rpm: dist/tikv-${TIKV_BUILD_VERSION}.rpm
+
+# Build an RPM in a docker image.
+# .PHONY: docker-rpm
+# docker-rpm:
+# 	docker build -t tikv-rpm-builder:${TIKV_BUILD_VERSION} -f scripts/docker/rpm-builder.dockerfile .
+# 	docker run --rm -ti -v $(CURDIR):/tikv tikv-rpm-builder:${TIKV_BUILD_VERSION}
+
+# dist/tikv-${TIKV_BUILD_VERSION}.rpm: dist/ # dist/tikv-${TIKV_BUILD_VERSION}.tar.gz
+# 	cp etc/rpm/tikv.spec ${HOME}/rpmbuild/SPECS/tikv.spec 
+# 	zcat dist/tikv-${TIKV_BUILD_VERSION}.tar.gz > dist/tikv-${TIKV_BUILD_VERSION}.tar
+# 	tar rvf dist/tikv-${TIKV_BUILD_VERSION}.tar etc/tikv.service --transform s,^,tikv-${TIKV_BUILD_VERSION}/,
+# 	tar rvf dist/tikv-${TIKV_BUILD_VERSION}.tar etc/tikv.sysconfig --transform s,^,tikv-${TIKV_BUILD_VERSION}/,
+# 	tar rvf dist/tikv-${TIKV_BUILD_VERSION}.tar etc/config-template.toml --transform s,^,tikv-${TIKV_BUILD_VERSION}/,
+# 	mv dist/tikv-${TIKV_BUILD_VERSION}.tar ${HOME}/rpmbuild/SOURCES/tikv-${TIKV_BUILD_VERSION}.tar
+# 	rpmbuild -bb ${HOME}/rpmbuild/SPECS/tikv.spec
+# 	cp ${HOME}/rpmbuild/RPMS/x86_64/tikv-${TIKV_BUILD_VERSION}-1.el7.x86_64.rpm dist/tikv-${TIKV_BUILD_VERSION}.rpm
+# 	rm -rf dist/tikv-${TIKV_BUILD_VERSION}.tar
 
 ## Testing
 ## -------
@@ -296,8 +362,11 @@ expression: format clippy
 
 # A special target for building TiKV docker image.
 .PHONY: docker
-docker:
-	bash ./scripts/gen-dockerfile.sh | docker build -t pingcap/tikv -f - .
+docker: dist/tikv-${TIKV_BUILD_VERSION}-docker.tar.gz
+
+# dist/tikv-${TIKV_BUILD_VERSION}-docker.tar.gz: dist/
+# 	bash ./scripts/gen-dockerfile.sh | docker build -t ${DOCKER_IMAGE_NAME} -f - .
+# 	docker save ${DOCKER_IMAGE_NAME} | gzip > dist/tikv-${TIKV_BUILD_VERSION}-docker.tar.gz
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------

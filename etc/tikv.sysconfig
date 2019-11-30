@@ -1,0 +1,1 @@
+OPTIONS="--config /etc/tikv/tikv-server.toml --addr 127.0.0.1:20160 --pd-endpoints http://127.0.0.1:2379 --data-dir /var/lib/tikv/store"
