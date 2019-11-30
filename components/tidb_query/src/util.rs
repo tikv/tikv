@@ -121,6 +121,7 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::Rng;
 
     fn test_prefix_next_once(key: &[u8], expected: &[u8]) {
         let mut key = key.to_vec();
@@ -190,5 +191,17 @@ mod tests {
                 &[1, 2, 4, 0, 0, 0],
             ],
         );
+    }
+    #[test]
+    fn test_get_rand() {
+        let mut rand = get_rand(None);
+        let res = rand.gen::<f64>();
+        assert!(res < 1.0);
+        assert!(res >= 0.0);
+        let seed: u64 = 20191201;
+        rand = get_rand(Some(seed));
+        let res = rand.gen::<f64>();
+        assert!(res < 1.0);
+        assert!(res >= 0.0);
     }
 }
