@@ -7,8 +7,6 @@ use crate::expr::EvalContext;
 use crate::util::get_rand;
 use crate::Result;
 use rand::Rng;
-use rand_xorshift::XorShiftRng;
-use std::cell::RefCell;
 
 #[rpn_fn]
 #[inline]
@@ -354,18 +352,9 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn rand() -> Result<Option<Real>> {
-    let rng: RefCell<Option<XorShiftRng>> = RefCell::new(None);
-    let mut cus_rng = rng.borrow_mut();
-    if cus_rng.is_none() {
-        let mut rand = get_rand(None);
-        let res = rand.gen::<f64>();
-        *cus_rng = Some(rand);
-        Ok(Real::new(res).ok())
-    } else {
-        let rand = cus_rng.as_mut().unwrap();
-        let res = rand.gen::<f64>();
-        Ok(Real::new(res).ok())
-    }
+    let mut rand = get_rand(None);
+    let res = rand.gen::<f64>();
+    Ok(Real::new(res).ok())
 }
 
 #[inline]
