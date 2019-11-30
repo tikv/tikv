@@ -36,7 +36,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
     ) -> Result<Self> {
         let store = SnapshotStore::new(
             snap,
-            req.get_start_ts(),
+            req.get_start_ts().into(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
@@ -287,7 +287,9 @@ impl SampleCollector {
         }
         if self.rng.gen_range(0, self.count) < self.max_sample_size as u64 {
             let idx = self.rng.gen_range(0, self.max_sample_size);
-            self.samples[idx] = data;
+            // https://github.com/pingcap/tidb/blob/master/statistics/sample.go#L173
+            self.samples.remove(idx);
+            self.samples.push(data);
         }
     }
 }
