@@ -10,7 +10,6 @@ use tikv_util::deadline::Deadline;
 
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
-use crate::execute_stats::*;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::metrics::*;
 use crate::storage::Storage;
@@ -110,7 +109,7 @@ impl BatchExecutorsRunner<()> {
     }
 }
 
-pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
+pub fn build_executors<S: Storage + 'static>(
     executor_descriptors: Vec<tipb::Executor>,
     storage: S,
     ranges: Vec<KeyRange>,
@@ -141,7 +140,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                     ranges,
                     descriptor.get_desc(),
                 )?
-                .with_summary_collector(C::new(summary_slot_index)),
+                .collect_summary(summary_slot_index),
             );
         }
         ExecType::TypeIndexScan => {
@@ -160,7 +159,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                     descriptor.get_desc(),
                     descriptor.get_unique(),
                 )?
-                .with_summary_collector(C::new(summary_slot_index)),
+                .collect_summary(summary_slot_index),
             );
         }
         _ => {
@@ -186,7 +185,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                         executor,
                         ed.take_selection().take_conditions().into(),
                     )?
-                    .with_summary_collector(C::new(summary_slot_index)),
+                    .collect_summary(summary_slot_index),
                 )
             }
             ExecType::TypeAggregation | ExecType::TypeStreamAgg
@@ -202,7 +201,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                         executor,
                         ed.mut_aggregation().take_agg_func().into(),
                     )?
-                    .with_summary_collector(C::new(summary_slot_index)),
+                    .collect_summary(summary_slot_index),
                 )
             }
             ExecType::TypeAggregation => {
@@ -219,7 +218,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                             ed.mut_aggregation().take_group_by().into(),
                             ed.mut_aggregation().take_agg_func().into(),
                         )?
-                        .with_summary_collector(C::new(summary_slot_index)),
+                        .collect_summary(summary_slot_index),
                     )
                 } else {
                     COPR_EXECUTOR_COUNT
@@ -233,7 +232,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                             ed.mut_aggregation().take_group_by().into(),
                             ed.mut_aggregation().take_agg_func().into(),
                         )?
-                        .with_summary_collector(C::new(summary_slot_index)),
+                        .collect_summary(summary_slot_index),
                     )
                 }
             }
@@ -249,7 +248,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                         ed.mut_aggregation().take_group_by().into(),
                         ed.mut_aggregation().take_agg_func().into(),
                     )?
-                    .with_summary_collector(C::new(summary_slot_index)),
+                    .collect_summary(summary_slot_index),
                 )
             }
             ExecType::TypeLimit => {
@@ -259,7 +258,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
 
                 Box::new(
                     BatchLimitExecutor::new(executor, ed.get_limit().get_limit() as usize)?
-                        .with_summary_collector(C::new(summary_slot_index)),
+                        .collect_summary(summary_slot_index),
                 )
             }
             ExecType::TypeTopN => {
@@ -284,7 +283,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                         order_is_desc,
                         d.get_limit() as usize,
                     )?
-                    .with_summary_collector(C::new(summary_slot_index)),
+                    .collect_summary(summary_slot_index),
                 )
             }
             _ => {
@@ -308,25 +307,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         deadline: Deadline,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
-        let collect_exec_summary = true;
+        let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
         let encode_type = req.get_encode_type();
 
-        let out_most_executor = if collect_exec_summary {
-            build_executors::<_, ExecSummaryCollectorEnabled>(
-                req.take_executors().into(),
-                storage,
-                ranges,
-                config.clone(),
-            )?
-        } else {
-            build_executors::<_, ExecSummaryCollectorDisabled>(
-                req.take_executors().into(),
-                storage,
-                ranges,
-                config.clone(),
-            )?
-        };
+        let out_most_executor =
+            build_executors(req.take_executors().into(), storage, ranges, config.clone())?;
 
         // Check output offsets
         let output_offsets = req.take_output_offsets();
@@ -341,11 +327,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             }
         }
 
-        let exec_stats = ExecuteStats::new(if collect_exec_summary {
-            executors_len
-        } else {
-            0 // Avoid allocation for executor summaries when it is not needed
-        });
+        let exec_stats = ExecuteStats::new(executors_len);
 
         Ok(Self {
             deadline,
