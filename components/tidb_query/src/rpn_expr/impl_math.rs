@@ -316,6 +316,21 @@ fn tan(arg: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
+fn pow(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
+    match (arg0, arg1) {
+        (Some(arg0), Some(arg1)) => {
+            let pow = arg0.powf(**arg1);
+            if pow.is_infinite() || pow.is_nan() {
+                return Err(Error::overflow("DOUBLE", &format!("{}.pow({})", arg0, arg1)).into());
+            }
+            Ok(Some(Real::from(pow)))
+        }
+        _ => Ok(None)
+    }
+}
+
+#[inline]
+#[rpn_fn]
 fn cot(arg: &Option<Real>) -> Result<Option<Real>> {
     match arg {
         Some(arg) => {
@@ -917,6 +932,23 @@ mod tests {
                 .evaluate(ScalarFuncSig::Cos)
                 .unwrap();
             assert!((output.unwrap().into_inner() - expect).abs() < std::f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_pow() {
+        let tests = vec![
+            (1.0, 3.0, 1.0),
+            (3.0, 0.0, 1.0),
+            (2.0, 4.0, 16.0),
+        ];
+        for (arg0, arg1, exp) in tests {
+            let output: Option<Real> = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::from(arg0)))
+                .push_param(Some(Real::from(arg1)))
+                .evaluate(ScalarFuncSig::Pow)
+                .unwrap();
+            assert_eq!(output, Some(Real::from(exp)));
         }
     }
 
