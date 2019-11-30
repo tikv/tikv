@@ -253,6 +253,20 @@ pub fn validate_expr_arguments_gte(expr: &Expr, args: usize) -> Result<()> {
     }
 }
 
+/// Validates whether the number of arguments of an expression node <= expectation.
+pub fn validate_expr_arguments_lte(expr: &Expr, args: usize) -> Result<()> {
+    let received_args = expr.get_children().len();
+    if received_args <= args {
+        Ok(())
+    } else {
+        Err(other_err!(
+            "Expect at most {} arguments, received {}",
+            args,
+            received_args
+        ))
+    }
+}
+
 thread_local! {
     pub static VARG_PARAM_BUF: std::cell::RefCell<Vec<usize>> =
         std::cell::RefCell::new(Vec::with_capacity(20));
