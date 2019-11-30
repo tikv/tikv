@@ -107,11 +107,10 @@ impl MemComparableByteCodec {
     /// # Panics
     ///
     /// Panics if the encoded length overflows usize.
-    pub fn encode_all_in_place(src: &mut Vec<u8>) -> usize {
+    pub fn encode_all_in_place(src: &mut [u8]) -> usize {
         // Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
         let src_len = src.len();
         let dest_len = Self::encoded_len(src_len);
-        src.reserve_exact(dest_len - src_len);
 
         // There must be 0 or more zero padding groups and 1 non-zero padding groups
         // in the output.
@@ -141,8 +140,6 @@ impl MemComparableByteCodec {
                 dest_ptr = dest_ptr.sub(MEMCMP_GROUP_SIZE);
                 std::ptr::copy(src_ptr, dest_ptr, MEMCMP_GROUP_SIZE);
             }
-
-            src.set_len(dest_len);
         }
 
         dest_len
@@ -159,6 +156,18 @@ impl MemComparableByteCodec {
         // It is even faster than a manually written "flip by 64bit".
         for k in &mut src[0..len] {
             *k = !*k;
+        }
+    }
+
+    /// Performs in place bitwise NOT for specified memory region, without doing bounds checking.
+    #[inline]
+    fn flip_bytes_in_place_unchecked(src: &mut [u8], len: usize) {
+        unsafe {
+            let mut src_ptr = src.as_mut_ptr();
+            for _ in 0..len {
+                *src_ptr = !*src_ptr;
+                src_ptr = src_ptr.add(1);
+            }
         }
     }
 
@@ -188,9 +197,9 @@ impl MemComparableByteCodec {
     /// # Panics
     ///
     /// Panics if the encoded length overflows usize.
-    pub fn encode_all_in_place_desc(src: &mut Vec<u8>) -> usize {
+    pub fn encode_all_in_place_desc(src: &mut [u8]) -> usize {
         let encoded_len = Self::encode_all_in_place(src);
-        Self::flip_bytes_in_place(src, encoded_len);
+        Self::flip_bytes_in_place_unchecked(src, encoded_len);
         encoded_len
     }
 
@@ -995,10 +1004,14 @@ mod tests {
 
             // Test encode ascending
             let mut buffer: Vec<u8> = src.clone();
+            buffer.reserve_exact(encoded_len);
             let output_len = MemComparableByteCodec::encode_all_in_place(&mut buffer);
             assert_eq!(output_len, encoded_len);
-            assert_eq!(buffer.len(), encoded_len);
             assert_eq!(output_len, expect_encoded_asc.len());
+            assert_eq!(buffer.len(), src.len());
+            unsafe {
+                buffer.set_len(output_len);
+            }
             assert_eq!(
                 &buffer.as_mut_slice()[..output_len],
                 expect_encoded_asc.as_slice()
@@ -1006,10 +1019,14 @@ mod tests {
 
             // Test encode descending
             let mut buffer: Vec<u8> = src.clone();
+            buffer.reserve_exact(encoded_len);
             let output_len = MemComparableByteCodec::encode_all_in_place_desc(&mut buffer);
             assert_eq!(output_len, encoded_len);
-            assert_eq!(buffer.len(), encoded_len);
-            assert_eq!(output_len, expect_encoded_desc.len());
+            assert_eq!(output_len, expect_encoded_asc.len());
+            assert_eq!(buffer.len(), src.len());
+            unsafe {
+                buffer.set_len(output_len);
+            }
             assert_eq!(
                 &buffer.as_mut_slice()[..output_len],
                 expect_encoded_desc.as_slice()
