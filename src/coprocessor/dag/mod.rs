@@ -24,7 +24,7 @@ pub fn build_handler<S: Store + 'static>(
     enable_batch_if_possible: bool,
 ) -> Result<Box<dyn RequestHandler>> {
     let mut is_batch = false;
-    if enable_batch_if_possible && !is_streaming {
+    if enable_batch_if_possible {
         let is_supported =
             tidb_query::batch::runner::BatchExecutorsRunner::check_supported(req.get_executors());
         if let Err(e) = is_supported {
@@ -38,7 +38,10 @@ pub fn build_handler<S: Store + 'static>(
 
     if is_batch {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        Ok(BatchDAGHandler::new(req, ranges, store, data_version, deadline)?.into_boxed())
+        Ok(
+            BatchDAGHandler::new(req, ranges, store, data_version, deadline, batch_row_limit, is_streaming)?
+                .into_boxed(),
+        )
     } else {
         COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
         Ok(DAGHandler::new(
@@ -109,6 +112,8 @@ impl BatchDAGHandler {
         store: S,
         data_version: Option<u64>,
         deadline: Deadline,
+        stream_min_rows_each_iter: usize,
+        is_streaming: bool,
     ) -> Result<Self> {
         Ok(Self {
             runner: tidb_query::batch::runner::BatchExecutorsRunner::from_request(
@@ -116,6 +121,8 @@ impl BatchDAGHandler {
                 ranges,
                 TiKVStorage::from(store),
                 deadline,
+                stream_min_rows_each_iter,
+                is_streaming,
             )?,
             data_version,
         })
@@ -125,6 +132,10 @@ impl BatchDAGHandler {
 impl RequestHandler for BatchDAGHandler {
     fn handle_request(&mut self) -> Result<Response> {
         handle_qe_response(self.runner.handle_request(), self.data_version)
+    }
+
+    fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
+        handle_qe_stream_response(self.runner.handle_streaming_request())
     }
 
     fn collect_scan_statistics(&mut self, dest: &mut Statistics) {
