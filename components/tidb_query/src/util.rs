@@ -4,6 +4,8 @@ use kvproto::coprocessor as coppb;
 use tipb::ColumnInfo;
 
 use crate::codec::datum::Datum;
+use rand::SeedableRng;
+use rand_xorshift::XorShiftRng;
 
 /// Convert the key to the smallest key which is larger than the key given.
 pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
@@ -83,6 +85,19 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
         // Length not match.
         false
     }
+}
+/// Generate rand seed by time.
+pub fn get_rand(arg: Option<u64>) -> XorShiftRng {
+    let seed = match arg {
+        Some(v) => v,
+        None => {
+            let current_time = time::get_time();
+            let nsec = current_time.nsec as u64;
+            let sec = (current_time.sec * 1000000000) as u64;
+            sec + nsec
+        }
+    };
+    SeedableRng::seed_from_u64(seed)
 }
 
 /// `is_point` checks if the key range represents a point.
