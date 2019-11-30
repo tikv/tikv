@@ -42,7 +42,7 @@ pub struct RpnFnMeta {
     pub validator_ptr: fn(expr: &Expr) -> Result<()>,
 
     /// The metadata constructor of the RPN function.
-    pub metadata_ctor_ptr: fn(expr: &mut Expr) -> Box<dyn Any + Send>,
+    pub metadata_ctor_ptr: fn(expr: &mut Expr) -> Result<Box<dyn Any + Send>>,
 
     #[allow(clippy::type_complexity)]
     /// The RPN function.

@@ -13,7 +13,7 @@ struct DetectGenerator {
 }
 
 impl DetectGenerator {
-    pub fn new(range: u64) -> Self {
+    fn new(range: u64) -> Self {
         Self {
             rng: ThreadRng::default(),
             range,
@@ -22,10 +22,10 @@ impl DetectGenerator {
     }
 
     /// Generates n detect requests with the same timestamp
-    pub fn generate(&mut self, n: u64) -> Vec<WaitForEntry> {
+    fn generate(&mut self, n: u64) -> Vec<WaitForEntry> {
         let mut entries = Vec::with_capacity(n as usize);
         (0..n).for_each(|_| {
-            let mut entry = WaitForEntry::new();
+            let mut entry = WaitForEntry::default();
             entry.set_txn(self.timestamp);
             let mut wait_for_txn = self.timestamp;
             while wait_for_txn == self.timestamp {
@@ -33,7 +33,7 @@ impl DetectGenerator {
                     if self.timestamp < self.range {
                         0
                     } else {
-                        self.timestamp - self.range
+                        (self.timestamp - self.range)
                     },
                     self.timestamp + self.range,
                 );
@@ -60,8 +60,8 @@ fn bench_detect(b: &mut Bencher, cfg: &Config) {
     b.iter(|| {
         for entry in generator.generate(cfg.n) {
             detect_table.detect(
-                entry.get_txn(),
-                entry.get_wait_for_txn(),
+                entry.get_txn().into(),
+                entry.get_wait_for_txn().into(),
                 entry.get_key_hash(),
             );
         }
