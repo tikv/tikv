@@ -5,6 +5,9 @@ use crate::codec::data_type::*;
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::Result;
+use rand::{Rng, SeedableRng};
+use rand_xorshift::XorShiftRng;
+use std::cell::RefCell;
 
 #[rpn_fn]
 #[inline]
@@ -345,6 +348,36 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
         }
         _ => Ok(None),
     }
+}
+
+#[inline]
+#[rpn_fn]
+fn rand() -> Result<Option<Real>> {
+    let rng: RefCell<Option<XorShiftRng>> = RefCell::new(None);
+    let mut cus_rng = rng.borrow_mut();
+    if cus_rng.is_none() {
+        let mut rand = get_rand(None);
+        let res = rand.gen::<f64>();
+        *cus_rng = Some(rand);
+        Ok(Real::new(res).ok())
+    } else {
+        let rand = cus_rng.as_mut().unwrap();
+        let res = rand.gen::<f64>();
+        Ok(Real::new(res).ok())
+    }
+}
+
+fn get_rand(arg: Option<u64>) -> XorShiftRng {
+    let seed = match arg {
+        Some(v) => v,
+        None => {
+            let current_time = time::get_time();
+            let nsec = current_time.nsec as u64;
+            let sec = (current_time.sec * 1000000000) as u64;
+            sec + nsec
+        }
+    };
+    SeedableRng::seed_from_u64(seed)
 }
 
 #[inline]
@@ -1024,6 +1057,17 @@ mod tests {
                 .evaluate::<Real>(ScalarFuncSig::Pow)
                 .is_err());
         }
+    }
+
+    #[test]
+    fn test_rand() {
+        let got = RpnFnScalarEvaluator::new()
+            .evaluate::<Real>(ScalarFuncSig::Rand)
+            .unwrap();
+
+        assert!(got.is_some());
+        assert!(got < Some(Real::from(1.0)));
+        assert!(got >= Some(Real::from(0.0)));
     }
 
     #[test]
