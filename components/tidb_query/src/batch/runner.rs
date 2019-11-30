@@ -312,21 +312,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let config = Arc::new(EvalConfig::from_request(&req)?);
         let encode_type = req.get_encode_type();
 
-        let out_most_executor = if collect_exec_summary {
-            build_executors::<_, ExecSummaryCollectorEnabled>(
-                req.take_executors().into(),
-                storage,
-                ranges,
-                config.clone(),
-            )?
-        } else {
-            build_executors::<_, ExecSummaryCollectorDisabled>(
-                req.take_executors().into(),
-                storage,
-                ranges,
-                config.clone(),
-            )?
-        };
+        let out_most_executor = build_executors::<_, ExecSummaryCollectorEnabled>(
+            req.take_executors().into(),
+            storage,
+            ranges,
+            config.clone(),
+        )?;
 
         // Check output offsets
         let output_offsets = req.take_output_offsets();
