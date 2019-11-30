@@ -4,14 +4,13 @@ use std::borrow::Cow;
 use std::{f64, i64};
 
 use num::traits::Pow;
-use rand::{Rng, SeedableRng};
-use rand_xorshift::XorShiftRng;
+use rand::Rng;
 use tikv_util::file::calc_crc32_bytes;
-use time;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use crate::codec::Datum;
+use crate::util::get_rand;
 
 impl ScalarFunc {
     #[inline]
@@ -459,19 +458,6 @@ impl ScalarFunc {
         let to_base = try_opt!(self.children[2].eval_int(ctx, row));
         Ok(conv_impl(n.as_ref(), from_base, to_base).map(Cow::Owned))
     }
-}
-
-fn get_rand(arg: Option<u64>) -> XorShiftRng {
-    let seed = match arg {
-        Some(v) => v,
-        None => {
-            let current_time = time::get_time();
-            let nsec = current_time.nsec as u64;
-            let sec = (current_time.sec * 1000000000) as u64;
-            sec + nsec
-        }
-    };
-    SeedableRng::seed_from_u64(seed)
 }
 
 #[cfg(test)]

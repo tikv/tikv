@@ -4,8 +4,9 @@ use tidb_query_codegen::rpn_fn;
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
+use crate::util::get_rand;
 use crate::Result;
-use rand::{Rng, SeedableRng};
+use rand::Rng;
 use rand_xorshift::XorShiftRng;
 use std::cell::RefCell;
 
@@ -365,19 +366,6 @@ fn rand() -> Result<Option<Real>> {
         let res = rand.gen::<f64>();
         Ok(Real::new(res).ok())
     }
-}
-
-fn get_rand(arg: Option<u64>) -> XorShiftRng {
-    let seed = match arg {
-        Some(v) => v,
-        None => {
-            let current_time = time::get_time();
-            let nsec = current_time.nsec as u64;
-            let sec = (current_time.sec * 1000000000) as u64;
-            sec + nsec
-        }
-    };
-    SeedableRng::seed_from_u64(seed)
 }
 
 #[inline]
