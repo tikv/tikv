@@ -133,9 +133,8 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Gets Region info which the key belongs to.
-    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
-        self.get_region(key)
-            .map(|region| RegionInfo::new(region, None))
+    fn get_region_info(&self, _key: &[u8]) -> Result<RegionInfo> {
+        unimplemented!();
     }
 
     /// Gets Region by Region id.
