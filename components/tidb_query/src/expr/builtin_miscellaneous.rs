@@ -4,6 +4,8 @@ use super::{EvalContext, Result, ScalarFunc};
 use crate::codec::data_type::Duration;
 use crate::codec::mysql::{Decimal, Json, Time};
 use crate::codec::Datum;
+use crate::expr_util;
+
 use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::convert::TryInto;
@@ -128,36 +130,8 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
-        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        if input.len() == 0 || input.ends_with('.') {
-            return Ok(None);
-        }
-        let (mut byte_result, mut result, mut dot_count): (u64, u64, usize) = (0, 0, 0);
-        for c in input.chars() {
-            if c >= '0' && c <= '9' {
-                let digit = c as u64 - '0' as u64;
-                byte_result = byte_result * 10 + digit;
-                if byte_result > 255 {
-                    return Ok(None);
-                }
-            } else if c == '.' {
-                dot_count += 1;
-                if dot_count > 3 {
-                    return Ok(None);
-                }
-                result = (result << 8) + byte_result;
-                byte_result = 0;
-            } else {
-                return Ok(None);
-            }
-        }
-
-        if dot_count == 1 {
-            result <<= 16;
-        } else if dot_count == 2 {
-            result <<= 8;
-        }
-        Ok(Some(((result << 8) + byte_result) as i64))
+        let addr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        Ok(expr_util::miscellaneous::inet_aton(addr))
     }
 
     pub fn inet_ntoa<'a, 'b: 'a>(

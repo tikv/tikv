@@ -77,7 +77,7 @@ impl Writer {
         let mut contents = buf as &[u8];
         let mut limit_reader = LimitReader::new(limiter, &mut contents);
         storage.write(&file_name, &mut limit_reader)?;
-        let mut file = File::new();
+        let mut file = File::default();
         file.set_name(file_name);
         file.set_sha256(sha256);
         file.set_crc64xor(self.checksum);

@@ -706,7 +706,7 @@ mod tests {
     }
 
     fn new_rewrite_rule(old_key_prefix: &[u8], new_key_prefix: &[u8]) -> RewriteRule {
-        let mut rule = RewriteRule::new();
+        let mut rule = RewriteRule::default();
         rule.set_old_key_prefix(old_key_prefix.to_vec());
         rule.set_new_key_prefix(new_key_prefix.to_vec());
         rule
@@ -940,7 +940,7 @@ mod tests {
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir).unwrap();
 
-        let mut meta = SstMeta::new();
+        let mut meta = SstMeta::default();
         meta.set_uuid(vec![0u8; 16]);
 
         let result = importer.download::<TestEngine>(

@@ -588,8 +588,7 @@ impl Snap {
 
     // Only called in `do_build`.
     fn save_meta_file(&mut self) -> RaftStoreResult<()> {
-        let mut v = vec![];
-        box_try!(self.meta_file.meta.write_to_vec(&mut v));
+        let v = box_try!(self.meta_file.meta.write_to_bytes());
         if let Some(mut f) = self.meta_file.file.take() {
             // `meta_file` could be None for this case: in `init_for_building` the snapshot exists
             // so no temporary meta file is created, and this field is None. However in `do_build`
@@ -825,8 +824,7 @@ impl Snapshot for Snap {
         }
         sync_dir(&self.dir_path)?;
         // write meta file
-        let mut v = vec![];
-        self.meta_file.meta.write_to_vec(&mut v)?;
+        let v = self.meta_file.meta.write_to_bytes()?;
         {
             let mut meta_file = self.meta_file.file.take().unwrap();
             meta_file.write_all(&v[..])?;
@@ -1836,8 +1834,7 @@ pub mod tests {
                         cf.set_checksum(corrupted_checksum);
                     }
 
-                    buf.clear();
-                    snapshot_meta.write_to_vec(&mut buf).unwrap();
+                    let buf = snapshot_meta.write_to_bytes().unwrap();
                     {
                         let mut f = OpenOptions::new()
                             .write(true)
@@ -2298,8 +2295,7 @@ pub mod tests {
             Box::new(src_mgr.clone()),
         )
         .unwrap();
-        let mut v = vec![];
-        snap_data.write_to_vec(&mut v).unwrap();
+        let v = snap_data.write_to_bytes().unwrap();
 
         check_registry_around_deregister(src_mgr.clone(), &key, &SnapEntry::Generating);
 
