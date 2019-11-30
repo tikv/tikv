@@ -12,6 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]

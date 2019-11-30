@@ -1458,7 +1458,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#79dee6393e290f6d5338b1b06fe6424fc4b7f3dd"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#970a27c2651210882cd4b36d80b59b6c4db07bcf"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1475,7 +1475,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#79dee6393e290f6d5338b1b06fe6424fc4b7f3dd"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#970a27c2651210882cd4b36d80b59b6c4db07bcf"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2676,7 +2676,7 @@ checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#79dee6393e290f6d5338b1b06fe6424fc4b7f3dd"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#970a27c2651210882cd4b36d80b59b6c4db07bcf"
 dependencies = [
  "crc",
  "libc",
@@ -3590,7 +3590,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#a594830fb004783d4fb7ec4fbdf184d05fd7ab13"
+source = "git+https://github.com/pingcap/tipb.git#0820b784842f3ef6cecc8f520e8834d326a0dbeb"
 dependencies = [
  "bytes",
  "lazy_static",

@@ -14,7 +14,7 @@ prost = { version = "0.5", optional = true }
 protobuf = "2"
 test_storage = { path = "../test_storage" }
 tidb_query = { path = "../tidb_query" }
-tikv = { path = "../../" }
+tikv = { path = "../../", default-features = false}
 
 tikv_util = { path = "../tikv_util" }
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }

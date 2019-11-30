@@ -9,5 +9,5 @@ futures = "0.1"
 keys = { path = "../keys" }
 kvproto = { git = "https://github.com/youjiali1995/kvproto.git", branch = "parallel-commit", default-features = false }
 test_raftstore = { path = "../test_raftstore" }
-tikv = { path = "../../" }
+tikv = { path = "../../", default-features = false }
 tikv_util = { path = "../tikv_util" }
