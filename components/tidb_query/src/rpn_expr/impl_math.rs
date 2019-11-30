@@ -325,7 +325,7 @@ fn pow(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
             }
             Ok(Some(Real::from(pow)))
         }
-        _ => Ok(None)
+        _ => Ok(None),
     }
 }
 
@@ -937,11 +937,7 @@ mod tests {
 
     #[test]
     fn test_pow() {
-        let tests = vec![
-            (1.0, 3.0, 1.0),
-            (3.0, 0.0, 1.0),
-            (2.0, 4.0, 16.0),
-        ];
+        let tests = vec![(1.0, 3.0, 1.0), (3.0, 0.0, 1.0), (2.0, 4.0, 16.0)];
         for (arg0, arg1, exp) in tests {
             let output: Option<Real> = RpnFnScalarEvaluator::new()
                 .push_param(Some(Real::from(arg0)))
