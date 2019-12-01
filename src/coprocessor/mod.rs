@@ -19,6 +19,7 @@
 //!
 //! Please refer to `Endpoint` for more details.
 
+mod cache;
 mod checksum;
 pub mod dag;
 mod endpoint;
@@ -104,6 +105,12 @@ pub struct ReqContext {
 
     /// The set of timestamps of locks that can be bypassed during the reading.
     pub bypass_locks: TsSet,
+
+    /// The data version to match. If it matches the underlying data version,
+    /// request will not be processed (i.e. cache hit).
+    ///
+    /// None means don't try to hit the cache.
+    pub cache_match_version: Option<u64>,
 }
 
 impl ReqContext {
@@ -115,6 +122,7 @@ impl ReqContext {
         peer: Option<String>,
         is_desc_scan: Option<bool>,
         txn_start_ts: Option<u64>,
+        cache_match_version: Option<u64>,
     ) -> Self {
         let deadline = Deadline::from_now(max_handle_duration);
         let bypass_locks = TsSet::from_u64s(context.take_resolved_locks());
@@ -128,6 +136,7 @@ impl ReqContext {
             first_range: ranges.first().cloned(),
             ranges_len: ranges.len(),
             bypass_locks,
+            cache_match_version,
         }
     }
 
@@ -138,6 +147,7 @@ impl ReqContext {
             kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(100),
+            None,
             None,
             None,
             None,

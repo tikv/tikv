@@ -209,7 +209,7 @@ impl Display for Task {
 fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
     m.into_iter()
         .map(|(k, v)| {
-            let mut pair = pdpb::RecordPair::new();
+            let mut pair = pdpb::RecordPair::default();
             pair.set_key(k);
             pair.set_value(v);
             pair
@@ -535,15 +535,9 @@ impl<T: PdClient> Runner<T> {
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
 
-        stats.set_cpu_usages(protobuf::RepeatedField::from_vec(
-            self.store_stat.store_cpu_usages.clone(),
-        ));
-        stats.set_read_io_rates(protobuf::RepeatedField::from_vec(
-            self.store_stat.store_read_io_rates.clone(),
-        ));
-        stats.set_write_io_rates(protobuf::RepeatedField::from_vec(
-            self.store_stat.store_write_io_rates.clone(),
-        ));
+        stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
+        stats.set_read_io_rates(self.store_stat.store_read_io_rates.clone().into());
+        stats.set_write_io_rates(self.store_stat.store_write_io_rates.clone().into());
 
         let mut interval = pdpb::TimeInterval::default();
         interval.set_start_timestamp(self.store_stat.last_report_ts.into_inner());
@@ -710,7 +704,7 @@ impl<T: PdClient> Runner<T> {
                     let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
                         CasualMessage::SplitRegion{
                             region_epoch: epoch,
-                            split_keys: split_region.take_keys().into_vec(),
+                            split_keys: split_region.take_keys().into(),
                             callback: Callback::None,
                         }
                     } else {
