@@ -1,15 +1,16 @@
+use std::cell::RefCell;
+
+use rand::Rng;
+use rand_xorshift::XorShiftRng;
 use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
+use tipb::Expr;
 
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::util::get_rng;
 use crate::Result;
-use rand::Rng;
-use rand_xorshift::XorShiftRng;
-use std::cell::RefCell;
-use tipb::Expr;
 
 #[rpn_fn]
 #[inline]
@@ -355,8 +356,8 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn(capture = [metadata],metadata_ctor = init_rng_data)]
 fn rand(metadata: &RefCell<XorShiftRng>) -> Result<Option<Real>> {
-    let rng = metadata;
-    let res = (rng.borrow_mut()).gen::<f64>();
+    let mut rng = metadata.borrow_mut();
+    let res = rng.gen::<f64>();
     Ok(Real::new(res).ok())
 }
 
@@ -1047,17 +1048,17 @@ mod tests {
     fn test_rand() {
         let got1 = RpnFnScalarEvaluator::new()
             .evaluate::<Real>(ScalarFuncSig::Rand)
+            .unwrap()
             .unwrap();
         let got2 = RpnFnScalarEvaluator::new()
             .evaluate::<Real>(ScalarFuncSig::Rand)
+            .unwrap()
             .unwrap();
 
-        assert!(got1.is_some());
-        assert!(got1 < Some(Real::from(1.0)));
-        assert!(got1 >= Some(Real::from(0.0)));
-        assert!(got2.is_some());
-        assert!(got2 < Some(Real::from(1.0)));
-        assert!(got2 >= Some(Real::from(0.0)));
+        assert!(got1 < Real::from(1.0));
+        assert!(got1 >= Real::from(0.0));
+        assert!(got2 < Real::from(1.0));
+        assert!(got2 >= Real::from(0.0));
         assert_ne!(got1, got2)
     }
 
