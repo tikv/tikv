@@ -86,8 +86,9 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
         false
     }
 }
-/// Generate rand seed by time.
-pub fn get_rand(arg: Option<u64>) -> XorShiftRng {
+
+/// Generate rng by seed.
+pub fn get_rng(arg: Option<u64>) -> XorShiftRng {
     let seed = match arg {
         Some(v) => v,
         None => {
@@ -192,14 +193,15 @@ mod tests {
             ],
         );
     }
+
     #[test]
     fn test_get_rand() {
-        let mut rand = get_rand(None);
+        let mut rand = get_rng(None);
         let res = rand.gen::<f64>();
         assert!(res < 1.0);
         assert!(res >= 0.0);
         let seed: u64 = 20191201;
-        rand = get_rand(Some(seed));
+        rand = get_rng(Some(seed));
         let res = rand.gen::<f64>();
         assert!(res < 1.0);
         assert!(res >= 0.0);

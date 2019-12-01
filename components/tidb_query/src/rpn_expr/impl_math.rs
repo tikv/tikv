@@ -4,7 +4,7 @@ use tidb_query_codegen::rpn_fn;
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
-use crate::util::get_rand;
+use crate::util::get_rng;
 use crate::Result;
 use rand::Rng;
 
@@ -352,7 +352,7 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn rand() -> Result<Option<Real>> {
-    let mut rand = get_rand(None);
+    let mut rand = get_rng(None);
     let res = rand.gen::<f64>();
     Ok(Real::new(res).ok())
 }
