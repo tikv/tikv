@@ -156,9 +156,9 @@ impl ScalarFunc {
     pub fn rand(&self, _: &mut EvalContext, _: &[Datum]) -> Result<Option<f64>> {
         let mut cus_rng = self.cus_rng.rng.borrow_mut();
         if cus_rng.is_none() {
-            let rng = get_rng(None);
-            let res = (rng.borrow_mut()).gen::<f64>();
-            *cus_rng = Some(rng.borrow_mut().to_owned());
+            let mut rng = get_rng(None);
+            let res = rng.gen::<f64>();
+            *cus_rng = Some(rng);
             Ok(Some(res))
         } else {
             let rng = cus_rng.as_mut().unwrap();
@@ -176,9 +176,9 @@ impl ScalarFunc {
 
         let mut cus_rng = self.cus_rng.rng.borrow_mut();
         if cus_rng.is_none() {
-            let rng = get_rng(seed);
-            let res = (rng.borrow_mut()).gen::<f64>();
-            *cus_rng = Some(rng.borrow_mut().to_owned());
+            let mut rng = get_rng(seed);
+            let res = rng.gen::<f64>();
+            *cus_rng = Some(rng);
             Ok(Some(res))
         } else {
             let rng = cus_rng.as_mut().unwrap();

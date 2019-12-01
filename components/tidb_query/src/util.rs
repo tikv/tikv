@@ -6,7 +6,6 @@ use tipb::ColumnInfo;
 use crate::codec::datum::Datum;
 use rand::SeedableRng;
 use rand_xorshift::XorShiftRng;
-use std::cell::RefCell;
 
 /// Convert the key to the smallest key which is larger than the key given.
 pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
@@ -89,7 +88,7 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
 }
 
 /// Generate rng by seed.
-pub fn get_rng(arg: Option<u64>) -> RefCell<XorShiftRng> {
+pub fn get_rng(arg: Option<u64>) -> XorShiftRng {
     let seed = match arg {
         Some(v) => v,
         None => {
@@ -99,7 +98,7 @@ pub fn get_rng(arg: Option<u64>) -> RefCell<XorShiftRng> {
             sec + nsec
         }
     };
-    RefCell::new(SeedableRng::seed_from_u64(seed))
+    SeedableRng::seed_from_u64(seed)
 }
 
 /// `is_point` checks if the key range represents a point.
@@ -198,12 +197,12 @@ mod tests {
     #[test]
     fn test_get_rand() {
         let mut rand = get_rng(None);
-        let res = (rand.borrow_mut()).gen::<f64>();
+        let res = rand.gen::<f64>();
         assert!(res < 1.0);
         assert!(res >= 0.0);
         let seed: u64 = 20191201;
         rand = get_rng(Some(seed));
-        let res = (rand.borrow_mut()).gen::<f64>();
+        let res = rand.gen::<f64>();
         assert!(res < 1.0);
         assert!(res >= 0.0);
     }
