@@ -424,7 +424,7 @@ where
 impl<N, C> Drop for BatchSystem<N, C>
 where
     N: Fsm + Send + 'static,
-    C: Fsm + Send + 'static
+    C: Fsm + Send + 'static,
 {
     fn drop(&mut self) {
         if !self.is_shutdown() {
