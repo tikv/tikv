@@ -251,6 +251,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CaseWhenTime => case_when_fn_meta::<DateTime>(),
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
+        ScalarFuncSig::Md5 => md5_fn_meta(),
         ScalarFuncSig::Sha1 => sha1_fn_meta(),
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
@@ -407,6 +408,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Space => space_fn_meta(),
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
+        ScalarFuncSig::DayOfMonth => day_of_month_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
