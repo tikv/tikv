@@ -766,6 +766,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_rand() {
         let got1 = eval_func(ScalarFuncSig::Rand, &[Datum::Null])
             .unwrap()
