@@ -223,5 +223,15 @@ mod tests {
                 .unwrap();
             assert_eq!(got, exp, "sha2('{:?}', {:?})", input_str, hash_length_i64);
         }
+
+        let invalid_cases = vec![("pingcap", -1), ("13572468", 999)];
+
+        for (input_str, hash_length_i64) in invalid_cases {
+            assert!(RpnFnScalarEvaluator::new()
+                .push_param(Some(Bytes::from(input_str)))
+                .push_param(Some(Int::from(hash_length_i64)))
+                .evaluate::<Bytes>(ScalarFuncSig::Sha2)
+                .is_err())
+        }
     }
 }
