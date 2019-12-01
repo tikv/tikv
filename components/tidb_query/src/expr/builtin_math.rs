@@ -10,7 +10,7 @@ use tikv_util::file::calc_crc32_bytes;
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use crate::codec::Datum;
-`use crate::util::get_rng;
+use crate::util::get_rng;
 
 impl ScalarFunc {
     #[inline]
