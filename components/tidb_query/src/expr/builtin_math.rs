@@ -767,14 +767,21 @@ mod tests {
 
     #[test]
     fn test_rand() {
-        let got = eval_func(ScalarFuncSig::Rand, &[Datum::Null])
+        let got1 = eval_func(ScalarFuncSig::Rand, &[Datum::Null])
             .unwrap()
             .as_real()
+            .unwrap()
             .unwrap();
 
-        assert!(got.is_some());
-        assert!(got.unwrap() < 1.0);
-        assert!(got.unwrap() >= 0.0);
+        let got2 = eval_func(ScalarFuncSig::Rand, &[Datum::Null])
+            .unwrap()
+            .as_real()
+            .unwrap()
+            .unwrap();
+
+        assert!(got1 < 1.0);
+        assert!(got1 >= 0.0);
+        assert_ne!(got1, got2)
     }
 
     #[test]
