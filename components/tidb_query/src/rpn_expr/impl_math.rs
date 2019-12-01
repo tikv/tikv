@@ -1045,13 +1045,20 @@ mod tests {
 
     #[test]
     fn test_rand() {
-        let got = RpnFnScalarEvaluator::new()
+        let got1 = RpnFnScalarEvaluator::new()
+            .evaluate::<Real>(ScalarFuncSig::Rand)
+            .unwrap();
+        let got2 = RpnFnScalarEvaluator::new()
             .evaluate::<Real>(ScalarFuncSig::Rand)
             .unwrap();
 
-        assert!(got.is_some());
-        assert!(got < Some(Real::from(1.0)));
-        assert!(got >= Some(Real::from(0.0)));
+        assert!(got1.is_some());
+        assert!(got1 < Some(Real::from(1.0)));
+        assert!(got1 >= Some(Real::from(0.0)));
+        assert!(got2.is_some());
+        assert!(got2 < Some(Real::from(1.0)));
+        assert!(got2 >= Some(Real::from(0.0)));
+        assert_ne!(got1, got2)
     }
 
     #[test]

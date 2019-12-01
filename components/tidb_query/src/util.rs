@@ -205,5 +205,10 @@ mod tests {
         let res = rand.gen::<f64>();
         assert!(res < 1.0);
         assert!(res >= 0.0);
+        let seed: u64 = 20191202;
+        rand = get_rng(Some(seed));
+        let res = rand.gen::<f64>();
+        assert!(res < 1.0);
+        assert!(res >= 0.0);
     }
 }
