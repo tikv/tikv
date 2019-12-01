@@ -1979,7 +1979,8 @@ fn future_prewrite<E: Engine, L: LockManager>(
         .take_mutations()
         .into_iter()
         .map(|mut x| {
-            let secondary_keys = Some(x.take_secondary_keys().into_vec()).filter(|k| !k.is_empty());
+            let secondary_keys =
+                Some(x.take_secondary_keys().into()).filter(|k: &Vec<Vec<u8>>| !k.is_empty());
             match x.get_op() {
                 Op::Put => {
                     Mutation::Put((Key::from_raw(x.get_key()), x.take_value(), secondary_keys))
