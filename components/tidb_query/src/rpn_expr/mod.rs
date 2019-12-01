@@ -254,6 +254,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Md5 => md5_fn_meta(),
         ScalarFuncSig::Sha1 => sha1_fn_meta(),
         ScalarFuncSig::UncompressedLength => uncompressed_length_fn_meta(),
+        ScalarFuncSig::Sha2 => sha2_fn_meta(),
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
         ScalarFuncSig::WeekDay => week_day_fn_meta(),
