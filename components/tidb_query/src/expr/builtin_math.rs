@@ -10,7 +10,7 @@ use tikv_util::file::calc_crc32_bytes;
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use crate::codec::Datum;
-use crate::util::get_rand;
+`use crate::util::get_rng;
 
 impl ScalarFunc {
     #[inline]
@@ -156,7 +156,7 @@ impl ScalarFunc {
     pub fn rand(&self, _: &mut EvalContext, _: &[Datum]) -> Result<Option<f64>> {
         let mut cus_rng = self.cus_rng.rng.borrow_mut();
         if cus_rng.is_none() {
-            let mut rand = get_rand(None);
+            let mut rand = get_rng(None);
             let res = rand.gen::<f64>();
             *cus_rng = Some(rand);
             Ok(Some(res))
@@ -176,7 +176,7 @@ impl ScalarFunc {
 
         let mut cus_rng = self.cus_rng.rng.borrow_mut();
         if cus_rng.is_none() {
-            let mut rand = get_rand(seed);
+            let mut rand = get_rng(seed);
             let res = rand.gen::<f64>();
             *cus_rng = Some(rand);
             Ok(Some(res))
