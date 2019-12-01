@@ -1978,12 +1978,19 @@ fn future_prewrite<E: Engine, L: LockManager>(
     let mutations = req
         .take_mutations()
         .into_iter()
-        .map(|mut x| match x.get_op() {
-            Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
-            Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
-            Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
-            Op::Insert => Mutation::Insert((Key::from_raw(x.get_key()), x.take_value())),
-            _ => panic!("mismatch Op in prewrite mutations"),
+        .map(|mut x| {
+            let secondary_keys = Some(x.take_secondary_keys().into_vec()).filter(|k| !k.is_empty());
+            match x.get_op() {
+                Op::Put => {
+                    Mutation::Put((Key::from_raw(x.get_key()), x.take_value(), secondary_keys))
+                }
+                Op::Del => Mutation::Delete((Key::from_raw(x.get_key()), secondary_keys)),
+                Op::Lock => Mutation::Lock((Key::from_raw(x.get_key()), secondary_keys)),
+                Op::Insert => {
+                    Mutation::Insert((Key::from_raw(x.get_key()), x.take_value(), secondary_keys))
+                }
+                _ => panic!("mismatch Op in prewrite mutations"),
+            }
         })
         .collect();
     let mut options = Options::default();

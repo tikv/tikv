@@ -9,7 +9,9 @@ use tikv::config::CoprReadPoolConfig;
 use tikv::coprocessor::{readpool_impl, Endpoint};
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
-use tikv::storage::{Engine, TestEngineBuilder};
+use tikv::storage::{AtomicTsCache, Engine, TestEngineBuilder};
+
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct ProductTable(Table);
@@ -83,7 +85,7 @@ pub fn init_data_with_details<E: Engine>(
         &CoprReadPoolConfig::default_for_test(),
         store.get_engine(),
     );
-    let cop = Endpoint::new(cfg, pool);
+    let cop = Endpoint::new(cfg, pool, Arc::new(AtomicTsCache::new()));
     (store, cop)
 }
 

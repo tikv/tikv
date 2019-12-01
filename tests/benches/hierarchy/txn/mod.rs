@@ -26,7 +26,7 @@ where
     let kvs = KvGenerator::new(config.key_length, config.value_length).generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
         txn.prewrite(
-            Mutation::Put((Key::from_raw(&k), v.clone())),
+            Mutation::Put((Key::from_raw(&k), v.clone(), None)),
             &k.clone(),
             &option,
         )
@@ -48,7 +48,12 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
                 KvGenerator::new(config.key_length, config.value_length)
                     .generate(DEFAULT_ITERATIONS)
                     .iter()
-                    .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
+                    .map(|(k, v)| {
+                        (
+                            Mutation::Put((Key::from_raw(&k), v.clone(), None)),
+                            k.clone(),
+                        )
+                    })
                     .collect();
             (mutations, &option)
         },

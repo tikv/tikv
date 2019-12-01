@@ -62,7 +62,7 @@ impl AssertionStorage<SimulateEngine> {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) {
-        let mutations = vec![Mutation::Delete(Key::from_raw(key))];
+        let mutations = vec![Mutation::Delete((Key::from_raw(key), None))];
         let commit_keys = vec![Key::from_raw(key)];
         self.two_pc_ok_for_cluster(
             cluster,
@@ -109,7 +109,7 @@ impl AssertionStorage<SimulateEngine> {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) {
-        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
+        let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec(), None))];
         let commit_keys = vec![Key::from_raw(key)];
         self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
     }
@@ -295,7 +295,7 @@ impl<E: Engine> AssertionStorage<E> {
         self.store
             .prewrite(
                 self.ctx.clone(),
-                vec![Mutation::Put((Key::from_raw(key), value.to_vec()))],
+                vec![Mutation::Put((Key::from_raw(key), value.to_vec(), None))],
                 key.to_vec(),
                 start_ts,
             )
@@ -320,7 +320,7 @@ impl<E: Engine> AssertionStorage<E> {
         self.store
             .prewrite(
                 self.ctx.clone(),
-                vec![Mutation::Delete(Key::from_raw(key))],
+                vec![Mutation::Delete((Key::from_raw(key), None))],
                 key.to_vec(),
                 start_ts,
             )

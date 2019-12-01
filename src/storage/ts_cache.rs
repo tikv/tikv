@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::storage::mvcc::TimeStamp;
 
-pub trait Cache {
+pub trait Cache: Sync + Send {
     fn get(&self) -> TimeStamp;
 
     fn update(&self, ts: TimeStamp);
@@ -13,6 +13,7 @@ pub trait Cache {
 pub struct AtomicCache(AtomicU64);
 
 impl AtomicCache {
+    // TODO: Get Ts from PD
     pub fn new() -> Self {
         Self(AtomicU64::new(0))
     }
@@ -24,6 +25,24 @@ impl Cache for AtomicCache {
     }
 
     fn update(&self, ts: TimeStamp) {
-        self.0.fetch_max(ts.into_inner(), Ordering::Relaxed);
+        if ts != TimeStamp::max() {
+            self.0.fetch_max(ts.into_inner(), Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_atomic_cache() {
+        let cache = AtomicCache::new();
+        cache.update(10.into());
+        assert_eq!(cache.get(), 10.into());
+        cache.update(5.into());
+        assert_eq!(cache.get(), 10.into());
+        cache.update(TimeStamp::max());
+        assert_eq!(cache.get(), 10.into());
     }
 }

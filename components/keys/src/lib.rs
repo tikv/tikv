@@ -17,7 +17,7 @@ mod timestamp;
 mod types;
 
 pub use timestamp::{TimeStamp, UnixSecs};
-pub use types::{Key, KvPair, Value};
+pub use types::{Key, KvPair, RawKey, Value};
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];

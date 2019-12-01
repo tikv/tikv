@@ -75,6 +75,7 @@ pub enum CommandKind {
         /// The transaction timestamp.
         start_ts: TimeStamp,
         options: Options,
+        max_read_ts: TimeStamp,
     },
     /// Acquire a Pessimistic lock on the keys.
     ///
@@ -318,13 +319,16 @@ impl Command {
             CommandKind::Prewrite { ref mutations, .. } => {
                 for m in mutations {
                     match *m {
-                        Mutation::Put((ref key, ref value))
-                        | Mutation::Insert((ref key, ref value)) => {
+                        Mutation::Put((ref key, ref value, ref secondaries))
+                        | Mutation::Insert((ref key, ref value, ref secondaries)) => {
                             bytes += key.as_encoded().len();
                             bytes += value.len();
+                            bytes += secondaries.iter().fold(0, |acc, key| acc + key.len());
                         }
-                        Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                        Mutation::Delete((ref key, ref secondaries))
+                        | Mutation::Lock((ref key, ref secondaries)) => {
                             bytes += key.as_encoded().len();
+                            bytes += secondaries.iter().fold(0, |acc, key| acc + key.len());
                         }
                     }
                 }

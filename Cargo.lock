@@ -1388,7 +1388,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/youjiali1995/kvproto.git?branch=parallel-commit#e506830fd80b59854cb43c28f7e16ca39f23c75b"
+source = "git+https://github.com/youjiali1995/kvproto.git?branch=parallel-commit#60f2de37d98aa656257d5033b27aca0564643ae5"
 dependencies = [
  "bytes",
  "futures",

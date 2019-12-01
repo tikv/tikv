@@ -9,7 +9,7 @@ use crate::storage::{
 use kvproto::kvrpcpb::LockInfo;
 use std::fmt::Debug;
 
-pub use keys::{Key, KvPair, Value};
+pub use keys::{Key, KvPair, RawKey, Value};
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.
@@ -26,33 +26,33 @@ pub struct MvccInfo {
 #[derive(Debug, Clone)]
 pub enum Mutation {
     /// Put `Value` into `Key`, overwriting any existing value.
-    Put((Key, Value)),
+    Put((Key, Value, Option<Vec<RawKey>>)),
     /// Delete `Key`.
-    Delete(Key),
+    Delete((Key, Option<Vec<RawKey>>)),
     /// Set a lock on `Key`.
-    Lock(Key),
+    Lock((Key, Option<Vec<RawKey>>)),
     /// Put `Value` into `Key` if `Key` does not yet exist.
     ///
     /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
-    Insert((Key, Value)),
+    Insert((Key, Value, Option<Vec<RawKey>>)),
 }
 
 impl Mutation {
     pub fn key(&self) -> &Key {
         match self {
-            Mutation::Put((ref key, _)) => key,
-            Mutation::Delete(ref key) => key,
-            Mutation::Lock(ref key) => key,
-            Mutation::Insert((ref key, _)) => key,
+            Mutation::Put((ref key, _, _)) => key,
+            Mutation::Delete((ref key, _)) => key,
+            Mutation::Lock((ref key, _)) => key,
+            Mutation::Insert((ref key, _, _)) => key,
         }
     }
 
-    pub fn into_key_value(self) -> (Key, Option<Value>) {
+    pub fn into_inner(self) -> (Key, Option<Value>, Option<Vec<RawKey>>) {
         match self {
-            Mutation::Put((key, value)) => (key, Some(value)),
-            Mutation::Delete(key) => (key, None),
-            Mutation::Lock(key) => (key, None),
-            Mutation::Insert((key, value)) => (key, Some(value)),
+            Mutation::Put((key, value, secondary_keys)) => (key, Some(value), secondary_keys),
+            Mutation::Delete((key, secondary_keys)) => (key, None, secondary_keys),
+            Mutation::Lock((key, secondary_keys)) => (key, None, secondary_keys),
+            Mutation::Insert((key, value, secondary_keys)) => (key, Some(value), secondary_keys),
         }
     }
 
