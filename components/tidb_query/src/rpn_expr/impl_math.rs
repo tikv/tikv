@@ -361,7 +361,7 @@ fn rand(metadata: &RefCell<XorShiftRng>) -> Result<Option<Real>> {
 }
 
 fn init_rng_data(_expr: &mut Expr) -> Result<RefCell<XorShiftRng>> {
-    Ok(get_rng(None))
+    Ok(RefCell::new(get_rng(None)))
 }
 
 #[inline]
