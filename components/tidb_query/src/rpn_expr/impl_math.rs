@@ -7,6 +7,9 @@ use crate::expr::EvalContext;
 use crate::util::get_rng;
 use crate::Result;
 use rand::Rng;
+use rand_xorshift::XorShiftRng;
+use std::cell::RefCell;
+use tipb::Expr;
 
 #[rpn_fn]
 #[inline]
@@ -350,11 +353,15 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn]
-fn rand() -> Result<Option<Real>> {
-    let mut rand = get_rng(None);
-    let res = rand.gen::<f64>();
+#[rpn_fn(capture = [metadata],metadata_ctor = init_rng_data)]
+fn rand(metadata: &RefCell<XorShiftRng>) -> Result<Option<Real>> {
+    let rng = metadata;
+    let res = (rng.borrow_mut()).gen::<f64>();
     Ok(Real::new(res).ok())
+}
+
+fn init_rng_data(_expr: &mut Expr) -> Result<RefCell<XorShiftRng>> {
+    Ok(get_rng(None))
 }
 
 #[inline]
