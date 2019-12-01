@@ -163,10 +163,9 @@ impl MemComparableByteCodec {
     #[inline]
     fn flip_bytes_in_place_unchecked(src: &mut [u8], len: usize) {
         unsafe {
-            let mut src_ptr = src.as_mut_ptr();
-            for _ in 0..len {
-                *src_ptr = !*src_ptr;
-                src_ptr = src_ptr.add(1);
+            for k in 0..len {
+                let elem = src.get_unchecked_mut(k);
+                *elem = !*elem;
             }
         }
     }
@@ -1523,9 +1522,10 @@ mod benches {
     fn bench_memcmp_encode_all_in_place_asc_small(b: &mut test::Bencher) {
         let src = vec![b'x'; 100];
         b.iter(|| {
-            let encoded = super::MemComparableByteCodec::encode_all_in_place(test::black_box(
-                &mut src.clone(),
-            ));
+            let mut src_clone = src.clone();
+            src_clone.reserve_exact(super::MemComparableByteCodec::encoded_len(src.len()));
+            let encoded =
+                super::MemComparableByteCodec::encode_all_in_place(test::black_box(&mut src_clone));
             test::black_box(encoded);
         });
     }
@@ -1548,8 +1548,10 @@ mod benches {
     fn bench_memcmp_encode_all_in_place_desc_small(b: &mut test::Bencher) {
         let src: Vec<u8> = vec![b'x'; 100];
         b.iter(|| {
+            let mut src_clone = src.clone();
+            src_clone.reserve_exact(super::MemComparableByteCodec::encoded_len(src.len()));
             let encoded = super::MemComparableByteCodec::encode_all_in_place_desc(test::black_box(
-                &mut src.clone(),
+                &mut src_clone,
             ));
             test::black_box(encoded);
         });
@@ -1585,9 +1587,10 @@ mod benches {
     fn bench_memcmp_encode_all_in_place_asc_large(b: &mut test::Bencher) {
         let src = vec![b'x'; 1000];
         b.iter(|| {
-            let encoded = super::MemComparableByteCodec::encode_all_in_place(test::black_box(
-                &mut src.clone(),
-            ));
+            let mut src_clone = src.clone();
+            src_clone.reserve_exact(super::MemComparableByteCodec::encoded_len(src.len()));
+            let encoded =
+                super::MemComparableByteCodec::encode_all_in_place(test::black_box(&mut src_clone));
             test::black_box(encoded);
         });
     }
@@ -1622,8 +1625,10 @@ mod benches {
     fn bench_memcmp_encode_all_in_place_desc_large(b: &mut test::Bencher) {
         let src: Vec<u8> = vec![b'x'; 1000];
         b.iter(|| {
+            let mut src_clone = src.clone();
+            src_clone.reserve_exact(super::MemComparableByteCodec::encoded_len(src.len()));
             let encoded = super::MemComparableByteCodec::encode_all_in_place_desc(test::black_box(
-                &mut src.clone(),
+                &mut src_clone,
             ));
             test::black_box(encoded);
         });
