@@ -14,7 +14,7 @@ use engine;
 use engine::rocks;
 use engine::rocks::DB;
 use engine::{ALL_CFS, CF_DEFAULT};
-use engine_rocks::{RocksSnapshot, RocksEngine};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::Snapshot;
 use tikv::raftstore::store::{
     cmd_resp, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
@@ -106,20 +106,22 @@ fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     };
 
     b.iter(|| {
-        let cb1: EngineCallback<RegionSnapshot<RocksEngine>> =
-            Box::new(move |(_, res): (CbContext, EngineResult<RegionSnapshot<RocksEngine>>)| {
+        let cb1: EngineCallback<RegionSnapshot<RocksEngine>> = Box::new(
+            move |(_, res): (CbContext, EngineResult<RegionSnapshot<RocksEngine>>)| {
                 assert!(res.is_ok());
-            });
+            },
+        );
         let cb2: EngineCallback<CmdRes> =
             Box::new(move |(ctx, res): (CbContext, EngineResult<CmdRes>)| {
                 if let Ok(CmdRes::Snap(snap)) = res {
                     cb1((ctx, Ok(snap)));
                 }
             });
-        let cb: Callback<RocksEngine> = Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
-            let res = CmdRes::Snap(resp.snapshot.unwrap());
-            cb2((CbContext::new(), Ok(res)));
-        }));
+        let cb: Callback<RocksEngine> =
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
+                let res = CmdRes::Snap(resp.snapshot.unwrap());
+                cb2((CbContext::new(), Ok(res)));
+            }));
         cb.invoke_read(resp.clone());
     });
 }

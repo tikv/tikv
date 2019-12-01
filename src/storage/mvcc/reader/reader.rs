@@ -499,7 +499,8 @@ mod tests {
         }
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
-            let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap =
+                RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true).unwrap();
             txn.prewrite(m, pk, &Options::default()).unwrap();
             self.write(txn.into_modifies());
@@ -511,7 +512,8 @@ mod tests {
             pk: &[u8],
             start_ts: impl Into<TimeStamp>,
         ) {
-            let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap =
+                RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true).unwrap();
             let options = Options::default();
             txn.pessimistic_prewrite(m, pk, true, &options).unwrap();
@@ -525,7 +527,8 @@ mod tests {
             start_ts: impl Into<TimeStamp>,
             for_update_ts: impl Into<TimeStamp>,
         ) {
-            let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap =
+                RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true).unwrap();
             let mut options = Options::default();
             options.for_update_ts = for_update_ts.into();
@@ -540,14 +543,16 @@ mod tests {
             start_ts: impl Into<TimeStamp>,
             commit_ts: impl Into<TimeStamp>,
         ) {
-            let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap =
+                RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true).unwrap();
             txn.commit(Key::from_raw(pk), commit_ts.into()).unwrap();
             self.write(txn.into_modifies());
         }
 
         fn rollback(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
-            let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap =
+                RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true).unwrap();
             txn.collapse_rollback(false);
             txn.rollback(Key::from_raw(pk)).unwrap();
@@ -556,7 +561,10 @@ mod tests {
 
         fn gc(&mut self, pk: &[u8], safe_point: impl Into<TimeStamp> + Copy) {
             loop {
-                let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
+                let snap = RegionSnapshot::<RocksEngine>::from_raw(
+                    Arc::clone(&self.db),
+                    self.region.clone(),
+                );
                 let mut txn = MvccTxn::new(snap, safe_point.into(), true).unwrap();
                 txn.gc(Key::from_raw(pk), safe_point.into()).unwrap();
                 let modifies = txn.into_modifies();

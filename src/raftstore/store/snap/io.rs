@@ -6,9 +6,9 @@ use std::{fs, usize};
 use engine::CfName;
 use engine_rocks::{RocksSnapshot, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::IOLimiter;
-use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
 use engine_traits::{ImportExt, IngestExternalFileOptions, KvEngine};
-use engine_traits::{WriteBatch, Mutable};
+use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
+use engine_traits::{Mutable, WriteBatch};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
 use super::Error;
@@ -34,7 +34,8 @@ pub fn build_plain_cf_file<S>(
     start_key: &[u8],
     end_key: &[u8],
 ) -> Result<BuildStatistics, Error>
-where S: SnapshotTrait
+where
+    S: SnapshotTrait,
 {
     let mut file = box_try!(OpenOptions::new().write(true).create_new(true).open(path));
     let mut stats = BuildStatistics::default();
@@ -107,7 +108,8 @@ pub fn apply_plain_cf_file<E>(
     cf: &str,
     batch_size: usize,
 ) -> Result<(), Error>
-where E: KvEngine
+where
+    E: KvEngine,
 {
     let mut decoder = BufReader::new(box_try!(File::open(path)));
     let wb = db.write_batch();
@@ -131,7 +133,10 @@ where E: KvEngine
     }
 }
 
-pub fn apply_sst_cf_file<E>(path: &str, db: &E, cf: &str) -> Result<(), Error> where E: KvEngine {
+pub fn apply_sst_cf_file<E>(path: &str, db: &E, cf: &str) -> Result<(), Error>
+where
+    E: KvEngine,
+{
     let cf_handle = box_try!(db.cf_handle(cf));
     let mut ingest_opt = <E as ImportExt>::IngestExternalFileOptions::new();
     ingest_opt.move_files(true);
@@ -157,7 +162,7 @@ mod tests {
     use super::*;
     use crate::raftstore::store::snap::tests::*;
     use engine::CF_DEFAULT;
-    use engine_rocks::{RocksIOLimiter, Compat};
+    use engine_rocks::{Compat, RocksIOLimiter};
     use tempfile::Builder;
 
     struct TestStaleDetector;

@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{TablePropertiesExt, TablePropertiesCollection};
 use crate::engine::RocksEngine;
-use rocksdb::TablePropertiesCollection as RawTablePropertiesCollection;
-use engine_traits::Range;
-use engine_traits::{Result, Error};
 use crate::util;
+use engine_traits::Range;
+use engine_traits::{Error, Result};
+use engine_traits::{TablePropertiesCollection, TablePropertiesExt};
+use rocksdb::TablePropertiesCollection as RawTablePropertiesCollection;
 
 impl TablePropertiesExt for RocksEngine {
     type TablePropertiesCollection = RocksTablePropertiesCollection;
@@ -17,7 +17,9 @@ impl TablePropertiesExt for RocksEngine {
     ) -> Result<Self::TablePropertiesCollection> {
         // FIXME: extra allocation
         let ranges: Vec<_> = ranges.iter().map(util::range_to_rocks_range).collect();
-        let raw = self.as_inner().get_properties_of_tables_in_range(cf.as_inner(), &ranges);
+        let raw = self
+            .as_inner()
+            .get_properties_of_tables_in_range(cf.as_inner(), &ranges);
         let raw = raw.map_err(Error::Engine)?;
         Ok(RocksTablePropertiesCollection::from_raw(raw))
     }
@@ -31,5 +33,4 @@ impl RocksTablePropertiesCollection {
     }
 }
 
-impl TablePropertiesCollection for RocksTablePropertiesCollection {
-}
+impl TablePropertiesCollection for RocksTablePropertiesCollection {}

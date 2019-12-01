@@ -11,7 +11,7 @@ use std::{cmp, mem, u64};
 use engine::rocks::{WriteBatch, WriteOptions};
 use engine::Engines;
 use engine_rocks::{Compat, RocksEngine};
-use engine_traits::{Peekable, Snapshot, KvEngine};
+use engine_traits::{KvEngine, Peekable, Snapshot};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -1936,7 +1936,12 @@ impl Peer {
         last_index <= progress.get(peer_id).unwrap().matched + ctx.cfg.leader_transfer_max_log_lag
     }
 
-    fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C>, req: RaftCmdRequest, cb: Callback<RocksEngine>) {
+    fn read_local<T, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+        req: RaftCmdRequest,
+        cb: Callback<RocksEngine>,
+    ) {
         ctx.raft_metrics.propose.local_read += 1;
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
     }
@@ -2608,7 +2613,10 @@ pub struct ReadExecutor<E: KvEngine> {
     need_snapshot_time: bool,
 }
 
-impl<E> ReadExecutor<E> where E: KvEngine {
+impl<E> ReadExecutor<E>
+where
+    E: KvEngine,
+{
     pub fn new(engine: E, check_epoch: bool, need_snapshot_time: bool) -> Self {
         ReadExecutor {
             check_epoch,

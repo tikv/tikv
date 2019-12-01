@@ -278,10 +278,10 @@ mod tests {
     use crate::raftstore::Result as RaftStoreResult;
     use crate::storage::TestStorageBuilder;
 
+    use engine_rocks::RocksEngine;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use tikv_util::security::SecurityConfig;
-    use engine_rocks::RocksEngine;
 
     #[derive(Clone)]
     struct MockResolver {

@@ -3,9 +3,7 @@
 use engine::rocks::{TablePropertiesCollection, DB};
 use engine::{self, IterOption};
 use engine_rocks::Compat;
-use engine_traits::{
-    Peekable, ReadOptions, Result as EngineResult, Snapshot, KvEngine
-};
+use engine_traits::{KvEngine, Peekable, ReadOptions, Result as EngineResult, Snapshot};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftApplyState;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,10 +12,10 @@ use std::sync::Arc;
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
+use engine_rocks::RocksEngine;
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
-use engine_rocks::RocksEngine;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -32,7 +30,10 @@ pub struct RegionSnapshot<E: KvEngine> {
     apply_index: Arc<AtomicU64>,
 }
 
-impl<E> RegionSnapshot<E> where E: KvEngine {
+impl<E> RegionSnapshot<E>
+where
+    E: KvEngine,
+{
     #[allow(clippy::new_ret_no_self)] // temporary until this returns RegionSnapshot<E>
     pub fn new(ps: &PeerStorage) -> RegionSnapshot<RocksEngine> {
         RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
@@ -42,8 +43,10 @@ impl<E> RegionSnapshot<E> where E: KvEngine {
         RegionSnapshot::from_snapshot(db.c().snapshot().into_sync(), region)
     }
 
-    pub fn from_snapshot(snap: <E::Snapshot as Snapshot>::SyncSnapshot, region: Region) -> RegionSnapshot<E>
-    {
+    pub fn from_snapshot(
+        snap: <E::Snapshot as Snapshot>::SyncSnapshot,
+        region: Region,
+    ) -> RegionSnapshot<E> {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
@@ -166,7 +169,10 @@ impl<E> RegionSnapshot<E> where E: KvEngine {
     }
 }
 
-impl<E> Clone for RegionSnapshot<E> where E: KvEngine {
+impl<E> Clone for RegionSnapshot<E>
+where
+    E: KvEngine,
+{
     fn clone(&self) -> Self {
         RegionSnapshot {
             snap: self.snap.clone(),
@@ -176,7 +182,10 @@ impl<E> Clone for RegionSnapshot<E> where E: KvEngine {
     }
 }
 
-impl<E> Peekable for RegionSnapshot<E> where E: KvEngine {
+impl<E> Peekable for RegionSnapshot<E>
+where
+    E: KvEngine,
+{
     type DBVector = <E::Snapshot as Peekable>::DBVector;
 
     fn get_value_opt(
@@ -217,7 +226,10 @@ impl<E> Peekable for RegionSnapshot<E> where E: KvEngine {
     }
 }
 
-impl<E> RegionSnapshot<E> where E: KvEngine {
+impl<E> RegionSnapshot<E>
+where
+    E: KvEngine,
+{
     #[inline(never)]
     fn handle_get_value_error(&self, e: EngineError, cf: &str, key: &[u8]) -> EngineError {
         CRITICAL_ERROR.with_label_values(&["rocksdb get"]).inc();
@@ -275,7 +287,10 @@ fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
 }
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
-impl<E> RegionIterator<E> where E: KvEngine {
+impl<E> RegionIterator<E>
+where
+    E: KvEngine,
+{
     pub fn new(
         snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
         region: Arc<Region>,
@@ -410,7 +425,7 @@ mod tests {
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
     use engine_rocks::RocksIOLimiter;
-    use engine_rocks::{RocksSnapshot, RocksSstWriterBuilder, Compat};
+    use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
     use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;
@@ -554,30 +569,31 @@ mod tests {
             );
             let mut iter = snap.iter(iter_opt);
             for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
-                let check_res =
-                    |iter: &RegionIterator<RocksEngine>, res: Result<bool>, exp: Option<(&[u8], &[u8])>| {
-                        if !in_range {
-                            assert!(
-                                res.is_err(),
-                                "exp failed at {}",
-                                hex::encode_upper(seek_key)
-                            );
-                            return;
-                        }
-                        if exp.is_none() {
-                            assert!(!res.unwrap(), "exp none at {}", hex::encode_upper(seek_key));
-                            return;
-                        }
-
+                let check_res = |iter: &RegionIterator<RocksEngine>,
+                                 res: Result<bool>,
+                                 exp: Option<(&[u8], &[u8])>| {
+                    if !in_range {
                         assert!(
-                            res.unwrap(),
-                            "should succeed at {}",
+                            res.is_err(),
+                            "exp failed at {}",
                             hex::encode_upper(seek_key)
                         );
-                        let (exp_key, exp_val) = exp.unwrap();
-                        assert_eq!(iter.key(), exp_key);
-                        assert_eq!(iter.value(), exp_val);
-                    };
+                        return;
+                    }
+                    if exp.is_none() {
+                        assert!(!res.unwrap(), "exp none at {}", hex::encode_upper(seek_key));
+                        return;
+                    }
+
+                    assert!(
+                        res.unwrap(),
+                        "should succeed at {}",
+                        hex::encode_upper(seek_key)
+                    );
+                    let (exp_key, exp_val) = exp.unwrap();
+                    assert_eq!(iter.key(), exp_key);
+                    assert_eq!(iter.value(), exp_val);
+                };
                 let seek_res = iter.seek(seek_key);
                 check_res(&iter, seek_res, seek_exp);
                 let prev_res = iter.seek_for_prev(seek_key);

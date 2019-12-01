@@ -5,17 +5,17 @@ use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
+use std::marker::PhantomData;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
-use std::marker::PhantomData;
 
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{CFHandleExt, ImportExt, Snapshot as EngineSnapshot, KvEngine};
+use engine_traits::{CFHandleExt, ImportExt, KvEngine, Snapshot as EngineSnapshot};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
@@ -151,7 +151,10 @@ impl SnapshotStatistics {
     }
 }
 
-pub struct ApplyOptions<E> where E: KvEngine {
+pub struct ApplyOptions<E>
+where
+    E: KvEngine,
+{
     pub db: E,
     pub region: Region,
     pub abort: Arc<AtomicUsize>,
@@ -296,7 +299,10 @@ struct MetaFile {
     pub tmp_path: PathBuf,
 }
 
-pub struct Snap<S> where S: EngineSnapshot {
+pub struct Snap<S>
+where
+    S: EngineSnapshot,
+{
     key: SnapKey,
     is_sending: bool,
     display_path: String,
@@ -310,7 +316,10 @@ pub struct Snap<S> where S: EngineSnapshot {
     _s: PhantomData<S>,
 }
 
-impl<S> Snap<S> where S: EngineSnapshot {
+impl<S> Snap<S>
+where
+    S: EngineSnapshot,
+{
     fn new<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
@@ -559,8 +568,7 @@ impl<S> Snap<S> where S: EngineSnapshot {
             if plain_file_used(cf_file.cf) {
                 check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
             } else {
-                let cf = engine
-                    .cf_handle(cf_file.cf)?;
+                let cf = engine.cf_handle(cf_file.cf)?;
                 engine.prepare_sst_for_ingestion(&cf_file.path, &cf_file.clone_path)?;
                 engine.validate_sst_for_ingestion(
                     &cf,
@@ -691,7 +699,10 @@ impl<S> Snap<S> where S: EngineSnapshot {
     }
 }
 
-impl<S> fmt::Debug for Snap<S> where S: EngineSnapshot {
+impl<S> fmt::Debug for Snap<S>
+where
+    S: EngineSnapshot,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Snap")
             .field("key", &self.key)
@@ -700,7 +711,10 @@ impl<S> fmt::Debug for Snap<S> where S: EngineSnapshot {
     }
 }
 
-impl<S> Snapshot for Snap<S> where S: EngineSnapshot {
+impl<S> Snapshot for Snap<S>
+where
+    S: EngineSnapshot,
+{
     fn build(
         &mut self,
         kv_snap: &RocksSnapshot,
@@ -868,7 +882,10 @@ impl snap_io::StaleDetector for ApplyAbortChecker {
     }
 }
 
-impl<S> Read for Snap<S> where S: EngineSnapshot {
+impl<S> Read for Snap<S>
+where
+    S: EngineSnapshot,
+{
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -894,7 +911,10 @@ impl<S> Read for Snap<S> where S: EngineSnapshot {
     }
 }
 
-impl<S> Write for Snap<S> where S: EngineSnapshot {
+impl<S> Write for Snap<S>
+where
+    S: EngineSnapshot,
+{
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -943,7 +963,10 @@ impl<S> Write for Snap<S> where S: EngineSnapshot {
     }
 }
 
-impl<S> Drop for Snap<S> where S: EngineSnapshot {
+impl<S> Drop for Snap<S>
+where
+    S: EngineSnapshot,
+{
     fn drop(&mut self) {
         // cleanup if some of the cf files and meta file is partly written
         if self
@@ -1362,7 +1385,7 @@ pub mod tests {
     use engine::rocks::{DBOptions, Env, DB};
     use engine::{Engines, Mutable, Peekable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use engine_rocks::{RocksSnapshot, Compat};
+    use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::Iterable;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
@@ -1690,8 +1713,13 @@ pub mod tests {
         assert_eq!(size_track.load(Ordering::SeqCst), size);
 
         // Ensure a snapshot could be applied to DB.
-        let mut s4 =
-            Snap::<RocksSnapshot>::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter).unwrap();
+        let mut s4 = Snap::<RocksSnapshot>::new_for_applying(
+            dst_dir.path(),
+            &key,
+            Arc::clone(&size_track),
+            deleter,
+        )
+        .unwrap();
         assert!(s4.exists());
 
         let dst_db_dir = Builder::new()
@@ -1962,10 +1990,13 @@ pub mod tests {
 
         corrupt_snapshot_size_in(dir.path());
 
-        assert!(
-            Snap::<RocksSnapshot>::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone())
-                .is_err()
-        );
+        assert!(Snap::<RocksSnapshot>::new_for_sending(
+            dir.path(),
+            &key,
+            Arc::clone(&size_track),
+            deleter.clone()
+        )
+        .is_err());
 
         let mut s2 = Snap::<RocksSnapshot>::new_for_building(
             dir.path(),
@@ -2087,10 +2118,13 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-        assert!(
-            Snap::<RocksSnapshot>::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone())
-                .is_err()
-        );
+        assert!(Snap::<RocksSnapshot>::new_for_sending(
+            dir.path(),
+            &key,
+            Arc::clone(&size_track),
+            deleter.clone()
+        )
+        .is_err());
 
         let mut s2 = Snap::<RocksSnapshot>::new_for_building(
             dir.path(),
@@ -2182,9 +2216,14 @@ pub mod tests {
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(mgr.clone());
-        let mut s1 =
-            Snap::<RocksSnapshot>::new_for_building(&path, &key1, Arc::clone(&size_track), deleter.clone(), None)
-                .unwrap();
+        let mut s1 = Snap::<RocksSnapshot>::new_for_building(
+            &path,
+            &key1,
+            Arc::clone(&size_track),
+            deleter.clone(),
+            None,
+        )
+        .unwrap();
         let mut region = gen_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
@@ -2197,8 +2236,13 @@ pub mod tests {
             deleter.clone(),
         )
         .unwrap();
-        let mut s =
-            Snap::<RocksSnapshot>::new_for_sending(&path, &key1, Arc::clone(&size_track), deleter.clone()).unwrap();
+        let mut s = Snap::<RocksSnapshot>::new_for_sending(
+            &path,
+            &key1,
+            Arc::clone(&size_track),
+            deleter.clone(),
+        )
+        .unwrap();
         let expected_size = s.total_size().unwrap();
         let mut s2 = Snap::<RocksSnapshot>::new_for_receiving(
             &path,
@@ -2216,9 +2260,14 @@ pub mod tests {
         let key2 = SnapKey::new(2, 1, 1);
         region.set_id(2);
         snap_data.set_region(region);
-        let s3 =
-            Snap::<RocksSnapshot>::new_for_building(&path, &key2, Arc::clone(&size_track), deleter.clone(), None)
-                .unwrap();
+        let s3 = Snap::<RocksSnapshot>::new_for_building(
+            &path,
+            &key2,
+            Arc::clone(&size_track),
+            deleter.clone(),
+            None,
+        )
+        .unwrap();
         let s4 = Snap::<RocksSnapshot>::new_for_receiving(
             &path,
             &key2,

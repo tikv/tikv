@@ -12,7 +12,7 @@ use crate::raftstore::{Error, Result};
 use engine::Engines;
 use engine::Peekable;
 use engine::CF_RAFT;
-use engine_rocks::{RocksSnapshot, RocksEngine};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;

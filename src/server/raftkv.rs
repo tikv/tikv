@@ -9,8 +9,8 @@ use engine::rocks::TablePropertiesCollection;
 use engine::CfName;
 use engine::IterOption;
 use engine::CF_DEFAULT;
-use engine_traits::Peekable;
 use engine_rocks::RocksEngine;
+use engine_traits::Peekable;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
@@ -144,7 +144,10 @@ fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext,
     (cb_ctx, Ok(CmdRes::Resp(resps.into())))
 }
 
-fn on_read_result(mut read_resp: ReadResponse<RocksEngine>, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
+fn on_read_result(
+    mut read_resp: ReadResponse<RocksEngine>,
+    req_cnt: usize,
+) -> (CbContext, Result<CmdRes>) {
     let cb_ctx = new_ctx(&read_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));

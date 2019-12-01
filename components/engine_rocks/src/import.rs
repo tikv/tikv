@@ -41,7 +41,8 @@ impl ImportExt for RocksEngine {
         files: &[&str],
     ) -> Result<bool> {
         let cf = cf.as_inner();
-        let r = self.as_inner()
+        let r = self
+            .as_inner()
             .ingest_external_file_optimized(&cf, &opts.0, files)?;
         Ok(r)
     }

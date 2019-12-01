@@ -4,7 +4,7 @@ use crate::cf_options::RocksColumnFamilyOptions;
 use crate::engine::RocksEngine;
 use engine_traits::CFHandle;
 use engine_traits::CFHandleExt;
-use engine_traits::{Result, Error};
+use engine_traits::{Error, Result};
 use rocksdb::CFHandle as RawCFHandle;
 
 impl CFHandleExt for RocksEngine {
@@ -12,7 +12,9 @@ impl CFHandleExt for RocksEngine {
     type ColumnFamilyOptions = RocksColumnFamilyOptions;
 
     fn cf_handle(&self, name: &str) -> Result<&Self::CFHandle> {
-        self.as_inner().cf_handle(name).map(RocksCFHandle::from_raw)
+        self.as_inner()
+            .cf_handle(name)
+            .map(RocksCFHandle::from_raw)
             .ok_or_else(|| Error::CFName(name.to_string()))
     }
 

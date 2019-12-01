@@ -832,7 +832,12 @@ impl ApplyDelegate {
         }
     }
 
-    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback<RocksEngine>> {
+    fn find_cb(
+        &mut self,
+        index: u64,
+        term: u64,
+        is_conf_change: bool,
+    ) -> Option<Callback<RocksEngine>> {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {

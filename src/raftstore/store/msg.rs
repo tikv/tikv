@@ -3,6 +3,8 @@
 use std::fmt;
 use std::time::Instant;
 
+use engine_rocks::RocksEngine;
+use engine_traits::KvEngine;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
@@ -10,8 +12,6 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
-use engine_traits::KvEngine;
-use engine_rocks::RocksEngine;
 
 use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::raftstore::store::fsm::PeerFsm;
@@ -50,7 +50,10 @@ pub enum Callback<E: KvEngine> {
     Write(WriteCallback),
 }
 
-impl<E> Callback<E> where E: KvEngine {
+impl<E> Callback<E>
+where
+    E: KvEngine,
+{
     pub fn invoke_with_response(self, resp: RaftCmdResponse) {
         match self {
             Callback::None => (),
@@ -83,7 +86,10 @@ impl<E> Callback<E> where E: KvEngine {
     }
 }
 
-impl<E> fmt::Debug for Callback<E> where E: KvEngine {
+impl<E> fmt::Debug for Callback<E>
+where
+    E: KvEngine,
+{
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Callback::None => write!(fmt, "Callback::None"),
