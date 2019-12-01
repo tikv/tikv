@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 
+use num::traits::Pow;
 use rand::Rng;
 use rand_xorshift::XorShiftRng;
-use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
 use tipb::Expr;
 
