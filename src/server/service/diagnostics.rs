@@ -219,7 +219,7 @@ mod log {
                             if !self.filter.is_empty() && !content.contains(&self.filter) {
                                 continue;
                             }
-                            let mut item = LogMessage::new();
+                            let mut item = LogMessage::default();
                             item.set_time(time);
                             item.set_level(level);
                             item.set_message(content.to_owned());
@@ -314,7 +314,7 @@ mod log {
             Err(e) => return err(e),
         };
 
-        let mut resp = SearchLogResponse::new();
+        let mut resp = SearchLogResponse::default();
         resp.set_messages(
             iter.take(limit as usize)
                 .collect::<Vec<LogMessage>>()
@@ -663,7 +663,7 @@ mod log {
             )
             .unwrap();
 
-            let mut req = SearchLogRequest::new();
+            let mut req = SearchLogRequest::default();
             req.set_start_time(timestamp("2019/08/23 18:09:54.387 +08:00"));
             req.set_end_time(std::i64::MAX);
             req.set_level(LogLevel::Warn);

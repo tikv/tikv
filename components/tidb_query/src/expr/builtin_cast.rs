@@ -349,7 +349,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val: f64 = try_opt!(self.children[0].eval_real(ctx, row));
-        let val = if self.children[0].field_type().tp() == FieldTypeTp::Float {
+        let val = if self.children[0].field_type().as_accessor().tp() == FieldTypeTp::Float {
             let val = val as f32;
             val.to_string()
         } else {
