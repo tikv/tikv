@@ -131,6 +131,25 @@ pub fn year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> 
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
+pub fn day_of_month(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    let t = match t {
+        Some(v) => v,
+        _ => return Ok(None),
+    };
+
+    if t.is_zero() {
+        if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .map(|_| Ok(None))?;
+        }
+        return Ok(Some(0));
+    }
+    Ok(Some(Int::from(t.day())))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
 pub fn day_name(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Bytes>> {
     match t {
         Some(t) => {
@@ -470,6 +489,27 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(time)
                 .evaluate(ScalarFuncSig::Year)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_day_of_month() {
+        let cases = vec![
+            (Some("0000-00-00 00:00:00.000000"), Some(0)),
+            (Some("2018-02-01 00:00:00.000000"), Some(1)),
+            (Some("2018-02-15 00:00:00.000000"), Some(15)),
+            (Some("2018-02-28 00:00:00.000000"), Some(28)),
+            (Some("2016-02-29 00:00:00.000000"), Some(29)),
+            (None, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (time, expect) in cases {
+            let time = time.map(|t| DateTime::parse_datetime(&mut ctx, t, 6, true).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(time)
+                .evaluate(ScalarFuncSig::DayOfMonth)
                 .unwrap();
             assert_eq!(output, expect);
         }

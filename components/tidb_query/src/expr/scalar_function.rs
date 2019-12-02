@@ -381,7 +381,31 @@ impl ScalarFunc {
             | ScalarFuncSig::Pi => (0, 0),
 
             // unimplemented signature
-            ScalarFuncSig::AddDateAndDuration
+            ScalarFuncSig::TruncateUint
+            | ScalarFuncSig::AesDecryptIv
+            | ScalarFuncSig::AesEncryptIv
+            | ScalarFuncSig::Encode
+            | ScalarFuncSig::Decode
+            | ScalarFuncSig::SubDateStringReal
+            | ScalarFuncSig::SubDateIntReal
+            | ScalarFuncSig::SubDateIntDecimal
+            | ScalarFuncSig::SubDateDatetimeReal
+            | ScalarFuncSig::SubDateDatetimeDecimal
+            | ScalarFuncSig::SubDateDurationString
+            | ScalarFuncSig::SubDateDurationInt
+            | ScalarFuncSig::SubDateDurationReal
+            | ScalarFuncSig::SubDateDurationDecimal
+            | ScalarFuncSig::AddDateStringReal
+            | ScalarFuncSig::AddDateIntReal
+            | ScalarFuncSig::AddDateIntDecimal
+            | ScalarFuncSig::AddDateDatetimeReal
+            | ScalarFuncSig::AddDateDatetimeDecimal
+            | ScalarFuncSig::AddDateDurationString
+            | ScalarFuncSig::AddDateDurationInt
+            | ScalarFuncSig::AddDateDurationReal
+            | ScalarFuncSig::AddDateDurationDecimal
+            | ScalarFuncSig::CharLengthBinary
+            | ScalarFuncSig::AddDateAndDuration
             | ScalarFuncSig::AddDateAndString
             | ScalarFuncSig::AddDateDatetimeInt
             | ScalarFuncSig::AddDateDatetimeString
@@ -1502,6 +1526,30 @@ mod tests {
 
         // unimplemented signature
         let cases = vec![
+            ScalarFuncSig::TruncateUint,
+            ScalarFuncSig::AesDecryptIv,
+            ScalarFuncSig::AesEncryptIv,
+            ScalarFuncSig::Encode,
+            ScalarFuncSig::Decode,
+            ScalarFuncSig::SubDateStringReal,
+            ScalarFuncSig::SubDateIntReal,
+            ScalarFuncSig::SubDateIntDecimal,
+            ScalarFuncSig::SubDateDatetimeReal,
+            ScalarFuncSig::SubDateDatetimeDecimal,
+            ScalarFuncSig::SubDateDurationString,
+            ScalarFuncSig::SubDateDurationInt,
+            ScalarFuncSig::SubDateDurationReal,
+            ScalarFuncSig::SubDateDurationDecimal,
+            ScalarFuncSig::AddDateStringReal,
+            ScalarFuncSig::AddDateIntReal,
+            ScalarFuncSig::AddDateIntDecimal,
+            ScalarFuncSig::AddDateDatetimeReal,
+            ScalarFuncSig::AddDateDatetimeDecimal,
+            ScalarFuncSig::AddDateDurationString,
+            ScalarFuncSig::AddDateDurationInt,
+            ScalarFuncSig::AddDateDurationReal,
+            ScalarFuncSig::AddDateDurationDecimal,
+            ScalarFuncSig::CharLengthBinary,
             ScalarFuncSig::AddDateAndDuration,
             ScalarFuncSig::AddDateAndString,
             ScalarFuncSig::AddDateDatetimeInt,
