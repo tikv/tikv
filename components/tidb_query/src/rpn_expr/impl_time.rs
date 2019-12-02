@@ -480,34 +480,34 @@ mod tests {
         let cases = vec![
             (None, None, None),
             (
-                Some("0000-00-00 00:00:00.000000"),
+                Some("0000-00-00"),
                 Some(ERR_TRUNCATE_WRONG_VALUE),
                 None,
             ),
-            (Some("2019-11-17 00:00:00.000000"), None, Some("Sunday")),
-            (Some("2019-11-18 00:00:00.000000"), None, Some("Monday")),
-            (Some("2019-11-19 00:00:00.000000"), None, Some("Tuesday")),
-            (Some("2019-11-20 00:00:00.000000"), None, Some("Wednesday")),
-            (Some("2019-11-21 00:00:00.000000"), None, Some("Thursday")),
-            (Some("2019-11-22 00:00:00.000000"), None, Some("Friday")),
-            (Some("2019-11-23 00:00:00.000000"), None, Some("Saturday")),
-            (Some("2019-11-24 00:00:00.000000"), None, Some("Sunday")),
-            (
-                Some("2019-11-00 00:00:00.000000"),
-                Some(ERR_TRUNCATE_WRONG_VALUE),
-                None,
-            ),
-            (
-                Some("2019-00-00 00:00:00.000000"),
-                Some(ERR_TRUNCATE_WRONG_VALUE),
-                None,
-            ),
-            (
-                Some("2019-00-01 00:00:00.000000"),
-                Some(ERR_TRUNCATE_WRONG_VALUE),
-                None,
-            ),
+            (Some("2019-11-17"), None, Some("Sunday")),
+            (Some("2019-11-18"), None, Some("Monday")),
+            (Some("2019-11-19"), None, Some("Tuesday")),
+            (Some("2019-11-20"), None, Some("Wednesday")),
+            (Some("2019-11-21"), None, Some("Thursday")),
+            (Some("2019-11-22"), None, Some("Friday")),
+            (Some("2019-11-23"), None, Some("Saturday")),
             (Some("2019-11-24"), None, Some("Sunday")),
+            (
+                Some("2019-11-00"),
+                Some(ERR_TRUNCATE_WRONG_VALUE),
+                None,
+            ),
+            (
+                Some("2019-00-00"),
+                Some(ERR_TRUNCATE_WRONG_VALUE),
+                None,
+            ),
+            (
+                Some("2019-00-01"),
+                Some(ERR_TRUNCATE_WRONG_VALUE),
+                None,
+            ),
+            (Some("2019-11-24 00:00:00.000000"), None, Some("Sunday")),
         ];
 
         for (arg, err_code, exp) in cases {
