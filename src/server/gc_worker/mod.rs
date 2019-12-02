@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod applied_lock_collector;
+
 use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
@@ -9,6 +11,7 @@ use std::sync::{atomic, Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
+use applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
@@ -24,6 +27,7 @@ use log_wrappers::DisplayValue;
 use raft::StateRole;
 use tokio_core::reactor::Handle;
 
+use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
@@ -1215,6 +1219,8 @@ pub struct GCWorker<E: Engine> {
     worker: Arc<Mutex<FutureWorker<GCTask>>>,
     worker_scheduler: FutureScheduler<GCTask>,
 
+    applied_lock_collector: Option<AppliedLockCollector>,
+
     gc_manager_handle: Arc<Mutex<Option<GCManagerHandle>>>,
 }
 
@@ -1233,6 +1239,7 @@ impl<E: Engine> Clone for GCWorker<E> {
             refs: self.refs.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
+            applied_lock_collector: self.applied_lock_collector.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
         }
     }
@@ -1280,8 +1287,15 @@ impl<E: Engine> GCWorker<E> {
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             worker,
             worker_scheduler,
+            applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn start_observe_lock_apply(&self, coprocessor_host: &mut CoprocessorHost) {
+        assert!(self.applied_lock_collector.is_none());
+        let collector = AppliedLockCollector::new(coprocessor_host);
+        self.applied_lock_collector = Some(collector);
     }
 
     pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
