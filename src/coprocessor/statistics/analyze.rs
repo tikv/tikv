@@ -31,12 +31,13 @@ impl<S: Snapshot> AnalyzeContext<S> {
     pub fn new(
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
+        start_ts: u64,
         snap: S,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
         let store = SnapshotStore::new(
             snap,
-            req.get_start_ts().into(),
+            start_ts.into(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
