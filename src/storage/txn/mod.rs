@@ -33,6 +33,11 @@ quick_error! {
             cause(err)
             description(err.description())
         }
+        NewCodec(err: codec::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         ProtoBuf(err: protobuf::error::ProtobufError) {
             from()
             cause(err)
@@ -79,6 +84,7 @@ impl ErrorInner {
         match *self {
             ErrorInner::Engine(ref e) => e.maybe_clone().map(ErrorInner::Engine),
             ErrorInner::Codec(ref e) => e.maybe_clone().map(ErrorInner::Codec),
+            ErrorInner::NewCodec(ref e) => e.maybe_clone().map(ErrorInner::NewCodec),
             ErrorInner::Mvcc(ref e) => e.maybe_clone().map(ErrorInner::Mvcc),
             ErrorInner::InvalidTxnTso {
                 start_ts,

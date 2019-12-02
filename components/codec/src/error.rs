@@ -11,6 +11,9 @@ pub enum ErrorInner {
 
     #[fail(display = "Data padding is incorrect")]
     BadPadding,
+
+    #[fail(display = "bad format key(length)")]
+    KeyLength,
 }
 
 impl ErrorInner {
@@ -22,6 +25,16 @@ impl ErrorInner {
     #[inline]
     pub(crate) fn bad_padding() -> ErrorInner {
         ErrorInner::BadPadding
+    }
+}
+
+impl ErrorInner {
+    pub fn maybe_clone(&self) -> Option<ErrorInner> {
+        match *self {
+            ErrorInner::KeyLength => Some(ErrorInner::KeyLength),
+            ErrorInner::BadPadding => Some(ErrorInner::BadPadding),
+            ErrorInner::Io(_) => None,
+        }
     }
 }
 
@@ -49,6 +62,18 @@ impl Fail for Box<ErrorInner> {
 #[derive(Debug, Fail)]
 #[fail(display = "{}", _0)]
 pub struct Error(#[fail(cause)] pub Box<ErrorInner>);
+
+impl Error {
+    pub fn maybe_clone(&self) -> Option<Error> {
+        self.0.maybe_clone().map(Error::from)
+    }
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        "codec error"
+    }
+}
 
 impl From<ErrorInner> for Error {
     #[inline]

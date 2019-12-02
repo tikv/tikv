@@ -15,6 +15,7 @@ slog = "2.3"
 
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
+codec = { path = "../codec", default-features = false }
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }

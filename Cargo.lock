@@ -1374,6 +1374,7 @@ name = "keys"
 version = "0.1.0"
 dependencies = [
  "byteorder",
+ "codec",
  "derive_more",
  "failure",
  "farmhash",

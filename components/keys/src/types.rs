@@ -2,10 +2,10 @@ use crate::timestamp::TimeStamp;
 use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
 use std::fmt::{self, Debug, Display, Formatter};
-use tikv_util::codec;
-use tikv_util::codec::bytes;
-use tikv_util::codec::bytes::BytesEncoder;
-use tikv_util::codec::number::{self, NumberEncoder};
+
+use codec;
+use codec::byte::{MemComparableByteCodec, MEMCMP_GROUP_SIZE};
+use codec::number::{self, NumberCodec};
 
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
@@ -34,10 +34,9 @@ impl Key {
     /// Creates a key from raw bytes.
     #[inline]
     pub fn from_raw(key: &[u8]) -> Key {
-        // adding extra length for appending timestamp
-        let len = codec::bytes::max_encoded_bytes_size(key.len()) + codec::number::U64_SIZE;
+        let len = MemComparableByteCodec::encoded_len(key.len());
         let mut encoded = Vec::with_capacity(len);
-        encoded.encode_bytes(key, false).unwrap();
+        encoded.write_comparable_bytes(key).unwrap();
         Key(encoded)
     }
 
@@ -45,14 +44,16 @@ impl Key {
     #[inline]
     pub fn into_raw(self) -> Result<Vec<u8>, codec::Error> {
         let mut k = self.0;
-        bytes::decode_bytes_in_place(&mut k, false)?;
+        MemComparableByteCodec::try_decode_first_in_place(&mut k)?;
         Ok(k)
     }
 
     /// Gets the raw representation of this key.
     #[inline]
     pub fn to_raw(&self) -> Result<Vec<u8>, codec::Error> {
-        bytes::decode_bytes(&mut self.0.as_slice(), false)
+        let mut k = Vec::with_capacity(self.0.len() / (MEMCMP_GROUP_SIZE + 1) * MEMCMP_GROUP_SIZE);
+        MemComparableByteCodec::try_decode_first(&mut self.0.as_slice(), &mut k)?;
+        Ok(k)
     }
 
     /// Creates a key from encoded bytes vector.
@@ -85,7 +86,7 @@ impl Key {
     #[inline]
     pub fn append_ts(self, ts: TimeStamp) -> Key {
         let mut encoded = self.0;
-        encoded.encode_u64_desc(ts.into_inner()).unwrap();
+        NumberCodec::encode_u64_desc(&mut encoded, ts.into_inner());
         Key(encoded)
     }
 
@@ -114,7 +115,7 @@ impl Key {
             // functions to convert between `TimestampedKey` and `Key`.
             // `TimestampedKey` is in a higher (MVCC) layer, while `Key` is
             // in the core storage engine layer.
-            Err(codec::Error::KeyLength)
+            Err(codec::ErrorInner::KeyLength.into())
         } else {
             self.0.truncate(len - number::U64_SIZE);
             Ok(self)
@@ -125,12 +126,12 @@ impl Key {
     #[inline]
     pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], TimeStamp), codec::Error> {
         if key.len() < number::U64_SIZE {
-            Err(codec::Error::KeyLength)
+            Err(codec::ErrorInner::KeyLength.into())
         } else {
             let pos = key.len() - number::U64_SIZE;
             let k = &key[..pos];
             let mut ts = &key[pos..];
-            Ok((k, number::decode_u64_desc(&mut ts)?.into()))
+            Ok((k, NumberCodec::decode_u64_desc(&mut ts).into()))
         }
     }
 
@@ -139,7 +140,7 @@ impl Key {
     pub fn truncate_ts_for(key: &[u8]) -> Result<&[u8], codec::Error> {
         let len = key.len();
         if len < number::U64_SIZE {
-            return Err(codec::Error::KeyLength);
+            return Err(codec::ErrorInner::KeyLength.into());
         }
         Ok(&key[..key.len() - number::U64_SIZE])
     }
@@ -149,10 +150,10 @@ impl Key {
     pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp, codec::Error> {
         let len = key.len();
         if len < number::U64_SIZE {
-            return Err(codec::Error::KeyLength);
+            return Err(codec::ErrorInner::KeyLength.into());
         }
         let mut ts = &key[len - number::U64_SIZE..];
-        Ok(number::decode_u64_desc(&mut ts)?.into())
+        Ok(NumberCodec::decode_u64_desc(&mut ts).into())
     }
 
     /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to the encoded
@@ -186,7 +187,7 @@ impl Key {
 
     /// Returns whether the encoded key is encoded from `raw_key`.
     pub fn is_encoded_from(&self, raw_key: &[u8]) -> bool {
-        bytes::is_encoded_from(&self.0, raw_key, false)
+        MemComparableByteCodec::is_encoded_from(&self.0, raw_key)
     }
 
     /// TiDB uses the same hash algorithm.
