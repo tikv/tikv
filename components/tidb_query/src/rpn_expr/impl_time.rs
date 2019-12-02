@@ -519,11 +519,7 @@ mod tests {
     fn test_day_name() {
         let cases = vec![
             (None, None, None),
-            (
-                Some("0000-00-00"),
-                Some(ERR_TRUNCATE_WRONG_VALUE),
-                None,
-            ),
+            (Some("0000-00-00"), Some(ERR_TRUNCATE_WRONG_VALUE), None),
             (Some("2019-11-17"), None, Some("Sunday")),
             (Some("2019-11-18"), None, Some("Monday")),
             (Some("2019-11-19"), None, Some("Tuesday")),
@@ -532,21 +528,9 @@ mod tests {
             (Some("2019-11-22"), None, Some("Friday")),
             (Some("2019-11-23"), None, Some("Saturday")),
             (Some("2019-11-24"), None, Some("Sunday")),
-            (
-                Some("2019-11-00"),
-                Some(ERR_TRUNCATE_WRONG_VALUE),
-                None,
-            ),
-            (
-                Some("2019-00-00"),
-                Some(ERR_TRUNCATE_WRONG_VALUE),
-                None,
-            ),
-            (
-                Some("2019-00-01"),
-                Some(ERR_TRUNCATE_WRONG_VALUE),
-                None,
-            ),
+            (Some("2019-11-00"), Some(ERR_TRUNCATE_WRONG_VALUE), None),
+            (Some("2019-00-00"), Some(ERR_TRUNCATE_WRONG_VALUE), None),
+            (Some("2019-00-01"), Some(ERR_TRUNCATE_WRONG_VALUE), None),
             (Some("2019-11-24 00:00:00.000000"), None, Some("Sunday")),
         ];
 
