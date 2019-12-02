@@ -268,7 +268,6 @@ mod tests {
     use kvproto::kvrpcpb::LockInfo;
     use kvproto::metapb::{Peer, Region};
     use metrics::*;
-    use pd_client::{RegionInfo, Result as PdResult};
     use raft::StateRole;
     use std::sync::mpsc;
     use std::thread;
@@ -277,11 +276,7 @@ mod tests {
 
     struct MockPdClient;
 
-    impl PdClient for MockPdClient {
-        fn get_region_info(&self, _key: &[u8]) -> PdResult<RegionInfo> {
-            unimplemented!();
-        }
-    }
+    impl PdClient for MockPdClient {}
 
     #[derive(Clone)]
     struct MockResolver;
