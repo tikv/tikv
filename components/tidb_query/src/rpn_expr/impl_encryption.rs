@@ -6,7 +6,6 @@ use tidb_query_codegen::rpn_fn;
 use super::super::expr::{Error, EvalContext};
 
 use crate::codec::data_type::*;
-use crate::codec::Error;
 use crate::Result;
 
 const SHA0: i64 = 0;
