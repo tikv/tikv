@@ -11,7 +11,7 @@ test = false
 [dependencies]
 crc32fast = "1.2"
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/Little-Wallace/kvproto.git", branch="raft_thread" }
 
 engine = { path = "../engine" }
 engine_traits = { path = "../engine_traits" }

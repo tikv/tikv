@@ -162,10 +162,6 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     ) -> RaftStoreResult<()> {
         let region_id = req.get_header().get_region_id();
         let cmd = RaftCommand::new(req, cb);
-        let high = high
-            || self
-                .schedule_limiter
-                .change_to_high_priority(region_id as usize);
         if LocalReader::<RaftRouter>::acceptable(&cmd.request) {
             self.local_reader.execute_raft_command(cmd, high);
             Ok(())

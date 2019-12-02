@@ -601,7 +601,7 @@ mod tests {
                 panic!("unexpected invoke, {:?}", resp);
             })),
         );
-        reader.propose_raft_command(task);
+        reader.propose_raft_command(task, false);
         assert_eq!(
             rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
                 .unwrap()
@@ -615,7 +615,7 @@ mod tests {
         rx: &Receiver<RaftCommand>,
         task: RaftCommand,
     ) {
-        reader.propose_raft_command(task);
+        reader.propose_raft_command(task, false);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
     }
 
@@ -730,7 +730,7 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(task);
+        reader.propose_raft_command(task, false);
         assert_eq!(reader.metrics.borrow().rejected_by_store_id_mismatch, 1);
         assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 3);
 
@@ -751,7 +751,7 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(task);
+        reader.propose_raft_command(task, false);
         assert_eq!(reader.metrics.borrow().rejected_by_peer_id_mismatch, 1);
         assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 4);
 
@@ -772,7 +772,7 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(task);
+        reader.propose_raft_command(task, false);
         assert_eq!(reader.metrics.borrow().rejected_by_term_mismatch, 1);
         assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 6);
 
@@ -806,8 +806,8 @@ mod tests {
                 assert!(resp.snapshot.is_none());
             })),
         );
-        reader.propose_raft_command(task1);
-        reader.propose_raft_command(task_full);
+        reader.propose_raft_command(task1, false);
+        reader.propose_raft_command(task_full, false);
         rx.try_recv().unwrap();
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
         assert_eq!(reader.metrics.borrow().rejected_by_channel_full, 1);
@@ -833,7 +833,7 @@ mod tests {
                 .unwrap()
                 .update(Progress::applied_index_term(term6 + 3));
         }
-        reader.propose_raft_command(task);
+        reader.propose_raft_command(task, false);
         assert_eq!(
             rx.recv_timeout(Duration::seconds(5).to_std().unwrap())
                 .unwrap()

@@ -19,6 +19,7 @@ use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
+use tikv::storage::ScheduleLimiter;
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
@@ -242,7 +243,8 @@ impl Simulator for NodeCluster {
                 .insert(node_id, (snap_mgr, tmp));
         }
 
-        let router = ServerRaftStoreRouter::new(router, local_reader);
+        let schedule_limiter = Arc::new(ScheduleLimiter::new(5, 1000));
+        let router = ServerRaftStoreRouter::new(router, local_reader, schedule_limiter);
         self.trans
             .core
             .lock()

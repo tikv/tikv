@@ -848,6 +848,7 @@ impl<T: Simulator> Cluster<T> {
         router
             .send(
                 region.get_id(),
+                false,
                 PeerMsg::CasualMessage(CasualMessage::SplitRegion {
                     region_epoch: region.get_region_epoch().clone(),
                     split_keys: vec![split_key.clone()],
@@ -1034,6 +1035,7 @@ impl<T: Simulator> Cluster<T> {
         router
             .send(
                 region_id,
+                false,
                 PeerMsg::CasualMessage(CasualMessage::Test(Box::new(move |peer: &mut PeerFsm| {
                     let idx = peer.peer.raft_group.get_store().committed_index();
                     peer.peer.raft_group.request_snapshot(idx).unwrap();
