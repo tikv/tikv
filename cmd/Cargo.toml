@@ -27,33 +27,33 @@ name = "tikv-server"
 name = "tikv-ctl"
 
 [dependencies]
-tikv = { path = "../" }
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
-rand = "0.7"
-toml = "0.4"
-libc = "0.2"
-fs2 = "0.4"
-protobuf = "2.8"
-nix = "0.11"
+backup = { path = "../components/backup" }
 chrono = "0.4"
 clap = "2.32"
-url = "2"
+engine = { path = "../components/engine" }
+fail = "0.3"
+fs2 = "0.4"
 futures = "0.1"
+futures-cpupool = "0.1"
+grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
+hex = "0.3"
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+libc = "0.2"
+log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+nix = "0.11"
+pd_client = { path = "../components/pd_client" }
+protobuf = "2.8"
+raft = { version = "0.6.0-alpha" , default-features = false }
+rand = "0.7"
 serde = "1.0"
 serde_json = "1.0"
-fail = "0.3"
-grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
-raft = { version = "0.6.0-alpha" , default-features = false }
-hex = "0.3"
-vlog = "0.1.4"
-kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
+tikv = { path = "../", default-features = false }
 tikv_util = { path = "../components/tikv_util" }
-engine = { path = "../components/engine" }
-pd_client = { path = "../components/pd_client" }
-backup = { path = "../components/backup" }
-futures-cpupool = "0.1"
+toml = "0.4"
+url = "2"
+vlog = "0.1.4"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

@@ -266,9 +266,8 @@ mod tests {
         Error as StorageError, Result as StorageResult,
     };
     use kvproto::kvrpcpb::LockInfo;
-    use kvproto::metapb::Region;
+    use kvproto::metapb::{Peer, Region};
     use metrics::*;
-    use pd_client::{RegionInfo, Result as PdResult};
     use raft::StateRole;
     use std::sync::mpsc;
     use std::thread;
@@ -277,11 +276,7 @@ mod tests {
 
     struct MockPdClient;
 
-    impl PdClient for MockPdClient {
-        fn get_region_info(&self, _key: &[u8]) -> PdResult<RegionInfo> {
-            unimplemented!();
-        }
-    }
+    impl PdClient for MockPdClient {}
 
     #[derive(Clone)]
     struct MockResolver;
@@ -312,6 +307,7 @@ mod tests {
         let mut leader_region = Region::default();
         leader_region.set_start_key(b"".to_vec());
         leader_region.set_end_key(b"foo".to_vec());
+        leader_region.set_peers(vec![Peer::default()].into());
         coprocessor_host.on_role_change(&leader_region, StateRole::Leader);
         thread::sleep(Duration::from_millis(100));
 
