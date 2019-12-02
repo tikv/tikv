@@ -5,7 +5,7 @@ use tidb_query_codegen::rpn_fn;
 use super::super::expr::EvalContext;
 
 use crate::codec::data_type::*;
-use crate::codec::mysql::time::extension::DateTimeExtension;
+use crate::codec::mysql::time::extension::{DateTimeExtension, MonthExtension};
 use crate::codec::mysql::Time;
 use crate::codec::Error;
 use crate::expr::SqlMode;
@@ -133,15 +133,11 @@ pub fn year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> 
 pub fn month_name(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Bytes>> {
     match t {
         Some(t) => {
-            let month = t.month() as usize;
             if t.is_zero() && ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
                 ctx.handle_invalid_time_error(Error::incorrect_datetime_value(t))
                     .map(|_| Ok(None))?
-            } else if month == 0 {
-                Ok(None)
             } else {
-                use crate::codec::mysql::time::MONTH_NAMES;
-                Ok(Some(MONTH_NAMES[month - 1].to_string().into_bytes()))
+                Ok(t.month_name().map(|s| s.to_string().into_bytes()))
             }
         }
         None => Ok(None),
