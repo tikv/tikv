@@ -19,6 +19,7 @@ use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
+use tikv::server::lock_manager::{Config as PessimisticTxnConfig, LockManager};
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::transport::{RaftStoreBlackHole, RaftStoreRouter};
@@ -131,6 +132,7 @@ impl Simulator for ServerCluster {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let storage_read_pool =
             storage::readpool_impl::build_read_pool_for_test(raft_engine.clone());
+        let mut lock_mgr = LockManager::new();
         let store = create_raft_storage(
             RaftKv::new(sim_router.clone()),
             &cfg.storage,
@@ -138,7 +140,7 @@ impl Simulator for ServerCluster {
             storage_read_pool,
             None,
             None,
-            None,
+            Some(lock_mgr.clone()),
         )?;
         self.storages.insert(node_id, raft_engine);
 
@@ -153,6 +155,9 @@ impl Simulator for ServerCluster {
             Arc::clone(&engines.kv),
             Arc::clone(&importer),
         );
+
+        // Create deadlock service.
+        let deadlock_service = lock_mgr.deadlock_service();
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
@@ -174,7 +179,7 @@ impl Simulator for ServerCluster {
                 snap_mgr.clone(),
                 Some(engines.clone()),
                 Some(import_service.clone()),
-                None,
+                Some(deadlock_service.clone()),
             ));
             match server {
                 Some(Ok(_)) => break,
@@ -209,6 +214,9 @@ impl Simulator for ServerCluster {
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
 
+        // Register the role change observer of the lock manager.
+        lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
+
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
 
@@ -226,6 +234,16 @@ impl Simulator for ServerCluster {
         if let Some(tmp) = tmp {
             self.snap_paths.insert(node_id, tmp);
         }
+
+        lock_mgr
+            .start(
+                node.id(),
+                Arc::clone(&self.pd_client),
+                resolver,
+                Arc::clone(&security_mgr),
+                &PessimisticTxnConfig::default(),
+            )
+            .unwrap();
 
         server.start(server_cfg, security_mgr).unwrap();
 

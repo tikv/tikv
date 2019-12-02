@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod kv_service;
+mod lock_manager;
 mod raft_client;
 
 use std::sync::Arc;
