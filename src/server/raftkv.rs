@@ -5,18 +5,6 @@ use std::io::Error as IoError;
 use std::result;
 use std::time::Duration;
 
-use engine::rocks::TablePropertiesCollection;
-use engine::CfName;
-use engine::IterOption;
-use engine::Peekable;
-use engine::CF_DEFAULT;
-use kvproto::errorpb;
-use kvproto::kvrpcpb::Context;
-use kvproto::raft_cmdpb::{
-    CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
-    RaftRequestHeader, Request, Response,
-};
-
 use super::metrics::*;
 use crate::raftstore::errors::Error as RaftServerError;
 use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
@@ -27,6 +15,17 @@ use crate::storage::kv::{
     Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
 use crate::storage::{self, kv, Key, Value};
+use engine::rocks::TablePropertiesCollection;
+use engine::CfName;
+use engine::IterOption;
+use engine::Peekable;
+use engine::CF_DEFAULT;
+use kvproto::errorpb;
+use kvproto::kvrpcpb::{CommandPri, Context};
+use kvproto::raft_cmdpb::{
+    CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
+    RaftRequestHeader, Request, Response,
+};
 
 quick_error! {
     #[derive(Debug)]
@@ -184,12 +183,14 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         let len = reqs.len();
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::default();
+        let high = ctx.get_priority() == CommandPri::High;
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
 
         self.router
-            .send_command(
+            .send_command_with_priority(
                 cmd,
+                high,
                 StoreCallback::Read(Box::new(move |resp| {
                     let (cb_ctx, res) = on_read_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
@@ -210,12 +211,15 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         let len = reqs.len();
         let header = self.new_request_header(ctx);
         let mut cmd = RaftCmdRequest::default();
+
+        let high = ctx.get_priority() == CommandPri::High;
         cmd.set_header(header);
         cmd.set_requests(reqs.into());
 
         self.router
-            .send_command(
+            .send_command_with_priority(
                 cmd,
+                high,
                 StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));

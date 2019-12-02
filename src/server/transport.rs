@@ -16,6 +16,7 @@ use crate::raftstore::store::{
 use crate::raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use crate::server::raft_client::RaftClient;
 use crate::server::Result;
+use crate::storage::ScheduleLimiter;
 use raft::SnapshotStatus;
 use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
@@ -28,6 +29,16 @@ pub trait RaftStoreRouter: Send + Clone {
 
     /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()>;
+
+    /// Sends RaftCmdRequest to local store with high priority.
+    fn send_command_with_priority(
+        &self,
+        req: RaftCmdRequest,
+        _high: bool,
+        cb: Callback,
+    ) -> RaftStoreResult<()> {
+        self.send_command(req, cb)
+    }
 
     /// Sends a significant message. We should guarantee that the message can't be dropped.
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
@@ -96,14 +107,20 @@ impl RaftStoreRouter for RaftStoreBlackHole {
 pub struct ServerRaftStoreRouter {
     router: RaftRouter,
     local_reader: LocalReader<RaftRouter>,
+    schedule_limiter: Arc<ScheduleLimiter>,
 }
 
 impl ServerRaftStoreRouter {
     /// Creates a new router.
-    pub fn new(router: RaftRouter, local_reader: LocalReader<RaftRouter>) -> ServerRaftStoreRouter {
+    pub fn new(
+        router: RaftRouter,
+        local_reader: LocalReader<RaftRouter>,
+        schedule_limiter: Arc<ScheduleLimiter>,
+    ) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
             router,
             local_reader,
+            schedule_limiter,
         }
     }
 
@@ -134,14 +151,27 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
+        self.send_command_with_priority(req, false, cb)
+    }
+
+    fn send_command_with_priority(
+        &self,
+        req: RaftCmdRequest,
+        high: bool,
+        cb: Callback,
+    ) -> RaftStoreResult<()> {
+        let region_id = req.get_header().get_region_id();
         let cmd = RaftCommand::new(req, cb);
+        let high = high
+            || self
+                .schedule_limiter
+                .change_to_high_priority(region_id as usize);
         if LocalReader::<RaftRouter>::acceptable(&cmd.request) {
-            self.local_reader.execute_raft_command(cmd);
+            self.local_reader.execute_raft_command(cmd, high);
             Ok(())
         } else {
-            let region_id = cmd.request.get_header().get_region_id();
             self.router
-                .send_raft_command(cmd)
+                .send_raft_command(cmd, high)
                 .map_err(|e| handle_error(region_id, e))
         }
     }
@@ -160,8 +190,11 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn casual_send(&self, region_id: u64, msg: CasualMessage) -> RaftStoreResult<()> {
+        let high = self
+            .schedule_limiter
+            .is_high_priority_region(region_id as usize);
         self.router
-            .send(region_id, PeerMsg::CasualMessage(msg))
+            .send_with_priority(region_id, high, PeerMsg::CasualMessage(msg))
             .map_err(|e| handle_error(region_id, e))
     }
 

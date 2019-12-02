@@ -33,13 +33,15 @@ use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv::server::{create_raft_storage, Node, RaftKv, Server};
-use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::storage::{self, ScheduleLimiter, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
 use tikv_util::worker::FutureWorker;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
+const REGION_CAPACITY_SLOTS_NUM: usize = 1 << 16;
+const HIGH_PRIORITY_RATIO: usize = 1 * 1024 * 1024;
 
 pub fn run_tikv(mut config: TiKvConfig) {
     // Sets the global logger ASAP.
@@ -172,7 +174,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine), cache.is_some());
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
     let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
-    let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
+    let schedule_limiter = Arc::new(ScheduleLimiter::new(
+        HIGH_PRIORITY_RATIO,
+        REGION_CAPACITY_SLOTS_NUM,
+    ));
+    let raft_router =
+        ServerRaftStoreRouter::new(router.clone(), local_reader, schedule_limiter.clone());
 
     let engine = RaftKv::new(raft_router.clone());
 
@@ -203,6 +210,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         &cfg.storage,
         storage_read_pool,
         lock_mgr.clone(),
+        schedule_limiter.clone(),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 

@@ -95,6 +95,7 @@ pub struct PeerFsm {
     group_state: GroupState,
     stopped: bool,
     has_ready: bool,
+    pub high_priority: bool,
     mailbox: Option<BasicMailbox<PeerFsm>>,
     pub receiver: Receiver<PeerMsg>,
 }
@@ -156,6 +157,7 @@ impl PeerFsm {
                 group_state: GroupState::Ordered,
                 stopped: false,
                 has_ready: false,
+                high_priority: false,
                 mailbox: None,
                 receiver: rx,
             }),
@@ -193,6 +195,7 @@ impl PeerFsm {
                 group_state: GroupState::Ordered,
                 stopped: false,
                 has_ready: false,
+                high_priority: false,
                 mailbox: None,
                 receiver: rx,
             }),
@@ -257,6 +260,14 @@ impl Fsm for PeerFsm {
         Self: Sized,
     {
         self.mailbox.take()
+    }
+
+    fn set_priority(&mut self, high_priority: bool) {
+        self.peer.high_priority = high_priority;
+    }
+
+    fn is_high_priority(&self) -> bool {
+        return self.peer.high_priority;
     }
 }
 
@@ -710,6 +721,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
         };
         let peer_id = self.fsm.peer.peer_id();
+        let high = self.fsm.peer.high_priority;
         let f = self
             .ctx
             .timer
@@ -723,7 +735,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // This can happen only when the peer is about to be destroyed
                 // or the node is shutting down. So it's OK to not to clean up
                 // registry.
-                if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
+                if let Err(e) = mb.force_send(PeerMsg::Tick(tick), high) {
                     info!(
                         "failed to schedule peer tick";
                         "region_id" => region_id,
@@ -1336,9 +1348,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
         if job.initialized {
-            self.ctx
-                .apply_router
-                .schedule_task(job.region_id, ApplyTask::destroy(job.region_id));
+            self.ctx.apply_router.schedule_priority_task(
+                job.region_id,
+                self.ctx.high_priority,
+                ApplyTask::destroy(job.region_id),
+            );
         }
         if job.async_remove {
             info!(
@@ -1659,7 +1673,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.ctx.router.register(new_region_id, mailbox);
             self.ctx
                 .router
-                .force_send(new_region_id, PeerMsg::Start)
+                .force_send_with_priority(new_region_id, self.ctx.high_priority, PeerMsg::Start)
                 .unwrap();
 
             if !campaigned {
@@ -1667,10 +1681,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     .pending_votes
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
-                    let _ = self
-                        .ctx
-                        .router
-                        .send(new_region_id, PeerMsg::RaftMessage(msg));
+                    let _ = self.ctx.router.send_with_priority(
+                        new_region_id,
+                        self.ctx.high_priority,
+                        PeerMsg::RaftMessage(msg),
+                    );
                 }
             }
         }

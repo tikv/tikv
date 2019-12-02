@@ -57,6 +57,8 @@ const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
+const MAX_LOW_PRIORITY_BATCH_SIZE_PER_TICK: usize = 64 * 1024;
+const MAX_BATCH_SIZE_PER_TICK: usize = 8 * 1024 * 1024;
 
 pub struct PendingCmd {
     pub index: u64,
@@ -262,10 +264,11 @@ pub enum Notifier {
 }
 
 impl Notifier {
-    fn notify(&self, region_id: u64, msg: PeerMsg) {
+    fn notify(&self, region_id: u64, high_priority: bool, msg: PeerMsg) {
         match *self {
             Notifier::Router(ref r) => {
-                r.force_send(region_id, msg).unwrap();
+                r.force_send_with_priority(region_id, high_priority, msg)
+                    .unwrap();
             }
             #[cfg(test)]
             Notifier::Sender(ref s) => s.send(msg).unwrap(),
@@ -299,6 +302,8 @@ struct ApplyContext {
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
     use_delete_range: bool,
+
+    high_priority: bool,
 }
 
 impl ApplyContext {
@@ -310,6 +315,7 @@ impl ApplyContext {
         engines: Engines,
         router: BatchRouter<ApplyFsm, ControlFsm>,
         notifier: Notifier,
+        high_priority: bool,
         cfg: &Config,
     ) -> ApplyContext {
         ApplyContext {
@@ -321,6 +327,7 @@ impl ApplyContext {
             engines,
             router,
             notifier,
+            high_priority,
             kv_wb: None,
             cbs: MustConsumeVec::new("callback of apply context"),
             apply_res: vec![],
@@ -413,6 +420,7 @@ impl ApplyContext {
         self.apply_res.push(ApplyRes {
             region_id: delegate.region_id(),
             apply_state: delegate.apply_state.clone(),
+            high_priority: delegate.high_priority,
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_index_term: delegate.applied_index_term,
@@ -457,6 +465,7 @@ impl ApplyContext {
             for res in self.apply_res.drain(..) {
                 self.notifier.notify(
                     res.region_id,
+                    res.high_priority,
                     PeerMsg::ApplyRes {
                         res: TaskRes::Apply(res),
                     },
@@ -637,6 +646,8 @@ pub struct ApplyDelegate {
     /// The latest synced apply index.
     last_sync_apply_index: u64,
 
+    high_priority: bool,
+
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
 }
@@ -654,6 +665,7 @@ impl ApplyDelegate {
             term: reg.term,
             stopped: false,
             merged: false,
+            high_priority: false,
             ready_source_region_id: 0,
             wait_merge_state: None,
             is_merging: reg.is_merging,
@@ -2338,6 +2350,7 @@ pub struct ApplyRes {
     pub applied_index_term: u64,
     pub exec_res: VecDeque<ExecResult>,
     pub metrics: ApplyMetrics,
+    pub high_priority: bool,
 }
 
 #[derive(Debug)]
@@ -2478,6 +2491,7 @@ impl ApplyFsm {
             self.destroy(ctx);
             ctx.notifier.notify(
                 self.delegate.region_id(),
+                ctx.high_priority,
                 PeerMsg::ApplyRes {
                     res: TaskRes::Destroy {
                         region_id: self.delegate.region_id(),
@@ -2557,6 +2571,7 @@ impl ApplyFsm {
             // TODO: can we use `ctx.finish_for()` directly? is it safe here?
             ctx.apply_res.push(ApplyRes {
                 region_id: self.delegate.region_id(),
+                high_priority: self.delegate.high_priority,
                 apply_state: self.delegate.apply_state.clone(),
                 exec_res: res,
                 metrics: self.delegate.metrics.clone(),
@@ -2584,7 +2599,7 @@ impl ApplyFsm {
         );
 
         if let Some(mailbox) = ctx.router.mailbox(catch_up_logs.target_region_id) {
-            let _ = mailbox.force_send(Msg::LogsUpToDate(region_id));
+            let _ = mailbox.force_send(Msg::LogsUpToDate(region_id), false);
         } else {
             error!(
                 "failed to get mailbox, are we shutting down?";
@@ -2704,6 +2719,14 @@ impl Fsm for ApplyFsm {
     {
         self.mailbox.take()
     }
+
+    fn set_priority(&mut self, high_priority: bool) {
+        self.delegate.high_priority = high_priority;
+    }
+
+    fn is_high_priority(&self) -> bool {
+        return self.delegate.high_priority;
+    }
 }
 
 impl Drop for ApplyFsm {
@@ -2714,7 +2737,9 @@ impl Drop for ApplyFsm {
 
 pub struct ControlMsg;
 
-pub struct ControlFsm;
+pub struct ControlFsm {
+    high_priority: bool,
+}
 
 impl Fsm for ControlFsm {
     type Message = ControlMsg;
@@ -2722,6 +2747,14 @@ impl Fsm for ControlFsm {
     #[inline]
     fn is_stopped(&self) -> bool {
         true
+    }
+
+    fn is_high_priority(&self) -> bool {
+        return self.high_priority;
+    }
+
+    fn set_priority(&mut self, high_priority: bool) {
+        self.high_priority = high_priority;
     }
 }
 
@@ -2751,9 +2784,23 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
             }
             expected_msg_count = None;
         }
+        let mut msg_size = 0;
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
-                Ok(msg) => self.msg_buf.push(msg),
+                Ok(msg) => {
+                    if let Msg::Apply {
+                        ref apply,
+                        start: _,
+                    } = msg
+                    {
+                        for e in apply.entries.iter() {
+                            msg_size += e.get_data().len();
+                        }
+                    } else {
+                        msg_size += 1;
+                    }
+                    self.msg_buf.push(msg)
+                }
                 Err(TryRecvError::Empty) => {
                     expected_msg_count = Some(0);
                     break;
@@ -2763,6 +2810,12 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
                     expected_msg_count = Some(0);
                     break;
                 }
+            }
+            if self.is_high_priority()
+                && !normal.delegate.high_priority
+                && msg_size > MAX_LOW_PRIORITY_BATCH_SIZE_PER_TICK
+            {
+                break;
             }
         }
         normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
@@ -2784,6 +2837,10 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
                 fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
             }
         }
+    }
+
+    fn is_high_priority(&self) -> bool {
+        self.apply_ctx.high_priority
     }
 }
 
@@ -2820,7 +2877,7 @@ impl Builder {
 impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
     type Handler = ApplyPoller;
 
-    fn build(&mut self) -> ApplyPoller {
+    fn build(&mut self, high_priority: bool) -> ApplyPoller {
         ApplyPoller {
             msg_buf: Vec::with_capacity(self.cfg.messages_per_tick),
             apply_ctx: ApplyContext::new(
@@ -2831,6 +2888,7 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
                 self.engines.clone(),
                 self.router.clone(),
                 self.sender.clone(),
+                high_priority,
                 &self.cfg,
             ),
             messages_per_tick: self.cfg.messages_per_tick,
@@ -2841,8 +2899,8 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
 pub type ApplyRouter = BatchRouter<ApplyFsm, ControlFsm>;
 
 impl ApplyRouter {
-    pub fn schedule_task(&self, region_id: u64, msg: Msg) {
-        let reg = match self.try_send(region_id, msg) {
+    pub fn schedule_priority_task(&self, region_id: u64, high: bool, msg: Msg) {
+        let reg = match self.try_send_with_priority(region_id, high, msg) {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
                 Msg::Registration(reg) => reg,
@@ -2893,6 +2951,10 @@ impl ApplyRouter {
         let mailbox = BasicMailbox::new(sender, apply_fsm);
         self.register(region_id, mailbox);
     }
+
+    pub fn schedule_task(&self, region_id: u64, msg: Msg) {
+        self.schedule_priority_task(region_id, false, msg);
+    }
 }
 
 pub type ApplyBatchSystem = BatchSystem<ApplyFsm, ControlFsm>;
@@ -2913,8 +2975,11 @@ pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem
     super::batch::create_system(
         cfg.apply_pool_size,
         cfg.apply_max_batch_size,
+        cfg.high_priority_apply_pool_size,
         tx,
-        Box::new(ControlFsm),
+        Box::new(ControlFsm {
+            high_priority: false,
+        }),
     )
 }
 

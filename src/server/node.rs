@@ -17,7 +17,7 @@ use crate::raftstore::store::{
 };
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
-use crate::storage::{Config as StorageConfig, Storage};
+use crate::storage::{Config as StorageConfig, ScheduleLimiter, Storage};
 use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
@@ -36,11 +36,12 @@ pub fn create_raft_storage<S>(
     cfg: &StorageConfig,
     read_pools: Vec<FuturePool>,
     lock_mgr: Option<LockManager>,
+    schedule_limiter: Arc<ScheduleLimiter>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let store = Storage::from_engine(engine, cfg, read_pools, lock_mgr)?;
+    let store = Storage::from_engine(engine, cfg, read_pools, lock_mgr, schedule_limiter)?;
     Ok(store)
 }
 

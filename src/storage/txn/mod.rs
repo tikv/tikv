@@ -5,6 +5,7 @@
 mod latch;
 mod process;
 pub mod sched_pool;
+pub mod schedule_limiter;
 pub mod scheduler;
 mod store;
 
@@ -15,6 +16,7 @@ use std::io::Error as IoError;
 use crate::storage::mvcc::TimeStamp;
 
 pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
+pub use self::schedule_limiter::ScheduleLimiter;
 pub use self::scheduler::{Msg, Scheduler};
 pub use self::store::{EntryBatch, TxnEntry, TxnEntryScanner, TxnEntryStore};
 pub use self::store::{FixtureStore, FixtureStoreScanner};

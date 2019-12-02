@@ -18,7 +18,8 @@ pub use self::apply::{
     TaskRes as ApplyTaskRes,
 };
 pub use self::batch::{
-    BatchRouter, BatchSystem, Fsm, HandlerBuilder, NormalScheduler, PollHandler,
+    BatchRouter, BatchSystem, Fsm, FsmScheduler, HandlerBuilder, NormalScheduler, PollHandler,
+    MAX_LOW_PRIORITY_MESSAGE_PER_TICK,
 };
 pub use self::peer::{DestroyPeerJob, GroupState, PeerFsm};
 pub use self::router::{BasicMailbox, Mailbox};

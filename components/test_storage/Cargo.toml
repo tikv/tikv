@@ -9,5 +9,5 @@ keys = { path = "../keys" }
 tikv_util = { path = "../tikv_util" }
 tikv = { path = "../../", default-features = false }
 test_raftstore = { path = "../test_raftstore" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/Little-Wallace/kvproto.git", branch="raft_thread" }
 futures = "0.1"

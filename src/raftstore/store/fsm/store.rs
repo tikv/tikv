@@ -33,7 +33,7 @@ use crate::raftstore::store::fsm::peer::{
 use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
+    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder, MAX_LOW_PRIORITY_MESSAGE_PER_TICK,
 };
 use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
 use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -143,7 +143,8 @@ impl RaftRouter {
         mut msg: RaftMessage,
     ) -> std::result::Result<(), TrySendError<RaftMessage>> {
         let id = msg.get_region_id();
-        match self.try_send(id, PeerMsg::RaftMessage(msg)) {
+        let high = msg.get_high_priority();
+        match self.try_send_with_priority(id, high, PeerMsg::RaftMessage(msg)) {
             Either::Left(Ok(())) => return Ok(()),
             Either::Left(Err(TrySendError::Full(PeerMsg::RaftMessage(m)))) => {
                 return Err(TrySendError::Full(m));
@@ -154,7 +155,7 @@ impl RaftRouter {
             Either::Right(PeerMsg::RaftMessage(m)) => msg = m,
             _ => unreachable!(),
         }
-        match self.send_control(StoreMsg::RaftMessage(msg)) {
+        match self.send_control_with_priority(high, StoreMsg::RaftMessage(msg)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(StoreMsg::RaftMessage(m))) => Err(TrySendError::Full(m)),
             Err(TrySendError::Disconnected(StoreMsg::RaftMessage(m))) => {
@@ -168,9 +169,10 @@ impl RaftRouter {
     pub fn send_raft_command(
         &self,
         cmd: RaftCommand,
+        high_priority: bool,
     ) -> std::result::Result<(), TrySendError<RaftCommand>> {
         let region_id = cmd.request.get_header().get_region_id();
-        match self.send(region_id, PeerMsg::RaftCommand(cmd)) {
+        match self.send_with_priority(region_id, high_priority, PeerMsg::RaftCommand(cmd)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(PeerMsg::RaftCommand(cmd))) => Err(TrySendError::Full(cmd)),
             Err(TrySendError::Disconnected(PeerMsg::RaftCommand(cmd))) => {
@@ -217,6 +219,7 @@ pub struct PollContext<T, C: 'static> {
     pub pending_count: usize,
     pub sync_log: bool,
     pub has_ready: bool,
+    pub high_priority: bool,
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
@@ -266,12 +269,13 @@ impl<T: Transport, C> PollContext<T, C> {
     #[inline]
     fn schedule_store_tick(&self, tick: StoreTick, timeout: Duration) {
         if !is_zero_duration(&timeout) {
+            let high = self.high_priority;
             let mb = self.router.control_mailbox();
             let f = self
                 .timer
                 .delay(timeout)
                 .map(move |_| {
-                    if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
+                    if let Err(e) = mb.force_send(StoreMsg::Tick(tick), high) {
                         info!(
                             "failed to schedule store tick, are we shutting down?";
                             "tick" => ?tick,
@@ -466,9 +470,11 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
         if !self.pending_proposals.is_empty() {
             for prop in self.pending_proposals.drain(..) {
-                self.poll_ctx
-                    .apply_router
-                    .schedule_task(prop.region_id, ApplyTask::Proposal(prop));
+                self.poll_ctx.apply_router.schedule_priority_task(
+                    prop.region_id,
+                    self.poll_ctx.high_priority,
+                    ApplyTask::Proposal(prop),
+                );
             }
         }
         if self.poll_ctx.need_flush_trans
@@ -641,6 +647,11 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                     break;
                 }
             }
+            if self.is_high_priority()
+                && self.peer_msg_buf.len() > MAX_LOW_PRIORITY_MESSAGE_PER_TICK
+            {
+                break;
+            }
         }
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
@@ -672,6 +683,10 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             self.poll_ctx.trans.flush();
             self.poll_ctx.need_flush_trans = false;
         }
+    }
+
+    fn is_high_priority(&self) -> bool {
+        self.poll_ctx.high_priority
     }
 }
 
@@ -869,7 +884,7 @@ where
 {
     type Handler = RaftPoller<T, C>;
 
-    fn build(&mut self) -> RaftPoller<T, C> {
+    fn build(&mut self, high_priority: bool) -> RaftPoller<T, C> {
         let ctx = PollContext {
             cfg: self.cfg.clone(),
             store: self.store.clone(),
@@ -899,6 +914,7 @@ where
             pending_count: 0,
             sync_log: false,
             has_ready: false,
+            high_priority,
             ready_res: Vec::new(),
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
@@ -1112,9 +1128,6 @@ impl RaftBatchSystem {
             .consistency_check_worker
             .start(consistency_check_runner));
 
-        if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
-            warn!("set thread priority for raftstore failed"; "error" => ?e);
-        }
         self.workers = Some(workers);
         Ok(())
     }
@@ -1150,6 +1163,7 @@ pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter, RaftBatchSystem) {
     let (router, system) = batch::create_system(
         cfg.store_pool_size,
         cfg.store_max_batch_size,
+        cfg.high_priority_store_pool_size,
         store_tx,
         store_fsm,
     );
@@ -1268,7 +1282,12 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         let region_id = msg.get_region_id();
-        match self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg)) {
+        let high = msg.get_high_priority();
+        match self
+            .ctx
+            .router
+            .send_with_priority(region_id, high, PeerMsg::RaftMessage(msg))
+        {
             Ok(()) | Err(TrySendError::Full(_)) => return Ok(()),
             Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) => msg = m,
             e => panic!(
@@ -1315,7 +1334,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         if !self.maybe_create_peer(region_id, &msg)? {
             return Ok(());
         }
-        let _ = self.ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
+        let _ = self
+            .ctx
+            .router
+            .send_with_priority(region_id, high, PeerMsg::RaftMessage(msg));
         Ok(())
     }
 
@@ -1418,7 +1440,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         self.ctx.router.register(region_id, mailbox);
         self.ctx
             .router
-            .force_send(region_id, PeerMsg::Start)
+            .force_send_with_priority(region_id, self.ctx.high_priority, PeerMsg::Start)
             .unwrap();
         Ok(true)
     }
@@ -1456,8 +1478,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .observe(region_declined_bytes.len() as f64);
 
         for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
-            let _ = self.ctx.router.send(
+            let _ = self.ctx.router.send_with_priority(
                 region_id,
+                self.ctx.high_priority,
                 PeerMsg::CasualMessage(CasualMessage::CompactionDeclinedBytes {
                     bytes: declined_bytes,
                 }),
@@ -1635,7 +1658,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "region_id" => region_id,
             );
             let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
-            match self.ctx.router.send(region_id, gc_snap) {
+            match self
+                .ctx
+                .router
+                .send_with_priority(region_id, self.ctx.high_priority, gc_snap)
+            {
                 Ok(()) => Ok(()),
                 Err(TrySendError::Disconnected(PeerMsg::CasualMessage(
                     CasualMessage::GcSnap { snaps },
@@ -1895,8 +1922,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         admin.set_cmd_type(AdminCmdType::ComputeHash);
         request.set_admin_request(admin);
 
-        let _ = self.ctx.router.send(
+        let _ = self.ctx.router.send_with_priority(
             target_region_id,
+            self.ctx.high_priority,
             PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None)),
         );
     }

@@ -30,6 +30,7 @@ use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::{collections::HashMap, time::SlowTimer};
 
+use super::ScheduleLimiter;
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockManager};
 use crate::storage::txn::latch::{Latches, Lock};
@@ -248,6 +249,7 @@ pub struct Scheduler<E: Engine, L: LockManager> {
     // `engine` is `None` means currently the program is in scheduler worker threads.
     engine: Option<E>,
     inner: Arc<SchedulerInner<L>>,
+    schedule_limiter: Arc<ScheduleLimiter>,
 }
 
 unsafe impl<E: Engine, L: LockManager> Send for Scheduler<E, L> {}
@@ -257,6 +259,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     pub fn new(
         engine: E,
         lock_mgr: Option<L>,
+        schedule_limiter: Arc<ScheduleLimiter>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -288,6 +291,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         Scheduler {
             engine: Some(engine),
             inner,
+            schedule_limiter,
         }
     }
 
@@ -306,6 +310,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let scheduler = Scheduler {
             engine: None,
             inner: Arc::clone(&self.inner),
+            schedule_limiter: Arc::clone(&self.schedule_limiter),
         };
         Executor::new(scheduler, pool, self.inner.lock_mgr.clone())
     }
@@ -345,6 +350,20 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCallback) {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
+            SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
+            callback.execute(ProcessResult::Failed {
+                err: StorageError::from(StorageErrorInner::SchedTooBusy),
+            });
+            return;
+        }
+        let region_id = cmd.ctx.get_region_id();
+        let high_priority = cmd.ctx.get_priority();
+        let key_num = cmd.write_bytes();
+        if self.schedule_limiter.delay(
+            region_id as usize,
+            high_priority == CommandPri::High,
+            key_num,
+        ) {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
             callback.execute(ProcessResult::Failed {
                 err: StorageError::from(StorageErrorInner::SchedTooBusy),

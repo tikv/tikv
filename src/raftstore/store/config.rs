@@ -114,10 +114,12 @@ pub struct Config {
     pub local_read_batch_size: u64,
 
     pub apply_max_batch_size: usize,
+    pub high_priority_apply_pool_size: usize,
     pub apply_pool_size: usize,
 
     pub store_max_batch_size: usize,
     pub store_pool_size: usize,
+    pub high_priority_store_pool_size: usize,
     pub future_poll_size: usize,
     pub hibernate_regions: bool,
 
@@ -154,6 +156,7 @@ impl Default for Config {
             raft_log_gc_size_limit: split_size * 3 / 4,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
+            high_priority_store_pool_size: 1,
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
             clean_stale_peer_delay: ReadableDuration::minutes(10),
@@ -189,6 +192,7 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_max_batch_size: 1024,
             apply_pool_size: 2,
+            high_priority_apply_pool_size: 1,
             store_max_batch_size: 1024,
             store_pool_size: 2,
             future_poll_size: 1,
@@ -334,11 +338,18 @@ impl Config {
         if self.apply_pool_size == 0 {
             return Err(box_err!("apply-pool-size should be greater than 0"));
         }
+        if self.apply_pool_size < 3 {
+            self.high_priority_apply_pool_size = 0;
+        }
+
         if self.apply_max_batch_size == 0 {
             return Err(box_err!("apply-max-batch-size should be greater than 0"));
         }
         if self.store_pool_size == 0 {
             return Err(box_err!("store-pool-size should be greater than 0"));
+        }
+        if self.store_pool_size < 3 {
+            self.high_priority_store_pool_size = 0;
         }
         if self.store_max_batch_size == 0 {
             return Err(box_err!("store-max-batch-size should be greater than 0"));

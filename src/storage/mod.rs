@@ -36,6 +36,7 @@ use self::kv::with_tls_engine;
 use self::metrics::*;
 use self::mvcc::{Lock, TsSet};
 use self::txn::scheduler::Scheduler as TxnScheduler;
+pub use self::txn::ScheduleLimiter;
 
 pub use self::commands::{Options, PointGetCommand};
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
@@ -166,11 +167,13 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         config: &Config,
         mut read_pool: Vec<FuturePool>,
         lock_mgr: Option<L>,
+        schedule_limiter: Arc<ScheduleLimiter>,
     ) -> Result<Self> {
         let pessimistic_txn_enabled = lock_mgr.is_some();
         let sched = TxnScheduler::new(
             engine.clone(),
             lock_mgr,
+            schedule_limiter,
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -1526,7 +1529,14 @@ impl<E: Engine> TestStorageBuilder<E> {
             &crate::config::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
-        Storage::from_engine(self.engine, &self.config, read_pool, None)
+        let limiter = ScheduleLimiter::new(1024, 1024);
+        Storage::from_engine(
+            self.engine,
+            &self.config,
+            read_pool,
+            None,
+            Arc::new(limiter),
+        )
     }
 }
 

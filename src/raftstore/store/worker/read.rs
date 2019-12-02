@@ -182,11 +182,11 @@ impl LocalReader<RaftRouter> {
 }
 
 impl<C: ProposalRouter> LocalReader<C> {
-    fn redirect(&self, mut cmd: RaftCommand) {
+    fn redirect(&self, mut cmd: RaftCommand, high: bool) {
         debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
-        match self.router.send(cmd) {
+        match self.router.send(cmd, high) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
                 self.metrics.borrow_mut().rejected_by_channel_full += 1;
@@ -287,7 +287,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 
     // It can only handle read command.
-    pub fn propose_raft_command(&self, cmd: RaftCommand) {
+    pub fn propose_raft_command(&self, cmd: RaftCommand, high_priority: bool) {
         let region_id = cmd.request.get_header().get_region_id();
         let mut executor = ReadExecutor::new(
             self.kv_engine.clone(),
@@ -345,12 +345,12 @@ impl<C: ProposalRouter> LocalReader<C> {
         // Remove delegate for updating it by next cmd execution.
         self.delegates.borrow_mut().remove(&region_id);
         // Forward to raftstore.
-        self.redirect(cmd);
+        self.redirect(cmd, high_priority);
     }
 
     #[inline]
-    pub fn execute_raft_command(&self, cmd: RaftCommand) {
-        self.propose_raft_command(cmd);
+    pub fn execute_raft_command(&self, cmd: RaftCommand, high_priority: bool) {
+        self.propose_raft_command(cmd, high_priority);
         self.metrics.borrow_mut().maybe_flush();
     }
 

@@ -46,7 +46,7 @@ use tikv_util::worker::Scheduler;
 use tikv_util::MustConsumeVec;
 
 use super::cmd_resp;
-use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
+use super::local_metrics::RaftReadyMetrics;
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
 use super::transport::Transport;
@@ -339,6 +339,8 @@ pub struct Peer {
 
     /// Write Statistics for PD to schedule hot spot.
     pub peer_stat: PeerStat,
+
+    pub high_priority: bool,
 }
 
 impl Peer {
@@ -396,6 +398,7 @@ impl Peer {
             compaction_declined_bytes: 0,
             leader_unreachable: false,
             pending_remove: false,
+            high_priority: false,
             pending_merge_state: None,
             pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
             last_proposed_prepare_merge_idx: 0,
@@ -751,11 +754,12 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
+    fn send<T, C, I>(&mut self, ctx: &mut PollContext<T, C>, msgs: I)
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
     {
+        let metrics = &mut ctx.raft_metrics.message;
         for msg in msgs {
             let msg_type = msg.get_msg_type();
             match msg_type {
@@ -797,7 +801,7 @@ impl Peer {
                 | MessageType::MsgReadIndex
                 | MessageType::MsgReadIndexResp => {}
             }
-            self.send_raft_message(msg, trans);
+            self.send_raft_message(msg, &mut ctx.trans);
         }
     }
 
@@ -1167,7 +1171,7 @@ impl Peer {
             fail_point!("raft_before_follower_send");
             let messages = mem::replace(&mut self.pending_messages, vec![]);
             ctx.need_flush_trans = true;
-            self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
+            self.send(ctx, messages);
         }
 
         if let Some(snap) = self.get_pending_snapshot() {
@@ -1259,7 +1263,7 @@ impl Peer {
             fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
             ctx.need_flush_trans = true;
-            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message);
+            self.send(ctx, msgs);
         }
 
         let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
@@ -1312,11 +1316,7 @@ impl Peer {
             if self.is_applying_snapshot() {
                 self.pending_messages = mem::replace(&mut ready.messages, vec![]);
             } else {
-                self.send(
-                    &mut ctx.trans,
-                    ready.messages.drain(..),
-                    &mut ctx.raft_metrics.message,
-                );
+                self.send(ctx, ready.messages.drain(..));
                 ctx.need_flush_trans = true;
             }
         }
@@ -1401,8 +1401,11 @@ impl Peer {
                     self.last_urgent_proposal_idx = u64::MAX;
                 }
                 let apply = Apply::new(self.region_id, self.term(), committed_entries);
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::apply(apply));
+                ctx.apply_router.schedule_priority_task(
+                    self.region_id,
+                    self.high_priority,
+                    ApplyTask::apply(apply),
+                );
             }
             // Check whether there is a pending generate snapshot task, the task
             // needs to be sent to the apply system.
@@ -1411,8 +1414,11 @@ impl Peer {
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
                 self.pending_request_snapshot_count
                     .fetch_add(1, Ordering::SeqCst);
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+                ctx.apply_router.schedule_priority_task(
+                    self.region_id,
+                    self.high_priority,
+                    ApplyTask::Snapshot(gen_task),
+                );
             }
         }
 
@@ -2413,6 +2419,7 @@ impl Peer {
         send_msg.set_region_id(self.region_id);
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
+        send_msg.set_high_priority(self.high_priority);
 
         let from_peer = self.peer.clone();
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {

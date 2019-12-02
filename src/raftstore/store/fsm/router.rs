@@ -91,11 +91,12 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
 
     /// Notify owner via a `FsmScheduler`.
     #[inline]
-    fn notify<S: FsmScheduler<Fsm = Owner>>(&self, scheduler: &S) {
+    fn notify<S: FsmScheduler<Fsm = Owner>>(&self, scheduler: &S, high: bool) {
         match self.take_fsm() {
             None => {}
             Some(mut n) => {
                 n.set_mailbox(Cow::Borrowed(self));
+                n.set_priority(high);
                 scheduler.schedule(n);
             }
         }
@@ -135,9 +136,10 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         &self,
         msg: Owner::Message,
         scheduler: &S,
+        high: bool,
     ) -> Result<(), SendError<Owner::Message>> {
         self.sender.force_send(msg)?;
-        self.notify(scheduler);
+        self.notify(scheduler, high);
         Ok(())
     }
 
@@ -149,9 +151,10 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         &self,
         msg: Owner::Message,
         scheduler: &S,
+        high: bool,
     ) -> Result<(), TrySendError<Owner::Message>> {
         self.sender.try_send(msg)?;
-        self.notify(scheduler);
+        self.notify(scheduler, high);
         Ok(())
     }
 
@@ -192,14 +195,22 @@ pub struct Mailbox<Owner: Fsm, Scheduler: FsmScheduler<Fsm = Owner>> {
 impl<Owner: Fsm, Scheduler: FsmScheduler<Fsm = Owner>> Mailbox<Owner, Scheduler> {
     /// Force sending a message despite channel capacity limit.
     #[inline]
-    pub fn force_send(&self, msg: Owner::Message) -> Result<(), SendError<Owner::Message>> {
-        self.mailbox.force_send(msg, &self.scheduler)
+    pub fn force_send(
+        &self,
+        msg: Owner::Message,
+        high: bool,
+    ) -> Result<(), SendError<Owner::Message>> {
+        self.mailbox.force_send(msg, &self.scheduler, high)
     }
 
     /// Try to send a message.
     #[inline]
-    pub fn try_send(&self, msg: Owner::Message) -> Result<(), TrySendError<Owner::Message>> {
-        self.mailbox.try_send(msg, &self.scheduler)
+    pub fn try_send(
+        &self,
+        msg: Owner::Message,
+        high: bool,
+    ) -> Result<(), TrySendError<Owner::Message>> {
+        self.mailbox.try_send(msg, &self.scheduler, high)
     }
 }
 
@@ -227,7 +238,7 @@ pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     // TODO: These two schedulers should be unified as single one. However
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
     // for now.
-    normal_scheduler: Ns,
+    pub normal_scheduler: Ns,
     control_scheduler: Cs,
 }
 
@@ -361,10 +372,19 @@ where
         addr: u64,
         msg: N::Message,
     ) -> Either<Result<(), TrySendError<N::Message>>, N::Message> {
+        self.try_send_with_priority(addr, false, msg)
+    }
+
+    pub fn try_send_with_priority(
+        &self,
+        addr: u64,
+        high: bool,
+        msg: N::Message,
+    ) -> Either<Result<(), TrySendError<N::Message>>, N::Message> {
         let mut msg = Some(msg);
         let res = self.check_do(addr, |mailbox| {
             let m = msg.take().unwrap();
-            match mailbox.try_send(m, &self.normal_scheduler) {
+            match mailbox.try_send(m, &self.normal_scheduler, high) {
                 Ok(()) => Some(Ok(())),
                 r @ Err(TrySendError::Full(_)) => {
                     // TODO: report channel full
@@ -392,15 +412,38 @@ where
         }
     }
 
+    #[inline]
+    pub fn send_with_priority(
+        &self,
+        addr: u64,
+        high: bool,
+        msg: N::Message,
+    ) -> Result<(), TrySendError<N::Message>> {
+        match self.try_send_with_priority(addr, high, msg) {
+            Either::Left(res) => res,
+            Either::Right(m) => Err(TrySendError::Disconnected(m)),
+        }
+    }
+
     /// Force sending message to specified address despite the capacity
     /// limit of mailbox.
     #[inline]
     pub fn force_send(&self, addr: u64, msg: N::Message) -> Result<(), SendError<N::Message>> {
-        match self.send(addr, msg) {
+        self.force_send_with_priority(addr, false, msg)
+    }
+
+    #[inline]
+    pub fn force_send_with_priority(
+        &self,
+        addr: u64,
+        high_priority: bool,
+        msg: N::Message,
+    ) -> Result<(), SendError<N::Message>> {
+        match self.send_with_priority(addr, high_priority, msg) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(m)) => {
                 let caches = unsafe { &mut *self.caches.as_ptr() };
-                caches[&addr].force_send(m, &self.normal_scheduler)
+                caches[&addr].force_send(m, &self.normal_scheduler, false)
             }
             Err(TrySendError::Disconnected(m)) => Err(SendError(m)),
         }
@@ -409,7 +452,19 @@ where
     /// Force sending message to control fsm.
     #[inline]
     pub fn send_control(&self, msg: C::Message) -> Result<(), TrySendError<C::Message>> {
-        match self.control_box.try_send(msg, &self.control_scheduler) {
+        self.send_control_with_priority(false, msg)
+    }
+
+    #[inline]
+    pub fn send_control_with_priority(
+        &self,
+        high: bool,
+        msg: C::Message,
+    ) -> Result<(), TrySendError<C::Message>> {
+        match self
+            .control_box
+            .try_send(msg, &self.control_scheduler, high)
+        {
             Ok(()) => Ok(()),
             r @ Err(TrySendError::Full(_)) => {
                 // TODO: record metrics.
@@ -423,11 +478,11 @@ where
     pub fn broadcast_normal(&self, mut msg_gen: impl FnMut() -> N::Message) {
         let mailboxes = self.normals.lock().unwrap();
         for mailbox in mailboxes.values() {
-            let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler);
+            let _ = mailbox.force_send(msg_gen(), &self.normal_scheduler, false);
         }
     }
 
-    /// Try to notify all fsm that the cluster is being shutdown.
+    /// Try to notify all fsm that the cluster is beinng shutdown.
     pub fn broadcast_shutdown(&self) {
         info!("broadcasting shutdown");
         unsafe { &mut *self.caches.as_ptr() }.clear();
@@ -498,7 +553,7 @@ mod tests {
         let (control_tx, mut control_fsm) = new_runner(10);
         let (control_drop_tx, control_drop_rx) = mpsc::unbounded();
         control_fsm.sender = Some(control_drop_tx);
-        let (router, mut system) = batch::create_system(2, 2, control_tx, control_fsm);
+        let (router, mut system) = batch::create_system(2, 2, 0, control_tx, control_fsm);
         let builder = Builder::new();
         system.spawn("test".to_owned(), builder);
 
@@ -595,7 +650,7 @@ mod tests {
     #[bench]
     fn bench_send(b: &mut Bencher) {
         let (control_tx, control_fsm) = new_runner(100000);
-        let (router, mut system) = batch::create_system(2, 2, control_tx, control_fsm);
+        let (router, mut system) = batch::create_system(2, 2, 0, control_tx, control_fsm);
         let builder = Builder::new();
         system.spawn("test".to_owned(), builder);
         let (normal_tx, normal_fsm) = new_runner(100000);

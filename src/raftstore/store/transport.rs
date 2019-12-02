@@ -22,7 +22,11 @@ pub trait CasualRouter {
 
 /// Routes proposal to target region.
 pub trait ProposalRouter {
-    fn send(&self, cmd: RaftCommand) -> std::result::Result<(), TrySendError<RaftCommand>>;
+    fn send(
+        &self,
+        cmd: RaftCommand,
+        high_priority: bool,
+    ) -> std::result::Result<(), TrySendError<RaftCommand>>;
 }
 
 /// Routes message to store FSM.
@@ -45,8 +49,12 @@ impl CasualRouter for RaftRouter {
 
 impl ProposalRouter for RaftRouter {
     #[inline]
-    fn send(&self, cmd: RaftCommand) -> std::result::Result<(), TrySendError<RaftCommand>> {
-        self.send_raft_command(cmd)
+    fn send(
+        &self,
+        cmd: RaftCommand,
+        high_priority: bool,
+    ) -> std::result::Result<(), TrySendError<RaftCommand>> {
+        self.send_raft_command(cmd, high_priority)
     }
 }
 
@@ -76,7 +84,11 @@ impl CasualRouter for mpsc::SyncSender<(u64, CasualMessage)> {
 }
 
 impl ProposalRouter for mpsc::SyncSender<RaftCommand> {
-    fn send(&self, cmd: RaftCommand) -> std::result::Result<(), TrySendError<RaftCommand>> {
+    fn send(
+        &self,
+        cmd: RaftCommand,
+        _high: bool,
+    ) -> std::result::Result<(), TrySendError<RaftCommand>> {
         match self.try_send(cmd) {
             Ok(()) => Ok(()),
             Err(mpsc::TrySendError::Disconnected(cmd)) => Err(TrySendError::Disconnected(cmd)),

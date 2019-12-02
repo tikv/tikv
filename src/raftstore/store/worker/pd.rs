@@ -972,7 +972,7 @@ fn send_admin_request(
 
     req.set_admin_request(request);
 
-    if let Err(e) = router.send_raft_command(RaftCommand::new(req, callback)) {
+    if let Err(e) = router.send_raft_command(RaftCommand::new(req, callback), false) {
         error!(
             "send request failed";
             "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,
