@@ -57,7 +57,7 @@ impl_into!(bool, ConfigValue::Bool(v), v);
 impl_into!(String, ConfigValue::String(v), v);
 impl_into!(ConfigChange, ConfigValue::Module(v), v);
 
-/// Configable can be derive with ```#[derive(Configable)```,
+/// the Configable trait
 /// There are three type of fields inside derived Configable struct:
 /// 1. `#[config(not_support)]` field, these fields will not return
 /// by `diff` method and have not effect of `update` method
@@ -66,7 +66,9 @@ impl_into!(ConfigChange, ConfigValue::Module(v), v);
 /// 3. normal fields, the type of these fields should be implment
 /// `Into` and `From` for `ConfigValue`
 pub trait Configable {
+    /// Compare to other config, return the difference
     fn diff(&self, _: &Self) -> ConfigChange;
+    /// Update config with difference returned by `diff`
     fn update(&mut self, _: ConfigChange);
 }
 

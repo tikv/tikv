@@ -56,7 +56,7 @@ fn update(
     fields: &Punctuated<Field, Comma>,
     creat_name: &Ident,
 ) -> Result<proc_macro2::TokenStream> {
-    let incomming = Ident::new("incomming", proc_macro2::Span::call_site());
+    let incoming = Ident::new("incoming", proc_macro2::Span::call_site());
     let mut update_fields = Vec::with_capacity(fields.len());
     for field in fields {
         let (not_support, submodule) = get_attrs(&field.attrs)?;
@@ -67,13 +67,13 @@ fn update(
         let name_lit = LitStr::new(&format!("{}", name), name.span());
         let f = if submodule {
             quote! {
-                if let Some(#creat_name::ConfigValue::Module(v)) = #incomming.remove(#name_lit) {
+                if let Some(#creat_name::ConfigValue::Module(v)) = #incoming.remove(#name_lit) {
                     #creat_name::Configable::update(&mut self.#name, v);
                 }
             }
         } else {
             quote! {
-                if let Some(v) = #incomming.remove(#name_lit) {
+                if let Some(v) = #incoming.remove(#name_lit) {
                     self.#name = v.into();
                 }
             }
@@ -81,7 +81,7 @@ fn update(
         update_fields.push(f);
     }
     Ok(quote! {
-        fn update(&mut self, mut #incomming: #creat_name::ConfigChange) {
+        fn update(&mut self, mut #incoming: #creat_name::ConfigChange) {
             #(#update_fields)*
         }
     })
@@ -89,7 +89,7 @@ fn update(
 
 fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<proc_macro2::TokenStream> {
     let diff_ident = Ident::new("diff_ident", proc_macro2::Span::call_site());
-    let incomming = Ident::new("incomming", proc_macro2::Span::call_site());
+    let incoming = Ident::new("incoming", proc_macro2::Span::call_site());
     let mut diff_fields = Vec::with_capacity(fields.len());
     for field in fields {
         let (not_support, submodule) = get_attrs(&field.attrs)?;
@@ -101,7 +101,7 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<proc_ma
         let f = if submodule {
             quote! {
                 {
-                    let diff = #creat_name::Configable::diff(&self.#name, &#incomming.#name);
+                    let diff = #creat_name::Configable::diff(&self.#name, &#incoming.#name);
                     if diff.len() != 0 {
                         #diff_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(diff));
                     }
@@ -109,15 +109,15 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<proc_ma
             }
         } else {
             quote! {
-                if self.#name != #incomming.#name {
-                    #diff_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(#incomming.#name.clone()));
+                if self.#name != #incoming.#name {
+                    #diff_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(#incoming.#name.clone()));
                 }
             }
         };
         diff_fields.push(f);
     }
     Ok(quote! {
-        fn diff(&self, mut #incomming: &Self) -> #creat_name::ConfigChange {
+        fn diff(&self, mut #incoming: &Self) -> #creat_name::ConfigChange {
             let mut #diff_ident = std::collections::HashMap::default();
             #(#diff_fields)*
             #diff_ident

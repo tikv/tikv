@@ -5,12 +5,9 @@ use std::u64;
 use time::Duration as TimeDuration;
 
 use crate::raftstore::{coprocessor, Result};
-use config_template::Configable;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
-use toml::Value;
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configable)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -25,17 +22,11 @@ pub struct Config {
 
     // raft_base_tick_interval is a base tick interval (ms).
     pub raft_base_tick_interval: ReadableDuration,
-    #[config(not_support)]
     pub raft_heartbeat_ticks: usize,
-    #[config(not_support)]
     pub raft_election_timeout_ticks: usize,
-    #[config(not_support)]
     pub raft_min_election_timeout_ticks: usize,
-    #[config(not_support)]
     pub raft_max_election_timeout_ticks: usize,
-    #[config(not_support)]
     pub raft_max_size_per_msg: ReadableSize,
-    #[config(not_support)]
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
     pub raft_entry_max_size: ReadableSize,
@@ -133,11 +124,9 @@ pub struct Config {
     // Deprecated! These two configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
-    #[config(not_support)]
     #[serde(skip_serializing)]
     pub region_max_size: ReadableSize,
     #[doc(hidden)]
-    #[config(not_support)]
     #[serde(skip_serializing)]
     pub region_split_size: ReadableSize,
 }
@@ -536,22 +525,6 @@ impl Config {
             .with_label_values(&["future_poll_size"])
             .set(self.future_poll_size as f64);
     }
-
-    // pub fn update(&mut self, partial_update: &Value) {
-    //     if let Value::Table(incomming) = partial_update {}
-    // }
-
-    // pub fn diff(&self, incommig: Value) -> Option<Value> {
-    //     if let Value::Table(incomming) = incommig {
-    //         if self.abnormal_leader_missing_duration
-    //             == incomming["abnormal-leader-missing-duration"]
-    //                 .clone()
-    //                 .try_into::<'_, ReadableDuration>()
-    //                 .unwrap()
-    //         {}
-    //     }
-    //     unimplemented!()
-    // }
 }
 
 #[cfg(test)]

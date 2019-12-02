@@ -10,7 +10,6 @@ use kvproto::raft_serverpb::RegionLocalState;
 
 use engine::*;
 use test_raftstore::*;
-use tikv::config::{ConfigController, TiKvConfig};
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::store::StoreMeta;
@@ -94,7 +93,6 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::new(Mutex::new(StoreMeta::new(0))),
         coprocessor_host,
         importer,
-        ConfigController::new(TiKvConfig::default()),
     )
     .unwrap();
     assert!(Arc::clone(&engine)

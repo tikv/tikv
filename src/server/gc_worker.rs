@@ -61,9 +61,9 @@ pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configable)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
-#[serde(deny_unknoxwwn_fields)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct GCConfig {
     pub ratio_threshold: f64,

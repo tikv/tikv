@@ -19,7 +19,6 @@ use engine::*;
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
 use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -852,7 +851,6 @@ fn test_double_run_node() {
             store_meta,
             coprocessor_host,
             importer,
-            ConfigController::new(TiKvConfig::default()),
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);
