@@ -233,5 +233,23 @@ mod tests {
                 .evaluate::<Bytes>(ScalarFuncSig::Sha2)
                 .is_err())
         }
+
+        let null_cases = vec![
+            (ScalarValue::Bytes(None), ScalarValue::Int(Some(1))),
+            (
+                ScalarValue::Bytes(Some(b"13572468".to_vec())),
+                ScalarValue::Int(None),
+            ),
+            (ScalarValue::Bytes(None), ScalarValue::Int(None)),
+        ];
+
+        for (input_str, hash_length_i64) in null_cases {
+            assert!(RpnFnScalarEvaluator::new()
+                .push_param(input_str)
+                .push_param(hash_length_i64)
+                .evaluate::<Bytes>(ScalarFuncSig::Sha2)
+                .unwrap()
+                .is_none())
+        }
     }
 }
