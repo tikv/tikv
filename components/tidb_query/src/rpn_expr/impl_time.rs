@@ -6,6 +6,7 @@ use super::super::expr::EvalContext;
 
 use crate::codec::data_type::*;
 use crate::codec::mysql::time::extension::DateTimeExtension;
+use crate::codec::mysql::time::WeekdayExtension;
 use crate::codec::mysql::Time;
 use crate::codec::Error;
 use crate::expr::SqlMode;
@@ -138,7 +139,6 @@ pub fn day_name(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<By
                     .handle_invalid_time_error(Error::incorrect_datetime_value(t))
                     .map(|_| Ok(None))?;
             }
-            use crate::codec::mysql::time::WeekdayExtension;
             Ok(Some(t.weekday().name().to_string().into_bytes()))
         }
         None => Ok(None),
