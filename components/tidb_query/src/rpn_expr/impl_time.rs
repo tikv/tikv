@@ -137,12 +137,9 @@ pub fn year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> 
     };
 
     if t.is_zero() {
-        if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
-            return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
-                .map(|_| Ok(None))?;
-        }
-        return Ok(Some(0));
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .map(|_| Ok(None))?;
     }
     Ok(Some(Int::from(t.year())))
 }
