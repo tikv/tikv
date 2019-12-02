@@ -293,6 +293,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     // Create CoprocessorHost.
     let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router);
 
+    gc_worker.start_observe_lock_apply(&mut coprocessor_host);
+
     // Create region collection.
     let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
     region_info_accessor.start();

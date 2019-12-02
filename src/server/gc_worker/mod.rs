@@ -1292,7 +1292,7 @@ impl<E: Engine> GCWorker<E> {
         }
     }
 
-    pub fn start_observe_lock_apply(&self, coprocessor_host: &mut CoprocessorHost) {
+    pub fn start_observe_lock_apply(&mut self, coprocessor_host: &mut CoprocessorHost) {
         assert!(self.applied_lock_collector.is_none());
         let collector = AppliedLockCollector::new(coprocessor_host);
         self.applied_lock_collector = Some(collector);
@@ -1428,6 +1428,39 @@ impl<E: Engine> GCWorker<E> {
             })
             .into_stream()
             .flatten()
+    }
+
+    pub fn start_collecting(
+        &self,
+        max_ts: TimeStamp,
+        callback: LockCollectorCallback<()>,
+    ) -> Result<()> {
+        self.applied_lock_collector
+            .as_ref()
+            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
+            .and_then(move |c| c.start_collecting(max_ts, callback))
+    }
+
+    pub fn fetch_result(
+        &self,
+        max_ts: TimeStamp,
+        callback: LockCollectorCallback<(Vec<LockInfo>, bool)>,
+    ) -> Result<()> {
+        self.applied_lock_collector
+            .as_ref()
+            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
+            .and_then(move |c| c.fetch_result(max_ts, callback))
+    }
+
+    pub fn stop_collecting(
+        &self,
+        max_ts: TimeStamp,
+        callback: LockCollectorCallback<()>,
+    ) -> Result<()> {
+        self.applied_lock_collector
+            .as_ref()
+            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
+            .and_then(move |c| c.stop_collecting(max_ts, callback))
     }
 
     pub fn change_io_limit(&self, limit: i64) -> Result<()> {

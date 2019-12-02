@@ -1,18 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use keys::{origin_key, Key};
-use std::fmt::{self, Display};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::fmt::{self, Debug, Display};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use engine::{CfName, CF_LOCK};
+use kvproto::kvrpcpb::LockInfo;
 use kvproto::raft_cmdpb::Request as RaftRequest;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 
 use crate::raftstore::coprocessor::{
     ApplySnapshotObserver, Coprocessor, CoprocessorHost, ObserverContext, QueryObserver,
 };
-use crate::storage::mvcc::{Lock, TimeStamp};
+use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
 
 // TODO: Use new error type for GCWorker instead of storege::Error.
 use super::{Error, Result};
@@ -34,13 +35,69 @@ enum LockObserverMsg {
     Err(Error),
 }
 
+impl Display for LockObserverMsg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&self, f)
+    }
+}
+
+pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
+
+enum LockCollectorTask {
+    // From observer
+    ObserverMsg(LockObserverMsg),
+
+    // From client
+    StartCollecting {
+        max_ts: TimeStamp,
+        callback: Callback<()>,
+    },
+    FetchResult {
+        max_ts: TimeStamp,
+        callback: Callback<(Vec<LockInfo>, bool)>,
+    },
+    StopCollecting {
+        max_ts: TimeStamp,
+        callback: Callback<()>,
+    },
+}
+
+impl Debug for LockCollectorTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LockCollectorTask::ObserverMsg(msg) => {
+                f.debug_struct("ObserverMsg").field("msg", msg).finish()
+            }
+            LockCollectorTask::StartCollecting { max_ts, .. } => f
+                .debug_struct("StartCollecting")
+                .field("max_ts", max_ts)
+                .finish(),
+            LockCollectorTask::FetchResult { max_ts, .. } => f
+                .debug_struct("FetchResult")
+                .field("max_ts", max_ts)
+                .finish(),
+            LockCollectorTask::StopCollecting { max_ts, .. } => f
+                .debug_struct("StopCollecting")
+                .field("max_ts", max_ts)
+                .finish(),
+        }
+    }
+}
+
+impl Display for LockCollectorTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&self, f)
+    }
+}
+
+#[derive(Clone)]
 struct LockObserver {
     state: Arc<LockObserverState>,
-    sender: Scheduler<LockObserverMsg>,
+    sender: Scheduler<LockCollectorTask>,
 }
 
 impl LockObserver {
-    pub fn new(state: Arc<LockObserverState>, sender: Scheduler<LockObserverMsg>) -> Self {
+    pub fn new(state: Arc<LockObserverState>, sender: Scheduler<LockCollectorTask>) -> Self {
         Self { state, sender }
     }
 
@@ -54,7 +111,7 @@ impl LockObserver {
     }
 
     fn send(&self, msg: LockObserverMsg) {
-        match self.sender.schedule(msg) {
+        match self.sender.schedule(LockCollectorTask::ObserverMsg(msg)) {
             Ok(()) => (),
             Err(ScheduleError::Stopped(m)) => {
                 error!("failed to send lock observer msg"; "msg" => ?m);
@@ -93,12 +150,13 @@ impl QueryObserver for LockObserver {
                         "value" => hex::encode_upper(put_request.get_value()),
                         "err" => ?e
                     );
-                    self.send(LockObserverMsg::Err(e.into()))
+                    self.send(LockObserverMsg::Err(e.into()));
+                    return;
                 }
             };
 
             if lock.ts <= max_ts {
-                let key = put_request.get_key().to_owned();
+                let key = Key::from_encoded_slice(put_request.get_key());
                 self.send(LockObserverMsg::Locks(vec![(key, lock)]));
             }
         }
@@ -128,8 +186,10 @@ impl ApplySnapshotObserver for LockObserver {
                     .map(|lock| (key, lock))
                     .map_err(From::from)
             })
-            .filter(|(_, lock)| lock.ts <= max_ts)
-            .map(|(key, lock)| (Key::from_encoded_slice(origin_key(key)), lock))
+            .filter(|result| result.is_err() || result.as_ref().unwrap().1.ts <= max_ts)
+            .map(|result| {
+                result.map(|(key, lock)| (Key::from_encoded_slice(origin_key(key)), lock))
+            })
             .collect();
 
         match locks {
@@ -147,44 +207,6 @@ impl ApplySnapshotObserver for LockObserver {
     }
 }
 
-pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
-
-enum LockCollectorTask {
-    // From observer
-    ObserverMsg(LockObserverMsg),
-
-    // From client
-    StartCollecting {
-        max_ts: TimeStamp,
-        callback: Callback<()>,
-    },
-    FetchResult {
-        max_ts: TimeStamp,
-        callback: Callback<(Vec<(Key, Lock)>, bool)>,
-    },
-    StopCollecting {
-        max_ts: TimeStamp,
-        callback: Callback<()>,
-    },
-}
-
-impl Display for LockCollectorTask {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LockCollectorTask::ObserverMsg(msg) => f.debug_struct("ObserverMsg").field("msg", msg),
-            LockCollectorTask::StartCollecting { max_ts, .. } => {
-                f.debug_struct("StartCollecting").field("max_ts", max_ts)
-            }
-            LockCollectorTask::FetchResult { max_ts, .. } => {
-                f.debug_struct("FetchResult").field("max_ts", max_ts)
-            }
-            LockCollectorTask::StopCollecting { max_ts, .. } => {
-                f.debug_struct("StopCollecting").field("max_ts", max_ts)
-            }
-        }
-    }
-}
-
 struct LockCollectorRunner {
     observer_state: Arc<LockObserverState>,
 
@@ -195,9 +217,9 @@ struct LockCollectorRunner {
 }
 
 impl LockCollectorRunner {
-    pub fn new(state: Arc<LockObserverState>) -> Self {
+    pub fn new(observer_state: Arc<LockObserverState>) -> Self {
         Self {
-            state,
+            observer_state,
             collected_locks: vec![],
             is_clean: true,
         }
@@ -213,11 +235,11 @@ impl LockCollectorRunner {
                 self.is_clean = false;
                 info!("lock collector marked dirty because received error"; "err" => ?e);
             }
-            LockObserverMsg::Ok(mut locks) => {
+            LockObserverMsg::Locks(mut locks) => {
                 if locks.len() + self.collected_locks.len() > MAX_COLLECT_SIZE {
                     self.is_clean = false;
                     info!("lock collector marked dirty because received too many locks");
-                    locks = locks.truncate(MAX_COLLECT_SIZE - self.collected_locks.len());
+                    locks.truncate(MAX_COLLECT_SIZE - self.collected_locks.len());
                 }
                 self.collected_locks.extend(locks);
             }
@@ -234,8 +256,9 @@ impl LockCollectorRunner {
         Ok(())
     }
 
-    fn fetch_result(&mut self, max_ts: TimeStamp) -> Result<(Vec<(Key, Lock)>, bool)> {
-        let curr_max_ts = self.observer_state.max_ts.load(Ordering::Acquire).into();
+    fn fetch_result(&mut self, max_ts: TimeStamp) -> Result<(Vec<LockInfo>, bool)> {
+        let curr_max_ts = self.observer_state.max_ts.load(Ordering::Acquire);
+        let curr_max_ts = TimeStamp::new(curr_max_ts);
         if curr_max_ts != max_ts {
             warn!(
                 "trying to fetch collected locks but now collecting with another max_ts";
@@ -247,7 +270,17 @@ impl LockCollectorRunner {
             ));
         }
 
-        Ok((self.collected_locks.clone(), self.is_clean))
+        let locks: Result<_> = self
+            .collected_locks
+            .drain(..)
+            .map(|(k, l)| {
+                k.into_raw()
+                    .map(|raw_key| l.into_lock_info(raw_key))
+                    .map_err(|e| Error::from(MvccError::from(e)))
+            })
+            .collect();
+
+        Ok((locks?, self.is_clean))
     }
 
     fn stop_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
@@ -256,6 +289,7 @@ impl LockCollectorRunner {
             .max_ts
             .compare_and_swap(max_ts.into_inner(), 0, Ordering::SeqCst)
             .into();
+        let curr_max_ts = TimeStamp::new(curr_max_ts);
 
         if curr_max_ts == max_ts {
             self.collected_locks.clear();
@@ -334,7 +368,7 @@ impl AppliedLockCollector {
     pub fn fetch_result(
         &self,
         max_ts: TimeStamp,
-        callback: Callback<(Vec<(Key, Lock)>, bool)>,
+        callback: Callback<(Vec<LockInfo>, bool)>,
     ) -> Result<()> {
         self.scheduler
             .schedule(LockCollectorTask::FetchResult { max_ts, callback })
