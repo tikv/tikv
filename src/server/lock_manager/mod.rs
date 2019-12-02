@@ -265,7 +265,7 @@ mod tests {
         Result as StorageResult,
     };
     use kvproto::kvrpcpb::LockInfo;
-    use kvproto::metapb::Region;
+    use kvproto::metapb::{Peer, Region};
     use metrics::*;
     use raft::StateRole;
     use std::sync::mpsc;
@@ -291,6 +291,8 @@ mod tests {
     }
 
     fn start_lock_manager() -> LockManager {
+        use protobuf::RepeatedField;
+
         let (tx, _rx) = mpsc::sync_channel(100);
         let mut coprocessor_host = CoprocessorHost::new(CopConfig::default(), tx);
 
@@ -310,6 +312,7 @@ mod tests {
         let mut leader_region = Region::new();
         leader_region.set_start_key(b"".to_vec());
         leader_region.set_end_key(b"foo".to_vec());
+        leader_region.set_peers(RepeatedField::from_vec(vec![Peer::new()]));
         coprocessor_host.on_role_change(&leader_region, StateRole::Leader);
         thread::sleep(Duration::from_millis(100));
 
