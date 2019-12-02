@@ -162,6 +162,6 @@ fn test_detect_deadlock_when_shuffle_region() {
     // the deadlock detector. It misleads the leader of deadlock detector stepping down.
     pd_client.must_add_peer(new_region.get_id(), new_peer(1, 5));
     deadlock_detector_leader_must_be(&mut cluster, 1);
-    let (client, ctx) = build_leader_client(&mut cluster, b"k1");
-    must_deadlock(&client, ctx, b"k1", 10);
+    let (client, ctx) = build_leader_client(&mut cluster, b"k3");
+    must_deadlock(&client, ctx, b"k3", 10);
 }
