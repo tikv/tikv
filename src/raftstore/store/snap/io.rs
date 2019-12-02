@@ -122,7 +122,8 @@ where
 
     let wb = WriteBatch::default();
     // Collect keys to a vec rather than wb so that we can invoke the callback less times.
-    let mut batch = Vec::with_capacity(batch_size);
+    let mut batch = Vec::with_capacity(1024);
+    let mut batch_data_size = 0;
 
     loop {
         if stale_detector.is_stale() {
@@ -137,11 +138,13 @@ where
             return Ok(());
         }
         let value = box_try!(decoder.decode_compact_bytes());
+        batch_data_size += key.len() + value.len();
         batch.push((key, value));
-        if batch.len() >= batch_size {
+        if batch_data_size >= batch_size {
             box_try!(write_to_wb(&mut batch, &wb));
             box_try!(db.write(&wb));
             wb.clear();
+            batch_data_size = 0;
         }
     }
 }
