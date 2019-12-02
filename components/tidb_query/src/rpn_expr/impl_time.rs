@@ -80,7 +80,7 @@ pub fn to_days(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int
 
     if t.is_zero() {
         return ctx
-            .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
             .map(|_| Ok(None))?;
     }
     Ok(Some(Int::from(t.day_number())))
