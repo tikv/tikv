@@ -420,7 +420,7 @@ impl ScalarFunc {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let time_type: TimeType = self.field_type.as_accessor().tp().try_into()?;
         let fsp = self.field_type.get_decimal() as i8;
-        Time::parse_from_u64(ctx, val as u64, time_type, fsp)
+        Time::parse_from_i64(ctx, val, time_type, fsp)
             .map(Cow::Owned)
             .map(Some)
     }

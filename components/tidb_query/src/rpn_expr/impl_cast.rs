@@ -906,17 +906,17 @@ fn cast_int_as_time(
 ) -> Result<Option<Time>> {
     if let Some(val) = *val {
         // Parse `val` as a `u64`
-        Time::parse_from_u64(
+        Time::parse_from_i64(
             ctx,
-            val as u64,
+            val,
             extra.ret_field_type.as_accessor().tp().try_into()?,
             extra.ret_field_type.get_decimal() as i8,
         )
         .map(Some)
         .or_else(|_| {
-            ctx.handle_invalid_time_error(Error::incorrect_datetime_value(val))
-                .map(|_| None)
-                .map_err(|e| e.into())
+            Ok(ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(val))
+                .map(|_| None)?)
         })
     } else {
         Ok(None)
@@ -942,11 +942,7 @@ fn cast_real_as_time(
             true,
         )
         .map(Some)
-        .or_else(|e| {
-            ctx.handle_invalid_time_error(e)
-                .map(|_| None)
-                .map_err(|e| e.into())
-        })
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
     } else {
         Ok(None)
     }
@@ -969,11 +965,7 @@ fn cast_string_as_time(
             true,
         )
         .map(Some)
-        .or_else(|e| {
-            ctx.handle_invalid_time_error(e)
-                .map(|_| None)
-                .map_err(|e| e.into())
-        })
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
     } else {
         Ok(None)
     }
@@ -996,11 +988,7 @@ fn cast_decimal_as_time(
             true,
         )
         .map(Some)
-        .or_else(|e| {
-            ctx.handle_invalid_time_error(e)
-                .map(|_| None)
-                .map_err(|e| e.into())
-        })
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
     } else {
         Ok(None)
     }
@@ -1016,11 +1004,7 @@ fn cast_time_as_time(
         val.set_time_type(extra.ret_field_type.as_accessor().tp().try_into()?)?;
         val.round_frac(ctx, extra.ret_field_type.get_decimal() as i8)
             .map(Some)
-            .or_else(|e| {
-                ctx.handle_invalid_time_error(e)
-                    .map(|_| None)
-                    .map_err(|e| e.into())
-            })
+            .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
     } else {
         Ok(None)
     }
@@ -1040,11 +1024,7 @@ fn cast_duration_as_time(
         )
         .and_then(|now| now.round_frac(ctx, extra.ret_field_type.get_decimal() as i8))
         .map(Some)
-        .or_else(|e| {
-            ctx.handle_invalid_time_error(e)
-                .map(|_| None)
-                .map_err(|e| e.into())
-        })
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
     } else {
         Ok(None)
     }
@@ -1871,6 +1851,7 @@ mod tests {
         }
 
         let should_fail = vec![
+            -11111,
             1,
             100,
             700_100,
