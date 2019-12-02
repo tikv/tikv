@@ -7,7 +7,7 @@ use std::time::Duration;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::{Peer, Region};
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
@@ -18,12 +18,12 @@ fn acquire_pessimistic_lock(
     key: Vec<u8>,
     ts: u64,
 ) -> PessimisticLockResponse {
-    let mut req = PessimisticLockRequest::new();
+    let mut req = PessimisticLockRequest::default();
     req.set_context(ctx);
-    let mut mutation = Mutation::new();
-    mutation.op = Op::PessimisticLock;
-    mutation.key = key.clone();
-    mutation.value = key.clone();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.set_key(key.clone());
+    mutation.set_value(key.clone());
     req.set_mutations(vec![mutation].into_iter().collect());
     req.primary_lock = key;
     req.start_version = ts;
@@ -71,7 +71,7 @@ fn build_leader_client(cluster: &mut Cluster<ServerCluster>, key: &[u8]) -> (Tik
         ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(leader.get_store_id()));
     let client = TikvClient::new(channel);
 
-    let mut ctx = Context::new();
+    let mut ctx = Context::default();
     ctx.set_region_id(region_id);
     ctx.set_peer(leader);
     ctx.set_region_epoch(epoch);
