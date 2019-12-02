@@ -6,11 +6,15 @@ use std::str::FromStr;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::expr_util;
 use crate::Result;
 
 const IPV4_LENGTH: usize = 4;
 const IPV6_LENGTH: usize = 16;
 const PREFIX_COMPAT: [u8; 12] = [0x00; 12];
+const PREFIX_MAPPED: [u8; 12] = [
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff,
+];
 
 #[rpn_fn]
 #[inline]
@@ -103,6 +107,30 @@ pub fn inet6_aton(input: &Option<Bytes>) -> Result<Option<Bytes>> {
         .or_else(ipv4_addr_eval)
         .map(Option::Some)
         .or(Ok(None))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn inet_aton(addr: &Option<Bytes>) -> Result<Option<i64>> {
+    Ok(addr
+        .as_ref()
+        .map(|addr| String::from_utf8_lossy(addr))
+        .and_then(expr_util::miscellaneous::inet_aton))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn is_ipv4_mapped(addr: &Option<Bytes>) -> Result<Option<i64>> {
+    Ok(match addr {
+        Some(addr) => {
+            if addr.len() != IPV6_LENGTH || !addr.starts_with(&PREFIX_MAPPED) {
+                Some(0)
+            } else {
+                Some(1)
+            }
+        }
+        None => Some(0),
+    })
 }
 
 #[cfg(test)]
@@ -336,6 +364,70 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
                 .evaluate(ScalarFuncSig::Inet6Aton)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_inet_aton() {
+        let test_cases = vec![
+            (Some(b"0.0.0.0".to_vec()), Some(0)),
+            (Some(b"255.255.255.255".to_vec()), Some(4294967295)),
+            (Some(b"127.0.0.1".to_vec()), Some(2130706433)),
+            (Some(b"113.14.22.3".to_vec()), Some(1896748547)),
+            (Some(b"1".to_vec()), Some(1)),
+            (Some(b"0.1.2".to_vec()), Some(65538)),
+            (Some(b"0.1.2.3.4".to_vec()), None),
+            (Some(b"0.1.2..3".to_vec()), None),
+            (Some(b".0.1.2.3".to_vec()), None),
+            (Some(b"0.1.2.3.".to_vec()), None),
+            (Some(b"1.-2.3.4".to_vec()), None),
+            (Some(b"".to_vec()), None),
+            (Some(b"0.0.0.256".to_vec()), None),
+            (Some(b"127.0.0,1".to_vec()), None),
+            (None, None),
+        ];
+
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::InetAton)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_is_ipv4_mapped() {
+        let test_cases = vec![
+            (
+                Some(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x1, 0x2, 0x3, 0x4,
+                ]),
+                Some(0),
+            ),
+            (
+                Some(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x2, 0x3, 0x4,
+                ]),
+                Some(0),
+            ),
+            (Some(vec![0x10, 0x10, 0x10, 0x10]), Some(0)),
+            (
+                Some(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xff, 0xff, 0x1, 0x2, 0x3,
+                    0x4,
+                ]),
+                Some(1),
+            ),
+            (Some(vec![0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6]), Some(0)),
+            (None, Some(0)),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::IsIPv4Mapped)
                 .unwrap();
             assert_eq!(output, expect);
         }

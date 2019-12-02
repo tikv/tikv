@@ -103,7 +103,7 @@ fn get_cast_fn_rpn_meta(
             }
         }
         (EvalType::Real, EvalType::Bytes) => {
-            if from_field_type.tp() == FieldTypeTp::Float {
+            if from_field_type.as_accessor().tp() == FieldTypeTp::Float {
                 cast_float_real_as_string_fn_meta()
             } else {
                 cast_any_as_string_fn_meta::<Real>()
@@ -1064,6 +1064,7 @@ fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: &Option<Bytes>) -> Resul
         Some(val) => {
             if extra
                 .ret_field_type
+                .as_accessor()
                 .flag()
                 .contains(FieldTypeFlag::PARSE_TO_JSON)
             {
@@ -1196,40 +1197,47 @@ mod tests {
         assert!(r.is_none());
     }
 
-    fn make_ctx_about_overflow_truncate_should_clip_to_zero(
+    struct CtxConfig {
         overflow_as_warning: bool,
         truncate_as_warning: bool,
         should_clip_to_zero: bool,
-    ) -> EvalContext {
-        let mut flag: Flag = Flag::empty();
-        if overflow_as_warning {
-            flag |= Flag::OVERFLOW_AS_WARNING;
-        }
-        if truncate_as_warning {
-            flag |= Flag::TRUNCATE_AS_WARNING;
-        }
-        if should_clip_to_zero {
-            flag |= Flag::IN_INSERT_STMT;
-        }
-        let cfg = Arc::new(EvalConfig::from_flag(flag));
-        EvalContext::new(cfg)
+        in_insert_stmt: bool,
+        in_update_or_delete_stmt: bool,
     }
 
-    fn make_ctx_about_overflow_truncate_flags(
-        overflow_as_warning: bool,
-        truncate_as_warning: bool,
-        flags: Vec<Flag>,
-    ) -> EvalContext {
-        let mut flag: Flag = Flag::empty();
-        if overflow_as_warning {
-            flag |= Flag::OVERFLOW_AS_WARNING;
+    impl Default for CtxConfig {
+        fn default() -> Self {
+            CtxConfig {
+                overflow_as_warning: false,
+                truncate_as_warning: false,
+                should_clip_to_zero: false,
+                in_insert_stmt: false,
+                in_update_or_delete_stmt: false,
+            }
         }
-        if truncate_as_warning {
-            flag |= Flag::TRUNCATE_AS_WARNING;
+    }
+
+    impl From<CtxConfig> for EvalContext {
+        fn from(config: CtxConfig) -> Self {
+            let mut flag: Flag = Flag::empty();
+            if config.overflow_as_warning {
+                flag |= Flag::OVERFLOW_AS_WARNING;
+            }
+            if config.truncate_as_warning {
+                flag |= Flag::TRUNCATE_AS_WARNING;
+            }
+            if config.should_clip_to_zero {
+                flag |= Flag::IN_INSERT_STMT;
+            }
+            if config.in_insert_stmt {
+                flag |= Flag::IN_INSERT_STMT;
+            }
+            if config.in_update_or_delete_stmt {
+                flag |= Flag::IN_UPDATE_OR_DELETE_STMT;
+            }
+            let cfg = Arc::new(EvalConfig::from_flag(flag));
+            EvalContext::new(cfg)
         }
-        let flag = flags.into_iter().fold(flag, |acc, x| (acc | x));
-        let cfg = Arc::new(EvalConfig::from_flag(flag));
-        EvalContext::new(cfg)
     }
 
     fn make_implicit_args(in_union: bool) -> [ScalarValue; 1] {
@@ -1240,59 +1248,48 @@ mod tests {
         }
     }
 
-    fn make_ret_field_type_1(unsigned: bool) -> FieldType {
-        let mut ft = if unsigned {
-            let mut ft = FieldType::default();
-            ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
-            ft
-        } else {
-            FieldType::default()
-        };
-        let fta = ft.as_mut_accessor();
-        fta.set_flen(UNSPECIFIED_LENGTH);
-        fta.set_decimal(UNSPECIFIED_LENGTH);
-        ft
-    }
-
-    fn make_ret_field_type_2(unsigned: bool, flen: isize, decimal: isize) -> FieldType {
-        let mut ft = make_ret_field_type_1(unsigned);
-        let fta = ft.as_mut_accessor();
-        fta.set_flen(flen);
-        fta.set_decimal(decimal);
-        ft
-    }
-
-    fn make_ret_field_type_3(
+    struct RetFieldTypeConfig {
+        unsigned: bool,
         flen: isize,
-        charset: &str,
-        tp: FieldTypeTp,
-        collation: Collation,
-    ) -> FieldType {
-        let mut ft = FieldType::default();
-        let fta = ft.as_mut_accessor();
-        fta.set_flen(flen);
-        fta.set_tp(tp);
-        fta.set_collation(collation);
-        ft.set_charset(String::from(charset));
-        ft
+        decimal: isize,
+        charset: Option<&'static str>,
+        tp: Option<FieldTypeTp>,
+        collation: Option<Collation>,
     }
 
-    fn make_ret_field_type_4(flen: isize, decimal: isize, unsigned: bool) -> FieldType {
-        let mut ft = FieldType::default();
-        let fta = ft.as_mut_accessor();
-        fta.set_flen(flen);
-        fta.set_decimal(decimal);
-        if unsigned {
-            fta.set_flag(FieldTypeFlag::UNSIGNED);
+    impl Default for RetFieldTypeConfig {
+        fn default() -> Self {
+            RetFieldTypeConfig {
+                unsigned: false,
+                flen: UNSPECIFIED_LENGTH,
+                decimal: UNSPECIFIED_LENGTH,
+                charset: None,
+                tp: None,
+                collation: None,
+            }
         }
-        ft
     }
 
-    fn make_ret_field_type_5(decimal: isize) -> FieldType {
-        let mut ft = FieldType::default();
-        let fta = ft.as_mut_accessor();
-        fta.set_decimal(decimal);
-        ft
+    impl From<RetFieldTypeConfig> for FieldType {
+        fn from(config: RetFieldTypeConfig) -> Self {
+            let mut ft = FieldType::default();
+            if let Some(c) = config.charset {
+                ft.set_charset(String::from(c));
+            }
+            let fta = ft.as_mut_accessor();
+            if config.unsigned {
+                fta.set_flag(FieldTypeFlag::UNSIGNED);
+            }
+            fta.set_flen(config.flen);
+            fta.set_decimal(config.decimal);
+            if let Some(tp) = config.tp {
+                fta.set_tp(tp);
+            }
+            if let Some(c) = config.collation {
+                fta.set_collation(c);
+            }
+            ft
+        }
     }
 
     fn make_extra<'a>(
@@ -1345,7 +1342,7 @@ mod tests {
         }
     }
 
-    fn check_warning_2(ctx: &EvalContext, err_code: Vec<i32>, log: &str) {
+    fn check_warnings(ctx: &EvalContext, err_code: Vec<i32>, log: &str) {
         assert_eq!(
             ctx.warnings.warning_cnt,
             err_code.len(),
@@ -1419,9 +1416,13 @@ mod tests {
             (i64::MAX, i64::MAX as u64, false),
         ];
         for (input, expect, in_union) in cs {
-            let rtf = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(in_union);
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_signed_int_as_unsigned_int(&extra, &Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1447,7 +1448,11 @@ mod tests {
         ];
 
         for (input, result, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_any_as_any::<Real, Int>(&mut ctx, &Real::new(input).ok());
             let log = make_log(&input, &result, &r);
             check_result(Some(&result), &r, log.as_str());
@@ -1470,9 +1475,13 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let rtf = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(true);
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1495,10 +1504,18 @@ mod tests {
         ];
 
         for (input, expect, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rtf = make_ret_field_type_1(true);
-            let extra = make_extra(&rtf, &ia);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
+            let extra = make_extra(&rft, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Real::new(input).ok());
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1514,9 +1531,18 @@ mod tests {
         ];
 
         for (input, expect, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, true);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                should_clip_to_zero: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
@@ -1648,9 +1674,18 @@ mod tests {
         ];
 
         for (input, expect, err_code, cond) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(cond.in_union());
-            let rft = make_ret_field_type_1(cond.is_unsigned());
+            let rft = RetFieldTypeConfig {
+                unsigned: cond.is_unsigned(),
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let val = Some(Vec::from(input.as_bytes()));
@@ -1661,7 +1696,7 @@ mod tests {
                 input, expect, err_code, cond, r
             );
             check_result(Some(&expect), &r, log.as_str());
-            check_warning_2(&ctx, err_code, log.as_str());
+            check_warnings(&ctx, err_code, log.as_str());
         }
     }
 
@@ -1702,7 +1737,11 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_any_as_any::<Decimal, Int>(&mut ctx, &Some(input.clone()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1744,7 +1783,11 @@ mod tests {
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
             let ia = make_implicit_args(true);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input.clone()));
@@ -1778,9 +1821,17 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input.clone()));
@@ -2013,7 +2064,11 @@ mod tests {
         ];
 
         for (input, expect) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_any_as_any::<Duration, Int>(&mut ctx, &Some(input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2059,7 +2114,11 @@ mod tests {
         ];
 
         for (input, expect, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_any_as_any::<Json, Int>(&mut ctx, &Some(input.clone()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2094,7 +2153,12 @@ mod tests {
         ];
 
         for (input, expect, error_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_json_as_uint(&mut ctx, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -2130,7 +2194,13 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, true);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                should_clip_to_zero: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_json_as_uint(&mut ctx, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -2179,7 +2249,11 @@ mod tests {
         ];
         for (input, expect, in_union) in cs {
             let ia = make_implicit_args(in_union);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
             let r = cast_signed_int_as_unsigned_real(&extra, &Some(input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
@@ -2259,7 +2333,11 @@ mod tests {
 
         for (input, expect, in_union) in cs {
             let ia = make_implicit_args(in_union);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
             let r = cast_real_as_unsigned_real(&extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
@@ -2310,9 +2388,20 @@ mod tests {
         ];
 
         for (input, expect, flen, decimal, truncated, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_2(false, flen, decimal);
+            let rft = RetFieldTypeConfig {
+                unsigned: false,
+                flen,
+                decimal,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
             let r = cast_string_as_signed_real(&mut ctx, &extra, &Some(input.clone().into_bytes()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
@@ -2483,9 +2572,20 @@ mod tests {
         ];
 
         for (input, expect, flen, decimal, truncated, overflow, in_union) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(in_union);
-            let rft = make_ret_field_type_2(true, flen, decimal);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                flen,
+                decimal,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let p = Some(input.clone().into_bytes());
@@ -2588,9 +2688,20 @@ mod tests {
             ),
         ];
         for (input, expect, flen, decimal, err_codes) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_2(true, flen, decimal);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                flen,
+                decimal,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let p = Some(input.clone().into_bytes());
@@ -2695,9 +2806,17 @@ mod tests {
         ];
 
         for (input, expect, in_union, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(in_union);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
             let r = cast_decimal_as_unsigned_real(&mut ctx, &extra, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
@@ -2798,7 +2917,11 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(false, true, false);
+            let mut ctx = CtxConfig {
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_any_as_any::<Json, Real>(&mut ctx, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
@@ -3026,8 +3149,11 @@ mod tests {
         ];
         for (input, bytes, debug_str) in base_cs {
             for (flen_type, pad_zero, charset, tp, collation, err_code) in cs.iter() {
-                let mut ctx =
-                    make_ctx_about_overflow_truncate_should_clip_to_zero(false, true, false);
+                let mut ctx = CtxConfig {
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                }
+                .into();
                 let ia = make_implicit_args(false);
                 let res_len = bytes.len();
                 let flen = match flen_type {
@@ -3042,7 +3168,14 @@ mod tests {
                     FlenType::ExtraOne => (res_len + 1) as isize,
                     FlenType::Unspecified => UNSPECIFIED_LENGTH,
                 };
-                let rft = make_ret_field_type_3(flen, charset, *tp, *collation);
+                let rft = RetFieldTypeConfig {
+                    flen,
+                    charset: Some(charset),
+                    tp: Some(*tp),
+                    collation: Some(*collation),
+                    ..RetFieldTypeConfig::default()
+                }
+                .into();
                 let extra = make_extra(&rft, &ia);
 
                 let r = cast_func(&mut ctx, &extra, &Some(input.clone()));
@@ -3722,22 +3855,34 @@ mod tests {
                 let ctx_in_dml_flag = vec![Flag::IN_INSERT_STMT, Flag::IN_UPDATE_OR_DELETE_STMT];
                 for in_dml_flag in ctx_in_dml_flag {
                     let (res_flen, res_decimal) = (res_flen as isize, res_decimal as isize);
-                    let rft = make_ret_field_type_4(res_flen, res_decimal, is_unsigned);
+                    let rft = RetFieldTypeConfig {
+                        unsigned: is_unsigned,
+                        flen: res_flen,
+                        decimal: res_decimal,
+                        ..RetFieldTypeConfig::default()
+                    }
+                    .into();
                     let ia = make_implicit_args(in_union);
                     let extra = make_extra(&rft, &ia);
 
-                    let mut ctx = make_ctx_about_overflow_truncate_flags(
+                    let mut ctx = CtxConfig {
                         overflow_as_warning,
                         truncate_as_warning,
-                        vec![in_dml_flag],
-                    );
+                        in_insert_stmt: in_dml_flag == Flag::IN_INSERT_STMT,
+                        in_update_or_delete_stmt: in_dml_flag == Flag::IN_UPDATE_OR_DELETE_STMT,
+                        ..CtxConfig::default()
+                    }
+                    .into();
                     let cast_func_res = cast_func(&mut ctx, &extra, &Some(input.clone()));
 
-                    let mut ctx = make_ctx_about_overflow_truncate_flags(
+                    let mut ctx = CtxConfig {
                         overflow_as_warning,
                         truncate_as_warning,
-                        vec![in_dml_flag],
-                    );
+                        in_insert_stmt: in_dml_flag == Flag::IN_INSERT_STMT,
+                        in_update_or_delete_stmt: in_dml_flag == Flag::IN_UPDATE_OR_DELETE_STMT,
+                        ..CtxConfig::default()
+                    }
+                    .into();
                     let pd_res = produce_dec_with_specified_tp(&mut ctx, base_res.clone(), &rft);
 
                     // make log
@@ -4752,10 +4897,17 @@ mod tests {
         ];
 
         for (input, fsp, expect, overflow) in cs {
-            let mut ctx =
-                make_ctx_about_overflow_truncate_should_clip_to_zero(overflow, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: overflow,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_5(fsp);
+            let rft = RetFieldTypeConfig {
+                decimal: fsp,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let result = cast_int_as_duration(&mut ctx, &extra, &Some(input));
@@ -4801,10 +4953,18 @@ mod tests {
         // no matter whether call_real_as_duration call Duration::parse directly.
         for val in base_cs {
             for fsp in MIN_FSP..=MAX_FSP {
-                let mut ctx =
-                    make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+                let mut ctx = CtxConfig {
+                    overflow_as_warning: true,
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                }
+                .into();
                 let ia = make_implicit_args(false);
-                let rft = make_ret_field_type_5(fsp as isize);
+                let rft = RetFieldTypeConfig {
+                    decimal: fsp as isize,
+                    ..RetFieldTypeConfig::default()
+                }
+                .into();
                 let extra = make_extra(&rft, &ia);
 
                 let result = func_cast(&mut ctx, &extra, &Some(val.clone()));
@@ -4996,7 +5156,11 @@ mod tests {
             let mut ctx = EvalContext::default();
 
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_5(expect_fsp);
+            let rft = RetFieldTypeConfig {
+                decimal: expect_fsp,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let input_time = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
@@ -5027,7 +5191,11 @@ mod tests {
 
         for (input, input_fsp, output_fsp, expect) in cs {
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_5(output_fsp as isize);
+            let rft = RetFieldTypeConfig {
+                decimal: output_fsp as isize,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let dur = Duration::parse(input.as_bytes(), input_fsp).unwrap();
