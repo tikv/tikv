@@ -524,10 +524,12 @@ fn consistency_check<T: RaftStoreRouter>(
         })
 }
 
+#[cfg(feature = "protobuf-codec")]
 mod region_size_response {
     pub type Entry = kvproto::debugpb::RegionSizeResponseEntry;
 }
 
+#[cfg(feature = "protobuf-codec")]
 mod list_fail_points_response {
     pub type Entry = kvproto::debugpb::ListFailPointsResponseEntry;
 }

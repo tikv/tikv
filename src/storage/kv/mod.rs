@@ -123,6 +123,15 @@ pub trait Snapshot: Send + Clone {
     fn upper_bound(&self) -> Option<&[u8]> {
         None
     }
+
+    /// Retrieves a version that represents the modification status of the underlying data.
+    /// Version should be changed when underlying data is changed.
+    ///
+    /// If the engine does not support data version, then `None` is returned.
+    #[inline]
+    fn get_data_version(&self) -> Option<u64> {
+        None
+    }
 }
 
 pub trait Iterator: Send {

@@ -16,7 +16,7 @@ use crate::metrics::*;
 impl Into<ErrorPb> for Error {
     // TODO: test error conversion.
     fn into(self) -> ErrorPb {
-        let mut err = ErrorPb::new();
+        let mut err = ErrorPb::default();
         match self {
             Error::ClusterID { current, request } => {
                 BACKUP_RANGE_ERROR_VEC
@@ -70,7 +70,7 @@ impl Into<ErrorPb> for Error {
                 BACKUP_RANGE_ERROR_VEC
                     .with_label_values(&["key_is_locked"])
                     .inc();
-                let mut e = KeyError::new();
+                let mut e = KeyError::default();
                 e.set_locked(info);
                 err.set_kv_error(e);
             }
