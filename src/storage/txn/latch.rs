@@ -291,7 +291,7 @@ mod tests {
         let cid_a: u64 = 1;
         let cid_b: u64 = 2;
         let cid_c: u64 = 3;
-        let cid_d: u64 = d;
+        let cid_d: u64 = 4;
 
         let acquired_a = latches.acquire(&mut lock_a, cid_a);
         assert_eq!(acquired_a, true);
