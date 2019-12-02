@@ -54,7 +54,6 @@ engine = { path = "../components/engine" }
 pd_client = { path = "../components/pd_client" }
 backup = { path = "../components/backup" }
 futures-cpupool = "0.1"
-coarsetime = "0.1.11"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"

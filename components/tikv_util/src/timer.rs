@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::time::{monotonic_raw_now, Instant};
-use coarsetime::Instant as CoarseInstant;
 use std::cell::Cell;
 use std::cmp::{Ord, Ordering, Reverse};
 use std::collections::BinaryHeap;
@@ -202,14 +201,14 @@ fn start_global_steady_timer() -> SteadyTimer {
 }
 
 thread_local!(
-    pub static THREAD_LAST_TICK_PER_SEC: Cell<CoarseInstant> = Cell::new(CoarseInstant::recent());
+    pub static THREAD_LAST_TICK_PER_SEC: Cell<Instant> = Cell::new(Instant::now_coarse());
 );
 
-fn tick_per_duration(key: &'static LocalKey<Cell<CoarseInstant>>, f: &dyn Fn() -> ()) {
+fn tick_per_duration(key: &'static LocalKey<Cell<Instant>>, f: &dyn Fn() -> ()) {
     key.with(|last_tick_cell| {
-        let now = CoarseInstant::recent();
+        let now = Instant::now_coarse();
         let last_tick = last_tick_cell.get();
-        if now.duration_since(last_tick).as_f64() < 1.0 {
+        if now.duration_since(last_tick).as_secs_f64() < 1.0 {
             return;
         };
         last_tick_cell.set(now);
