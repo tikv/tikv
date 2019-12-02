@@ -34,6 +34,7 @@ protobuf-codec = [
   "grpcio/protobuf-codec",
   "raft/protobuf-codec",
 ]
+# Please update tikv#detect_enabled_features when introducing new features.
 
 [lib]
 name = "tikv"
@@ -179,11 +180,11 @@ default-members = ["cmd"]
 [profile.dev]
 opt-level = 0
 debug = 1 # required for line numbers in tests, see tikv #5049
-codegen-units = 4
+codegen-units = 16
 lto = false
 incremental = true
 panic = 'abort'
-debug-assertions = false
+debug-assertions = true # enable debug-assertions to make tikv#detect_build_profile work.
 overflow-checks = false
 rpath = false
 
