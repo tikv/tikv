@@ -232,6 +232,10 @@ pub enum CommandKind {
     MvccByKey { key: Key },
     /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
     MvccByStartTs { start_ts: TimeStamp },
+    Batch {
+        ids: Vec<Option<u64>>,
+        commands: Vec<Command>,
+    },
 }
 
 impl Command {
@@ -245,6 +249,7 @@ impl Command {
             CommandKind::MvccByKey { .. } |
             CommandKind::MvccByStartTs { .. } => true,
             CommandKind::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
+            CommandKind::Batch { ref commands, .. } => if commands.is_empty() { unreachable!() } else { commands[0].readonly() },
             _ => false,
         }
     }
@@ -258,6 +263,20 @@ impl Command {
             CommandKind::ScanLock { .. }
             | CommandKind::ResolveLock { .. }
             | CommandKind::ResolveLockLite { .. } => true,
+            CommandKind::Batch { ref commands, .. } => {
+                if commands.is_empty() {
+                    unreachable!()
+                } else {
+                    commands[0].is_sys_cmd()
+                }
+            }
+            _ => false,
+        }
+    }
+
+    pub fn is_batch_cmd(&self) -> bool {
+        match self.kind {
+            CommandKind::Batch { .. } => true,
             _ => false,
         }
     }
@@ -289,6 +308,17 @@ impl Command {
             CommandKind::Pause { .. } => metrics::CommandKind::pause,
             CommandKind::MvccByKey { .. } => metrics::CommandKind::key_mvcc,
             CommandKind::MvccByStartTs { .. } => metrics::CommandKind::start_ts_mvcc,
+            CommandKind::Batch { ref commands, .. } => {
+                if commands.is_empty() {
+                    unreachable!()
+                } else {
+                    match commands[0].tag() {
+                        metrics::CommandKind::prewrite => metrics::CommandKind::batch_prewrite,
+                        metrics::CommandKind::commit => metrics::CommandKind::batch_commit,
+                        _ => metrics::CommandKind::batch,
+                    }
+                }
+            }
         }
     }
 
@@ -309,7 +339,8 @@ impl Command {
             CommandKind::ResolveLock { .. }
             | CommandKind::DeleteRange { .. }
             | CommandKind::Pause { .. }
-            | CommandKind::MvccByKey { .. } => TimeStamp::zero(),
+            | CommandKind::MvccByKey { .. }
+            | CommandKind::Batch { .. } => TimeStamp::zero(),
         }
     }
 
@@ -370,6 +401,11 @@ impl Command {
                 ref primary_key, ..
             } => {
                 bytes += primary_key.as_encoded().len();
+            }
+            CommandKind::Batch { ref commands, .. } => {
+                for cmd in commands {
+                    bytes += cmd.write_bytes();
+                }
             }
             _ => {}
         }
@@ -500,6 +536,10 @@ impl Display for Command {
                 "kv::command::mvccbystartts {:?} | {:?}",
                 start_ts, self.ctx
             ),
+            CommandKind::Batch {
+                ref ids,
+                ref commands,
+            } => write!(f, "kv::command::batch {:?} | {:?}", ids, commands),
         }
     }
 }

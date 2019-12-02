@@ -33,9 +33,10 @@ use super::transport::{RaftStoreRouter, ServerTransport};
 use super::{Config, Result};
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
-const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
+const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(750);
 pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
 pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
+pub const SCHED_POOL_THREAD_PREFIX: &str = "sched-worker";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
 /// The TiKV server
@@ -61,6 +62,8 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     grpc_thread_load: Arc<ThreadLoad>,
     readpool_normal_concurrency: usize,
     readpool_normal_thread_load: Arc<ThreadLoad>,
+    sched_pool_concurrency: usize,
+    sched_pool_thread_load: Arc<ThreadLoad>,
     timer: Handle,
 }
 
@@ -85,6 +88,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         let readpool_normal_concurrency = storage.readpool_normal_concurrency();
         let readpool_normal_thread_load =
             Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
+        let sched_pool_concurrency = storage.sched_pool_concurrency();
+        let sched_pool_thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
 
         let env = Arc::new(
             EnvBuilder::new()
@@ -102,6 +107,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             snap_worker.scheduler(),
             Arc::clone(&grpc_thread_load),
             Arc::clone(&readpool_normal_thread_load),
+            Arc::clone(&sched_pool_thread_load),
             cfg.enable_request_batch,
             if cfg.enable_request_batch && cfg.request_batch_enable_cross_command {
                 Some(Duration::from(cfg.request_batch_wait_duration))
@@ -158,6 +164,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             grpc_thread_load,
             readpool_normal_concurrency,
             readpool_normal_thread_load,
+            sched_pool_concurrency,
+            sched_pool_thread_load,
             timer: GLOBAL_TIMER_HANDLE.clone(),
         };
 
@@ -224,6 +232,13 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             stats.set_thread_target(self.readpool_normal_concurrency);
             stats
         };
+        let mut sched_pool_load_stats = {
+            let tl = Arc::clone(&self.sched_pool_thread_load);
+            let mut stats =
+                ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, SCHED_POOL_THREAD_PREFIX, tl);
+            stats.set_thread_target(self.sched_pool_concurrency);
+            stats
+        };
         self.stats_pool.as_ref().unwrap().spawn(
             self.timer
                 .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
@@ -231,6 +246,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .for_each(move |i| {
                     grpc_load_stats.record(i);
                     readpool_normal_load_stats.record(i);
+                    sched_pool_load_stats.record(i);
                     Ok(())
                 }),
         );

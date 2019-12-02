@@ -56,7 +56,7 @@ futures = "0.1"
 futures-cpupool = "0.1"
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
 hex = "0.3"
-kvproto = { git = "https://github.com/youjiali1995/kvproto.git", branch = "parallel-commit", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "perf-4.0", default-features = false }
 pd_client = { path = "../components/pd_client" }
 protobuf = "2.8"
 raft = { version = "0.6.0-alpha" , default-features = false }

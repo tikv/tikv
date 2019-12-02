@@ -172,6 +172,7 @@ writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
 enable-unordered-write = true
+enable-multithread-write = false
 
 [rocksdb.titan]
 enabled = true
@@ -381,6 +382,7 @@ max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
 use-direct-io-for-flush-and-compaction = true
 enable-pipelined-write = false
+enable-multithread-write = false
 allow-concurrent-memtable-write = true
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"

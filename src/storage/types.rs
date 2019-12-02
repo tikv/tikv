@@ -4,7 +4,7 @@
 
 use crate::storage::{
     mvcc::{Lock, TimeStamp, Write},
-    Callback, Command, Error as StorageError, Result,
+    BatchCallback, Callback, Command, Error as StorageError, Result,
 };
 use kvproto::kvrpcpb::LockInfo;
 use std::fmt::Debug;
@@ -97,7 +97,9 @@ impl TxnStatus {
 
 pub enum StorageCallback {
     Boolean(Callback<()>),
+    BatchBoolean(BatchCallback<()>),
     Booleans(Callback<Vec<Result<()>>>),
+    BatchBooleans(BatchCallback<Vec<Result<()>>>),
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
@@ -150,6 +152,29 @@ impl StorageCallback {
                 ProcessResult::Failed { err } => cb(Err(err)),
                 _ => panic!("process result mismatch"),
             },
+            _ => panic!("callback type mismatch"),
+        }
+    }
+
+    pub fn execute_batch(&mut self, pr: Vec<(u64, ProcessResult)>) {
+        match self {
+            StorageCallback::BatchBoolean(cb) => cb(pr
+                .into_iter()
+                .map(|(id, r)| match r {
+                    ProcessResult::Res => (id, Ok(())),
+                    ProcessResult::Failed { err } => (id, Err(err)),
+                    _ => panic!("process result mismatch"),
+                })
+                .collect()),
+            StorageCallback::BatchBooleans(cb) => cb(pr
+                .into_iter()
+                .map(|(id, r)| match r {
+                    ProcessResult::MultiRes { results } => (id, Ok(results)),
+                    ProcessResult::Failed { err } => (id, Err(err)),
+                    _ => panic!("process result mismatch"),
+                })
+                .collect()),
+            _ => panic!("callback type mismatch"),
         }
     }
 }

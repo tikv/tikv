@@ -187,6 +187,10 @@ quick_error! {
             description(err.description())
             display("unknown error {:?}", err)
         }
+        OtherFlattened(description: String) {
+            description(description)
+            display("unknown error {:?}", description)
+        }
     }
 }
 
@@ -208,7 +212,18 @@ impl ErrorInner {
             ErrorInner::Request(ref e) => Some(ErrorInner::Request(e.clone())),
             ErrorInner::Timeout(d) => Some(ErrorInner::Timeout(d)),
             ErrorInner::EmptyRequest => Some(ErrorInner::EmptyRequest),
+            ErrorInner::OtherFlattened(ref d) => Some(ErrorInner::OtherFlattened(d.clone())),
             ErrorInner::Other(_) => None,
+        }
+    }
+
+    pub fn must_clone(&self) -> ErrorInner {
+        match *self {
+            ErrorInner::Request(ref e) => ErrorInner::Request(e.clone()),
+            ErrorInner::Timeout(d) => ErrorInner::Timeout(d),
+            ErrorInner::EmptyRequest => ErrorInner::EmptyRequest,
+            ErrorInner::Other(ref e) => ErrorInner::OtherFlattened(e.description().to_owned()),
+            ErrorInner::OtherFlattened(ref d) => ErrorInner::OtherFlattened(d.clone()),
         }
     }
 }

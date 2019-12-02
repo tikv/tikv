@@ -30,7 +30,7 @@ use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::{collections::HashMap, time::SlowTimer};
 
-use crate::storage::kv::{with_tls_engine, Result as EngineResult};
+use crate::storage::kv::{with_tls_engine, Error as EngineError, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockManager};
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{Executor, MsgScheduler, Task};
@@ -167,7 +167,9 @@ struct SchedulerInner<L: LockManager> {
     high_priority_pool: SchedPool,
 
     // used to control write flow
-    running_write_bytes: AtomicUsize,
+    running_write_bytes: Arc<AtomicUsize>,
+
+    pending_commands: Arc<AtomicUsize>,
 
     lock_mgr: Option<L>,
 }
@@ -185,6 +187,10 @@ impl<L: LockManager> SchedulerInner<L> {
         id + 1
     }
 
+    fn peek_task_mutex(&self, cid: u64) -> &Mutex<HashMap<u64, TaskContext>> {
+        &self.task_contexts[id_index(cid)]
+    }
+
     fn dequeue_task(&self, cid: u64) -> Task {
         let mut tasks = self.task_contexts[id_index(cid)].lock();
         let task = tasks.get_mut(&cid).unwrap().task.take().unwrap();
@@ -196,9 +202,10 @@ impl<L: LockManager> SchedulerInner<L> {
         let cid = task.cid;
         let tctx = TaskContext::new(task, &self.latches, callback);
 
-        let running_write_bytes = self
-            .running_write_bytes
-            .fetch_add(tctx.write_bytes, Ordering::AcqRel) as i64;
+        let running_write_bytes =
+            self.running_write_bytes
+                .fetch_add(tctx.write_bytes, Ordering::Relaxed) as i64;
+        self.pending_commands.fetch_add(1, Ordering::Relaxed);
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes + tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.inc();
 
@@ -214,9 +221,10 @@ impl<L: LockManager> SchedulerInner<L> {
             .remove(&cid)
             .unwrap();
 
-        let running_write_bytes = self
-            .running_write_bytes
-            .fetch_sub(tctx.write_bytes, Ordering::AcqRel) as i64;
+        let running_write_bytes =
+            self.running_write_bytes
+                .fetch_sub(tctx.write_bytes, Ordering::Relaxed) as i64;
+        self.pending_commands.fetch_sub(1, Ordering::Relaxed);
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes - tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.dec();
 
@@ -225,7 +233,7 @@ impl<L: LockManager> SchedulerInner<L> {
 
     fn too_busy(&self) -> bool {
         fail_point!("txn_scheduler_busy", |_| true);
-        self.running_write_bytes.load(Ordering::Acquire) >= self.sched_pending_write_threshold
+        self.running_write_bytes.load(Ordering::Relaxed) >= self.sched_pending_write_threshold
     }
 
     /// Tries to acquire all the required latches for a command.
@@ -273,7 +281,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             task_contexts,
             id_alloc: AtomicU64::new(0),
             latches: Latches::new(concurrency),
-            running_write_bytes: AtomicUsize::new(0),
+            running_write_bytes: Arc::new(AtomicUsize::new(0)),
+            pending_commands: Arc::new(AtomicUsize::new(0)),
             sched_pending_write_threshold,
             worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
             high_priority_pool: SchedPool::new(
@@ -289,6 +298,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             engine: Some(engine),
             inner,
         }
+    }
+
+    pub fn get_pool_size(&self) -> usize {
+        self.inner.worker_pool.pool.get_pool_size()
+    }
+
+    pub fn writing_bytes(&self) -> &Arc<AtomicUsize> {
+        &self.inner.running_write_bytes
+    }
+
+    pub fn pending_commands(&self) -> &Arc<AtomicUsize> {
+        &self.inner.pending_commands
     }
 
     pub fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
@@ -342,13 +363,32 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         }
     }
 
-    fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCallback) {
+    fn on_receive_new_cmd(&self, cmd: Command, mut callback: StorageCallback) {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
             SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
-            callback.execute(ProcessResult::Failed {
-                err: StorageError::from(StorageErrorInner::SchedTooBusy),
-            });
+            if let CommandKind::Batch { ids, .. } = cmd.kind {
+                callback.execute_batch(
+                    ids.into_iter()
+                        .filter_map(|id| {
+                            if let Some(id) = id {
+                                Some((
+                                    id,
+                                    ProcessResult::Failed {
+                                        err: StorageError::from(StorageErrorInner::SchedTooBusy),
+                                    },
+                                ))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect(),
+                );
+            } else {
+                callback.execute(ProcessResult::Failed {
+                    err: StorageError::from(StorageErrorInner::SchedTooBusy),
+                });
+            }
             return;
         }
         self.schedule_command(cmd, callback);
@@ -361,6 +401,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         let tag = task.tag;
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
+        let ids = if let CommandKind::Batch { ids, .. } = &task.cmd().kind {
+            Some(ids.clone())
+        } else {
+            None
+        };
 
         let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
@@ -371,7 +416,28 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).async_snapshot_err.inc();
 
                 info!("engine async_snapshot failed"; "err" => ?e);
-                self.finish_with_err(cid, e.into());
+                if let Some(ids) = ids {
+                    self.batch_finish_some(
+                        cid,
+                        ids.into_iter()
+                            .filter_map(move |id| {
+                                if let Some(id) = id {
+                                    Some((
+                                        id,
+                                        ProcessResult::Failed {
+                                            err: EngineError::from(e.0.must_clone()).into(),
+                                        },
+                                    ))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    );
+                    self.batch_cleanup(cid);
+                } else {
+                    self.finish_with_err(cid, e.into());
+                }
             } else {
                 SCHED_STAGE_COUNTER_VEC.get(tag).snapshot.inc();
             }
@@ -471,6 +537,18 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         );
         self.release_lock(&tctx.lock, cid);
     }
+
+    fn batch_finish_some(&self, cid: u64, results: Vec<(u64, ProcessResult)>) {
+        let mut tasks = self.inner.peek_task_mutex(cid).lock();
+        let tctx = tasks.get_mut(&cid).unwrap();
+        tctx.cb.execute_batch(results);
+    }
+
+    // Only called when all commands in batch are finished.
+    fn batch_cleanup(&self, cid: u64) {
+        let tctx = self.inner.dequeue_task_context(cid);
+        self.release_lock(&tctx.lock, cid);
+    }
 }
 
 impl<E: Engine, L: LockManager> MsgScheduler for Scheduler<E, L> {
@@ -494,6 +572,46 @@ impl<E: Engine, L: LockManager> MsgScheduler for Scheduler<E, L> {
             } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock, wait_timeout),
             _ => unreachable!(),
         }
+    }
+
+    fn on_batch_msg(&self, tasks: Vec<(u64, Msg)>) {
+        if tasks.is_empty() {
+            return;
+        }
+        let cid = match tasks[0].1 {
+            Msg::ReadFinished { cid, .. } => cid,
+            Msg::WriteFinished { cid, .. } => cid,
+            Msg::FinishedWithErr { cid, .. } => cid,
+            _ => panic!("msg type mismatch"),
+        };
+        self.batch_finish_some(
+            cid,
+            tasks
+                .into_iter()
+                .map(|(id, msg)| {
+                    (
+                        id,
+                        match msg {
+                            Msg::ReadFinished { pr, .. } => pr,
+                            Msg::WriteFinished { pr, result, .. } => match result {
+                                Ok(()) => pr,
+                                Err(e) => ProcessResult::Failed {
+                                    err: StorageError::from(e),
+                                },
+                            },
+                            Msg::FinishedWithErr { err, .. } => ProcessResult::Failed {
+                                err: StorageError::from(err),
+                            },
+                            _ => unreachable!(),
+                        },
+                    )
+                })
+                .collect(),
+        );
+    }
+
+    fn on_batch_completed(&self, cid: u64) {
+        self.batch_cleanup(cid);
     }
 }
 
@@ -531,6 +649,17 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         | CommandKind::DeleteRange { .. }
         | CommandKind::MvccByKey { .. }
         | CommandKind::MvccByStartTs { .. } => Lock::new(vec![]),
+        CommandKind::Batch { ref commands, .. } => {
+            let mut k: Vec<&Key> = Vec::new();
+            for cmd in commands {
+                if let CommandKind::Prewrite { ref mutations, .. } = cmd.kind {
+                    k.extend(mutations.iter().map(|x| x.key()));
+                } else if let CommandKind::Commit { ref keys, .. } = cmd.kind {
+                    k.extend(keys.iter())
+                }
+            }
+            latches.gen_lock(&k)
+        }
     }
 }
 
