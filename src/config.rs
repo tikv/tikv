@@ -15,7 +15,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::usize;
 
-use config_template::{ConfigValue, Configable, PartialChange};
+use configable::{ConfigChange, ConfigValue, Configable};
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -1348,10 +1348,10 @@ pub struct TiKvConfig {
     pub pd: PdConfig,
     #[config(not_support)]
     pub metric: MetricConfig,
-    #[config(sub_module)]
+    #[config(submodule)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
-    #[config(sub_module)]
+    #[config(submodule)]
     pub coprocessor: CopConfig,
     #[config(not_support)]
     pub rocksdb: DbConfig,
@@ -1361,9 +1361,9 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
     #[config(not_support)]
     pub import: ImportConfig,
-    #[config(sub_module)]
+    #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
-    #[config(sub_module)]
+    #[config(submodule)]
     pub gc: GCConfig,
 }
 
@@ -1669,7 +1669,7 @@ pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
 }
 
 pub trait ConfigManager {
-    fn dispatch(&mut self, _: PartialChange);
+    fn dispatch(&mut self, _: ConfigChange);
 }
 
 #[derive(Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
@@ -1735,7 +1735,7 @@ impl ConfigController {
     pub fn dispatch_update(&mut self, incomming: String) -> Result<(), toml::de::Error> {
         let mut tikv_cfg = toml::from_str::<TiKvConfig>(&incomming)?;
         let _ = tikv_cfg.validate();
-        let mut iter = self.current_config.diff(tikv_cfg).into_iter();
+        let mut iter = self.current_config.diff(&tikv_cfg).into_iter();
         while let Some((module, ConfigValue::Module(diff))) = iter.next() {
             if diff.len() != 0 {
                 if let Some(mgr) = self
@@ -1743,14 +1743,14 @@ impl ConfigController {
                     .get_mut(&Module::from_str(&module).unwrap())
                 {
                     mgr.dispatch(diff.clone());
-                    self.update_sub_module(&module, diff);
+                    self.update_submodule(&module, diff);
                 }
             }
         }
         Ok(())
     }
 
-    fn update_sub_module(&mut self, module: &str, diff: PartialChange) {
+    fn update_submodule(&mut self, module: &str, diff: ConfigChange) {
         match module {
             "raftstore" => self.current_config.raft_store.update(diff),
             "coprocessor" => self.current_config.coprocessor.update(diff),
