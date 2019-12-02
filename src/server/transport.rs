@@ -177,9 +177,9 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
-        if let Err(SendError(msg)) = self
-            .router
-            .force_send(region_id, PeerMsg::SignificantMsg(msg))
+        if let Err(SendError(msg)) =
+            self.router
+                .force_send(region_id, false, PeerMsg::SignificantMsg(msg))
         {
             // TODO: panic here once we can detect system is shutting down reliably.
             error!("failed to send significant msg"; "msg" => ?msg);
@@ -194,7 +194,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
             .schedule_limiter
             .is_high_priority_region(region_id as usize);
         self.router
-            .send_with_priority(region_id, high, PeerMsg::CasualMessage(msg))
+            .send(region_id, high, PeerMsg::CasualMessage(msg))
             .map_err(|e| handle_error(region_id, e))
     }
 

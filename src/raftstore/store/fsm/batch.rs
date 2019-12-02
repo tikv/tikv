@@ -10,6 +10,7 @@ use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
 use tikv_util::mpsc;
+use tikv_util::sys as sys_util;
 
 pub const MAX_LOW_PRIORITY_MESSAGE_PER_TICK: usize = 64;
 
@@ -629,6 +630,7 @@ pub mod tests {
         router
             .send(
                 1,
+                false,
                 Some(Box::new(move |_: &mut Runner| {
                     tx_.send(2).unwrap();
                 })),

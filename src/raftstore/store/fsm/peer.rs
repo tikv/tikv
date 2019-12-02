@@ -429,7 +429,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // Send an empty message to target peer to make sure it will check `ready_to_merge`
             self.ctx
                 .router
-                .force_send(target_region_id, PeerMsg::Noop)
+                .force_send(target_region_id, false, PeerMsg::Noop)
                 .unwrap();
         } else if exist_version > version {
             meta.merge_locks
@@ -1305,6 +1305,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             } else {
                 let _ = self.ctx.router.force_send(
                     exist_region.get_id(),
+                    false,
                     PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
                 );
             }
@@ -1322,6 +1323,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 .router
                 .force_send(
                     region_id,
+                    false,
                     PeerMsg::CasualMessage(CasualMessage::MergeResult {
                         target: self.fsm.peer.peer.clone(),
                         stale: true,
@@ -1673,7 +1675,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.ctx.router.register(new_region_id, mailbox);
             self.ctx
                 .router
-                .force_send_with_priority(new_region_id, self.ctx.high_priority, PeerMsg::Start)
+                .force_send(new_region_id, self.ctx.high_priority, PeerMsg::Start)
                 .unwrap();
 
             if !campaigned {
@@ -1681,7 +1683,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     .pending_votes
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
-                    let _ = self.ctx.router.send_with_priority(
+                    let _ = self.ctx.router.send(
                         new_region_id,
                         self.ctx.high_priority,
                         PeerMsg::RaftMessage(msg),
@@ -1837,6 +1839,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .router
             .force_send(
                 target_id,
+                false,
                 PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None)),
             )
             .map_err(|_| Error::RegionNotFound(target_id))
@@ -2036,6 +2039,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         if let Err(e) = self.ctx.router.send(
             source.get_id(),
+            false,
             PeerMsg::CasualMessage(CasualMessage::MergeResult {
                 target: self.fsm.peer.peer.clone(),
                 stale: false,

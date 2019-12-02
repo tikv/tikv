@@ -62,7 +62,7 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+use tikv_util::{is_zero_duration, Either, RingQueue};
 
 type Key = Vec<u8>;
 
@@ -172,7 +172,7 @@ impl RaftRouter {
         high_priority: bool,
     ) -> std::result::Result<(), TrySendError<RaftCommand>> {
         let region_id = cmd.request.get_header().get_region_id();
-        match self.send_with_priority(region_id, high_priority, PeerMsg::RaftCommand(cmd)) {
+        match self.send(region_id, high_priority, PeerMsg::RaftCommand(cmd)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(PeerMsg::RaftCommand(cmd))) => Err(TrySendError::Full(cmd)),
             Err(TrySendError::Disconnected(PeerMsg::RaftCommand(cmd))) => {
@@ -1072,7 +1072,7 @@ impl RaftBatchSystem {
 
         // Make sure Msg::Start is the first message each FSM received.
         for addr in address {
-            self.router.force_send(addr, PeerMsg::Start).unwrap();
+            self.router.force_send(addr, false, PeerMsg::Start).unwrap();
         }
         self.router
             .send_control(StoreMsg::Start {
@@ -1286,7 +1286,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         match self
             .ctx
             .router
-            .send_with_priority(region_id, high, PeerMsg::RaftMessage(msg))
+            .send(region_id, high, PeerMsg::RaftMessage(msg))
         {
             Ok(()) | Err(TrySendError::Full(_)) => return Ok(()),
             Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) => msg = m,
@@ -1337,7 +1337,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let _ = self
             .ctx
             .router
-            .send_with_priority(region_id, high, PeerMsg::RaftMessage(msg));
+            .send(region_id, high, PeerMsg::RaftMessage(msg));
         Ok(())
     }
 
@@ -1415,6 +1415,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 .router
                 .force_send(
                     id,
+                    false,
                     PeerMsg::CasualMessage(CasualMessage::MergeResult {
                         target: target.clone(),
                         stale: true,
@@ -1440,7 +1441,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         self.ctx.router.register(region_id, mailbox);
         self.ctx
             .router
-            .force_send_with_priority(region_id, self.ctx.high_priority, PeerMsg::Start)
+            .force_send(region_id, self.ctx.high_priority, PeerMsg::Start)
             .unwrap();
         Ok(true)
     }
@@ -1478,7 +1479,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .observe(region_declined_bytes.len() as f64);
 
         for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
-            let _ = self.ctx.router.send_with_priority(
+            let _ = self.ctx.router.send(
                 region_id,
                 self.ctx.high_priority,
                 PeerMsg::CasualMessage(CasualMessage::CompactionDeclinedBytes {
@@ -1661,7 +1662,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             match self
                 .ctx
                 .router
-                .send_with_priority(region_id, self.ctx.high_priority, gc_snap)
+                .send(region_id, self.ctx.high_priority, gc_snap)
             {
                 Ok(()) => Ok(()),
                 Err(TrySendError::Disconnected(PeerMsg::CasualMessage(
@@ -1922,7 +1923,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         admin.set_cmd_type(AdminCmdType::ComputeHash);
         request.set_admin_request(admin);
 
-        let _ = self.ctx.router.send_with_priority(
+        let _ = self.ctx.router.send(
             target_region_id,
             self.ctx.high_priority,
             PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None)),
@@ -1964,6 +1965,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         for region_id in regions {
             let _ = self.ctx.router.send(
                 region_id,
+                false,
                 PeerMsg::CasualMessage(CasualMessage::ClearRegionSize),
             );
         }

@@ -719,7 +719,7 @@ impl<T: PdClient> Runner<T> {
                             policy: split_region.get_policy(),
                         }
                     };
-                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                    if let Err(e) = router.send(region_id, false, PeerMsg::CasualMessage(msg)) {
                         error!("send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
                     }
                 } else if resp.has_merge() {
@@ -985,6 +985,7 @@ fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::P
     let target_id = target.get_id();
     if let Err(e) = router.send(
         source_region_id,
+        false,
         PeerMsg::CasualMessage(CasualMessage::MergeResult {
             target,
             stale: true,

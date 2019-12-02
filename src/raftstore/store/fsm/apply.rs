@@ -267,8 +267,7 @@ impl Notifier {
     fn notify(&self, region_id: u64, high_priority: bool, msg: PeerMsg) {
         match *self {
             Notifier::Router(ref r) => {
-                r.force_send_with_priority(region_id, high_priority, msg)
-                    .unwrap();
+                r.force_send(region_id, high_priority, msg).unwrap();
             }
             #[cfg(test)]
             Notifier::Sender(ref s) => s.send(msg).unwrap(),
