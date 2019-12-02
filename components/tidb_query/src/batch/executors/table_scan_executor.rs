@@ -656,7 +656,7 @@ mod tests {
             false,
         )
         .unwrap()
-        .with_summary_collector(ExecSummaryCollectorEnabled::new(1));
+        .collect_summary(1);
 
         executor.next_batch(1);
         executor.next_batch(2);
