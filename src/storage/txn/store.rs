@@ -564,7 +564,7 @@ mod tests {
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(
-                        Mutation::Put((Key::from_raw(key), key.to_vec())),
+                        Mutation::Put((Key::from_raw(key), key.to_vec(), None)),
                         pk,
                         &Options::default(),
                     )

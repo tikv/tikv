@@ -7,8 +7,8 @@ use super::write::{Write, WriteType};
 use super::{ErrorInner, Result, TimeStamp};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
-    is_short_value, Key, Mutation, Options, Statistics, TxnStatus, Value, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    is_short_value, Key, Mutation, Options, RawKey, Statistics, TxnStatus, Value, CF_DEFAULT,
+    CF_LOCK, CF_WRITE,
 };
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
@@ -104,6 +104,7 @@ impl<S: Snapshot> MvccTxn<S> {
         short_value: Option<Value>,
         lock_ttl: u64,
         options: &Options,
+        secondaries: Option<Vec<RawKey>>,
     ) {
         let lock = Lock::new(
             lock_type,
@@ -114,6 +115,8 @@ impl<S: Snapshot> MvccTxn<S> {
             options.for_update_ts,
             options.txn_size,
             options.min_commit_ts,
+            TimeStamp::zero(),
+            secondaries,
         );
         self.put_lock(key, &lock);
     }
@@ -159,20 +162,45 @@ impl<S: Snapshot> MvccTxn<S> {
         value: Option<Value>,
         lock_ttl: u64,
         options: &Options,
+        secondary_keys: Option<Vec<RawKey>>,
     ) {
         if let Some(value) = value {
             if is_short_value(&value) {
                 // If the value is short, embed it in Lock.
-                self.lock_key(key, lock_type, primary, Some(value), lock_ttl, options);
+                self.lock_key(
+                    key,
+                    lock_type,
+                    primary,
+                    Some(value),
+                    lock_ttl,
+                    options,
+                    secondary_keys,
+                );
             } else {
                 // value is long
                 let ts = self.start_ts;
                 self.put_value(key.clone(), ts, value);
 
-                self.lock_key(key, lock_type, primary, None, lock_ttl, options);
+                self.lock_key(
+                    key,
+                    lock_type,
+                    primary,
+                    None,
+                    lock_ttl,
+                    options,
+                    secondary_keys,
+                );
             }
         } else {
-            self.lock_key(key, lock_type, primary, None, lock_ttl, options);
+            self.lock_key(
+                key,
+                lock_type,
+                primary,
+                None,
+                lock_ttl,
+                options,
+                secondary_keys,
+            );
         }
     }
 
@@ -272,6 +300,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     None,
                     options.lock_ttl,
                     options,
+                    None,
                 );
             } else {
                 MVCC_DUPLICATE_CMD_COUNTER_VEC
@@ -338,6 +367,7 @@ impl<S: Snapshot> MvccTxn<S> {
             None,
             options.lock_ttl,
             options,
+            None,
         );
 
         Ok(())
@@ -351,7 +381,7 @@ impl<S: Snapshot> MvccTxn<S> {
         options: &Options,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
-        let (key, value) = mutation.into_key_value();
+        let (key, value, secondary_keys) = mutation.into_inner();
         let mut last_lock_ttl = 0;
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
@@ -403,6 +433,7 @@ impl<S: Snapshot> MvccTxn<S> {
             value,
             ::std::cmp::max(last_lock_ttl, options.lock_ttl),
             options,
+            secondary_keys,
         );
         Ok(())
     }
@@ -416,7 +447,7 @@ impl<S: Snapshot> MvccTxn<S> {
         let lock_type = LockType::from_mutation(&mutation);
         // For the insert operation, the old key should not be in the system.
         let should_not_exist = mutation.is_insert();
-        let (key, value) = mutation.into_key_value();
+        let (key, value, secondary_keys) = mutation.into_inner();
         // Check whether there is a newer version.
         if !options.skip_constraint_check {
             if let Some((commit_ts, write)) = self.reader.seek_write(&key, TimeStamp::max())? {
@@ -465,6 +496,7 @@ impl<S: Snapshot> MvccTxn<S> {
             value,
             options.lock_ttl,
             options,
+            secondary_keys,
         );
         Ok(())
     }
@@ -1397,7 +1429,7 @@ mod tests {
         assert_eq!(txn.write_size, 0);
 
         txn.prewrite(
-            Mutation::Put((key.clone(), v.to_vec())),
+            Mutation::Put((key.clone(), v.to_vec(), None)),
             pk,
             &Options::default(),
         )
@@ -1433,7 +1465,7 @@ mod tests {
         let mut txn = new_txn!(snapshot, 5, true);
         assert!(txn
             .prewrite(
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                Mutation::Put((Key::from_raw(key), value.to_vec(), None)),
                 key,
                 &Options::default()
             )
@@ -1446,7 +1478,7 @@ mod tests {
         opt.skip_constraint_check = true;
         assert!(txn
             .prewrite(
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                Mutation::Put((Key::from_raw(key), value.to_vec(), None)),
                 key,
                 &opt
             )
@@ -2355,5 +2387,15 @@ mod tests {
             must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60),
             &expected_lock_info,
         );
+    }
+
+    #[test]
+    fn test_jepsen_failure() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k";
+        must_rollback(&engine, k, 412903661948895265);
+        must_prewrite_put_err(&engine, k, b"CAQIBA==", k, 412903661948895261);
+        must_commit_err(&engine, k, 412903661948895261, 412903661948895266);
     }
 }

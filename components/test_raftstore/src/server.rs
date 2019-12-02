@@ -191,7 +191,7 @@ impl Simulator for ServerCluster {
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         );
-        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
+        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool, store.get_ts_cache());
         let mut server = None;
         for _ in 0..100 {
             let mut svr = Server::new(

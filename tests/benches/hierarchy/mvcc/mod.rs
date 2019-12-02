@@ -30,7 +30,7 @@ where
     .generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
         txn.prewrite(
-            Mutation::Put((Key::from_raw(&k), v.clone())),
+            Mutation::Put((Key::from_raw(&k), v.clone(), None)),
             &k.clone(),
             &Options::default(),
         )
@@ -56,7 +56,12 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
             )
             .generate(DEFAULT_ITERATIONS)
             .iter()
-            .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
+            .map(|(k, v)| {
+                (
+                    Mutation::Put((Key::from_raw(&k), v.clone(), None)),
+                    k.clone(),
+                )
+            })
             .collect();
             let snapshot = engine.snapshot(&ctx).unwrap();
             (mutations, snapshot, &option)

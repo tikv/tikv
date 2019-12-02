@@ -1193,6 +1193,7 @@ mod tests {
             mutations.push(Mutation::Insert((
                 Key::from_raw(&[i as u8]),
                 b"100".to_vec(),
+                None,
             )));
         }
         let mut statistic = Statistics::default();
@@ -1203,6 +1204,7 @@ mod tests {
             vec![Mutation::Put((
                 Key::from_raw(&[pri_key_number]),
                 b"100".to_vec(),
+                None,
             ))],
             pri_key.to_vec(),
             99,
@@ -1315,6 +1317,7 @@ mod tests {
                 primary,
                 start_ts: TimeStamp::from(start_ts),
                 options: Options::default(),
+                max_read_ts: TimeStamp::zero(),
             },
         };
         let m = DummyLockManager {};

@@ -7,6 +7,8 @@ use tikv_util::codec::bytes;
 use tikv_util::codec::bytes::BytesEncoder;
 use tikv_util::codec::number::{self, NumberEncoder};
 
+pub type RawKey = Vec<u8>;
+
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 

@@ -23,7 +23,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
         store
             .prewrite(
                 Context::default(),
-                vec![Mutation::Put((Key::from_raw(&k), v))],
+                vec![Mutation::Put((Key::from_raw(&k), v, None))],
                 k.clone(),
                 ts,
             )
@@ -41,7 +41,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
         store
             .prewrite(
                 Context::default(),
-                vec![Mutation::Delete(Key::from_raw(&k))],
+                vec![Mutation::Delete((Key::from_raw(&k), None))],
                 k.clone(),
                 ts,
             )

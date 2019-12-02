@@ -3,8 +3,8 @@
 use super::super::types::Value;
 use super::{ErrorInner, Result, TimeStamp, TsSet};
 use crate::storage::{
-    Key, Mutation, FOR_UPDATE_TS_PREFIX, MIN_COMMIT_TS_PREFIX, SHORT_VALUE_MAX_LEN,
-    SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
+    Key, Mutation, FOR_UPDATE_TS_PREFIX, MAX_READ_TS_PREFIX, MIN_COMMIT_TS_PREFIX,
+    SECONDARIES_PREFIX, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
 };
 use byteorder::ReadBytesExt;
 use derive_new::new;
@@ -65,6 +65,8 @@ pub struct Lock {
     pub for_update_ts: TimeStamp,
     pub txn_size: u64,
     pub min_commit_ts: TimeStamp,
+    pub max_read_ts: TimeStamp,
+    pub secondaries: Option<Vec<Vec<u8>>>,
 }
 
 impl Lock {
@@ -93,6 +95,16 @@ impl Lock {
             b.push(MIN_COMMIT_TS_PREFIX);
             b.encode_u64(self.min_commit_ts.into_inner()).unwrap();
         }
+        if !self.max_read_ts.is_zero() {
+            b.push(MAX_READ_TS_PREFIX);
+            b.encode_u64(self.max_read_ts.into_inner()).unwrap();
+        }
+        if let Some(ref secondaries) = self.secondaries {
+            b.push(SECONDARIES_PREFIX);
+            secondaries
+                .iter()
+                .for_each(|k| b.encode_compact_bytes(k).unwrap());
+        }
         b
     }
 
@@ -119,6 +131,8 @@ impl Lock {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                TimeStamp::zero(),
+                None,
             ));
         }
 
@@ -126,6 +140,8 @@ impl Lock {
         let mut for_update_ts = TimeStamp::zero();
         let mut txn_size: u64 = 0;
         let mut min_commit_ts = TimeStamp::zero();
+        let mut max_read_ts = TimeStamp::zero();
+        let mut secondaries = None;
         while !b.is_empty() {
             match b.read_u8()? {
                 SHORT_VALUE_PREFIX => {
@@ -143,6 +159,14 @@ impl Lock {
                 FOR_UPDATE_TS_PREFIX => for_update_ts = number::decode_u64(&mut b)?.into(),
                 TXN_SIZE_PREFIX => txn_size = number::decode_u64(&mut b)?,
                 MIN_COMMIT_TS_PREFIX => min_commit_ts = number::decode_u64(&mut b)?.into(),
+                MAX_READ_TS_PREFIX => max_read_ts = number::decode_u64(&mut b)?.into(),
+                SECONDARIES_PREFIX => {
+                    while !b.is_empty() {
+                        secondaries
+                            .get_or_insert_with(|| vec![])
+                            .push(bytes::decode_compact_bytes(&mut b)?);
+                    }
+                }
                 flag => panic!("invalid flag [{}] in lock", flag),
             }
         }
@@ -155,6 +179,8 @@ impl Lock {
             for_update_ts,
             txn_size,
             min_commit_ts,
+            max_read_ts,
+            secondaries,
         ))
     }
 
@@ -212,17 +238,17 @@ mod tests {
         let (key, value) = (b"key", b"value");
         let mut tests = vec![
             (
-                Mutation::Put((Key::from_raw(key), value.to_vec())),
+                Mutation::Put((Key::from_raw(key), value.to_vec(), None)),
                 LockType::Put,
                 FLAG_PUT,
             ),
             (
-                Mutation::Delete(Key::from_raw(key)),
+                Mutation::Delete((Key::from_raw(key), None)),
                 LockType::Delete,
                 FLAG_DELETE,
             ),
             (
-                Mutation::Lock(Key::from_raw(key)),
+                Mutation::Lock((Key::from_raw(key), None)),
                 LockType::Lock,
                 FLAG_LOCK,
             ),
@@ -262,6 +288,8 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                TimeStamp::zero(),
+                None,
             ),
             Lock::new(
                 LockType::Delete,
@@ -272,6 +300,8 @@ mod tests {
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
+                TimeStamp::zero(),
+                None,
             ),
             Lock::new(
                 LockType::Put,
@@ -282,6 +312,8 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
+                TimeStamp::zero(),
+                None,
             ),
             Lock::new(
                 LockType::Delete,
@@ -292,6 +324,8 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
+                TimeStamp::zero(),
+                None,
             ),
             Lock::new(
                 LockType::Put,
@@ -302,6 +336,8 @@ mod tests {
                 TimeStamp::zero(),
                 16,
                 TimeStamp::zero(),
+                TimeStamp::zero(),
+                None,
             ),
             Lock::new(
                 LockType::Delete,
@@ -312,6 +348,8 @@ mod tests {
                 TimeStamp::zero(),
                 16,
                 TimeStamp::zero(),
+                TimeStamp::zero(),
+                None,
             ),
             Lock::new(
                 LockType::Put,
@@ -322,6 +360,8 @@ mod tests {
                 10.into(),
                 16,
                 TimeStamp::zero(),
+                TimeStamp::zero(),
+                None,
             ),
             Lock::new(
                 LockType::Delete,
@@ -332,6 +372,8 @@ mod tests {
                 10.into(),
                 0,
                 TimeStamp::zero(),
+                TimeStamp::zero(),
+                None,
             ),
             Lock::new(
                 LockType::Put,
@@ -342,6 +384,32 @@ mod tests {
                 333.into(),
                 444,
                 555.into(),
+                TimeStamp::zero(),
+                None,
+            ),
+            Lock::new(
+                LockType::Put,
+                b"pk".to_vec(),
+                10.into(),
+                3,
+                None,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+                12.into(),
+                Some(vec![b"k1".to_vec(), b"k2".to_vec(), b"k3".to_vec()]),
+            ),
+            Lock::new(
+                LockType::Put,
+                b"pk".to_vec(),
+                10.into(),
+                3,
+                None,
+                TimeStamp::zero(),
+                0,
+                TimeStamp::zero(),
+                12.into(),
+                None,
             ),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
@@ -362,6 +430,8 @@ mod tests {
             TimeStamp::zero(),
             0,
             TimeStamp::zero(),
+            TimeStamp::zero(),
+            None,
         );
         let v = lock.to_bytes();
         assert!(Lock::parse(&v[..4]).is_err());
@@ -379,6 +449,8 @@ mod tests {
             TimeStamp::zero(),
             1,
             TimeStamp::zero(),
+            TimeStamp::zero(),
+            None,
         );
 
         let empty = Default::default();

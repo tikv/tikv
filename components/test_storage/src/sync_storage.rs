@@ -164,7 +164,7 @@ impl<E: Engine> SyncTestStorage<E> {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: impl Into<TimeStamp>,
-    ) -> Result<Vec<Result<()>>> {
+    ) -> Result<(Vec<Result<()>>, TimeStamp)> {
         wait_op!(|cb| self.store.async_prewrite(
             ctx,
             mutations,

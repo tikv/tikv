@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::sync::mpsc;
@@ -17,7 +18,7 @@ use tipb::{DagRequest, ExecType};
 use crate::server::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
-use crate::storage::{self, Engine, Snapshot, SnapshotStore};
+use crate::storage::{self, AtomicTsCache, Engine, Snapshot, SnapshotStore, TsCache};
 use tikv_util::future_pool::FuturePool;
 use tikv_util::Either;
 
@@ -46,6 +47,8 @@ pub struct Endpoint<E: Engine> {
     /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
 
+    ts_cache: Arc<AtomicTsCache>,
+
     _phantom: PhantomData<E>,
 }
 
@@ -55,6 +58,7 @@ impl<E: Engine> Clone for Endpoint<E> {
             read_pool_high: self.read_pool_high.clone(),
             read_pool_normal: self.read_pool_normal.clone(),
             read_pool_low: self.read_pool_low.clone(),
+            ts_cache: self.ts_cache.clone(),
             ..*self
         }
     }
@@ -63,7 +67,7 @@ impl<E: Engine> Clone for Endpoint<E> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
-    pub fn new(cfg: &Config, mut read_pool: Vec<FuturePool>) -> Self {
+    pub fn new(cfg: &Config, mut read_pool: Vec<FuturePool>, ts_cache: Arc<AtomicTsCache>) -> Self {
         let read_pool_high = read_pool.remove(2);
         let read_pool_normal = read_pool.remove(1);
         let read_pool_low = read_pool.remove(0);
@@ -78,6 +82,7 @@ impl<E: Engine> Endpoint<E> {
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            ts_cache,
             _phantom: Default::default(),
         }
     }
@@ -367,6 +372,10 @@ impl<E: Engine> Endpoint<E> {
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<impl Future<Item = coppb::Response, Error = Error>> {
+        if let Some(ts) = req_ctx.txn_start_ts {
+            self.ts_cache.update(ts.into());
+        }
+
         let read_pool = self.get_read_pool(req_ctx.context.get_priority());
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
@@ -502,6 +511,10 @@ impl<E: Engine> Endpoint<E> {
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<impl Stream<Item = coppb::Response, Error = Error>> {
+        if let Some(ts) = req_ctx.txn_start_ts {
+            self.ts_cache.update(ts.into());
+        }
+
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let read_pool = self.get_read_pool(req_ctx.context.get_priority());
         let tracker = Box::new(Tracker::new(req_ctx));
@@ -722,7 +735,11 @@ mod tests {
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool,
+            Arc::new(AtomicTsCache::new()),
+        );
 
         // a normal request
         let handler_builder =
@@ -758,7 +775,11 @@ mod tests {
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let mut cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool,
+            Arc::new(AtomicTsCache::new()),
+        );
         cop.recursion_limit = 100;
 
         let req = {
@@ -791,7 +812,11 @@ mod tests {
     fn test_invalid_req_type() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool,
+            Arc::new(AtomicTsCache::new()),
+        );
 
         let mut req = coppb::Request::default();
         req.set_tp(9999);
@@ -807,7 +832,11 @@ mod tests {
     fn test_invalid_req_body() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool,
+            Arc::new(AtomicTsCache::new()),
+        );
 
         let mut req = coppb::Request::default();
         req.set_tp(REQ_TYPE_DAG);
@@ -846,7 +875,11 @@ mod tests {
         })
         .collect();
 
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool,
+            Arc::new(AtomicTsCache::new()),
+        );
 
         let (tx, rx) = mpsc::channel();
 
@@ -892,7 +925,11 @@ mod tests {
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool,
+            Arc::new(AtomicTsCache::new()),
+        );
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
@@ -909,7 +946,11 @@ mod tests {
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool,
+            Arc::new(AtomicTsCache::new()),
+        );
 
         // Fail immediately
         let handler_builder =
@@ -952,7 +993,11 @@ mod tests {
     fn test_empty_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool,
+            Arc::new(AtomicTsCache::new()),
+        );
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
         let resp_vec = cop
@@ -970,7 +1015,11 @@ mod tests {
     fn test_special_streaming_handlers() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool,
+            Arc::new(AtomicTsCache::new()),
+        );
 
         // handler returns `finished == true` should not be called again.
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1062,6 +1111,7 @@ mod tests {
                 ..Config::default()
             },
             read_pool,
+            Arc::new(AtomicTsCache::new()),
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1120,7 +1170,7 @@ mod tests {
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cop = Endpoint::<RocksEngine>::new(&config, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&config, read_pool, Arc::new(AtomicTsCache::new()));
 
         let (tx, rx) = std::sync::mpsc::channel();
 

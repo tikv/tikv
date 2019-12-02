@@ -404,7 +404,7 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true).unwrap();
         txn.prewrite(
-            Mutation::Insert((Key::from_raw(key), value.to_vec())),
+            Mutation::Insert((Key::from_raw(key), value.to_vec(), None)),
             pk,
             &Options::default(),
         )?;
@@ -424,7 +424,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true).unwrap();
-        let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+        let mutation = Mutation::Put((Key::from_raw(key), value.to_vec(), None));
         if options.for_update_ts.is_zero() {
             txn.prewrite(mutation, pk, &options).unwrap();
         } else {
@@ -516,7 +516,7 @@ pub mod tests {
         let mut options = Options::default();
         let for_update_ts = for_update_ts.into();
         options.for_update_ts = for_update_ts;
-        let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+        let mutation = Mutation::Put((Key::from_raw(key), value.to_vec(), None));
         if for_update_ts.is_zero() {
             txn.prewrite(mutation, pk, &options).unwrap_err()
         } else {
@@ -569,7 +569,7 @@ pub mod tests {
         let mut options = Options::default();
         let for_update_ts = for_update_ts.into();
         options.for_update_ts = for_update_ts;
-        let mutation = Mutation::Delete(Key::from_raw(key));
+        let mutation = Mutation::Delete((Key::from_raw(key), None));
         if for_update_ts.is_zero() {
             txn.prewrite(mutation, pk, &options).unwrap();
         } else {
@@ -613,7 +613,7 @@ pub mod tests {
         let mut options = Options::default();
         let for_update_ts = for_update_ts.into();
         options.for_update_ts = for_update_ts;
-        let mutation = Mutation::Lock(Key::from_raw(key));
+        let mutation = Mutation::Lock((Key::from_raw(key), None));
         if for_update_ts.is_zero() {
             txn.prewrite(mutation, pk, &options).unwrap();
         } else {
@@ -642,7 +642,11 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true).unwrap();
         assert!(txn
-            .prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
+            .prewrite(
+                Mutation::Lock((Key::from_raw(key), None)),
+                pk,
+                &Options::default()
+            )
             .is_err());
     }
 

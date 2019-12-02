@@ -710,10 +710,11 @@ mod tests {
             Command {
                 ctx: Context::default(),
                 kind: CommandKind::Prewrite {
-                    mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                    mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec(), None))],
                     primary: b"k".to_vec(),
                     start_ts: 10.into(),
                     options: Options::default(),
+                    max_read_ts: TimeStamp::zero(),
                 },
             },
             Command {
@@ -772,6 +773,8 @@ mod tests {
                             TimeStamp::zero(),
                             0,
                             TimeStamp::zero(),
+                            TimeStamp::zero(),
+                            None,
                         ),
                     )],
                 },

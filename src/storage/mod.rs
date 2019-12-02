@@ -17,6 +17,7 @@ pub mod lock_manager;
 pub mod metrics;
 pub mod mvcc;
 pub mod readpool_impl;
+pub mod ts_cache;
 pub mod txn;
 pub mod types;
 
@@ -51,12 +52,13 @@ pub use self::kv::{
 pub use self::lock_manager::{DummyLockManager, LockManager};
 pub use self::mvcc::{Scanner as StoreScanner, TimeStamp};
 pub use self::readpool_impl::*;
+pub use self::ts_cache::{AtomicCache as AtomicTsCache, Cache as TsCache};
 pub use self::txn::{
     Error as TxnError, ErrorInner as TxnErrorInner, Msg, Scanner, Scheduler, SnapshotStore, Store,
 };
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::types::{
-    Key, KvPair, Mutation, MvccInfo, ProcessResult, StorageCallback, TxnStatus, Value,
+    Key, KvPair, Mutation, MvccInfo, ProcessResult, RawKey, StorageCallback, TxnStatus, Value,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -70,6 +72,8 @@ pub const SHORT_VALUE_PREFIX: u8 = b'v';
 pub const FOR_UPDATE_TS_PREFIX: u8 = b'f';
 pub const TXN_SIZE_PREFIX: u8 = b't';
 pub const MIN_COMMIT_TS_PREFIX: u8 = b'c';
+pub const SECONDARIES_PREFIX: u8 = b's';
+pub const MAX_READ_TS_PREFIX: u8 = b'r';
 
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
@@ -101,6 +105,8 @@ pub struct Storage<E: Engine, L: LockManager> {
 
     sched: TxnScheduler<E, L>,
 
+    ts_cache: Arc<AtomicTsCache>,
+
     /// The thread pool used to run most read operations.
     read_pool_low: FuturePool,
     read_pool_normal: FuturePool,
@@ -129,6 +135,7 @@ impl<E: Engine, L: LockManager> Clone for Storage<E, L> {
         Self {
             engine: self.engine.clone(),
             sched: self.sched.clone(),
+            ts_cache: self.ts_cache.clone(),
             read_pool_low: self.read_pool_low.clone(),
             read_pool_normal: self.read_pool_normal.clone(),
             read_pool_high: self.read_pool_high.clone(),
@@ -200,6 +207,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(Storage {
             engine,
             sched,
+            ts_cache: Arc::new(AtomicTsCache::new()),
             read_pool_low,
             read_pool_normal,
             read_pool_high,
@@ -212,6 +220,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
+    }
+
+    pub fn get_ts_cache(&self) -> Arc<AtomicTsCache> {
+        self.ts_cache.clone()
     }
 
     /// Schedule a command to the transaction scheduler. `cb` will be invoked after finishing
@@ -267,6 +279,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> impl Future<Item = Option<Value>, Error = Error> {
         const CMD: &str = "get";
         let priority = get_priority_tag(ctx.get_priority());
+
+        self.ts_cache.update(start_ts);
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
@@ -325,6 +339,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
+
+        let max_ts = gets.iter().fold(TimeStamp::zero(), |max, get| {
+            std::cmp::max(max, get.ts.as_ref().map_or(TimeStamp::zero(), |ts| *ts))
+        });
+        self.ts_cache.update(max_ts);
+
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
@@ -382,6 +402,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "batch_get";
         let priority = get_priority_tag(ctx.get_priority());
+
+        self.ts_cache.update(start_ts);
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
@@ -454,6 +476,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "scan";
         let priority = get_priority_tag(ctx.get_priority());
+
+        self.ts_cache.update(start_ts);
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
             tls_collect_command_count(CMD, priority);
@@ -544,7 +568,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         primary: Vec<u8>,
         start_ts: TimeStamp,
         options: Options,
-        callback: Callback<Vec<Result<()>>>,
+        callback: Callback<(Vec<Result<()>>, TimeStamp)>,
     ) -> Result<()> {
         for m in &mutations {
             let key_size = m.key().as_encoded().len();
@@ -556,6 +580,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 return Ok(());
             }
         }
+        // TODO: write fake locks first
         let cmd = Command {
             ctx,
             kind: CommandKind::Prewrite {
@@ -563,8 +588,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 primary,
                 start_ts,
                 options,
+                max_read_ts: self.ts_cache.get(),
             },
         };
+        self.ts_cache.update(start_ts);
+        let ts_cache = self.ts_cache.clone();
+        let callback = Box::new(move |res: Result<Vec<Result<()>>>| {
+            callback(res.map(|res| (res, ts_cache.get())));
+        });
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
         Ok(())
@@ -580,15 +611,22 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         if let CommandKind::Batch {
             ref mut ids,
-            ref commands,
+            ref mut commands,
         } = command.kind
         {
+            let cached_ts = self.ts_cache.get();
             let results: Vec<(u64, _)> = ids
                 .iter_mut()
-                .zip(commands.iter())
+                .zip(commands.iter_mut())
                 .filter_map(|(id, command)| {
                     if id.is_some() {
-                        if let CommandKind::Prewrite { ref mutations, .. } = command.kind {
+                        if let CommandKind::Prewrite {
+                            ref mutations,
+                            ref mut max_read_ts,
+                            ..
+                        } = command.kind
+                        {
+                            *max_read_ts = cached_ts;
                             for m in mutations {
                                 let key_size = m.key().as_encoded().len();
                                 if key_size > self.max_key_size {
@@ -1764,7 +1802,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), None))],
                 b"x".to_vec(),
                 100.into(),
                 Options::default(),
@@ -1833,10 +1871,12 @@ mod tests {
                                 mutations: vec![Mutation::Put((
                                     Key::from_raw(b"x"),
                                     b"100".to_vec(),
+                                    None,
                                 ))],
                                 primary: b"x".to_vec(),
                                 start_ts: 100.into(),
                                 options: Options::default(),
+                                max_read_ts: TimeStamp::zero(),
                             },
                         }],
                     },
@@ -1904,9 +1944,9 @@ mod tests {
             .async_prewrite(
                 Context::default(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec(), None)),
                 ],
                 b"a".to_vec(),
                 1.into(),
@@ -1932,13 +1972,14 @@ mod tests {
                             ctx: Context::default(),
                             kind: CommandKind::Prewrite {
                                 mutations: vec![
-                                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
-                                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
-                                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec(), None)),
+                                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec(), None)),
+                                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec(), None)),
                                 ],
                                 primary: b"a".to_vec(),
                                 start_ts: 1.into(),
                                 options: Options::default(),
+                                max_read_ts: TimeStamp::zero(),
                             },
                         }],
                     },
@@ -2028,9 +2069,9 @@ mod tests {
             .async_prewrite(
                 Context::default(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec(), None)),
                 ],
                 b"a".to_vec(),
                 1.into(),
@@ -2253,9 +2294,9 @@ mod tests {
             .async_prewrite(
                 Context::default(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec(), None)),
                 ],
                 b"a".to_vec(),
                 1.into(),
@@ -2317,9 +2358,9 @@ mod tests {
             .async_prewrite(
                 Context::default(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"b"), b"bb".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"c"), b"cc".to_vec(), None)),
                 ],
                 b"a".to_vec(),
                 1.into(),
@@ -2389,7 +2430,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), None))],
                 b"x".to_vec(),
                 100.into(),
                 Options::default(),
@@ -2399,7 +2440,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec(), None))],
                 b"y".to_vec(),
                 101.into(),
                 Options::default(),
@@ -2443,7 +2484,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec(), None))],
                 b"x".to_vec(),
                 105.into(),
                 Options::default(),
@@ -2475,10 +2516,12 @@ mod tests {
                                     mutations: vec![Mutation::Put((
                                         Key::from_raw(b"x"),
                                         b"100".to_vec(),
+                                        None,
                                     ))],
                                     primary: b"x".to_vec(),
                                     start_ts: 100.into(),
                                     options: Options::default(),
+                                    max_read_ts: TimeStamp::zero(),
                                 },
                             },
                             Command {
@@ -2487,10 +2530,12 @@ mod tests {
                                     mutations: vec![Mutation::Put((
                                         Key::from_raw(b"y"),
                                         b"101".to_vec(),
+                                        None,
                                     ))],
                                     primary: b"y".to_vec(),
                                     start_ts: 101.into(),
                                     options: Options::default(),
+                                    max_read_ts: TimeStamp::zero(),
                                 },
                             },
                         ],
@@ -2553,10 +2598,12 @@ mod tests {
                                 mutations: vec![Mutation::Put((
                                     Key::from_raw(b"x"),
                                     b"105".to_vec(),
+                                    None,
                                 ))],
                                 primary: b"x".to_vec(),
                                 start_ts: 105.into(),
                                 options: Options::default(),
+                                max_read_ts: TimeStamp::zero(),
                             },
                         }],
                     },
@@ -2594,7 +2641,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec(), None))],
                 b"y".to_vec(),
                 101.into(),
                 Options::default(),
@@ -2606,7 +2653,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec(), None))],
                 b"y".to_vec(),
                 102.into(),
                 Options::default(),
@@ -2653,10 +2700,12 @@ mod tests {
                                 mutations: vec![Mutation::Put((
                                     Key::from_raw(b"y"),
                                     b"101".to_vec(),
+                                    None,
                                 ))],
                                 primary: b"y".to_vec(),
                                 start_ts: 101.into(),
                                 options: Options::default(),
+                                max_read_ts: TimeStamp::zero(),
                             },
                         }],
                     },
@@ -2678,10 +2727,12 @@ mod tests {
                                 mutations: vec![Mutation::Put((
                                     Key::from_raw(b"z"),
                                     b"102".to_vec(),
+                                    None,
                                 ))],
                                 primary: b"y".to_vec(),
                                 start_ts: 102.into(),
                                 options: Options::default(),
+                                max_read_ts: TimeStamp::zero(),
                             },
                         }],
                     },
@@ -2699,7 +2750,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), None))],
                 b"x".to_vec(),
                 100.into(),
                 Options::default(),
@@ -2735,7 +2786,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"110".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"110".to_vec(), None))],
                 b"x".to_vec(),
                 ts(110, 0),
                 options,
@@ -2793,7 +2844,7 @@ mod tests {
         storage
             .async_prewrite(
                 ctx,
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), None))],
                 b"x".to_vec(),
                 100.into(),
                 Options::default(),
@@ -2844,7 +2895,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
+                vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), None))],
                 b"x".to_vec(),
                 100.into(),
                 Options::default(),
@@ -2892,9 +2943,9 @@ mod tests {
             .async_prewrite(
                 Context::default(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"x"), b"100".to_vec())),
-                    Mutation::Put((Key::from_raw(b"y"), b"100".to_vec())),
-                    Mutation::Put((Key::from_raw(b"z"), b"100".to_vec())),
+                    Mutation::Put((Key::from_raw(b"x"), b"100".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"y"), b"100".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"z"), b"100".to_vec(), None)),
                 ],
                 b"x".to_vec(),
                 100.into(),
@@ -3947,9 +3998,9 @@ mod tests {
             .async_prewrite(
                 Context::default(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"x"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"y"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"z"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"x"), b"foo".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"y"), b"foo".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"z"), b"foo".to_vec(), None)),
                 ],
                 b"x".to_vec(),
                 100.into(),
@@ -3966,9 +4017,9 @@ mod tests {
             .async_prewrite(
                 Context::default(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec(), None)),
                 ],
                 b"c".to_vec(),
                 101.into(),
@@ -4170,9 +4221,9 @@ mod tests {
             .async_prewrite(
                 Context::default(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec(), None)),
                 ],
                 b"c".to_vec(),
                 99.into(),
@@ -4231,6 +4282,7 @@ mod tests {
                     mutations.push(Mutation::Put((
                         Key::from_raw(format!("x{:08}", i).as_bytes()),
                         b"foo".to_vec(),
+                        None,
                     )));
                 }
 
@@ -4294,9 +4346,9 @@ mod tests {
             .async_prewrite(
                 Context::default(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec(), None)),
                 ],
                 b"c".to_vec(),
                 99.into(),
@@ -4354,9 +4406,9 @@ mod tests {
             .async_prewrite(
                 Context::default(),
                 vec![
-                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
-                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec(), None)),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec(), None)),
                 ],
                 b"c".to_vec(),
                 101.into(),
@@ -4431,7 +4483,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((k.clone(), v))],
+                vec![Mutation::Put((k.clone(), v, None))],
                 k.as_encoded().to_vec(),
                 10.into(),
                 options,
@@ -4534,7 +4586,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((k.clone(), v.clone()))],
+                vec![Mutation::Put((k.clone(), v.clone(), None))],
                 k.as_encoded().to_vec(),
                 ts(9, 0),
                 Options::default(),
@@ -4553,7 +4605,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((k.clone(), v.clone()))],
+                vec![Mutation::Put((k.clone(), v.clone(), None))],
                 k.as_encoded().to_vec(),
                 ts(10, 0),
                 options.clone(),
@@ -4606,7 +4658,7 @@ mod tests {
         storage
             .async_prewrite(
                 Context::default(),
-                vec![Mutation::Put((k.clone(), v))],
+                vec![Mutation::Put((k.clone(), v, None))],
                 k.as_encoded().to_vec(),
                 ts(25, 0),
                 options,
@@ -4641,6 +4693,93 @@ mod tests {
                     ))))) => (),
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_reads_update_max_read_ts() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        assert_eq!(storage.ts_cache.get(), TimeStamp::zero());
+
+        let key = Key::from_raw(b"k");
+        storage
+            .async_get(Context::default(), key.clone(), 10.into())
+            .wait()
+            .unwrap();
+        assert_eq!(storage.ts_cache.get(), 10.into());
+
+        storage
+            .async_batch_get_command(vec![
+                PointGetCommand::from_key_ts(Key::from_raw(b"a"), Some(21.into())),
+                PointGetCommand::from_key_ts(Key::from_raw(b"b"), Some(20.into())),
+                PointGetCommand::from_key_ts(Key::from_raw(b"b"), Some(22.into())),
+            ])
+            .wait()
+            .unwrap();
+        assert_eq!(storage.ts_cache.get(), 22.into());
+
+        storage
+            .async_batch_get(Context::default(), vec![key.clone()], 30.into())
+            .wait()
+            .unwrap();
+        assert_eq!(storage.ts_cache.get(), 30.into());
+
+        storage
+            .async_scan(
+                Context::default(),
+                key.clone(),
+                None,
+                0,
+                40.into(),
+                Options::default(),
+            )
+            .wait()
+            .unwrap();
+        assert_eq!(storage.ts_cache.get(), 40.into());
+
+        storage
+            .async_get(Context::default(), key.clone(), 10.into())
+            .wait()
+            .unwrap();
+        assert_eq!(storage.ts_cache.get(), 40.into());
+    }
+
+    #[test]
+    fn test_prewrite_return_max_read_ts() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        storage.ts_cache.update(10.into());
+
+        let (tx, rx) = channel();
+        let expect_max_read_ts_callback = |tx: Sender<i32>, max_read_ts| {
+            Box::new(move |res: Result<(Vec<Result<()>>, TimeStamp)>| {
+                assert_eq!(res.unwrap().1, max_read_ts);
+                tx.send(0).unwrap();
+            })
+        };
+
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec(), None))],
+                b"k".to_vec(),
+                5.into(),
+                Options::default(),
+                expect_max_read_ts_callback(tx.clone(), 10.into()),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Prewrite should also update max_read_ts to prevent returning a smaller max_read_ts.
+        storage
+            .async_prewrite(
+                Context::default(),
+                vec![Mutation::Put((Key::from_raw(b"k1"), b"v".to_vec(), None))],
+                b"k1".to_vec(),
+                20.into(),
+                Options::default(),
+                expect_max_read_ts_callback(tx.clone(), 20.into()),
             )
             .unwrap();
         rx.recv().unwrap();
