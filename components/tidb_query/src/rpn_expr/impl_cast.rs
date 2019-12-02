@@ -11,10 +11,12 @@ use tipb::{Expr, FieldType};
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+use crate::codec::mysql::Time;
 use crate::codec::Error;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
+use std::convert::TryInto;
 use std::num::IntErrorKind;
 
 fn get_cast_fn_rpn_meta(
@@ -150,6 +152,13 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Duration) => cast_time_as_duration_fn_meta(),
         (EvalType::Duration, EvalType::Duration) => cast_duration_as_duration_fn_meta(),
         (EvalType::Json, EvalType::Duration) => cast_json_as_duration_fn_meta(),
+
+        (EvalType::Int, EvalType::DateTime) => cast_int_as_time_fn_meta(),
+        (EvalType::Real, EvalType::DateTime) => cast_real_as_time_fn_meta(),
+        (EvalType::Bytes, EvalType::DateTime) => cast_string_as_time_fn_meta(),
+        (EvalType::Decimal, EvalType::DateTime) => cast_decimal_as_time_fn_meta(),
+        (EvalType::DateTime, EvalType::DateTime) => cast_time_as_time_fn_meta(),
+        (EvalType::Duration, EvalType::DateTime) => cast_duration_as_time_fn_meta(),
 
         // any as json
         (EvalType::Int, EvalType::Json) => {
@@ -889,6 +898,138 @@ cast_as_duration!(
 );
 cast_as_duration!(Json, cast_json_as_duration, val.unquote()?.as_bytes());
 
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_int_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Int>,
+) -> Result<Option<Time>> {
+    if let Some(val) = *val {
+        // Parse `val` as a `u64`
+        Time::parse_from_i64(
+            ctx,
+            val,
+            extra.ret_field_type.as_accessor().tp().try_into()?,
+            extra.ret_field_type.get_decimal() as i8,
+        )
+        .map(Some)
+        .or_else(|_| {
+            Ok(ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(val))
+                .map(|_| None)?)
+        })
+    } else {
+        Ok(None)
+    }
+}
+
+// NOTE: in MySQL, casting `Real` to `Time` should cast `Real` to `Int` first,
+// However, TiDB cast `Real` to `String` and then parse it into a `Time`
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_real_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Real>,
+) -> Result<Option<Time>> {
+    if let Some(val) = val {
+        // Convert `val` to a string first and then parse it as a float string.
+        Time::parse(
+            ctx,
+            &val.to_string(),
+            extra.ret_field_type.as_accessor().tp().try_into()?,
+            extra.ret_field_type.get_decimal() as i8,
+            // Enable round
+            true,
+        )
+        .map(Some)
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_string_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Bytes>,
+) -> Result<Option<Time>> {
+    if let Some(val) = val {
+        // Convert `val` to a string first and then parse it as a float string.
+        Time::parse(
+            ctx,
+            unsafe { std::str::from_utf8_unchecked(val) },
+            extra.ret_field_type.as_accessor().tp().try_into()?,
+            extra.ret_field_type.get_decimal() as i8,
+            // Enable round
+            true,
+        )
+        .map(Some)
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_decimal_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Decimal>,
+) -> Result<Option<Time>> {
+    if let Some(val) = val {
+        // Convert `val` to a string first and then parse it as a string.
+        Time::parse(
+            ctx,
+            val.to_string().as_str(),
+            extra.ret_field_type.as_accessor().tp().try_into()?,
+            extra.ret_field_type.get_decimal() as i8,
+            // Enable round
+            true,
+        )
+        .map(Some)
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_time_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Time>,
+) -> Result<Option<Time>> {
+    if let Some(mut val) = val {
+        val.set_time_type(extra.ret_field_type.as_accessor().tp().try_into()?)?;
+        val.round_frac(ctx, extra.ret_field_type.get_decimal() as i8)
+            .map(Some)
+            .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_duration_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Duration>,
+) -> Result<Option<Time>> {
+    if let Some(val) = *val {
+        Time::from_duration(
+            ctx,
+            val,
+            extra.ret_field_type.as_accessor().tp().try_into()?,
+        )
+        .and_then(|now| now.round_frac(ctx, extra.ret_field_type.get_decimal() as i8))
+        .map(Some)
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+    } else {
+        Ok(None)
+    }
+}
+
 // cast any as json, some cast functions reuse `cast_any_as_any`
 //
 // - cast_int_as_json -> cast_any_as_any<Int, Json>
@@ -982,12 +1123,15 @@ mod tests {
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
     use crate::rpn_expr::impl_cast::*;
+    use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
     use crate::rpn_expr::RpnFnCallExtra;
     use std::collections::BTreeMap;
     use std::fmt::{Debug, Display, Formatter};
     use std::sync::Arc;
     use std::{f32, f64, i64, u64};
+    use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
+    use tipb::ScalarFuncSig;
 
     #[test]
     fn test_in_union() {
@@ -1725,6 +1869,187 @@ mod tests {
             let r = cast_any_as_any::<Time, Int>(&mut ctx, &Some(input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
+        }
+    }
+
+    #[test]
+    fn test_cast_int_as_time() {
+        let should_pass = vec![
+            ("0000-00-00 00:00:00", 0),
+            ("2000-01-01 00:00:00", 101),
+            ("2045-00-00 00:00:00", 450_000),
+            ("2059-12-31 00:00:00", 591_231),
+            ("1970-01-01 00:00:00", 700_101),
+            ("1999-12-31 00:00:00", 991_231),
+            ("2000-01-01 00:00:00", 101_000_000),
+            ("2069-12-31 23:59:59", 691_231_235_959),
+            ("1970-01-01 00:00:00", 700_101_000_000),
+            ("1999-12-31 23:59:59", 991_231_235_959),
+            ("0100-00-00 00:00:00", 1_000_000_000_000),
+            ("1000-01-01 00:00:00", 10_000_101_000_000),
+            ("1999-01-01 00:00:00", 19_990_101_000_000),
+        ];
+
+        for (expected, input) in should_pass {
+            let actual: Time = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .return_field_type(FieldTypeBuilder::new().tp(FieldTypeTp::DateTime).build())
+                .evaluate(ScalarFuncSig::CastIntAsTime)
+                // `Result<Option<_>>`
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.to_string(), expected);
+        }
+
+        let should_fail = vec![
+            -11111,
+            1,
+            100,
+            700_100,
+            10_000_100,
+            100_000_000,
+            100_000_101_000_000,
+        ];
+
+        for case in should_fail {
+            let actual = RpnFnScalarEvaluator::new()
+                .push_param(case)
+                .return_field_type(FieldTypeBuilder::new().tp(FieldTypeTp::Date).build())
+                .evaluate::<Time>(ScalarFuncSig::CastIntAsTime)
+                .unwrap();
+            assert!(actual.is_none());
+        }
+    }
+
+    #[test]
+    fn test_cast_real_time() {
+        let cases = vec![
+            ("2019-09-16 10:11:12", 190916101112.111, 0),
+            ("2019-09-16 10:11:12", 20190916101112.111, 0),
+            ("2019-09-16 10:11:12", 20190916101112.123, 0),
+            ("2019-09-16 10:11:13", 20190916101112.999, 0),
+        ];
+
+        for (expected, input, fsp) in cases {
+            let actual: Time = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::DateTime)
+                        .decimal(fsp)
+                        .build(),
+                )
+                .evaluate::<Time>(ScalarFuncSig::CastRealAsTime)
+                // `Result<Option<_>>`
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_cast_string_as_time() {
+        let cases = vec![
+            ("2019-09-16 10:11:12", "20190916101112", 0),
+            ("2019-09-16 10:11:12", "190916101112", 0),
+            ("2019-09-16 10:11:01", "19091610111", 0),
+            ("2019-09-16 10:11:00", "1909161011", 0),
+            ("2019-09-16 10:01:00", "190916101", 0),
+            ("1909-12-10 00:00:00", "19091210", 0),
+            ("2020-02-29 10:00:00", "20200229100000", 0),
+            ("2019-09-16 01:00:00", "1909161", 0),
+            ("2019-09-16 00:00:00", "190916", 0),
+            ("2019-09-01 00:00:00", "19091", 0),
+            ("2019-09-16 10:11:12.111", "190916101112.111", 3),
+            ("2019-09-16 10:11:12.111", "20190916101112.111", 3),
+            ("2019-09-16 10:11:12.67", "20190916101112.666", 2),
+            ("2019-09-16 10:11:13.0", "20190916101112.999", 1),
+            ("2019-09-16 00:00:00", "2019-09-16", 0),
+            ("2019-09-16 10:11:12", "2019-09-16 10:11:12", 0),
+            ("2019-09-16 10:11:12", "2019-09-16T10:11:12", 0),
+            ("2019-09-16 10:11:12.7", "2019-09-16T10:11:12.66", 1),
+            ("2019-09-16 10:11:13.0", "2019-09-16T10:11:12.99", 1),
+            ("2020-01-01 00:00:00.0", "2019-12-31 23:59:59.99", 1),
+        ];
+
+        for (expected, input, fsp) in cases {
+            let actual: Time = RpnFnScalarEvaluator::new()
+                .push_param(input.as_bytes().to_vec())
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::DateTime)
+                        .decimal(fsp)
+                        .build(),
+                )
+                .evaluate::<Time>(ScalarFuncSig::CastStringAsTime)
+                // `Result<Option<_>>`
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_time_as_time() {
+        let cases = vec![
+            // (Timestamp, DateTime)
+            ("2020-02-29 10:00:00.999", "2020-02-29 10:00:01.0", 1),
+            ("2019-09-16 01:00:00.999", "2019-09-16 01:00:01.00", 2),
+            ("2019-09-16 00:00:00.9999", "2019-09-16 00:00:01.0", 1),
+        ];
+
+        for (input, expected, fsp) in cases {
+            let mut ctx = EvalContext::default();
+            let time =
+                Time::parse_timestamp(&mut ctx, input, MAX_FSP, /* Enable round*/ true).unwrap();
+
+            let actual: Time = RpnFnScalarEvaluator::new()
+                .push_param(time)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::DateTime)
+                        .decimal(fsp)
+                        .build(),
+                )
+                .evaluate::<Time>(ScalarFuncSig::CastTimeAsTime)
+                // `Result<Option<_>>`
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_cast_duration_as_time() {
+        use chrono::Datelike;
+
+        let cases = vec!["11:30:45.123456", "-35:30:46"];
+
+        for case in cases {
+            let mut ctx = EvalContext::default();
+
+            let duration = Duration::parse(case.as_bytes(), MAX_FSP).unwrap();
+            let now = RpnFnScalarEvaluator::new()
+                .push_param(duration)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::DateTime)
+                        .decimal(MAX_FSP as isize)
+                        .build(),
+                )
+                .evaluate::<Time>(ScalarFuncSig::CastDurationAsTime)
+                .unwrap()
+                .unwrap();
+            let chrono_today = chrono::Utc::now();
+            let today = now.checked_sub(&mut ctx, duration).unwrap();
+
+            assert_eq!(today.year(), chrono_today.year() as u32);
+            assert_eq!(today.month(), chrono_today.month());
+            assert_eq!(today.day(), chrono_today.day());
+            assert_eq!(today.hour(), 0);
+            assert_eq!(today.minute(), 0);
+            assert_eq!(today.second(), 0);
+            assert_eq!(today.micro(), 0);
         }
     }
 
