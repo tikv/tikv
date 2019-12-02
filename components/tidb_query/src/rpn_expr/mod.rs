@@ -251,7 +251,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CaseWhenTime => case_when_fn_meta::<DateTime>(),
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
+        ScalarFuncSig::Md5 => md5_fn_meta(),
         ScalarFuncSig::Sha1 => sha1_fn_meta(),
+        ScalarFuncSig::UncompressedLength => uncompressed_length_fn_meta(),
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
         ScalarFuncSig::WeekDay => week_day_fn_meta(),
@@ -330,6 +332,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Bin => bin_fn_meta(),
         ScalarFuncSig::IsIPv4 => is_ipv4_fn_meta(),
         ScalarFuncSig::IsIPv4Compat => is_ipv4_compat_fn_meta(),
+        ScalarFuncSig::IsIPv4Mapped => is_ipv4_mapped_fn_meta(),
         ScalarFuncSig::IsIPv6 => is_ipv6_fn_meta(),
         ScalarFuncSig::Inet6Ntoa => inet6_ntoa_fn_meta(),
         ScalarFuncSig::Inet6Aton => inet6_aton_fn_meta(),
@@ -406,6 +409,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Space => space_fn_meta(),
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
+        ScalarFuncSig::DayOfMonth => day_of_month_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
