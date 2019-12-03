@@ -4,6 +4,7 @@ use chrono::Weekday;
 
 use super::weekmode::WeekMode;
 use super::Time;
+use crate::codec::mysql::time::{MONTH_NAMES, MONTH_NAMES_ABBR};
 
 pub trait WeekdayExtension {
     fn name(&self) -> &'static str;
@@ -144,6 +145,31 @@ impl DateTimeExtension for Time {
     /// returns the days since 0000-00-00
     fn day_number(&self) -> i32 {
         calc_day_number(self.year() as i32, self.month() as i32, self.day() as i32)
+    }
+}
+
+pub trait MonthExtension {
+    fn month_name(&self) -> Option<&str>;
+    fn month_name_abbr(&self) -> Option<&str>;
+}
+
+impl MonthExtension for Time {
+    fn month_name(&self) -> Option<&str> {
+        let month = self.month() as usize;
+        if month == 0 {
+            None
+        } else {
+            Some(MONTH_NAMES[month - 1])
+        }
+    }
+
+    fn month_name_abbr(&self) -> Option<&str> {
+        let month = self.month() as usize;
+        if month == 0 {
+            None
+        } else {
+            Some(MONTH_NAMES_ABBR[month - 1])
+        }
     }
 }
 

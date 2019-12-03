@@ -396,6 +396,7 @@ dependencies = [
  "futures-cpupool",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "libc",
  "log",
@@ -414,6 +415,16 @@ dependencies = [
  "toml",
  "url 2.1.0",
  "vlog",
+]
+
+[[package]]
+name = "coarsetime"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bac87404ed1c708d9cdd0094449e70aadc1ab73c291d2cf536e946a413594e5"
+dependencies = [
+ "lazy_static",
+ "libc",
 ]
 
 [[package]]
@@ -1388,7 +1399,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#4c654046831d1f4d7db8e4d44f7a6d0b35c33168"
+source = "git+https://github.com/pingcap/kvproto.git#32be31591b03e9e7fda00ef5c67b330310701553"
 dependencies = [
  "bytes",
  "futures",
@@ -1458,7 +1469,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#79dee6393e290f6d5338b1b06fe6424fc4b7f3dd"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#970a27c2651210882cd4b36d80b59b6c4db07bcf"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1475,7 +1486,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#79dee6393e290f6d5338b1b06fe6424fc4b7f3dd"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#970a27c2651210882cd4b36d80b59b6c4db07bcf"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2676,7 +2687,7 @@ checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#79dee6393e290f6d5338b1b06fe6424fc4b7f3dd"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#970a27c2651210882cd4b36d80b59b6c4db07bcf"
 dependencies = [
  "crc",
  "libc",
@@ -3206,6 +3217,7 @@ name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
  "futures",
+ "keys",
  "kvproto",
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3371,6 +3383,7 @@ dependencies = [
  "panic_hook",
  "profiler",
  "prometheus",
+ "prometheus-static-metric",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "rand 0.6.5",
@@ -3523,6 +3536,7 @@ dependencies = [
  "backtrace",
  "byteorder",
  "chrono",
+ "coarsetime",
  "crc32fast",
  "crossbeam",
  "fail",
@@ -3590,7 +3604,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#a594830fb004783d4fb7ec4fbdf184d05fd7ab13"
+source = "git+https://github.com/pingcap/tipb.git#0820b784842f3ef6cecc8f520e8834d326a0dbeb"
 dependencies = [
  "bytes",
  "lazy_static",
