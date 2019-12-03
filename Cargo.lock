@@ -432,19 +432,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "config_derive"
+name = "configuration"
+version = "0.1.0"
+dependencies = [
+ "configuration_derive",
+]
+
+[[package]]
+name = "configuration_derive"
 version = "0.1.0"
 dependencies = [
  "proc-macro2 1.0.4",
  "quote 1.0.2",
  "syn 1.0.5",
-]
-
-[[package]]
-name = "configuration"
-version = "0.1.0"
-dependencies = [
- "config_derive",
 ]
 
 [[package]]

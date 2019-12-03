@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-pub use config_derive::*;
+pub use configuration_derive::*;
 
 pub type ConfigChange = HashMap<String, ConfigValue>;
 
@@ -19,7 +19,7 @@ pub enum ConfigValue {
 }
 
 macro_rules! impl_from {
-    ($from: ty, $to: ident) => {
+    ($from: ty, $to: tt) => {
         impl From<$from> for ConfigValue {
             fn from(r: $from) -> ConfigValue {
                 ConfigValue::$to(r)
@@ -35,24 +35,28 @@ impl_from!(String, String);
 impl_from!(ConfigChange, Module);
 
 macro_rules! impl_into {
-    ($into: ty, $from: pat, $v: ident) => {
+    ($into: ty, $from: tt) => {
         impl Into<$into> for ConfigValue {
             fn into(self) -> $into {
-                if let $from = self {
-                    $v
+                if let ConfigValue::$from(v) = self {
+                    v
                 } else {
-                    unreachable!()
+                    panic!(
+                        "expext : {:?} got: {:?}",
+                        format!("ConfigValue::{:}", stringify!($from)),
+                        self
+                    );
                 }
             }
         }
     };
 }
-impl_into!(u64, ConfigValue::U64(v), v);
-impl_into!(f64, ConfigValue::F64(v), v);
-impl_into!(usize, ConfigValue::Usize(v), v);
-impl_into!(bool, ConfigValue::Bool(v), v);
-impl_into!(String, ConfigValue::String(v), v);
-impl_into!(ConfigChange, ConfigValue::Module(v), v);
+impl_into!(u64, U64);
+impl_into!(f64, F64);
+impl_into!(usize, Usize);
+impl_into!(bool, Bool);
+impl_into!(String, String);
+impl_into!(ConfigChange, Module);
 
 /// the Configuration trait
 /// There are three type of fields inside derived Configuration struct:

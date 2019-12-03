@@ -8,4 +8,4 @@ publish = false
 name = "configuration"
 
 [dependencies]
-config_derive = { path = "./config_derive" }
+configuration_derive = { path = "./configuration_derive" }
