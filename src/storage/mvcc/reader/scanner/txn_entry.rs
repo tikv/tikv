@@ -7,11 +7,10 @@ use std::cmp::Ordering;
 use keys::Key;
 use kvproto::kvrpcpb::IsolationLevel;
 
-use crate::storage::kv::SEEK_BOUND;
+use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
 use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::{Result, TimeStamp, WriteRef};
+use crate::storage::mvcc::{Lock, Result, TimeStamp, WriteRef};
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
-use crate::storage::{Cursor, Lock, Snapshot, Statistics};
 
 use super::ScannerConfig;
 
@@ -365,8 +364,8 @@ impl<S: Snapshot> Scanner<S> {
 mod tests {
     use super::super::ScannerBuilder;
     use super::*;
+    use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
-    use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 

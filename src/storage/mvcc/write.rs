@@ -1,9 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::lock::LockType;
-use super::{Error, ErrorInner, Result, TimeStamp, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::storage::mvcc::lock::LockType;
+use crate::storage::mvcc::{Error, ErrorInner, Result, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use codec::prelude::NumberDecoder;
-use keys::Value;
+use keys::{TimeStamp, Value};
 use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]

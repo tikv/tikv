@@ -16,7 +16,10 @@ use std::error;
 use std::fmt;
 use std::io::Error as IoError;
 
-use crate::storage::{Error as StorageError, MvccInfo, Result as StorageResult, TxnStatus};
+use crate::storage::{
+    types::{MvccInfo, TxnStatus},
+    Error as StorageError, Result as StorageResult,
+};
 
 pub use self::commands::{Command, CommandKind, Options, PointGetCommand};
 pub use self::process::RESOLVE_LOCK_BATCH_SIZE;

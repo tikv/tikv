@@ -9,8 +9,10 @@ use futures::future;
 use keys::{Key, Value};
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
-use crate::storage::kv::with_tls_engine;
-use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
+use crate::storage::kv::{
+    with_tls_engine, CbContext, Engine, Modify, Result as EngineResult, ScanMode, Snapshot,
+    Statistics,
+};
 use crate::storage::lock_manager::{self, Lock, LockManager};
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
@@ -21,8 +23,8 @@ use crate::storage::txn::{
 };
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    Engine, Error as StorageError, ErrorInner as StorageErrorInner, MvccInfo,
-    Result as StorageResult, ScanMode, Snapshot, Statistics, TxnStatus,
+    types::{MvccInfo, TxnStatus},
+    Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
 use engine::CF_WRITE;
 use tikv_util::collections::HashMap;

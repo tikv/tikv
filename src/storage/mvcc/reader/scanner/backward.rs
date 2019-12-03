@@ -6,10 +6,9 @@ use engine::CF_DEFAULT;
 use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
 
-use crate::storage::kv::SEEK_BOUND;
+use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
 use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::{Result, TimeStamp, WriteRef};
-use crate::storage::{Cursor, Lock, Snapshot, Statistics};
+use crate::storage::mvcc::{Lock, Result, TimeStamp, WriteRef};
 
 use super::ScannerConfig;
 
@@ -369,9 +368,9 @@ impl<S: Snapshot> BackwardScanner<S> {
 mod tests {
     use super::super::ScannerBuilder;
     use super::*;
+    use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
-    use crate::storage::{Engine, TestEngineBuilder};
     use kvproto::kvrpcpb::Context;
 
     #[test]

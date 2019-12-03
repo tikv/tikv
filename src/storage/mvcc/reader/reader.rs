@@ -4,11 +4,9 @@ use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::lock::Lock;
 use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::{default_not_found_error, WriteRef};
-use crate::storage::mvcc::{Result, TimeStamp};
-use engine::IterOption;
-use engine::{CF_LOCK, CF_WRITE};
-use keys::{Key, Value};
+use crate::storage::mvcc::{default_not_found_error, Result, WriteRef};
+use engine::{IterOption, CF_LOCK, CF_WRITE};
+use keys::{Key, TimeStamp, Value};
 use kvproto::kvrpcpb::IsolationLevel;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -434,8 +432,8 @@ mod tests {
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::lock::LockType;
-    use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use crate::storage::{Mutation, Options};
+    use crate::storage::mvcc::{Mutation, MvccReader, MvccTxn};
+    use crate::storage::txn::commands::Options;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
