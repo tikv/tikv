@@ -7,23 +7,24 @@ use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
+use keys::TimeStamp;
 use test_coprocessor::*;
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query::storage::Range;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::*;
-use tikv::storage::{Engine, SnapshotStore, TimeStamp};
+use tikv::storage::{Engine, SnapshotStore};
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
     let mut ctx = Context::default();
     ctx.set_isolation_level(IsolationLevel::Si);
 
     let mut checksum = ChecksumRequest::default();
-    checksum.set_start_ts(u64::MAX);
     checksum.set_scan_on(scan_on);
     checksum.set_algorithm(ChecksumAlgorithm::Crc64Xor);
 
     let mut req = Request::default();
+    req.set_start_ts(u64::MAX);
     req.set_context(ctx);
     req.set_tp(REQ_TYPE_CHECKSUM);
     req.set_data(checksum.write_to_bytes().unwrap());
