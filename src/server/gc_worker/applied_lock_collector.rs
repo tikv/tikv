@@ -284,11 +284,10 @@ impl LockCollectorRunner {
     }
 
     fn stop_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
-        let curr_max_ts = self
-            .observer_state
-            .max_ts
-            .compare_and_swap(max_ts.into_inner(), 0, Ordering::SeqCst)
-            .into();
+        let curr_max_ts =
+            self.observer_state
+                .max_ts
+                .compare_and_swap(max_ts.into_inner(), 0, Ordering::SeqCst);
         let curr_max_ts = TimeStamp::new(curr_max_ts);
 
         if curr_max_ts == max_ts {
@@ -330,7 +329,7 @@ pub struct AppliedLockCollector {
 }
 
 impl AppliedLockCollector {
-    pub fn new(coprocessor_host: &mut CoprocessorHost) -> Self {
+    pub fn new(coprocessor_host: &mut CoprocessorHost) -> Result<Self> {
         let worker = Arc::new(Mutex::new(WorkerBuilder::new("lock-collector").create()));
 
         let scheduler = worker.lock().unwrap().scheduler();
@@ -342,9 +341,9 @@ impl AppliedLockCollector {
         observer.register(coprocessor_host);
 
         // Start the worker
-        worker.lock().unwrap().start(runner);
+        worker.lock().unwrap().start(runner)?;
 
-        Self { worker, scheduler }
+        Ok(Self { worker, scheduler })
     }
 
     pub fn stop(&self) -> Result<()> {

@@ -1292,12 +1292,6 @@ impl<E: Engine> GCWorker<E> {
         }
     }
 
-    pub fn start_observe_lock_apply(&mut self, coprocessor_host: &mut CoprocessorHost) {
-        assert!(self.applied_lock_collector.is_none());
-        let collector = AppliedLockCollector::new(coprocessor_host);
-        self.applied_lock_collector = Some(collector);
-    }
-
     pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
         &self,
         cfg: AutoGCConfig<S, R>,
@@ -1322,6 +1316,16 @@ impl<E: Engine> GCWorker<E> {
             .unwrap()
             .start(runner)
             .map_err(|e| box_err!("failed to start gc_worker, err: {:?}", e))
+    }
+
+    pub fn start_observe_lock_apply(
+        &mut self,
+        coprocessor_host: &mut CoprocessorHost,
+    ) -> Result<()> {
+        assert!(self.applied_lock_collector.is_none());
+        let collector = AppliedLockCollector::new(coprocessor_host)?;
+        self.applied_lock_collector = Some(collector);
+        Ok(())
     }
 
     pub fn stop(&self) -> Result<()> {
