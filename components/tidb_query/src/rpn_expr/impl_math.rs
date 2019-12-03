@@ -360,12 +360,12 @@ fn rand(metadata: &Option<RefCell<XorShiftRng>>) -> Result<Option<Real>> {
         Some(metadata) => {
             let mut rng = metadata.borrow_mut();
             let res = rng.gen::<f64>();
-            Ok(Real::new(res).ok());
+            Ok(Real::new(res).ok())
         }
         None => {
             let mut rng = get_rng(None);
             let res = rng.gen::<f64>();
-            Ok(Real::new(res).ok());
+            Ok(Real::new(res).ok())
         }
     }
 }
@@ -386,12 +386,12 @@ fn rand_with_seed(
                     Some(metadata) => {
                         let mut rng = metadata.borrow_mut();
                         let res = rng.gen::<f64>();
-                        Ok(Real::new(res).ok());
+                        Ok(Real::new(res).ok())
                     }
                     None => {
                         let mut rng = get_rng(Some(useed));
                         let res = rng.gen::<f64>();
-                        Ok(Real::new(res).ok());
+                        Ok(Real::new(res).ok())
                     }
                 }
             }
