@@ -1207,8 +1207,9 @@ mod tests {
 
             // Should return false if we modify one byte in raw
             for i in 0..raw.len() {
-                let mut invalid_raw = raw.clone();
-                invalid_raw[i] = raw[i].wrapping_add(1);
+                let mut invalid_raw = raw.to_vec();
+                invalid_raw[i] = invalid_raw[i].wrapping_add(1);
+                let invalid_raw = invalid_raw.as_slice();
                 assert!(
                     !MemComparableByteCodec::is_encoded_from(&encoded, &invalid_raw),
                     "Encoded: {:?}, Raw: {:?}",
@@ -1219,8 +1220,9 @@ mod tests {
 
             // Should return false if we modify one byte in encoded
             for i in 0..encoded.len() {
-                let mut invalid_encoded = encoded.clone();
-                invalid_encoded[i] = encoded[i].wrapping_add(1);
+                let mut invalid_encoded = encoded.to_vec();
+                invalid_encoded[i] = invalid_encoded[i].wrapping_add(1);
+                let invalid_encoded = invalid_encoded.as_slice();
                 assert!(
                     !MemComparableByteCodec::is_encoded_from(&invalid_encoded, &raw),
                     "Encoded: {:?}, Raw: {:?}",
