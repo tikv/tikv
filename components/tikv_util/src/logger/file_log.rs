@@ -82,8 +82,8 @@ pub struct RotatingFileLogger {
     path: PathBuf,
     file: File,
 
-    #[cfg(test)]
-    pub renamed: File,
+    // Path for latest rotated file
+    renamed: Option<PathBuf>,
 }
 
 impl RotatingFileLogger {
@@ -93,15 +93,17 @@ impl RotatingFileLogger {
             path: path.as_ref().to_path_buf(),
         }
     }
+
+    #[cfg(test)]
+    pub fn get_rotated_file(&self) -> &Option<PathBuf> {
+        &self.renamed
+    }
 }
 
 /// Builder for `RotatingFileLogger`
 pub struct RotatingFileLoggerBuilder {
     rotators: Vec<Box<dyn Rotator>>,
     path: PathBuf,
-
-    #[cfg(test)]
-    renamed: PathBuf,
 }
 
 impl RotatingFileLoggerBuilder {
@@ -117,6 +119,7 @@ impl RotatingFileLoggerBuilder {
             rotators: self.rotators,
             file: open_log_file(&self.path)?,
             path: self.path,
+            renamed: None,
         })
     }
 }
@@ -126,17 +129,6 @@ impl Write for RotatingFileLogger {
         self.file.write(bytes)
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        for rotator in self.rotators.iter_mut() {
-            if rotator.should_rotate(&self.file)? {
-                let _ = rotator.rotate(&self.path, &mut self.file)?;
-                break;
-            }
-        }
-        self.file.flush()
-    }
-
-    #[cfg(test)]
     fn flush(&mut self) -> io::Result<()> {
         for rotator in self.rotators.iter_mut() {
             if rotator.should_rotate(&self.file)? {
@@ -168,7 +160,7 @@ impl RotateByTime {
     }
 
     #[cfg(test)]
-    pub fn new_for_test(next_rotation_time: Datetime<Utc>, rotation_timespan: Duration) -> Self {
+    pub fn new_for_test(next_rotation_time: DateTime<Utc>, rotation_timespan: Duration) -> Self {
         Self {
             next_rotation_time,
             rotation_timespan,
@@ -239,30 +231,20 @@ impl Rotator for RotateBySize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::OpenOptions;
-    use std::io::prelude::*;
-    use std::path::Path;
 
     use chrono::{Duration, Utc};
     use tempfile::TempDir;
-    use utime;
 
     fn file_exists(file: impl AsRef<Path>) -> bool {
         let path = file.as_ref();
         path.exists() && path.is_file()
     }
 
-    fn create_file_with_path(path: impl AsRef<Path>) -> (PathBuf, File) {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().join(path).to_str().unwrap().to_string();
-        let file = open_log_file(&path).unwrap();
-
-        (path.into(), file)
-    }
-
     #[test]
     fn test_rotate_by_time() {
-        let (path, mut log_file) = create_file_with_path("test_rotate_by_time.log");
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("test_rotate_by_time.log");
+
         let next_rotation_time = Utc::now() - Duration::days(1);
 
         // Should rotate right now.
@@ -276,12 +258,14 @@ mod tests {
         // Rotate
         logger.flush().unwrap();
 
-        assert!(file_exist(logger.renamed));
+        assert!(file_exists(logger.get_rotated_file().as_ref().unwrap()));
     }
 
     #[test]
     fn test_rotate_by_size() {
-        let (path, mut log_file) = create_file_with_path("test_rotate_by_size.log");
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("test_rotate_by_size.log");
+
         let rotation_size = 1024;
 
         let mut logger = RotatingFileLogger::new(path)
@@ -289,70 +273,30 @@ mod tests {
             .build()
             .unwrap();
 
-        log_file.write_all(&[0xff; 1023]);
+        logger.write_all(&[0xff; 1023]).unwrap();
         logger.flush().unwrap();
+        assert!(logger.get_rotated_file().is_none());
+
+        logger.write_all(&[0xff; 1025]).unwrap();
+        logger.flush().unwrap();
+
+        assert!(file_exists(logger.get_rotated_file().as_ref().unwrap()));
+    }
+
+    #[test]
+    fn test_failing_to_rotate_file_will_not_cause_panic() {
+        let tmp_dir = TempDir::new().unwrap();
+        let log_file = tmp_dir.path().join("test_no_panic.log");
+        let mut logger = RotatingFileLogger::new(&log_file)
+            .add_rotator(RotateBySize::new(1024))
+            .build()
+            .unwrap();
+        // trigger fail point
+        fail::cfg("file_log_rename", "return(NotFound)").unwrap();
+        logger.flush().unwrap();
+        assert!(logger.get_rotated_file().is_none());
+        fail::remove("file_log_rename");
+        // dropping the logger still should not panic.
+        drop(logger);
     }
 }
-
-//#[cfg(test)]
-//mod tests {
-//    use std::fs::OpenOptions;
-//    use std::io::prelude::*;
-//    use std::path::Path;
-//
-//    use chrono::{Duration, Utc};
-//    use tempfile::TempDir;
-//    use utime;
-//
-//    use super::RotatingFileLogger;
-//
-//    fn file_exists(file: impl AsRef<Path>) -> bool {
-//        let path = file.as_ref();
-//        path.exists() && path.is_file()
-//    }
-//
-//    #[test]
-//    fn test_rotating_file_logger() {
-//        let tmp_dir = TempDir::new().unwrap();
-//        let log_file = tmp_dir
-//            .path()
-//            .join("test_rotating_file_logger.log")
-//            .to_str()
-//            .unwrap()
-//            .to_string();
-//        // create a file with mtime == one day ago
-//        {
-//            let mut file = OpenOptions::new()
-//                .append(true)
-//                .create(true)
-//                .open(&log_file)
-//                .unwrap();
-//            file.write_all(b"hello world!").unwrap();
-//        }
-//        let now = Utc::now();
-//        let one_day = Duration::days(1);
-//        let one_day_ago = now - one_day;
-//        let one_day_ago_ts = one_day_ago.timestamp() as u64;
-//        utime::set_file_times(&log_file, one_day_ago_ts, one_day_ago_ts).unwrap();
-//        // initialize the logger
-//        let mut logger = RotatingFileLogger::new(&log_file, one_day).unwrap();
-//        assert!(logger.should_rotate());
-//        let rotated_file = logger.rotate().unwrap().unwrap();
-//        // check the rotated file exist
-//        assert!(file_exists(&rotated_file));
-//        assert!(!logger.should_rotate());
-//    }
-//
-//    #[test]
-//    fn test_failing_to_rotate_file_will_not_cause_panic() {
-//        let tmp_dir = TempDir::new().unwrap();
-//        let log_file = tmp_dir.path().join("test_rotating_file_logger.log");
-//        let mut logger = RotatingFileLogger::new(&log_file, Duration::days(1)).unwrap();
-//        // trigger fail point
-//        fail::cfg("file_log_rename", "return(NotFound)").unwrap();
-//        logger.rotate().unwrap();
-//        fail::remove("file_log_rename");
-//        // dropping the logger still should not panic.
-//        drop(logger);
-//    }
-//}
