@@ -282,7 +282,9 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 
 pub mod tests {
     use super::*;
-    use crate::storage::{Engine, Modify, Options, ScanMode, Snapshot, TxnStatus};
+    use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot};
+    use crate::storage::txn::commands::Options;
+    use crate::storage::types::TxnStatus;
     use engine::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use txn_types::Key;

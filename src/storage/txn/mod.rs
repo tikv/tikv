@@ -10,7 +10,10 @@ mod latch;
 mod process;
 mod store;
 
-use crate::storage::{Error as StorageError, MvccInfo, Result as StorageResult, TxnStatus};
+use crate::storage::{
+    types::{MvccInfo, TxnStatus},
+    Error as StorageError, Result as StorageResult,
+};
 use kvproto::kvrpcpb::LockInfo;
 use std::error;
 use std::fmt;

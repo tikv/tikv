@@ -23,29 +23,26 @@ mod types;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
-        CfStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
-        ErrorInner as EngineErrorInner, FlowStatistics, FlowStatsReporter, Iterator, Modify,
+        CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
         RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
     readpool_impl::{build_read_pool, build_read_pool_for_test},
-    txn::{Options, PointGetCommand, ProcessResult, Scanner, SnapshotStore, Store},
+    txn::{Options, ProcessResult, Scanner, SnapshotStore, Store},
     types::{MvccInfo, StorageCallback, TxnStatus},
 };
 
 use crate::storage::{
     config::Config,
-    kv::with_tls_engine,
+    kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
-    mvcc::Lock,
     txn::{
         commands::{get_priority_tag, Command, CommandKind},
         scheduler::Scheduler as TxnScheduler,
+        PointGetCommand,
     },
 };
-use engine::{
-    CfName, IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_KEY_PREFIX_LEN,
-};
+use engine::{CfName, IterOption, ALL_CFS, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
 use std::{
