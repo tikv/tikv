@@ -4,7 +4,7 @@ use num::traits::Pow;
 use rand::Rng;
 use rand_xorshift::XorShiftRng;
 use tidb_query_codegen::rpn_fn;
-use tipb::Expr;
+use tipb::{Expr, ExprType};
 
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
@@ -355,32 +355,63 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn(capture = [metadata],metadata_ctor = init_rng_data)]
-fn rand(metadata: &RefCell<XorShiftRng>) -> Result<Option<Real>> {
-    let mut rng = metadata.borrow_mut();
-    let res = rng.gen::<f64>();
-    Ok(Real::new(res).ok())
+fn rand(metadata: &Option<RefCell<XorShiftRng>>) -> Result<Option<Real>> {
+    match metadata {
+        Some(metadata) => {
+            let mut rng = metadata.borrow_mut();
+            let res = rng.gen::<f64>();
+            return Ok(Real::new(res).ok());
+        }
+        None => {
+            let mut rng = get_rng(None);
+            let res = rng.gen::<f64>();
+            return Ok(Real::new(res).ok());
+        }
+    }
 }
 
 #[inline]
-#[rpn_fn]
-fn rand_with_seed(seed: &Option<Int>) -> Result<Option<Real>> {
+#[rpn_fn(capture = [metadata],metadata_ctor = init_rng_data)]
+fn rand_with_seed(
+    metadata: &Option<RefCell<XorShiftRng>>,
+    seed: &Option<Int>,
+) -> Result<Option<Real>> {
     match seed {
         Some(seed) => {
             let useed = *seed as u64;
             if useed > std::i64::MAX as u64 + 1 {
                 Err(Error::overflow("BIGINT", &format!("-{}", useed)).into())
             } else {
-                let mut rng = get_rng(Some(*seed as u64));
-                let res = rng.gen::<f64>();
-                Ok(Real::new(res).ok())
+                match metadata {
+                    Some(metadata) => {
+                        let mut rng = metadata.borrow_mut();
+                        let res = rng.gen::<f64>();
+                        return Ok(Real::new(res).ok());
+                    }
+                    None => {
+                        let mut rng = get_rng(Some(useed));
+                        let res = rng.gen::<f64>();
+                        return Ok(Real::new(res).ok());
+                    }
+                }
             }
         }
         _ => Ok(None),
     }
 }
 
-fn init_rng_data(_expr: &mut Expr) -> Result<RefCell<XorShiftRng>> {
-    Ok(RefCell::new(get_rng(None)))
+fn init_rng_data(expr: &mut Expr) -> Result<Option<RefCell<XorShiftRng>>> {
+    let children = expr.mut_children();
+    let n = children.len();
+    for i in (0..n).rev() {
+        let arg = &mut children[i];
+        match arg.get_tp() {
+            ExprType::ScalarFunc => return Ok(None),
+            ExprType::ColumnRef => return Ok(Some(RefCell::new(get_rng(None)))),
+            _ => return Ok(None),
+        }
+    }
+    Ok(Some(RefCell::new(get_rng(None))))
 }
 
 #[inline]
