@@ -1246,9 +1246,10 @@ mod tests {
                 shorter_encoded,
                 raw
             );
-            let mut longer_encoded: [u8; encoded_len + MEMCMP_GROUP_SIZE + 1] = [b'0'; encoded_len + MEMCMP_GROUP_SIZE + 1];
+            let mut longer_encoded = vec![b'0'; encoded_len + MEMCMP_GROUP_SIZE + 1];
             longer_encoded.clone_from_slice(&encoded);
             longer_encoded[encoded_len..].clone_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
+            let longer_encoded = longer_encoded.as_slice();
             assert!(
                 !MemComparableByteCodec::is_encoded_from(longer_encoded, &raw),
                 "Encoded: {:?}, Raw: {:?}",
@@ -1266,9 +1267,10 @@ mod tests {
                     shorter_raw
                 );
             }
-            let mut longer_raw = vec![0; raw_len + 1];
+            let mut longer_raw = vec![b'0'; raw_len + 1];
             longer_raw.clone_from_slice(&raw);
             longer_raw[raw_len..].clone_from_slice(&[0]);
+            let longer_encoded = longer_encoded.as_slice();
             assert!(
                 !MemComparableByteCodec::is_encoded_from(&encoded, &longer_raw),
                 "Encoded: {:?}, Raw: {:?}",
