@@ -5,7 +5,7 @@ use std::fmt::{self, Display, Formatter};
 use byteorder::{BigEndian, WriteBytesExt};
 use kvproto::metapb::Region;
 
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use crate::raftstore::store::{CasualMessage, CasualRouter};
 use engine::CF_RAFT;
 use engine_rocks::RocksSnapshot;
 use engine_traits::{Iterable, Peekable, Snapshot};
@@ -143,7 +143,6 @@ impl<C: CasualRouter> Runnable<Task> for Runner<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raftstore::store::keys;
     use byteorder::{BigEndian, WriteBytesExt};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;

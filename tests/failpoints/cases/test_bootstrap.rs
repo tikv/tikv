@@ -5,7 +5,6 @@ use std::sync::{Arc, RwLock};
 use engine::*;
 use kvproto::{metapb, raft_serverpb};
 use test_raftstore::*;
-use tikv::raftstore::store::keys;
 
 fn test_bootstrap_half_way_failure(fp: &str) {
     let pd_client = Arc::new(TestPdClient::new(0, false));

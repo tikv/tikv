@@ -6,7 +6,7 @@ use std::time::Instant;
 use fail;
 
 use test_raftstore::*;
-use tikv::raftstore::store::keys;
+
 use tikv_util::config::*;
 
 #[test]
