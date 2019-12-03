@@ -10,7 +10,7 @@ use grpcio::{
 };
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;
-use tikv::server::transport::RaftStoreBlackHole;
+use tikv::raftstore::router::RaftStoreBlackHole;
 use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 

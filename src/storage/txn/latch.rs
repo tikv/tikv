@@ -209,7 +209,7 @@ impl Latches {
 
 #[cfg(test)]
 mod tests {
-    use super::{Latches, Lock};
+    use super::*;
 
     #[test]
     fn test_wakeup() {
