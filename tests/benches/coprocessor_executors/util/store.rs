@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tikv::storage::kv::RocksSnapshot;
-use tikv::storage::{FixtureStore, SnapshotStore};
+use tikv::storage::txn::{FixtureStore, SnapshotStore};
 
 /// `MemStore` is a store provider that operates directly over a BTreeMap.
 pub type MemStore = FixtureStore;

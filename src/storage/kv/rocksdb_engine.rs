@@ -18,10 +18,11 @@ use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::RocksEngineIterator;
 use engine_traits::{Iterable, Iterator, Peekable, SeekKey};
+use keys::{Key, Value};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 
-use crate::storage::{BlockCacheConfig, Key, Value};
+use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -421,11 +422,10 @@ impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
+    use super::super::perf_context::PerfStatisticsInstant;
     use super::super::tests::*;
-    use super::super::CFStatistics;
+    use super::super::CfStatistics;
     use super::*;
-    use tempfile::Builder;
 
     #[test]
     fn test_rocksdb() {
@@ -456,7 +456,10 @@ mod tests {
 
     #[test]
     fn rocksdb_reopen() {
-        let dir = Builder::new().prefix("rocksdb_test").tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("rocksdb_test")
+            .tempdir()
+            .unwrap();
         {
             let engine = TestEngineBuilder::new()
                 .path(dir.path())
@@ -484,7 +487,7 @@ mod tests {
         test_perf_statistics(&engine);
     }
 
-    pub fn test_perf_statistics<E: Engine>(engine: &E) {
+    fn test_perf_statistics<E: Engine>(engine: &E) {
         must_put(engine, b"foo", b"bar1");
         must_put(engine, b"foo2", b"bar2");
         must_put(engine, b"foo3", b"bar3"); // deleted
@@ -501,7 +504,7 @@ mod tests {
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
 
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
