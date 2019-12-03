@@ -32,9 +32,13 @@ pub fn sha1(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     }
 }
 
-#[rpn_fn]
+#[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn sha2(input: &Option<Bytes>, hash_length: &Option<Int>) -> Result<Option<Bytes>> {
+pub fn sha2(
+    ctx: &mut EvalContext,
+    input: &Option<Bytes>,
+    hash_length: &Option<Int>,
+) -> Result<Option<Bytes>> {
     match (input, hash_length) {
         (Some(input), Some(hash_length)) => {
             let sha2 = match *hash_length {
@@ -43,7 +47,9 @@ pub fn sha2(input: &Option<Bytes>, hash_length: &Option<Int>) -> Result<Option<B
                 SHA384 => MessageDigest::sha384(),
                 SHA512 => MessageDigest::sha512(),
                 _ => {
-                    return Err(Error::incorrect_parameters("sha2").into());
+                    ctx.warnings
+                        .append_warning(Error::incorrect_parameters("sha2"));
+                    return Ok(None);
                 }
             };
             hex_digest(sha2, input).map(Some)
@@ -223,16 +229,6 @@ mod tests {
             assert_eq!(got, exp, "sha2('{:?}', {:?})", input_str, hash_length_i64);
         }
 
-        let invalid_cases = vec![("pingcap", -1), ("13572468", 999)];
-
-        for (input_str, hash_length_i64) in invalid_cases {
-            assert!(RpnFnScalarEvaluator::new()
-                .push_param(Some(Bytes::from(input_str)))
-                .push_param(Some(Int::from(hash_length_i64)))
-                .evaluate::<Bytes>(ScalarFuncSig::Sha2)
-                .is_err())
-        }
-
         let null_cases = vec![
             (ScalarValue::Bytes(None), ScalarValue::Int(Some(1))),
             (
@@ -240,6 +236,14 @@ mod tests {
                 ScalarValue::Int(None),
             ),
             (ScalarValue::Bytes(None), ScalarValue::Int(None)),
+            (
+                ScalarValue::Bytes(Some(b"pingcap".to_vec())),
+                ScalarValue::Int(Some(-1)),
+            ),
+            (
+                ScalarValue::Bytes(Some(b"13572468".to_vec())),
+                ScalarValue::Int(Some(999)),
+            ),
         ];
 
         for (input_str, hash_length_i64) in null_cases {
