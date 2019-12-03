@@ -1270,7 +1270,7 @@ mod tests {
             let mut longer_raw = vec![b'0'; raw_len + 1];
             longer_raw.clone_from_slice(&raw);
             longer_raw[raw_len..].clone_from_slice(&[0]);
-            let longer_encoded = longer_encoded.as_slice();
+            let longer_raw = longer_raw.as_slice();
             assert!(
                 !MemComparableByteCodec::is_encoded_from(&encoded, &longer_raw),
                 "Encoded: {:?}, Raw: {:?}",
