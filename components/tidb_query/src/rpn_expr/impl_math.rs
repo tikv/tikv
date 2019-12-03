@@ -361,6 +361,24 @@ fn rand(metadata: &RefCell<XorShiftRng>) -> Result<Option<Real>> {
     Ok(Real::new(res).ok())
 }
 
+#[inline]
+#[rpn_fn]
+fn rand_with_seed(seed: &Option<Int>) -> Result<Option<Real>> {
+    match seed {
+        Some(seed) => {
+            let useed = *seed as u64;
+            if useed > std::i64::MAX as u64 + 1 {
+                Err(Error::overflow("BIGINT", &format!("-{}", useed)).into())
+            } else {
+                let mut rng = get_rng(Some(*seed as u64));
+                let res = rng.gen::<f64>();
+                Ok(Real::new(res).ok())
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
 fn init_rng_data(_expr: &mut Expr) -> Result<RefCell<XorShiftRng>> {
     Ok(RefCell::new(get_rng(None)))
 }
@@ -1059,7 +1077,38 @@ mod tests {
         assert!(got1 >= Real::from(0.0));
         assert!(got2 < Real::from(1.0));
         assert!(got2 >= Real::from(0.0));
-        assert_ne!(got1, got2)
+        assert_ne!(got1, got2);
+    }
+
+    #[test]
+    fn test_rand_with_seed() {
+        let got1 = RpnFnScalarEvaluator::new()
+            .push_param(Some(Int::from(12345)))
+            .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
+            .unwrap()
+            .unwrap();
+        let got2 = RpnFnScalarEvaluator::new()
+            .push_param(Some(Int::from(123456)))
+            .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
+            .unwrap()
+            .unwrap();
+
+        assert!(got1 < Real::from(1.0));
+        assert!(got1 >= Real::from(0.0));
+        assert!(got2 < Real::from(1.0));
+        assert!(got2 >= Real::from(0.0));
+        assert_ne!(got1, got2);
+
+        let invalid_case_got = RpnFnScalarEvaluator::new()
+            .push_param(Some(Int::from(-12345)))
+            .evaluate::<Real>(ScalarFuncSig::RandWithSeed);
+        assert!(invalid_case_got.is_err());
+
+        let none_case_got = RpnFnScalarEvaluator::new()
+            .push_param(ScalarValue::Int(None))
+            .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
+            .unwrap();
+        assert!(none_case_got.is_none());
     }
 
     #[test]
