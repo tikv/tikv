@@ -24,13 +24,13 @@ use log_wrappers::DisplayValue;
 use raft::StateRole;
 use tokio_core::reactor::Handle;
 
-use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
+use crate::raftstore::store::{keys, RegionSnapshot};
 use crate::server::transport::ServerRaftStoreRouter;
 use crate::storage::kv::{
-    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider,
-    RocksSnapshot, ScanMode, Snapshot, Statistics,
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
+    Snapshot, Statistics,
 };
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{Error as MvccError, MvccReader, MvccTxn, TimeStamp};
@@ -517,7 +517,14 @@ impl<E: Engine> GCRunner<E> {
             }
         };
 
-        let lock_scanner = LockScanner::new(RocksSnapshot::new(db), max_ts);
+        // Create a `RegionSnapshot`, which can converts the 'z'-prefixed keys into normal keys
+        // internally. A fake region meta is given to make the snapshot's range unbounded.
+        // TODO: Should we implement a special snapshot and iterator types for this?
+        let mut fake_region = metapb::Region::default();
+        // Add a peer to pass initialized check.
+        fake_region.mut_peers().push(metapb::Peer::default());
+        let snap = RegionSnapshot::from_raw(db, fake_region);
+        let lock_scanner = LockScanner::new(snap, max_ts);
 
         let future = sender
             .send_all(lock_scanner.then(|res| Ok(res)))
@@ -1435,9 +1442,11 @@ mod tests {
     use super::*;
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
-    use crate::storage::kv::Result as EngineResult;
+    use crate::storage::kv::{Callback as EngineCallback, Modify, Result as EngineResult};
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
+    use crate::storage::{
+        Mutation, Options, RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder,
+    };
     use futures::Future;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb;
@@ -1544,6 +1553,60 @@ mod tests {
 
         pub fn stop(&mut self) {
             self.worker.stop().unwrap().join().unwrap();
+        }
+    }
+
+    /// A wrapper of engine that adds the 'z' prefix to keys internally.
+    /// For test engines, they writes keys into db directly, but in production a 'z' prefix will be
+    /// added to keys by raftstore layer before writing to db. Some functionalities of `GCWorker`
+    /// bypasses Raft layer, so they needs to know how data is actually represented in db. This
+    /// wrapper allows test engines write 'z'-prefixed keys to db.
+    #[derive(Clone)]
+    struct PrefixedEngine(RocksEngine);
+
+    impl Engine for PrefixedEngine {
+        // Use RegionSnapshot which can remove the z prefix internally.
+        type Snap = RegionSnapshot;
+
+        fn async_write(
+            &self,
+            ctx: &Context,
+            mut batch: Vec<Modify>,
+            callback: EngineCallback<()>,
+        ) -> EngineResult<()> {
+            batch.iter_mut().for_each(|modify| match modify {
+                Modify::Delete(_, ref mut key) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::Put(_, ref mut key, _) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
+                    *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
+                    *end_key = Key::from_encoded(keys::data_key(end_key.as_encoded()));
+                }
+            });
+            self.0.async_write(ctx, batch, callback)
+        }
+        fn async_snapshot(
+            &self,
+            ctx: &Context,
+            callback: EngineCallback<Self::Snap>,
+        ) -> EngineResult<()> {
+            self.0.async_snapshot(
+                ctx,
+                Box::new(move |(cb_ctx, r)| {
+                    callback((
+                        cb_ctx,
+                        r.map(|snap| {
+                            let mut fake_region = metapb::Region::default();
+                            // Add a peer to pass initialized check.
+                            fake_region.mut_peers().push(metapb::Peer::default());
+                            RegionSnapshot::from_snapshot(snap, fake_region)
+                        }),
+                    ))
+                }),
+            )
         }
     }
 
@@ -2022,11 +2085,12 @@ mod tests {
     #[test]
     fn test_physical_scan_lock() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine(engine.clone())
+        let db = engine.get_rocksdb();
+        let prefixed_engine = PrefixedEngine(engine);
+        let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
             .build()
             .unwrap();
-        let db = engine.get_rocksdb();
-        let mut gc_worker = GCWorker::new(engine, Some(db), None, GCConfig::default());
+        let mut gc_worker = GCWorker::new(prefixed_engine, Some(db), None, GCConfig::default());
         gc_worker.start().unwrap();
 
         let mut expected_lock_info = Vec::new();
