@@ -406,9 +406,9 @@ fn init_rng_data(expr: &mut Expr) -> Result<Option<RefCell<XorShiftRng>>> {
     if n == 1 {
         let arg = &mut children[0];
         match arg.get_tp() {
-            ExprType::ScalarFunc => Ok(None),
-            ExprType::ColumnRef => Ok(Some(RefCell::new(get_rng(None)))),
-            _ => Ok(None),
+            ExprType::ScalarFunc => return Ok(None),
+            ExprType::ColumnRef => return Ok(Some(RefCell::new(get_rng(None)))),
+            _ => return Ok(None),
         };
     }
     Ok(Some(RefCell::new(get_rng(None))))
