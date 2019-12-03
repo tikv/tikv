@@ -1330,6 +1330,7 @@ pub struct TiKvConfig {
     pub log_level: slog::Level,
     pub log_file: String,
     pub log_rotation_timespan: ReadableDuration,
+    // Measure in mebibytes
     pub log_rotation_size: u64,
     pub panic_when_unexpected_key_or_data: bool,
     pub readpool: ReadPoolConfig,

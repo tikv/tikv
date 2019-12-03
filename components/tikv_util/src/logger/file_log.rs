@@ -5,6 +5,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
+const BYTES_PER_MIB: usize = 1 << 20;
+
 /// Adds `Duration` to the initial date and time.
 fn compute_rotation_time(initial: &DateTime<Utc>, timespan: Duration) -> DateTime<Utc> {
     *initial + timespan
@@ -206,7 +208,7 @@ impl RotateBySize {
 
 impl Rotator for RotateBySize {
     fn should_rotate(&self, file: &File) -> io::Result<bool> {
-        Ok(file.metadata()?.len() > self.rotation_size)
+        Ok(file.metadata()?.len() > self.rotation_size * (BYTES_PER_MIB as u64))
     }
 
     fn rotate(&mut self, path: &Path, file: &mut File) -> io::Result<Option<PathBuf>> {
@@ -266,18 +268,20 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_rotate_by_size.log");
 
-        let rotation_size = 1024;
+        // 1 MiB
+        let rotation_size = 1;
 
         let mut logger = RotatingFileLogger::new(path)
             .add_rotator(RotateBySize::new(rotation_size))
             .build()
             .unwrap();
 
-        logger.write_all(&[0xff; 1023]).unwrap();
+        // Write 1 MiB
+        logger.write_all(&[0xff; BYTES_PER_MIB]).unwrap();
         logger.flush().unwrap();
         assert!(logger.get_rotated_file().is_none());
 
-        logger.write_all(&[0xff; 1025]).unwrap();
+        logger.write_all(&[0xff; 1024]).unwrap();
         logger.flush().unwrap();
 
         assert!(file_exists(logger.get_rotated_file().as_ref().unwrap()));
