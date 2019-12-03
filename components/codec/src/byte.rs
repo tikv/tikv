@@ -1246,7 +1246,7 @@ mod tests {
                 shorter_encoded,
                 raw
             );
-            let mut longer_encoded = vec![0; encoded_len + MEMCMP_GROUP_SIZE + 1];
+            let mut longer_encoded: [u8; encoded_len + MEMCMP_GROUP_SIZE + 1] = [b'0'; encoded_len + MEMCMP_GROUP_SIZE + 1];
             longer_encoded.clone_from_slice(&encoded);
             longer_encoded[encoded_len..].clone_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
             assert!(
