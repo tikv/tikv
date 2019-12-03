@@ -1,12 +1,11 @@
 [package]
-name = "configable"
+name = "configuration"
 version = "0.1.0"
 edition = "2018"
 publish = false
 
 [lib]
-name = "configable"
+name = "configuration"
 
 [dependencies]
 config_derive = { path = "./config_derive" }
-tikv_util = { path = "../tikv_util" }

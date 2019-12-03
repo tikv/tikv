@@ -14,7 +14,7 @@ use std::io::Write;
 use std::path::Path;
 use std::usize;
 
-use configable::Configable;
+use configuration::Configuration;
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -1324,45 +1324,45 @@ impl ReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configable)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
-    #[config(not_support)]
+    #[config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
-    #[config(not_support)]
+    #[config(skip)]
     pub log_file: String,
-    #[config(not_support)]
+    #[config(skip)]
     pub log_rotation_timespan: ReadableDuration,
-    #[config(not_support)]
+    #[config(skip)]
     pub panic_when_unexpected_key_or_data: bool,
-    #[config(not_support)]
+    #[config(skip)]
     pub readpool: ReadPoolConfig,
-    #[config(not_support)]
+    #[config(skip)]
     pub server: ServerConfig,
-    #[config(not_support)]
+    #[config(skip)]
     pub storage: StorageConfig,
-    #[config(not_support)]
+    #[config(skip)]
     pub pd: PdConfig,
-    #[config(not_support)]
+    #[config(skip)]
     pub metric: MetricConfig,
-    #[config(not_support)]
+    #[config(skip)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
-    #[config(not_support)]
+    #[config(skip)]
     pub coprocessor: CopConfig,
-    #[config(not_support)]
+    #[config(skip)]
     pub rocksdb: DbConfig,
-    #[config(not_support)]
+    #[config(skip)]
     pub raftdb: RaftDbConfig,
-    #[config(not_support)]
+    #[config(skip)]
     pub security: SecurityConfig,
-    #[config(not_support)]
+    #[config(skip)]
     pub import: ImportConfig,
-    #[config(not_support)]
+    #[config(skip)]
     pub pessimistic_txn: PessimisticTxnConfig,
-    #[config(not_support)]
+    #[config(skip)]
     pub gc: GCConfig,
 }
 

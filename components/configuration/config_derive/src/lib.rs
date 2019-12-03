@@ -1,8 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This crate provides a macro that can be used to generate code to
-//! implement `Configable` trait
-//!
+//! implement `Configuration` trait
 
 extern crate proc_macro;
 
@@ -12,7 +11,7 @@ use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::*;
 
-#[proc_macro_derive(Configable, attributes(config))]
+#[proc_macro_derive(Configuration, attributes(config))]
 pub fn config(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     match generate_token(ast.ident, ast.data) {
@@ -22,12 +21,12 @@ pub fn config(input: TokenStream) -> TokenStream {
 }
 
 fn generate_token(name: Ident, data: Data) -> std::result::Result<proc_macro2::TokenStream, Error> {
-    let creat_name = Ident::new("configable", proc_macro2::Span::call_site());
+    let creat_name = Ident::new("configuration", proc_macro2::Span::call_site());
     let fields = get_struct_fields(name.span(), &data)?;
     let update_fn = update(&fields, &creat_name)?;
     let diff_fn = diff(&fields, &creat_name)?;
     Ok(quote! {
-        impl #creat_name::Configable for #name {
+        impl #creat_name::Configuration for #name {
             #update_fn
             #diff_fn
         }
@@ -47,7 +46,7 @@ fn get_struct_fields(
     } else {
         Err(Error::new(
             span,
-            "expect derive Configable on struct with named fields!",
+            "expect derive Configuration on struct with named fields!",
         ))
     }
 }
@@ -59,8 +58,8 @@ fn update(
     let incoming = Ident::new("incoming", proc_macro2::Span::call_site());
     let mut update_fields = Vec::with_capacity(fields.len());
     for field in fields {
-        let (not_support, submodule) = get_attrs(&field.attrs)?;
-        if not_support || field.ident.is_none() {
+        let (skip, submodule) = get_attrs(&field.attrs)?;
+        if skip || field.ident.is_none() {
             continue;
         }
         let name = field.ident.as_ref().unwrap();
@@ -68,7 +67,7 @@ fn update(
         let f = if submodule {
             quote! {
                 if let Some(#creat_name::ConfigValue::Module(v)) = #incoming.remove(#name_lit) {
-                    #creat_name::Configable::update(&mut self.#name, v);
+                    #creat_name::Configuration::update(&mut self.#name, v);
                 }
             }
         } else {
@@ -92,8 +91,8 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<proc_ma
     let incoming = Ident::new("incoming", proc_macro2::Span::call_site());
     let mut diff_fields = Vec::with_capacity(fields.len());
     for field in fields {
-        let (not_support, submodule) = get_attrs(&field.attrs)?;
-        if not_support || field.ident.is_none() {
+        let (skip, submodule) = get_attrs(&field.attrs)?;
+        if skip || field.ident.is_none() {
             continue;
         }
         let name = field.ident.as_ref().unwrap();
@@ -101,7 +100,7 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<proc_ma
         let f = if submodule {
             quote! {
                 {
-                    let diff = #creat_name::Configable::diff(&self.#name, &#incoming.#name);
+                    let diff = #creat_name::Configuration::diff(&self.#name, &#incoming.#name);
                     if diff.len() != 0 {
                         #diff_ident.insert(#name_lit.to_owned(), #creat_name::ConfigValue::from(diff));
                     }
@@ -126,24 +125,24 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<proc_ma
 }
 
 fn get_attrs(attrs: &[Attribute]) -> Result<(bool, bool)> {
-    let (mut not_support, mut submodule) = (false, false);
+    let (mut skip, mut submodule) = (false, false);
     for attr in attrs {
         if !is_config_attr(&attr) {
             continue;
         }
         let name = attr.parse_args::<Ident>()?;
-        if name == "not_support" {
-            not_support = true;
+        if name == "skip" {
+            skip = true;
         } else if name == "submodule" {
             submodule = true;
         } else {
             return Err(Error::new(
                 name.span(),
-                "expect #[config(not_support)] or #[config(submodule)]",
+                "expect #[config(skip)] or #[config(submodule)]",
             ));
         }
     }
-    Ok((not_support, submodule))
+    Ok((skip, submodule))
 }
 
 fn is_config_attr(attr: &Attribute) -> bool {

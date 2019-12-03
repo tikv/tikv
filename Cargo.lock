@@ -441,11 +441,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "configable"
+name = "configuration"
 version = "0.1.0"
 dependencies = [
  "config_derive",
- "tikv_util",
 ]
 
 [[package]]
@@ -3442,7 +3441,7 @@ dependencies = [
  "bytes",
  "chrono",
  "codec",
- "configable",
+ "configuration",
  "crc32fast",
  "crc64fast",
  "criterion-papi",
@@ -3541,6 +3540,7 @@ dependencies = [
  "backtrace",
  "byteorder",
  "chrono",
+ "configuration",
  "crc32fast",
  "crossbeam",
  "fail",
