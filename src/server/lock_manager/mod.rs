@@ -16,9 +16,10 @@ use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::{
-    lock_manager::Lock, types::ProcessResult, LockManager as LockManagerTrait, StorageCallback,
-    TimeStamp,
+    lock_manager::{Lock, LockManager as LockManagerTrait},
+    ProcessResult, StorageCallback,
 };
+use keys::TimeStamp;
 use pd_client::PdClient;
 use spin::Mutex;
 use std::collections::hash_map::DefaultHasher;
