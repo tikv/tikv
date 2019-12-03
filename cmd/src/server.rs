@@ -41,7 +41,7 @@ use tikv_util::worker::FutureWorker;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 const REGION_CAPACITY_SLOTS_NUM: usize = 1 << 16;
-const HIGH_PRIORITY_RATIO: usize = 1 * 1024 * 1024;
+const HIGH_PRIORITY_RATIO: usize = 1024 * 1024;
 
 pub fn run_tikv(mut config: TiKvConfig) {
     // Sets the global logger ASAP.

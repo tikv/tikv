@@ -2723,7 +2723,7 @@ impl Fsm for ApplyFsm {
     }
 
     fn is_high_priority(&self) -> bool {
-        return self.delegate.high_priority;
+        self.delegate.high_priority
     }
 }
 
@@ -2748,7 +2748,7 @@ impl Fsm for ControlFsm {
     }
 
     fn is_high_priority(&self) -> bool {
-        return self.high_priority;
+        self.high_priority
     }
 
     fn set_priority(&mut self, high_priority: bool) {
@@ -2786,11 +2786,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => {
-                    if let Msg::Apply {
-                        ref apply,
-                        start: _,
-                    } = msg
-                    {
+                    if let Msg::Apply { ref apply, .. } = msg {
                         for e in apply.entries.iter() {
                             msg_size += e.get_data().len();
                         }

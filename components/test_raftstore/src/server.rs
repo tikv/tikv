@@ -129,7 +129,8 @@ impl Simulator for ServerCluster {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         let schedule_limiter = Arc::new(ScheduleLimiter::new(5, 1000));
-        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader, schedule_limiter.clone());
+        let raft_router =
+            ServerRaftStoreRouter::new(router.clone(), local_reader, schedule_limiter.clone());
         let sim_router = SimulateTransport::new(raft_router.clone());
 
         let raft_engine = RaftKv::new(sim_router.clone());
@@ -146,8 +147,13 @@ impl Simulator for ServerCluster {
         let mut gc_worker = GCWorker::new(engine.clone(), None, None, cfg.gc.clone());
         gc_worker.start().unwrap();
 
-        let store = create_raft_storage(engine, &cfg.storage,
-                                        storage_read_pool, None, schedule_limiter)?;
+        let store = create_raft_storage(
+            engine,
+            &cfg.storage,
+            storage_read_pool,
+            None,
+            schedule_limiter,
+        )?;
         self.storages.insert(node_id, raft_engine);
 
         // Create import service.

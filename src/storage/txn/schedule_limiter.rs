@@ -19,7 +19,7 @@ impl ScheduleLimiter {
         let v = &self.request_freq[region_id % self.request_freq.len()];
         if high_priority {
             v.1.store(true, Ordering::Relaxed);
-            return false;
+            false
         } else {
             if v.1.load(Ordering::Acquire) {
                 let prev = v.0.fetch_add(key_size, Ordering::Acquire);
@@ -31,7 +31,7 @@ impl ScheduleLimiter {
                     return true;
                 }
             }
-            return false;
+            false
         }
     }
 

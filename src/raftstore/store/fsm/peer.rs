@@ -267,7 +267,7 @@ impl Fsm for PeerFsm {
     }
 
     fn is_high_priority(&self) -> bool {
-        return self.peer.high_priority;
+        self.peer.high_priority
     }
 }
 

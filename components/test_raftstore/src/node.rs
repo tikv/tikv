@@ -19,9 +19,9 @@ use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
-use tikv::storage::ScheduleLimiter;
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
+use tikv::storage::ScheduleLimiter;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::worker::FutureWorker;
 

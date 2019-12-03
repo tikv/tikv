@@ -50,7 +50,7 @@ pub trait Fsm {
     fn set_priority(&mut self, _high_priority: bool) {}
 
     fn is_high_priority(&self) -> bool {
-        return false;
+        false
     }
 }
 
@@ -132,7 +132,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
-    pub fn normals_mut(&mut self) -> &mut Vec<Box<N>> {
+    pub fn normals_mut(&mut self) -> &mut [Box<N>] {
         &mut self.normals
     }
 
