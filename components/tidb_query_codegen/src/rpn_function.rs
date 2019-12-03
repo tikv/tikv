@@ -46,6 +46,12 @@
 //! Use `raw_varg` where the function takes a variable number of arguments and the types
 //! are not the same, for example, RPN function `case_when`.
 //!
+//! ### `max_args`
+//!
+//! The maximum number of arguments. The macro will generate code to check this
+//! as part of validation. Only valid if `varg` or `raw_varg` is also used.
+//! E.g., `#[rpn_fn(varg, max_args = 2)]`
+//!
 //! ### `min_args`
 //!
 //! The minimum number of arguments. The macro will generate code to check this
