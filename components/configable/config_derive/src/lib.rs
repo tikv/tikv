@@ -125,7 +125,7 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<proc_ma
     })
 }
 
-fn get_attrs(attrs: &Vec<Attribute>) -> Result<(bool, bool)> {
+fn get_attrs(attrs: &[Attribute]) -> Result<(bool, bool)> {
     let (mut not_support, mut submodule) = (false, false);
     for attr in attrs {
         if !is_config_attr(&attr) {
