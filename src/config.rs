@@ -1362,7 +1362,7 @@ pub struct TiKvConfig {
     #[config(skip)]
     pub pessimistic_txn: PessimisticTxnConfig,
     #[config(skip)]
-    pub gc: GCConfig,
+    pub gc: GcConfig,
 }
 
 impl Default for TiKvConfig {
