@@ -1,17 +1,15 @@
 [Unit]
-Description=TiKV is a distributed transactional key value database powered by Rust and Raft
-After=network-online.target
+Description=TiKV, a distributed transactional key value store.
 Wants=network-online.target
 
 [Service]
 User=tikv
-Group=tikv
-EnvironmentFile=-/etc/sysconfig/tikv
-ExecStart=/usr/bin/tikv-server \$OPTIONS
-ExecReload=/bin/kill -HUP \$MAINPID
+ExecStart=/usr/bin/tikv-server
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 KillSignal=SIGINT
-LimitNOFILE=102400
+LimitNOFILE=82920
+ConfigurationDirectory=tikv
 
 [Install]
 WantedBy=multi-user.target

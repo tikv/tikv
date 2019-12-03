@@ -153,26 +153,33 @@ BINARY_SERVER=${BINARY_DIR}/tikv-server
 BINARY_CTL=${BINARY_DIR}/tikv-ctl
 BINARIES=${BINARY_SERVER} ${BINARY_CTL}
 DOCKER_IMAGE_NAME=pingcap/tikv:${TIKV_BUILD_VERSION}
+ARTIFACT_DIR=dist
+ARTIFACT_TARBALL=${ARTIFACT_DIR}/tikv.tar.gz
+# RPM packaging prohibits `-` in names.
+ARTIFACT_VERSION=${subst -,.,${TIKV_BUILD_VERSION}}
+ARTIFACT_PACKAGE=${ARTIFACT_DIR}/tikv-package
+ARTIFACT_DOCKER=${ARTIFACT_DIR}/tikv-docker.tar.gz
+ARTIFACT_RPM=${ARTIFACT_DIR}/tikv.rpm
+ARTIFACT_DEB=${ARTIFACT_DIR}/tikv.deb
 
 ${BINARY_DIR}:
 	mkdir -p ${BINARY_DIR}
 
-${BINARY_SERVER}: ${BINARY_DIR} ${ARTIFACT_TARBALL}
+${BINARY_SERVER}: ${BINARY_DIR} ${ARTIFACT_DOCKER}
 	docker load -i ${ARTIFACT_DOCKER}
-	docker run --rm --entrypoint=/bin/cat ${DOCKER_IMAGE_NAME} /tikv-server > ${BINARY_SERVER}
+	docker run --rm \
+		--entrypoint=/bin/cp \
+		-v $(CURDIR)/${BINARY_DIR}:/out \
+		${DOCKER_IMAGE_NAME} \
+		/tikv-server /out
 
-${BINARY_CTL}: ${BINARY_DIR} ${ARTIFACT_TARBALL}
+${BINARY_CTL}: ${BINARY_DIR} ${ARTIFACT_DOCKER}
 	docker load -i ${ARTIFACT_DOCKER}
-	docker run --rm --entrypoint=/bin/cat ${DOCKER_IMAGE_NAME} /tikv-ctl > ${BINARY_CTL}
-
-ARTIFACT_DIR=dist
-ARTIFACT_TARBALL=${ARTIFACT_DIR}/tikv.tar.gz
-# RPM packaging prohibits `-` in names.
-ARTIFACT_PACKAGE_VERSION=${subst -,.,${TIKV_BUILD_VERSION}}
-ARTIFACT_PACKAGE=${ARTIFACT_DIR}/tikv-${ARTIFACT_PACKAGE_VERSION}.tar.gz
-ARTIFACT_DOCKER=${ARTIFACT_DIR}/tikv-docker.tar.gz
-ARTIFACT_RPM=${ARTIFACT_DIR}/tikv.rpm
-ARTIFACT_DEB=${ARTIFACT_DIR}/tikv.deb
+	docker run --rm \
+		--entrypoint=/bin/cp \
+		-v $(CURDIR)/${BINARY_DIR}:/out \
+		${DOCKER_IMAGE_NAME} \
+		/tikv-ctl /out
 
 .PHONY: dist_artifacts
 dist_artifacts: ${ARTIFACT_DOCKER} ${ARTIFACT_TARBALL} ${ARTIFACT_RPM} ${ARTIFACT_DEB}
@@ -183,23 +190,42 @@ ${ARTIFACT_DIR}:
 ${ARTIFACT_TARBALL}: ${ARTIFACT_DIR} ${BINARY_SERVER} ${BINARY_CTL}
 	tar czf ${ARTIFACT_TARBALL} ${BINARY_SERVER} ${BINARY_CTL}
 
-${ARTIFACT_DOCKER}: docker
+${ARTIFACT_DOCKER}: ${ARTIFACT_DIR}
+	bash ./scripts/gen-dockerfile.sh | docker build -t ${DOCKER_IMAGE_NAME} -f - .
+	docker save ${DOCKER_IMAGE_NAME} | gzip > ${ARTIFACT_DOCKER}
 
 ${ARTIFACT_RPM}: ${BINARY_SERVER} ${BINARY_CTL}
-	docker build -t tikv-rpm-builder:${TIKV_BUILD_VERSION} -f scripts/docker/rpm-builder.dockerfile scripts
-	tar czf ${ARTIFACT_PACKAGE} --transform 's,^,tikv-${ARTIFACT_PACKAGE_VERSION}/,' ${BINARY_SERVER} ${BINARY_CTL} etc/tikv.service etc/tikv.sysconfig etc/config-template.toml 
-	tar tvf ${ARTIFACT_PACKAGE}
+	bash etc/rpm/gen-spec.sh > ${ARTIFACT_DIR}/rpm-spec
+	docker build -t tikv-rpm-builder:${TIKV_BUILD_VERSION} -f etc/rpm/builder.dockerfile scripts
 	docker run \
 		--rm \
-		-v $(CURDIR)/${ARTIFACT_DIR}:/root/rpmbuild/SOURCES/ \
-		-v $(CURDIR)/etc/rpm/tikv.spec:/root/rpmbuild/SPECS/tikv.spec \
-		-v $(CURDIR)/dist:/root/rpmbuild/RPMS/x86_64/ \
-		tikv-rpm-builder:${TIKV_BUILD_VERSION} rpmbuild -bb /root/rpmbuild/SPECS/tikv.spec 
-	mv ${ARTIFACT_DIR}/tikv-${ARTIFACT_PACKAGE_VERSION}-1.el7.x86_64.rpm ${ARTIFACT_RPM}
+		-v $(CURDIR)/${BINARY_SERVER}:/root/rpmbuild/SOURCES/tikv-server \
+		-v $(CURDIR)/${BINARY_CTL}:/root/rpmbuild/SOURCES/tikv-ctl \
+		-v $(CURDIR)/etc/tikv.service:/root/rpmbuild/SOURCES/tikv.service \
+		-v $(CURDIR)/etc/config-template.toml:/root/rpmbuild/SOURCES/config.toml \
+		-v $(CURDIR)/${ARTIFACT_DIR}/rpm-spec:/root/rpmbuild/SPECS/tikv.spec \
+		-v $(CURDIR)/${ARTIFACT_DIR}:/root/rpmbuild/RPMS/x86_64/ \
+		tikv-rpm-builder:${TIKV_BUILD_VERSION} rpmbuild -bb /root/rpmbuild/SPECS/tikv.spec
+	mv -f ${ARTIFACT_DIR}/tikv-${ARTIFACT_VERSION}-1.el7.x86_64.rpm ${ARTIFACT_RPM}
+	rm ${ARTIFACT_DIR}/rpm-spec
 
-${ARTIFACT_DEB}:
-	docker build -t tikv-rpm-builder:${TIKV_BUILD_VERSION} -f scripts/docker/rpm-builder.dockerfile .
-	docker run --rm -ti -v $(CURDIR):/tikv tikv-rpm-builder:${TIKV_BUILD_VERSION}
+${ARTIFACT_PACKAGE}: ${BINARY_SERVER} ${BINARY_CTL}
+	install -D -m 0755 bin/tikv-server ${ARTIFACT_PACKAGE}/usr/bin/tikv-server
+	install -D -m 0755 bin/tikv-ctl ${ARTIFACT_PACKAGE}/usr/bin/tikv-ctl
+	install -D -m 0644 etc/config-template.toml ${ARTIFACT_PACKAGE}/etc/tikv/config.toml
+	install -D -m 0644 etc/tikv.service ${ARTIFACT_PACKAGE}/lib/systemd/system/tikv.service
+	mkdir -p ${ARTIFACT_PACKAGE}/var/lib/tikv
+
+${ARTIFACT_DEB}: ${ARTIFACT_PACKAGE}
+	bash etc/deb/gen-control.sh | install -D /dev/stdin ${ARTIFACT_PACKAGE}/DEBIAN/control
+	cp etc/deb/preinst ${ARTIFACT_PACKAGE}/DEBIAN/
+	docker build -t tikv-deb-builder:${TIKV_BUILD_VERSION} -f etc/deb/builder.dockerfile scripts
+	docker run \
+		--rm \
+		-v $(CURDIR)/${ARTIFACT_DIR}:/dist \
+		debian:stretch bash -c "apt update && apt install -y fakeroot && fakeroot dpkg-deb --build ${ARTIFACT_PACKAGE} /dist"
+	mv -f ${ARTIFACT_DIR}/tikv_${TIKV_BUILD_VERSION}_amd64.deb ${ARTIFACT_DEB}
+	rm -rf ${ARTIFACT_DEB_PACKAGE}
 
 # These builds are fully optimized, with LTO, and they contain
 # debuginfo. They take a very long time to build, so it is recommended
@@ -362,11 +388,7 @@ expression: format clippy
 
 # A special target for building TiKV docker image.
 .PHONY: docker
-docker: dist/tikv-${TIKV_BUILD_VERSION}-docker.tar.gz
-
-# dist/tikv-${TIKV_BUILD_VERSION}-docker.tar.gz: dist/
-# 	bash ./scripts/gen-dockerfile.sh | docker build -t ${DOCKER_IMAGE_NAME} -f - .
-# 	docker save ${DOCKER_IMAGE_NAME} | gzip > dist/tikv-${TIKV_BUILD_VERSION}-docker.tar.gz
+docker: ${ARTIFACT_DOCKER}
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------
