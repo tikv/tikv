@@ -16,11 +16,12 @@ use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
     MvccReader, MvccTxn, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
-use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, ErrorInner, Result};
-use crate::storage::types::ProcessResult;
+use crate::storage::txn::{
+    sched_pool::*, scheduler::Msg, Command, CommandKind, Error, ErrorInner, ProcessResult, Result,
+};
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, MvccInfo,
+    Engine, Error as StorageError, ErrorInner as StorageErrorInner, MvccInfo,
     Result as StorageResult, ScanMode, Snapshot, Statistics, TxnStatus,
 };
 use engine::CF_WRITE;

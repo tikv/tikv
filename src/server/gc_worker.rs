@@ -1288,7 +1288,7 @@ mod tests {
     use crate::raftstore::store::util::new_peer;
     use crate::storage::kv::Result as EngineResult;
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
+    use crate::storage::{txn::Options, Mutation, Storage, TestEngineBuilder, TestStorageBuilder};
     use futures::Future;
     use kvproto::metapb;
     use std::collections::BTreeMap;

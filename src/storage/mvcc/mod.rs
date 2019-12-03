@@ -15,6 +15,8 @@ pub use self::write::{Write, WriteRef, WriteType};
 pub use crate::new_txn;
 pub use keys::TimeStamp;
 
+use crate::storage::SHORT_VALUE_MAX_LEN;
+use keys::{Key, Value};
 use std::error;
 use std::fmt;
 use std::io;
@@ -24,6 +26,57 @@ use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 const TS_SET_USE_VEC_LIMIT: usize = 8;
+
+const SHORT_VALUE_PREFIX: u8 = b'v';
+const FOR_UPDATE_TS_PREFIX: u8 = b'f';
+const TXN_SIZE_PREFIX: u8 = b't';
+const MIN_COMMIT_TS_PREFIX: u8 = b'c';
+
+fn is_short_value(value: &[u8]) -> bool {
+    value.len() <= SHORT_VALUE_MAX_LEN
+}
+
+/// A row mutation.
+#[derive(Debug, Clone)]
+pub enum Mutation {
+    /// Put `Value` into `Key`, overwriting any existing value.
+    Put((Key, Value)),
+    /// Delete `Key`.
+    Delete(Key),
+    /// Set a lock on `Key`.
+    Lock(Key),
+    /// Put `Value` into `Key` if `Key` does not yet exist.
+    ///
+    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
+    Insert((Key, Value)),
+}
+
+impl Mutation {
+    pub fn key(&self) -> &Key {
+        match self {
+            Mutation::Put((ref key, _)) => key,
+            Mutation::Delete(ref key) => key,
+            Mutation::Lock(ref key) => key,
+            Mutation::Insert((ref key, _)) => key,
+        }
+    }
+
+    pub fn into_key_value(self) -> (Key, Option<Value>) {
+        match self {
+            Mutation::Put((key, value)) => (key, Some(value)),
+            Mutation::Delete(key) => (key, None),
+            Mutation::Lock(key) => (key, None),
+            Mutation::Insert((key, value)) => (key, Some(value)),
+        }
+    }
+
+    pub fn is_insert(&self) -> bool {
+        match self {
+            Mutation::Insert(_) => true,
+            _ => false,
+        }
+    }
+}
 
 /// A hybrid immutable set for timestamps.
 #[derive(Debug, Clone, PartialEq)]
@@ -343,7 +396,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 
 pub mod tests {
     use super::*;
-    use crate::storage::{Engine, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
+    use crate::storage::{Engine, Modify, Options, ScanMode, Snapshot, TxnStatus};
     use engine::CF_WRITE;
     use keys::Key;
     use kvproto::kvrpcpb::{Context, IsolationLevel};

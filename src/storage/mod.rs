@@ -15,33 +15,34 @@ pub mod lock_manager;
 pub mod mvcc;
 pub mod txn;
 
-mod commands;
 mod errors;
 mod metrics;
 mod readpool_impl;
 mod types;
 
 pub use self::{
-    commands::{Options, PointGetCommand},
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CfStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
         ErrorInner as EngineErrorInner, FlowStatistics, FlowStatsReporter, Iterator, Modify,
         RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
+    mvcc::Mutation,
     readpool_impl::{build_read_pool, build_read_pool_for_test},
-    types::{Mutation, MvccInfo, ProcessResult, StorageCallback, TxnStatus},
-    txn::{Scanner, SnapshotStore, Store},
+    txn::{Options, PointGetCommand, ProcessResult, Scanner, SnapshotStore, Store},
+    types::{MvccInfo, StorageCallback, TxnStatus},
 };
 
 use crate::storage::{
-    commands::{get_priority_tag, Command, CommandKind},
     config::Config,
     kv::with_tls_engine,
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     mvcc::{Lock, TsSet},
-    txn::scheduler::Scheduler as TxnScheduler,
+    txn::{
+        commands::{get_priority_tag, Command, CommandKind},
+        scheduler::Scheduler as TxnScheduler,
+    },
 };
 use engine::{
     CfName, IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_KEY_PREFIX_LEN,
@@ -60,15 +61,6 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
-
-const SHORT_VALUE_PREFIX: u8 = b'v';
-const FOR_UPDATE_TS_PREFIX: u8 = b'f';
-const TXN_SIZE_PREFIX: u8 = b't';
-const MIN_COMMIT_TS_PREFIX: u8 = b'c';
-
-pub fn is_short_value(value: &[u8]) -> bool {
-    value.len() <= SHORT_VALUE_MAX_LEN
-}
 
 /// [`Storage`] implements transactional KV APIs and raw KV APIs on a given [`Engine`]. An [`Engine`]
 /// provides low level KV functionality. [`Engine`] has multiple implementations. When a TiKV server

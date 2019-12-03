@@ -20,8 +20,10 @@ use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, LockType, TimeStamp, Write as MvccWrite,
     WriteType,
 };
-use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use crate::storage::{self, Engine, Mutation, Options, PointGetCommand, Storage, TxnStatus};
+use crate::storage::txn::{
+    Error as TxnError, ErrorInner as TxnErrorInner, Options, PointGetCommand,
+};
+use crate::storage::{self, Engine, Mutation, Storage, TxnStatus};
 use crate::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
