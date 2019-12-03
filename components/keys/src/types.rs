@@ -5,8 +5,8 @@ use std::fmt::{self, Debug, Display, Formatter};
 
 use codec;
 use codec::byte::{MemComparableByteCodec, MEMCMP_GROUP_SIZE};
-use codec::prelude::MemComparableByteEncoder;
 use codec::number::{self, NumberCodec};
+use codec::prelude::MemComparableByteEncoder;
 
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
