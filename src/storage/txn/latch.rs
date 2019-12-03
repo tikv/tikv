@@ -51,10 +51,10 @@ impl Latch {
                 }
                 self.waiting.push_front(item);
             }
-            for item in self.waiting.iter_mut() {
-                if let Some((v, _)) = item {
+            for it in self.waiting.iter_mut() {
+                if let Some((v, _)) = it {
                     if *v == hash_key {
-                        return item.take();
+                        return it.take();
                     }
                 }
             }
