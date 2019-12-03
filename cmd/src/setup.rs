@@ -30,6 +30,7 @@ macro_rules! fatal {
 pub fn initial_logger(config: &TiKvConfig) {
     let log_rotation_timespan = chrono::Duration::from_std(config.log_rotation_timespan.into())
         .expect("config.log_rotation_timespan is an invalid duration.");
+    let log_rotation_size = config.log_rotation_size.as_mb();
 
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
@@ -38,18 +39,15 @@ pub fn initial_logger(config: &TiKvConfig) {
             fatal!("failed to initialize log: {}", e);
         });
     } else {
-        let drainer = logger::file_drainer(
-            &config.log_file,
-            log_rotation_timespan,
-            config.log_rotation_size,
-        )
-        .unwrap_or_else(|e| {
-            fatal!(
-                "failed to initialize log with file {}: {}",
-                config.log_file,
-                e
-            );
-        });
+        let drainer =
+            logger::file_drainer(&config.log_file, log_rotation_timespan, log_rotation_size)
+                .unwrap_or_else(|e| {
+                    fatal!(
+                        "failed to initialize log with file {}: {}",
+                        config.log_file,
+                        e
+                    );
+                });
 
         // use async drainer and init std log.
         logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {

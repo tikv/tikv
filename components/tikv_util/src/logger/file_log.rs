@@ -89,13 +89,6 @@ pub struct RotatingFileLogger {
 }
 
 impl RotatingFileLogger {
-    pub fn new(path: impl AsRef<Path>) -> RotatingFileLoggerBuilder {
-        RotatingFileLoggerBuilder {
-            rotators: vec![],
-            path: path.as_ref().to_path_buf(),
-        }
-    }
-
     #[cfg(test)]
     pub fn get_rotated_file(&self) -> &Option<PathBuf> {
         &self.renamed
@@ -109,6 +102,13 @@ pub struct RotatingFileLoggerBuilder {
 }
 
 impl RotatingFileLoggerBuilder {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        RotatingFileLoggerBuilder {
+            rotators: vec![],
+            path: path.as_ref().to_path_buf(),
+        }
+    }
+
     pub fn add_rotator<R: 'static + Rotator>(mut self, rotator: R) -> Self {
         if rotator.validate() {
             self.rotators.push(Box::new(rotator));
@@ -250,7 +250,7 @@ mod tests {
         let next_rotation_time = Utc::now() - Duration::days(1);
 
         // Should rotate right now.
-        let mut logger = RotatingFileLogger::new(path)
+        let mut logger = RotatingFileLoggerBuilder::new(path)
             .add_rotator(RotateByTime::new_for_test(
                 next_rotation_time,
                 Duration::days(1),
@@ -271,7 +271,7 @@ mod tests {
         // 1 MiB
         let rotation_size = 1;
 
-        let mut logger = RotatingFileLogger::new(path)
+        let mut logger = RotatingFileLoggerBuilder::new(path)
             .add_rotator(RotateBySize::new(rotation_size))
             .build()
             .unwrap();
@@ -291,7 +291,7 @@ mod tests {
     fn test_failing_to_rotate_file_will_not_cause_panic() {
         let tmp_dir = TempDir::new().unwrap();
         let log_file = tmp_dir.path().join("test_no_panic.log");
-        let mut logger = RotatingFileLogger::new(&log_file)
+        let mut logger = RotatingFileLoggerBuilder::new(&log_file)
             .add_rotator(RotateBySize::new(1024))
             .build()
             .unwrap();

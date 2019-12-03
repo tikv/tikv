@@ -1330,8 +1330,7 @@ pub struct TiKvConfig {
     pub log_level: slog::Level,
     pub log_file: String,
     pub log_rotation_timespan: ReadableDuration,
-    // Measure in mebibytes
-    pub log_rotation_size: u64,
+    pub log_rotation_size: ReadableSize,
     pub panic_when_unexpected_key_or_data: bool,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
@@ -1355,7 +1354,7 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
-            log_rotation_size: 1024,
+            log_rotation_size: ReadableSize::gb(4),
             panic_when_unexpected_key_or_data: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
