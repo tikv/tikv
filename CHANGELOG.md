@@ -3,7 +3,7 @@ All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
 ## [3.0.7]
-+ Update grpc to fix a potencial memory leak issue [#6128](https://github.com/tikv/tikv/pull/6128)
++ Update grpc to fix a potential memory leak issue [#6128](https://github.com/tikv/tikv/pull/6128)
 + Deadlock: only observe valid region in order to make sure the manager is in the valid region [#6110](https://github.com/tikv/tikv/pull/6110)
 
 ## [3.0.6]
