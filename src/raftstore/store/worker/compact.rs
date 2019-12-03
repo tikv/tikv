@@ -261,9 +261,8 @@ mod tests {
 
     use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-    use crate::raftstore::store::keys::data_key;
     use crate::storage::mvcc::{TimeStamp, Write, WriteType};
-    use crate::storage::types::Key as MvccKey;
+    use keys::{data_key, Key as MvccKey};
 
     use super::*;
 

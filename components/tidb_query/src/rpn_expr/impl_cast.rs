@@ -11,10 +11,12 @@ use tipb::{Expr, FieldType};
 use crate::codec::convert::*;
 use crate::codec::data_type::*;
 use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
+use crate::codec::mysql::Time;
 use crate::codec::Error;
 use crate::expr::EvalContext;
 use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
+use std::convert::TryInto;
 use std::num::IntErrorKind;
 
 fn get_cast_fn_rpn_meta(
@@ -101,7 +103,7 @@ fn get_cast_fn_rpn_meta(
             }
         }
         (EvalType::Real, EvalType::Bytes) => {
-            if from_field_type.tp() == FieldTypeTp::Float {
+            if from_field_type.as_accessor().tp() == FieldTypeTp::Float {
                 cast_float_real_as_string_fn_meta()
             } else {
                 cast_any_as_string_fn_meta::<Real>()
@@ -150,6 +152,13 @@ fn get_cast_fn_rpn_meta(
         (EvalType::DateTime, EvalType::Duration) => cast_time_as_duration_fn_meta(),
         (EvalType::Duration, EvalType::Duration) => cast_duration_as_duration_fn_meta(),
         (EvalType::Json, EvalType::Duration) => cast_json_as_duration_fn_meta(),
+
+        (EvalType::Int, EvalType::DateTime) => cast_int_as_time_fn_meta(),
+        (EvalType::Real, EvalType::DateTime) => cast_real_as_time_fn_meta(),
+        (EvalType::Bytes, EvalType::DateTime) => cast_string_as_time_fn_meta(),
+        (EvalType::Decimal, EvalType::DateTime) => cast_decimal_as_time_fn_meta(),
+        (EvalType::DateTime, EvalType::DateTime) => cast_time_as_time_fn_meta(),
+        (EvalType::Duration, EvalType::DateTime) => cast_duration_as_time_fn_meta(),
 
         // any as json
         (EvalType::Int, EvalType::Json) => {
@@ -889,6 +898,138 @@ cast_as_duration!(
 );
 cast_as_duration!(Json, cast_json_as_duration, val.unquote()?.as_bytes());
 
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_int_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra<'_>,
+    val: &Option<Int>,
+) -> Result<Option<Time>> {
+    if let Some(val) = *val {
+        // Parse `val` as a `u64`
+        Time::parse_from_i64(
+            ctx,
+            val,
+            extra.ret_field_type.as_accessor().tp().try_into()?,
+            extra.ret_field_type.get_decimal() as i8,
+        )
+        .map(Some)
+        .or_else(|_| {
+            Ok(ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(val))
+                .map(|_| None)?)
+        })
+    } else {
+        Ok(None)
+    }
+}
+
+// NOTE: in MySQL, casting `Real` to `Time` should cast `Real` to `Int` first,
+// However, TiDB cast `Real` to `String` and then parse it into a `Time`
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_real_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Real>,
+) -> Result<Option<Time>> {
+    if let Some(val) = val {
+        // Convert `val` to a string first and then parse it as a float string.
+        Time::parse(
+            ctx,
+            &val.to_string(),
+            extra.ret_field_type.as_accessor().tp().try_into()?,
+            extra.ret_field_type.get_decimal() as i8,
+            // Enable round
+            true,
+        )
+        .map(Some)
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_string_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Bytes>,
+) -> Result<Option<Time>> {
+    if let Some(val) = val {
+        // Convert `val` to a string first and then parse it as a float string.
+        Time::parse(
+            ctx,
+            unsafe { std::str::from_utf8_unchecked(val) },
+            extra.ret_field_type.as_accessor().tp().try_into()?,
+            extra.ret_field_type.get_decimal() as i8,
+            // Enable round
+            true,
+        )
+        .map(Some)
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_decimal_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Decimal>,
+) -> Result<Option<Time>> {
+    if let Some(val) = val {
+        // Convert `val` to a string first and then parse it as a string.
+        Time::parse(
+            ctx,
+            val.to_string().as_str(),
+            extra.ret_field_type.as_accessor().tp().try_into()?,
+            extra.ret_field_type.get_decimal() as i8,
+            // Enable round
+            true,
+        )
+        .map(Some)
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_time_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Time>,
+) -> Result<Option<Time>> {
+    if let Some(mut val) = val {
+        val.set_time_type(extra.ret_field_type.as_accessor().tp().try_into()?)?;
+        val.round_frac(ctx, extra.ret_field_type.get_decimal() as i8)
+            .map(Some)
+            .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+fn cast_duration_as_time(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Duration>,
+) -> Result<Option<Time>> {
+    if let Some(val) = *val {
+        Time::from_duration(
+            ctx,
+            val,
+            extra.ret_field_type.as_accessor().tp().try_into()?,
+        )
+        .and_then(|now| now.round_frac(ctx, extra.ret_field_type.get_decimal() as i8))
+        .map(Some)
+        .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+    } else {
+        Ok(None)
+    }
+}
+
 // cast any as json, some cast functions reuse `cast_any_as_any`
 //
 // - cast_int_as_json -> cast_any_as_any<Int, Json>
@@ -923,6 +1064,7 @@ fn cast_string_as_json(extra: &RpnFnCallExtra<'_>, val: &Option<Bytes>) -> Resul
         Some(val) => {
             if extra
                 .ret_field_type
+                .as_accessor()
                 .flag()
                 .contains(FieldTypeFlag::PARSE_TO_JSON)
             {
@@ -981,12 +1123,15 @@ mod tests {
     use crate::expr::Flag;
     use crate::expr::{EvalConfig, EvalContext};
     use crate::rpn_expr::impl_cast::*;
+    use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
     use crate::rpn_expr::RpnFnCallExtra;
     use std::collections::BTreeMap;
     use std::fmt::{Debug, Display, Formatter};
     use std::sync::Arc;
     use std::{f32, f64, i64, u64};
+    use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, UNSPECIFIED_LENGTH};
+    use tipb::ScalarFuncSig;
 
     #[test]
     fn test_in_union() {
@@ -1052,40 +1197,47 @@ mod tests {
         assert!(r.is_none());
     }
 
-    fn make_ctx_about_overflow_truncate_should_clip_to_zero(
+    struct CtxConfig {
         overflow_as_warning: bool,
         truncate_as_warning: bool,
         should_clip_to_zero: bool,
-    ) -> EvalContext {
-        let mut flag: Flag = Flag::empty();
-        if overflow_as_warning {
-            flag |= Flag::OVERFLOW_AS_WARNING;
-        }
-        if truncate_as_warning {
-            flag |= Flag::TRUNCATE_AS_WARNING;
-        }
-        if should_clip_to_zero {
-            flag |= Flag::IN_INSERT_STMT;
-        }
-        let cfg = Arc::new(EvalConfig::from_flag(flag));
-        EvalContext::new(cfg)
+        in_insert_stmt: bool,
+        in_update_or_delete_stmt: bool,
     }
 
-    fn make_ctx_about_overflow_truncate_flags(
-        overflow_as_warning: bool,
-        truncate_as_warning: bool,
-        flags: Vec<Flag>,
-    ) -> EvalContext {
-        let mut flag: Flag = Flag::empty();
-        if overflow_as_warning {
-            flag |= Flag::OVERFLOW_AS_WARNING;
+    impl Default for CtxConfig {
+        fn default() -> Self {
+            CtxConfig {
+                overflow_as_warning: false,
+                truncate_as_warning: false,
+                should_clip_to_zero: false,
+                in_insert_stmt: false,
+                in_update_or_delete_stmt: false,
+            }
         }
-        if truncate_as_warning {
-            flag |= Flag::TRUNCATE_AS_WARNING;
+    }
+
+    impl From<CtxConfig> for EvalContext {
+        fn from(config: CtxConfig) -> Self {
+            let mut flag: Flag = Flag::empty();
+            if config.overflow_as_warning {
+                flag |= Flag::OVERFLOW_AS_WARNING;
+            }
+            if config.truncate_as_warning {
+                flag |= Flag::TRUNCATE_AS_WARNING;
+            }
+            if config.should_clip_to_zero {
+                flag |= Flag::IN_INSERT_STMT;
+            }
+            if config.in_insert_stmt {
+                flag |= Flag::IN_INSERT_STMT;
+            }
+            if config.in_update_or_delete_stmt {
+                flag |= Flag::IN_UPDATE_OR_DELETE_STMT;
+            }
+            let cfg = Arc::new(EvalConfig::from_flag(flag));
+            EvalContext::new(cfg)
         }
-        let flag = flags.into_iter().fold(flag, |acc, x| (acc | x));
-        let cfg = Arc::new(EvalConfig::from_flag(flag));
-        EvalContext::new(cfg)
     }
 
     fn make_implicit_args(in_union: bool) -> [ScalarValue; 1] {
@@ -1096,59 +1248,48 @@ mod tests {
         }
     }
 
-    fn make_ret_field_type_1(unsigned: bool) -> FieldType {
-        let mut ft = if unsigned {
-            let mut ft = FieldType::default();
-            ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
-            ft
-        } else {
-            FieldType::default()
-        };
-        let fta = ft.as_mut_accessor();
-        fta.set_flen(UNSPECIFIED_LENGTH);
-        fta.set_decimal(UNSPECIFIED_LENGTH);
-        ft
-    }
-
-    fn make_ret_field_type_2(unsigned: bool, flen: isize, decimal: isize) -> FieldType {
-        let mut ft = make_ret_field_type_1(unsigned);
-        let fta = ft.as_mut_accessor();
-        fta.set_flen(flen);
-        fta.set_decimal(decimal);
-        ft
-    }
-
-    fn make_ret_field_type_3(
+    struct RetFieldTypeConfig {
+        unsigned: bool,
         flen: isize,
-        charset: &str,
-        tp: FieldTypeTp,
-        collation: Collation,
-    ) -> FieldType {
-        let mut ft = FieldType::default();
-        let fta = ft.as_mut_accessor();
-        fta.set_flen(flen);
-        fta.set_tp(tp);
-        fta.set_collation(collation);
-        ft.set_charset(String::from(charset));
-        ft
+        decimal: isize,
+        charset: Option<&'static str>,
+        tp: Option<FieldTypeTp>,
+        collation: Option<Collation>,
     }
 
-    fn make_ret_field_type_4(flen: isize, decimal: isize, unsigned: bool) -> FieldType {
-        let mut ft = FieldType::default();
-        let fta = ft.as_mut_accessor();
-        fta.set_flen(flen);
-        fta.set_decimal(decimal);
-        if unsigned {
-            fta.set_flag(FieldTypeFlag::UNSIGNED);
+    impl Default for RetFieldTypeConfig {
+        fn default() -> Self {
+            RetFieldTypeConfig {
+                unsigned: false,
+                flen: UNSPECIFIED_LENGTH,
+                decimal: UNSPECIFIED_LENGTH,
+                charset: None,
+                tp: None,
+                collation: None,
+            }
         }
-        ft
     }
 
-    fn make_ret_field_type_5(decimal: isize) -> FieldType {
-        let mut ft = FieldType::default();
-        let fta = ft.as_mut_accessor();
-        fta.set_decimal(decimal);
-        ft
+    impl From<RetFieldTypeConfig> for FieldType {
+        fn from(config: RetFieldTypeConfig) -> Self {
+            let mut ft = FieldType::default();
+            if let Some(c) = config.charset {
+                ft.set_charset(String::from(c));
+            }
+            let fta = ft.as_mut_accessor();
+            if config.unsigned {
+                fta.set_flag(FieldTypeFlag::UNSIGNED);
+            }
+            fta.set_flen(config.flen);
+            fta.set_decimal(config.decimal);
+            if let Some(tp) = config.tp {
+                fta.set_tp(tp);
+            }
+            if let Some(c) = config.collation {
+                fta.set_collation(c);
+            }
+            ft
+        }
     }
 
     fn make_extra<'a>(
@@ -1201,7 +1342,7 @@ mod tests {
         }
     }
 
-    fn check_warning_2(ctx: &EvalContext, err_code: Vec<i32>, log: &str) {
+    fn check_warnings(ctx: &EvalContext, err_code: Vec<i32>, log: &str) {
         assert_eq!(
             ctx.warnings.warning_cnt,
             err_code.len(),
@@ -1275,9 +1416,13 @@ mod tests {
             (i64::MAX, i64::MAX as u64, false),
         ];
         for (input, expect, in_union) in cs {
-            let rtf = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(in_union);
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_signed_int_as_unsigned_int(&extra, &Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1303,7 +1448,11 @@ mod tests {
         ];
 
         for (input, result, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_any_as_any::<Real, Int>(&mut ctx, &Real::new(input).ok());
             let log = make_log(&input, &result, &r);
             check_result(Some(&result), &r, log.as_str());
@@ -1326,9 +1475,13 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let rtf = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(true);
-            let extra = make_extra(&rtf, &ia);
+            let extra = make_extra(&rft, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1351,10 +1504,18 @@ mod tests {
         ];
 
         for (input, expect, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rtf = make_ret_field_type_1(true);
-            let extra = make_extra(&rtf, &ia);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
+            let extra = make_extra(&rft, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Real::new(input).ok());
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1370,9 +1531,18 @@ mod tests {
         ];
 
         for (input, expect, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, true);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                should_clip_to_zero: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
             let r = cast_real_as_uint(&mut ctx, &extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x as u64));
@@ -1504,9 +1674,18 @@ mod tests {
         ];
 
         for (input, expect, err_code, cond) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(cond.in_union());
-            let rft = make_ret_field_type_1(cond.is_unsigned());
+            let rft = RetFieldTypeConfig {
+                unsigned: cond.is_unsigned(),
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let val = Some(Vec::from(input.as_bytes()));
@@ -1517,7 +1696,7 @@ mod tests {
                 input, expect, err_code, cond, r
             );
             check_result(Some(&expect), &r, log.as_str());
-            check_warning_2(&ctx, err_code, log.as_str());
+            check_warnings(&ctx, err_code, log.as_str());
         }
     }
 
@@ -1558,7 +1737,11 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_any_as_any::<Decimal, Int>(&mut ctx, &Some(input.clone()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1600,7 +1783,11 @@ mod tests {
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
             let ia = make_implicit_args(true);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input.clone()));
@@ -1634,9 +1821,17 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let r = cast_decimal_as_uint(&mut ctx, &extra, &Some(input.clone()));
@@ -1678,6 +1873,187 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_int_as_time() {
+        let should_pass = vec![
+            ("0000-00-00 00:00:00", 0),
+            ("2000-01-01 00:00:00", 101),
+            ("2045-00-00 00:00:00", 450_000),
+            ("2059-12-31 00:00:00", 591_231),
+            ("1970-01-01 00:00:00", 700_101),
+            ("1999-12-31 00:00:00", 991_231),
+            ("2000-01-01 00:00:00", 101_000_000),
+            ("2069-12-31 23:59:59", 691_231_235_959),
+            ("1970-01-01 00:00:00", 700_101_000_000),
+            ("1999-12-31 23:59:59", 991_231_235_959),
+            ("0100-00-00 00:00:00", 1_000_000_000_000),
+            ("1000-01-01 00:00:00", 10_000_101_000_000),
+            ("1999-01-01 00:00:00", 19_990_101_000_000),
+        ];
+
+        for (expected, input) in should_pass {
+            let actual: Time = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .return_field_type(FieldTypeBuilder::new().tp(FieldTypeTp::DateTime).build())
+                .evaluate(ScalarFuncSig::CastIntAsTime)
+                // `Result<Option<_>>`
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.to_string(), expected);
+        }
+
+        let should_fail = vec![
+            -11111,
+            1,
+            100,
+            700_100,
+            10_000_100,
+            100_000_000,
+            100_000_101_000_000,
+        ];
+
+        for case in should_fail {
+            let actual = RpnFnScalarEvaluator::new()
+                .push_param(case)
+                .return_field_type(FieldTypeBuilder::new().tp(FieldTypeTp::Date).build())
+                .evaluate::<Time>(ScalarFuncSig::CastIntAsTime)
+                .unwrap();
+            assert!(actual.is_none());
+        }
+    }
+
+    #[test]
+    fn test_cast_real_time() {
+        let cases = vec![
+            ("2019-09-16 10:11:12", 190916101112.111, 0),
+            ("2019-09-16 10:11:12", 20190916101112.111, 0),
+            ("2019-09-16 10:11:12", 20190916101112.123, 0),
+            ("2019-09-16 10:11:13", 20190916101112.999, 0),
+        ];
+
+        for (expected, input, fsp) in cases {
+            let actual: Time = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::DateTime)
+                        .decimal(fsp)
+                        .build(),
+                )
+                .evaluate::<Time>(ScalarFuncSig::CastRealAsTime)
+                // `Result<Option<_>>`
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_cast_string_as_time() {
+        let cases = vec![
+            ("2019-09-16 10:11:12", "20190916101112", 0),
+            ("2019-09-16 10:11:12", "190916101112", 0),
+            ("2019-09-16 10:11:01", "19091610111", 0),
+            ("2019-09-16 10:11:00", "1909161011", 0),
+            ("2019-09-16 10:01:00", "190916101", 0),
+            ("1909-12-10 00:00:00", "19091210", 0),
+            ("2020-02-29 10:00:00", "20200229100000", 0),
+            ("2019-09-16 01:00:00", "1909161", 0),
+            ("2019-09-16 00:00:00", "190916", 0),
+            ("2019-09-01 00:00:00", "19091", 0),
+            ("2019-09-16 10:11:12.111", "190916101112.111", 3),
+            ("2019-09-16 10:11:12.111", "20190916101112.111", 3),
+            ("2019-09-16 10:11:12.67", "20190916101112.666", 2),
+            ("2019-09-16 10:11:13.0", "20190916101112.999", 1),
+            ("2019-09-16 00:00:00", "2019-09-16", 0),
+            ("2019-09-16 10:11:12", "2019-09-16 10:11:12", 0),
+            ("2019-09-16 10:11:12", "2019-09-16T10:11:12", 0),
+            ("2019-09-16 10:11:12.7", "2019-09-16T10:11:12.66", 1),
+            ("2019-09-16 10:11:13.0", "2019-09-16T10:11:12.99", 1),
+            ("2020-01-01 00:00:00.0", "2019-12-31 23:59:59.99", 1),
+        ];
+
+        for (expected, input, fsp) in cases {
+            let actual: Time = RpnFnScalarEvaluator::new()
+                .push_param(input.as_bytes().to_vec())
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::DateTime)
+                        .decimal(fsp)
+                        .build(),
+                )
+                .evaluate::<Time>(ScalarFuncSig::CastStringAsTime)
+                // `Result<Option<_>>`
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_time_as_time() {
+        let cases = vec![
+            // (Timestamp, DateTime)
+            ("2020-02-29 10:00:00.999", "2020-02-29 10:00:01.0", 1),
+            ("2019-09-16 01:00:00.999", "2019-09-16 01:00:01.00", 2),
+            ("2019-09-16 00:00:00.9999", "2019-09-16 00:00:01.0", 1),
+        ];
+
+        for (input, expected, fsp) in cases {
+            let mut ctx = EvalContext::default();
+            let time =
+                Time::parse_timestamp(&mut ctx, input, MAX_FSP, /* Enable round*/ true).unwrap();
+
+            let actual: Time = RpnFnScalarEvaluator::new()
+                .push_param(time)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::DateTime)
+                        .decimal(fsp)
+                        .build(),
+                )
+                .evaluate::<Time>(ScalarFuncSig::CastTimeAsTime)
+                // `Result<Option<_>>`
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_cast_duration_as_time() {
+        use chrono::Datelike;
+
+        let cases = vec!["11:30:45.123456", "-35:30:46"];
+
+        for case in cases {
+            let mut ctx = EvalContext::default();
+
+            let duration = Duration::parse(case.as_bytes(), MAX_FSP).unwrap();
+            let now = RpnFnScalarEvaluator::new()
+                .push_param(duration)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::DateTime)
+                        .decimal(MAX_FSP as isize)
+                        .build(),
+                )
+                .evaluate::<Time>(ScalarFuncSig::CastDurationAsTime)
+                .unwrap()
+                .unwrap();
+            let chrono_today = chrono::Utc::now();
+            let today = now.checked_sub(&mut ctx, duration).unwrap();
+
+            assert_eq!(today.year(), chrono_today.year() as u32);
+            assert_eq!(today.month(), chrono_today.month());
+            assert_eq!(today.day(), chrono_today.day());
+            assert_eq!(today.hour(), 0);
+            assert_eq!(today.minute(), 0);
+            assert_eq!(today.second(), 0);
+            assert_eq!(today.micro(), 0);
+        }
+    }
+
+    #[test]
     fn test_duration_as_int() {
         // TODO: add more test case
         let cs: Vec<(Duration, i64)> = vec![
@@ -1688,7 +2064,11 @@ mod tests {
         ];
 
         for (input, expect) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_any_as_any::<Duration, Int>(&mut ctx, &Some(input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1734,7 +2114,11 @@ mod tests {
         ];
 
         for (input, expect, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_any_as_any::<Json, Int>(&mut ctx, &Some(input.clone()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1769,7 +2153,12 @@ mod tests {
         ];
 
         for (input, expect, error_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_json_as_uint(&mut ctx, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1805,7 +2194,13 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, true);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                should_clip_to_zero: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_json_as_uint(&mut ctx, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
@@ -1854,7 +2249,11 @@ mod tests {
         ];
         for (input, expect, in_union) in cs {
             let ia = make_implicit_args(in_union);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
             let r = cast_signed_int_as_unsigned_real(&extra, &Some(input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
@@ -1934,7 +2333,11 @@ mod tests {
 
         for (input, expect, in_union) in cs {
             let ia = make_implicit_args(in_union);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
             let r = cast_real_as_unsigned_real(&extra, &Some(Real::new(input).unwrap()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
@@ -1985,9 +2388,20 @@ mod tests {
         ];
 
         for (input, expect, flen, decimal, truncated, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_2(false, flen, decimal);
+            let rft = RetFieldTypeConfig {
+                unsigned: false,
+                flen,
+                decimal,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
             let r = cast_string_as_signed_real(&mut ctx, &extra, &Some(input.clone().into_bytes()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
@@ -2158,9 +2572,20 @@ mod tests {
         ];
 
         for (input, expect, flen, decimal, truncated, overflow, in_union) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(in_union);
-            let rft = make_ret_field_type_2(true, flen, decimal);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                flen,
+                decimal,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let p = Some(input.clone().into_bytes());
@@ -2263,9 +2688,20 @@ mod tests {
             ),
         ];
         for (input, expect, flen, decimal, err_codes) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_2(true, flen, decimal);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                flen,
+                decimal,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let p = Some(input.clone().into_bytes());
@@ -2370,9 +2806,17 @@ mod tests {
         ];
 
         for (input, expect, in_union, overflow) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(true, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(in_union);
-            let rft = make_ret_field_type_1(true);
+            let rft = RetFieldTypeConfig {
+                unsigned: true,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
             let r = cast_decimal_as_unsigned_real(&mut ctx, &extra, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
@@ -2473,7 +2917,11 @@ mod tests {
         ];
 
         for (input, expect, err_code) in cs {
-            let mut ctx = make_ctx_about_overflow_truncate_should_clip_to_zero(false, true, false);
+            let mut ctx = CtxConfig {
+                truncate_as_warning: true,
+                ..CtxConfig::default()
+            }
+            .into();
             let r = cast_any_as_any::<Json, Real>(&mut ctx, &Some(input.clone()));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
@@ -2701,8 +3149,11 @@ mod tests {
         ];
         for (input, bytes, debug_str) in base_cs {
             for (flen_type, pad_zero, charset, tp, collation, err_code) in cs.iter() {
-                let mut ctx =
-                    make_ctx_about_overflow_truncate_should_clip_to_zero(false, true, false);
+                let mut ctx = CtxConfig {
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                }
+                .into();
                 let ia = make_implicit_args(false);
                 let res_len = bytes.len();
                 let flen = match flen_type {
@@ -2717,7 +3168,14 @@ mod tests {
                     FlenType::ExtraOne => (res_len + 1) as isize,
                     FlenType::Unspecified => UNSPECIFIED_LENGTH,
                 };
-                let rft = make_ret_field_type_3(flen, charset, *tp, *collation);
+                let rft = RetFieldTypeConfig {
+                    flen,
+                    charset: Some(charset),
+                    tp: Some(*tp),
+                    collation: Some(*collation),
+                    ..RetFieldTypeConfig::default()
+                }
+                .into();
                 let extra = make_extra(&rft, &ia);
 
                 let r = cast_func(&mut ctx, &extra, &Some(input.clone()));
@@ -3397,22 +3855,34 @@ mod tests {
                 let ctx_in_dml_flag = vec![Flag::IN_INSERT_STMT, Flag::IN_UPDATE_OR_DELETE_STMT];
                 for in_dml_flag in ctx_in_dml_flag {
                     let (res_flen, res_decimal) = (res_flen as isize, res_decimal as isize);
-                    let rft = make_ret_field_type_4(res_flen, res_decimal, is_unsigned);
+                    let rft = RetFieldTypeConfig {
+                        unsigned: is_unsigned,
+                        flen: res_flen,
+                        decimal: res_decimal,
+                        ..RetFieldTypeConfig::default()
+                    }
+                    .into();
                     let ia = make_implicit_args(in_union);
                     let extra = make_extra(&rft, &ia);
 
-                    let mut ctx = make_ctx_about_overflow_truncate_flags(
+                    let mut ctx = CtxConfig {
                         overflow_as_warning,
                         truncate_as_warning,
-                        vec![in_dml_flag],
-                    );
+                        in_insert_stmt: in_dml_flag == Flag::IN_INSERT_STMT,
+                        in_update_or_delete_stmt: in_dml_flag == Flag::IN_UPDATE_OR_DELETE_STMT,
+                        ..CtxConfig::default()
+                    }
+                    .into();
                     let cast_func_res = cast_func(&mut ctx, &extra, &Some(input.clone()));
 
-                    let mut ctx = make_ctx_about_overflow_truncate_flags(
+                    let mut ctx = CtxConfig {
                         overflow_as_warning,
                         truncate_as_warning,
-                        vec![in_dml_flag],
-                    );
+                        in_insert_stmt: in_dml_flag == Flag::IN_INSERT_STMT,
+                        in_update_or_delete_stmt: in_dml_flag == Flag::IN_UPDATE_OR_DELETE_STMT,
+                        ..CtxConfig::default()
+                    }
+                    .into();
                     let pd_res = produce_dec_with_specified_tp(&mut ctx, base_res.clone(), &rft);
 
                     // make log
@@ -4427,10 +4897,17 @@ mod tests {
         ];
 
         for (input, fsp, expect, overflow) in cs {
-            let mut ctx =
-                make_ctx_about_overflow_truncate_should_clip_to_zero(overflow, false, false);
+            let mut ctx = CtxConfig {
+                overflow_as_warning: overflow,
+                ..CtxConfig::default()
+            }
+            .into();
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_5(fsp);
+            let rft = RetFieldTypeConfig {
+                decimal: fsp,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let result = cast_int_as_duration(&mut ctx, &extra, &Some(input));
@@ -4476,10 +4953,18 @@ mod tests {
         // no matter whether call_real_as_duration call Duration::parse directly.
         for val in base_cs {
             for fsp in MIN_FSP..=MAX_FSP {
-                let mut ctx =
-                    make_ctx_about_overflow_truncate_should_clip_to_zero(true, true, false);
+                let mut ctx = CtxConfig {
+                    overflow_as_warning: true,
+                    truncate_as_warning: true,
+                    ..CtxConfig::default()
+                }
+                .into();
                 let ia = make_implicit_args(false);
-                let rft = make_ret_field_type_5(fsp as isize);
+                let rft = RetFieldTypeConfig {
+                    decimal: fsp as isize,
+                    ..RetFieldTypeConfig::default()
+                }
+                .into();
                 let extra = make_extra(&rft, &ia);
 
                 let result = func_cast(&mut ctx, &extra, &Some(val.clone()));
@@ -4671,7 +5156,11 @@ mod tests {
             let mut ctx = EvalContext::default();
 
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_5(expect_fsp);
+            let rft = RetFieldTypeConfig {
+                decimal: expect_fsp,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let input_time = Time::parse_datetime(&mut ctx, s, fsp, true).unwrap();
@@ -4702,7 +5191,11 @@ mod tests {
 
         for (input, input_fsp, output_fsp, expect) in cs {
             let ia = make_implicit_args(false);
-            let rft = make_ret_field_type_5(output_fsp as isize);
+            let rft = RetFieldTypeConfig {
+                decimal: output_fsp as isize,
+                ..RetFieldTypeConfig::default()
+            }
+            .into();
             let extra = make_extra(&rft, &ia);
 
             let dur = Duration::parse(input.as_bytes(), input_fsp).unwrap();

@@ -123,7 +123,7 @@ quick_error! {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
         }
-        PessimisticLockRollbacked { start_ts: TimeStamp, key: Vec<u8> } {
+        PessimisticLockRolledBack { start_ts: TimeStamp, key: Vec<u8> } {
             description("pessimistic lock already rollbacked")
             display("pessimistic lock already rollbacked, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
         }
@@ -248,8 +248,8 @@ impl ErrorInner {
             ErrorInner::Committed { commit_ts } => Some(ErrorInner::Committed {
                 commit_ts: *commit_ts,
             }),
-            ErrorInner::PessimisticLockRollbacked { start_ts, key } => {
-                Some(ErrorInner::PessimisticLockRollbacked {
+            ErrorInner::PessimisticLockRolledBack { start_ts, key } => {
+                Some(ErrorInner::PessimisticLockRolledBack {
                     start_ts: *start_ts,
                     key: key.to_owned(),
                 })
@@ -319,6 +319,7 @@ impl From<codec::Error> for ErrorInner {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Generates `DefaultNotFound` error or panic directly based on config.
+#[inline(never)]
 pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
     CRITICAL_ERROR
         .with_label_values(&["default value not found"])
@@ -341,12 +342,11 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 }
 
 pub mod tests {
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
-
-    use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
-    use engine::CF_WRITE;
-
     use super::*;
+    use crate::storage::{Engine, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
+    use engine::CF_WRITE;
+    use keys::Key;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
         if !modifies.is_empty() {
@@ -895,7 +895,8 @@ pub mod tests {
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), true).unwrap();
+        let mut txn =
+            MvccTxn::for_scan(snapshot, Some(ScanMode::Forward), TimeStamp::zero(), true).unwrap();
         txn.gc(Key::from_raw(key), safe_point.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }

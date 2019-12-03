@@ -6,24 +6,28 @@ use std::time::Duration;
 use std::{mem, thread, u64};
 
 use futures::future;
+use keys::{Key, Value};
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::lock_manager::{self, Lock, LockManager};
 use crate::storage::mvcc::{
-    Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock, MvccReader, MvccTxn,
-    TimeStamp, Write, MAX_TXN_WRITE_SIZE,
+    has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
+    MvccReader, MvccTxn, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, ErrorInner, Result};
 use crate::storage::types::ProcessResult;
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, Key,
-    MvccInfo, Result as StorageResult, ScanMode, Snapshot, Statistics, TxnStatus, Value,
+    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, MvccInfo,
+    Result as StorageResult, ScanMode, Snapshot, Statistics, TxnStatus,
 };
+use engine::CF_WRITE;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{Instant, SlowTimer};
+
+pub const FORWARD_MIN_MUTATIONS_NUM: usize = 12;
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
@@ -475,15 +479,43 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd.kind {
         CommandKind::Prewrite {
-            mutations,
+            mut mutations,
             primary,
             start_ts,
-            options,
+            mut options,
             ..
         } => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())?;
-            let mut locks = vec![];
+            let mut scan_mode = None;
             let rows = mutations.len();
+            if options.for_update_ts.is_zero() && rows > FORWARD_MIN_MUTATIONS_NUM {
+                mutations.sort_by(|a, b| a.key().cmp(b.key()));
+                let left_key = mutations.first().unwrap().key();
+                let right_key = mutations
+                    .last()
+                    .unwrap()
+                    .key()
+                    .clone()
+                    .append_ts(TimeStamp::zero());
+                if !has_data_in_range(
+                    snapshot.clone(),
+                    CF_WRITE,
+                    left_key,
+                    &right_key,
+                    &mut statistics.write,
+                )? {
+                    // If there is no data in range, we could skip constraint check, and use Forward seek for CF_LOCK.
+                    // Because in most instances, there won't be more than one transaction write the same key. Seek
+                    // operation could skip nonexistent key in CF_LOCK.
+                    options.skip_constraint_check = true;
+                    scan_mode = Some(ScanMode::Forward)
+                }
+            }
+            let mut locks = vec![];
+            let mut txn = if scan_mode.is_some() {
+                MvccTxn::for_scan(snapshot, scan_mode, start_ts, !cmd.ctx.get_not_fill_cache())?
+            } else {
+                MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())?
+            };
 
             // If `options.for_update_ts` is 0, the transaction is optimistic
             // or else pessimistic.
@@ -830,7 +862,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                         is_pessimistic_txn,
                     );
                 }
-                TxnStatus::Rollbacked
+                TxnStatus::RolledBack
                 | TxnStatus::Committed { .. }
                 | TxnStatus::Uncommitted { .. } => {}
             };
@@ -892,6 +924,8 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::kv::{Snapshot, TestEngineBuilder};
+    use crate::storage::{DummyLockManager, Mutation, Options};
 
     #[test]
     fn test_extract_lock_from_result() {
@@ -908,5 +942,175 @@ mod tests {
         let lock = extract_lock_from_result(&Err(case));
         assert_eq!(lock.ts, ts.into());
         assert_eq!(lock.hash, key.gen_hash());
+    }
+
+    fn inner_test_prewrite_skip_constraint_check(pri_key_number: u8, write_num: usize) {
+        let mut mutations = Vec::default();
+        let pri_key = &[pri_key_number];
+        for i in 0..write_num {
+            mutations.push(Mutation::Insert((
+                Key::from_raw(&[i as u8]),
+                b"100".to_vec(),
+            )));
+        }
+        let mut statistic = Statistics::default();
+        let engine = TestEngineBuilder::new().build().unwrap();
+        prewrite(
+            &engine,
+            &mut statistic,
+            vec![Mutation::Put((
+                Key::from_raw(&[pri_key_number]),
+                b"100".to_vec(),
+            ))],
+            pri_key.to_vec(),
+            99,
+        )
+        .unwrap();
+        assert_eq!(1, statistic.write.seek);
+        let e = prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            100,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(2, statistic.write.seek);
+        match e {
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))) => (),
+            _ => panic!("error type not match"),
+        }
+        commit(
+            &engine,
+            &mut statistic,
+            vec![Key::from_raw(&[pri_key_number])],
+            99,
+            102,
+        )
+        .unwrap();
+        assert_eq!(2, statistic.write.seek);
+        let e = prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            101,
+        )
+        .err()
+        .unwrap();
+        match e {
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::WriteConflict {
+                ..
+            }))) => (),
+            _ => panic!("error type not match"),
+        }
+        let e = prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            104,
+        )
+        .err()
+        .unwrap();
+        match e {
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { .. }))) => (),
+            _ => panic!("error type not match"),
+        }
+
+        statistic.write.seek = 0;
+        let ctx = Context::default();
+        engine
+            .delete_cf(
+                &ctx,
+                CF_WRITE,
+                Key::from_raw(&[pri_key_number]).append_ts(102.into()),
+            )
+            .unwrap();
+        prewrite(
+            &engine,
+            &mut statistic,
+            mutations.clone(),
+            pri_key.to_vec(),
+            104,
+        )
+        .unwrap();
+        // All keys are prewrited successful with only one seek operations.
+        assert_eq!(1, statistic.write.seek);
+        let keys: Vec<Key> = mutations.iter().map(|m| m.key().clone()).collect();
+        commit(&engine, &mut statistic, keys.clone(), 104, 105).unwrap();
+        let snap = engine.snapshot(&ctx).unwrap();
+        for k in keys {
+            let v = snap.get_cf(CF_WRITE, &k.append_ts(105.into())).unwrap();
+            assert!(v.is_some());
+        }
+    }
+
+    #[test]
+    fn test_prewrite_skip_constraint_check() {
+        inner_test_prewrite_skip_constraint_check(0, FORWARD_MIN_MUTATIONS_NUM + 1);
+        inner_test_prewrite_skip_constraint_check(5, FORWARD_MIN_MUTATIONS_NUM + 1);
+        inner_test_prewrite_skip_constraint_check(
+            FORWARD_MIN_MUTATIONS_NUM as u8,
+            FORWARD_MIN_MUTATIONS_NUM + 1,
+        );
+    }
+
+    fn prewrite<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(&ctx)?;
+        let cmd = Command {
+            ctx,
+            kind: CommandKind::Prewrite {
+                mutations,
+                primary,
+                start_ts: TimeStamp::from(start_ts),
+                options: Options::default(),
+            },
+        };
+        let m = DummyLockManager {};
+        let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
+        if let ProcessResult::MultiRes { results } = ret.pr {
+            if !results.is_empty() {
+                let info = LockInfo::default();
+                return Err(Error::from(ErrorInner::Mvcc(MvccError::from(
+                    MvccErrorInner::KeyIsLocked(info),
+                ))));
+            }
+        }
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
+    }
+
+    fn commit<E: Engine>(
+        engine: &E,
+        statistics: &mut Statistics,
+        keys: Vec<Key>,
+        lock_ts: u64,
+        commit_ts: u64,
+    ) -> Result<()> {
+        let ctx = Context::default();
+        let snap = engine.snapshot(&ctx)?;
+        let cmd = Command {
+            ctx,
+            kind: CommandKind::Commit {
+                keys,
+                lock_ts: TimeStamp::from(lock_ts),
+                commit_ts: TimeStamp::from(commit_ts),
+            },
+        };
+        let m = DummyLockManager {};
+        let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
+        let ctx = Context::default();
+        engine.write(&ctx, ret.to_be_write).unwrap();
+        Ok(())
     }
 }

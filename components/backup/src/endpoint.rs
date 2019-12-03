@@ -14,16 +14,16 @@ use external_storage::*;
 use futures::lazy;
 use futures::prelude::Future;
 use futures::sync::mpsc::*;
+use keys::Key;
 use keys::TimeStamp;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
-use tidb_query::codec::table::decode_table_id;
 use tikv::raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, RegionInfoProvider};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
-use tikv::storage::{Key, Statistics};
+use tikv::storage::Statistics;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -125,7 +125,7 @@ impl BackupRange {
         engine: &E,
         backup_ts: TimeStamp,
     ) -> Result<Statistics> {
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
         ctx.set_peer(self.leader.clone());
@@ -378,11 +378,13 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     warn!("backup task has canceled"; "range" => ?brange);
                     return Ok(());
                 }
-                let table_id = brange
+                // TODO: make file_name unique and short
+                let key = brange
                     .start_key
                     .clone()
-                    .and_then(|k| decode_table_id(&k.into_raw().unwrap()).ok());
-                let name = backup_file_name(store_id, &brange.region, table_id);
+                    .map(|k| hex::encode(k.into_raw().unwrap()));
+
+                let name = backup_file_name(store_id, &brange.region, key);
                 let mut writer = match BackupWriter::new(db.clone(), &name, storage.limiter.clone())
                 {
                     Ok(w) => w,
@@ -452,7 +454,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             let end_key = brange
                 .end_key
                 .map_or_else(|| vec![], |k| k.into_raw().unwrap());
-            let mut response = BackupResponse::new();
+            let mut response = BackupResponse::default();
             match res {
                 Ok((mut files, stat)) => {
                     debug!("backup region finish";
@@ -566,14 +568,14 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
 
 /// Construct an backup file name based on the given store id and region.
 /// A name consists with three parts: store id, region_id and a epoch version.
-fn backup_file_name(store_id: u64, region: &Region, table_id: Option<i64>) -> String {
-    match table_id {
-        Some(t_id) => format!(
+fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+    match key {
+        Some(k) => format!(
             "{}_{}_{}_{}",
             store_id,
             region.get_id(),
             region.get_region_epoch().get_version(),
-            t_id
+            k
         ),
         None => format!(
             "{}_{}_{}",
@@ -840,7 +842,7 @@ pub mod tests {
         // TODO: check key number for each snapshot.
         let limiter = Arc::new(RocksIOLimiter::new(10 * 1024 * 1024 /* 10 MB/s */));
         for (ts, len) in backup_tss {
-            let mut req = BackupRequest::new();
+            let mut req = BackupRequest::default();
             req.set_start_key(vec![]);
             req.set_end_key(vec![b'5']);
             req.set_start_version(ts.into_inner());
@@ -903,7 +905,7 @@ pub mod tests {
         );
 
         let now = alloc_ts();
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![b'5']);
         req.set_start_version(now.into_inner());
@@ -977,7 +979,7 @@ pub mod tests {
         must_commit(&engine, key.as_bytes(), start, commit);
 
         let now = alloc_ts();
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
         req.set_start_version(now.into_inner());
@@ -1014,7 +1016,7 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
         req.set_start_version(1);
@@ -1046,7 +1048,7 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"".to_vec(), 1)]);
 
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
         req.set_start_version(1);
@@ -1106,7 +1108,7 @@ pub mod tests {
             tx
         };
 
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
         req.set_start_version(1);

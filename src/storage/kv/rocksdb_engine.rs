@@ -14,14 +14,15 @@ use engine::rocks::{
 };
 use engine::Engines;
 use engine::Error as EngineError;
+use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine::{IterOption, Peekable};
-use engine_rocks::{Compat, RocksEngineIterator};
-use engine_traits::{Iterable, Iterator, SeekKey};
+use engine_rocks::RocksEngineIterator;
+use engine_traits::{Iterable, Iterator, Peekable, SeekKey};
+use keys::{Key, Value};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 
-use crate::storage::{BlockCacheConfig, Key, Value};
+use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -30,7 +31,7 @@ use super::{
     Result, ScanMode, Snapshot,
 };
 
-pub use engine::SyncSnapshot as RocksSnapshot;
+pub use engine_rocks::RocksSyncSnapshot as RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
@@ -278,7 +279,7 @@ impl Engine for RocksEngine {
             "snapshot failed"
         )));
         let not_leader = {
-            let mut header = kvproto::errorpb::Error::new();
+            let mut header = kvproto::errorpb::Error::default();
             header.mut_not_leader().set_region_id(100);
             header
         };
@@ -311,7 +312,7 @@ impl Snapshot for RocksSnapshot {
 
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create iterator");
-        let iter = self.c().iterator_opt(iter_opt)?;
+        let iter = self.iterator_opt(iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 
@@ -322,7 +323,7 @@ impl Snapshot for RocksSnapshot {
         mode: ScanMode,
     ) -> Result<Cursor<Self::Iter>> {
         trace!("RocksSnapshot: create cf iterator");
-        let iter = self.c().iterator_cf_opt(cf, iter_opt)?;
+        let iter = self.iterator_cf_opt(cf, iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
 }
@@ -421,11 +422,10 @@ impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
+    use super::super::perf_context::PerfStatisticsInstant;
     use super::super::tests::*;
-    use super::super::CFStatistics;
+    use super::super::CfStatistics;
     use super::*;
-    use tempfile::Builder;
 
     #[test]
     fn test_rocksdb() {
@@ -456,7 +456,10 @@ mod tests {
 
     #[test]
     fn rocksdb_reopen() {
-        let dir = Builder::new().prefix("rocksdb_test").tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("rocksdb_test")
+            .tempdir()
+            .unwrap();
         {
             let engine = TestEngineBuilder::new()
                 .path(dir.path())
@@ -484,7 +487,7 @@ mod tests {
         test_perf_statistics(&engine);
     }
 
-    pub fn test_perf_statistics<E: Engine>(engine: &E) {
+    fn test_perf_statistics<E: Engine>(engine: &E) {
         must_put(engine, b"foo", b"bar1");
         must_put(engine, b"foo2", b"bar2");
         must_put(engine, b"foo3", b"bar3"); // deleted
@@ -501,7 +504,7 @@ mod tests {
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
 
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
