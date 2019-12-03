@@ -38,14 +38,18 @@ pub fn initial_logger(config: &TiKvConfig) {
             fatal!("failed to initialize log: {}", e);
         });
     } else {
-        let drainer =
-            logger::file_drainer(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
-                fatal!(
-                    "failed to initialize log with file {}: {}",
-                    config.log_file,
-                    e
-                );
-            });
+        let drainer = logger::file_drainer(
+            &config.log_file,
+            log_rotation_timespan,
+            config.log_rotation_size,
+        )
+        .unwrap_or_else(|e| {
+            fatal!(
+                "failed to initialize log with file {}: {}",
+                config.log_file,
+                e
+            );
+        });
 
         // use async drainer and init std log.
         logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {

@@ -15,7 +15,7 @@ use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_async::{Async, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 
-use self::file_log::RotatingFileLogger;
+use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger};
 
 pub use slog::Level;
 
@@ -94,8 +94,14 @@ pub type RotatingFileDecorator = PlainDecorator<BufWriter<RotatingFileLogger>>;
 pub fn file_drainer(
     path: impl AsRef<Path>,
     rotation_timespan: Duration,
+    rotation_size: u64,
 ) -> io::Result<TikvFormat<RotatingFileDecorator>> {
-    let logger = BufWriter::new(RotatingFileLogger::new(path, rotation_timespan)?);
+    let logger = BufWriter::new(
+        RotatingFileLogger::new(path)
+            .add_rotator(RotateByTime::new(rotation_timespan))
+            .add_rotator(RotateBySize::new(rotation_size))
+            .build()?,
+    );
     let decorator = PlainDecorator::new(logger);
     let drain = TikvFormat::new(decorator);
     Ok(drain)
