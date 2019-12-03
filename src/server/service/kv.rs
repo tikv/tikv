@@ -14,17 +14,16 @@ use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Error;
-use crate::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{
-    Error as MvccError, ErrorInner as MvccErrorInner, LockType, TimeStamp, Write as MvccWrite,
-    WriteType,
+use crate::storage::{
+    errors::{
+        extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
+        extract_region_error,
+    },
+    kv::Engine,
+    lock_manager::LockManager,
+    txn::{Options, PointGetCommand},
+    Storage, TxnStatus,
 };
-use crate::storage::txn::{
-    Error as TxnError, ErrorInner as TxnErrorInner, Options, PointGetCommand,
-};
-use crate::storage::{self, Engine, Storage, TxnStatus};
-use crate::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
@@ -32,8 +31,7 @@ use grpcio::{
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
-use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use kvproto::kvrpcpb::{self, *};
+use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
@@ -45,10 +43,7 @@ use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
-use txn_types::{self, Key, Mutation, Value};
-
-const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
-const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
+use txn_types::{self, Key, TimeStamp};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
@@ -1234,7 +1229,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 } else {
                     match v {
                         Ok(mvcc) => {
-                            resp.set_info(extract_mvcc_info(mvcc));
+                            resp.set_info(mvcc.into_proto());
                         }
                         Err(e) => resp.set_error(format!("{}", e)),
                     };
@@ -1277,7 +1272,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     match v {
                         Ok(Some((k, vv))) => {
                             resp.set_key(k.into_raw().unwrap());
-                            resp.set_info(extract_mvcc_info(vv));
+                            resp.set_info(vv.into_proto());
                         }
                         Ok(None) => {
                             resp.set_info(Default::default());
@@ -1976,17 +1971,7 @@ fn future_prewrite<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: PrewriteRequest,
 ) -> impl Future<Item = PrewriteResponse, Error = Error> {
-    let mutations = req
-        .take_mutations()
-        .into_iter()
-        .map(|mut x| match x.get_op() {
-            Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
-            Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
-            Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
-            Op::Insert => Mutation::Insert((Key::from_raw(x.get_key()), x.take_value())),
-            _ => panic!("mismatch Op in prewrite mutations"),
-        })
-        .collect();
+    let mutations = req.take_mutations().into_iter().map(Into::into).collect();
     let mut options = Options::default();
     options.lock_ttl = req.get_lock_ttl();
     options.skip_constraint_check = req.get_skip_constraint_check();
@@ -2645,232 +2630,6 @@ fn future_cop<E: Engine>(
         .map_err(|_| unreachable!())
 }
 
-fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
-    use crate::storage::{Error, ErrorInner};
-    match *res {
-        // TODO: use `Error::cause` instead.
-        Err(Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e)))))
-        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
-            box EngineErrorInner::Request(ref e),
-        ))))))
-        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e))),
-        )))))) => Some(e.to_owned()),
-        Err(Error(box ErrorInner::SchedTooBusy)) => {
-            let mut err = RegionError::default();
-            let mut server_is_busy_err = ServerIsBusy::default();
-            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
-            err.set_server_is_busy(server_is_busy_err);
-            Some(err)
-        }
-        Err(Error(box ErrorInner::GcWorkerTooBusy)) => {
-            let mut err = RegionError::default();
-            let mut server_is_busy_err = ServerIsBusy::default();
-            server_is_busy_err.set_reason(GC_WORKER_IS_BUSY.to_owned());
-            err.set_server_is_busy(server_is_busy_err);
-            Some(err)
-        }
-        Err(Error(box ErrorInner::Closed)) => {
-            // TiKV is closing, return an RegionError to tell the client that this region is unavailable
-            // temporarily, the client should retry the request in other TiKVs.
-            let mut err = RegionError::default();
-            err.set_message("TiKV is Closing".to_string());
-            Some(err)
-        }
-        _ => None,
-    }
-}
-
-fn extract_committed(err: &StorageError) -> Option<TimeStamp> {
-    match *err {
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Committed { commit_ts },
-        ))))) => Some(commit_ts),
-        _ => None,
-    }
-}
-
-fn extract_key_error(err: &storage::Error) -> KeyError {
-    let mut key_error = KeyError::default();
-    match err {
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::KeyIsLocked(info),
-        ))))) => {
-            key_error.set_locked(info.clone());
-        }
-        // failed in prewrite or pessimistic lock
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::WriteConflict {
-                start_ts,
-                conflict_start_ts,
-                conflict_commit_ts,
-                key,
-                primary,
-                ..
-            },
-        ))))) => {
-            let mut write_conflict = WriteConflict::default();
-            write_conflict.set_start_ts(start_ts.into_inner());
-            write_conflict.set_conflict_ts(conflict_start_ts.into_inner());
-            write_conflict.set_conflict_commit_ts(conflict_commit_ts.into_inner());
-            write_conflict.set_key(key.to_owned());
-            write_conflict.set_primary(primary.to_owned());
-            key_error.set_conflict(write_conflict);
-            // for compatibility with older versions.
-            key_error.set_retryable(format!("{:?}", err));
-        }
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::AlreadyExist { key },
-        ))))) => {
-            let mut exist = AlreadyExist::default();
-            exist.set_key(key.clone());
-            key_error.set_already_exist(exist);
-        }
-        // failed in commit
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::TxnLockNotFound { .. },
-        ))))) => {
-            warn!("txn conflicts"; "err" => ?err);
-            key_error.set_retryable(format!("{:?}", err));
-        }
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::TxnNotFound { start_ts, key },
-        ))))) => {
-            let mut txn_not_found = TxnNotFound::default();
-            txn_not_found.set_start_ts(start_ts.into_inner());
-            txn_not_found.set_primary_key(key.to_owned());
-            key_error.set_txn_not_found(txn_not_found);
-        }
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Deadlock {
-                lock_ts,
-                lock_key,
-                deadlock_key_hash,
-                ..
-            },
-        ))))) => {
-            warn!("txn deadlocks"; "err" => ?err);
-            let mut deadlock = Deadlock::default();
-            deadlock.set_lock_ts(lock_ts.into_inner());
-            deadlock.set_lock_key(lock_key.to_owned());
-            deadlock.set_deadlock_key_hash(*deadlock_key_hash);
-            key_error.set_deadlock(deadlock);
-        }
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::CommitTsExpired {
-                start_ts,
-                commit_ts,
-                key,
-                min_commit_ts,
-            },
-        ))))) => {
-            let mut commit_ts_expired = CommitTsExpired::default();
-            commit_ts_expired.set_start_ts(start_ts.into_inner());
-            commit_ts_expired.set_attempted_commit_ts(commit_ts.into_inner());
-            commit_ts_expired.set_key(key.to_owned());
-            commit_ts_expired.set_min_commit_ts(min_commit_ts.into_inner());
-            key_error.set_commit_ts_expired(commit_ts_expired);
-        }
-        _ => {
-            error!("txn aborts"; "err" => ?err);
-            key_error.set_abort(format!("{:?}", err));
-        }
-    }
-    key_error
-}
-
-fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<txn_types::KvPair>>>) -> Vec<KvPair> {
-    match res {
-        Ok(res) => res
-            .into_iter()
-            .map(|r| match r {
-                Ok((key, value)) => {
-                    let mut pair = KvPair::default();
-                    pair.set_key(key);
-                    pair.set_value(value);
-                    pair
-                }
-                Err(e) => {
-                    let mut pair = KvPair::default();
-                    pair.set_error(extract_key_error(&e));
-                    pair
-                }
-            })
-            .collect(),
-        Err(e) => {
-            let mut pair = KvPair::default();
-            pair.set_error(extract_key_error(&e));
-            vec![pair]
-        }
-    }
-}
-
-fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
-    let mut mvcc_info = MvccInfo::default();
-    if let Some(lock) = mvcc.lock {
-        let mut lock_info = MvccLock::default();
-        let op = match lock.lock_type {
-            LockType::Put => Op::Put,
-            LockType::Delete => Op::Del,
-            LockType::Lock => Op::Lock,
-            LockType::Pessimistic => Op::PessimisticLock,
-        };
-        lock_info.set_type(op);
-        lock_info.set_start_ts(lock.ts.into_inner());
-        lock_info.set_primary(lock.primary);
-        lock_info.set_short_value(lock.short_value.unwrap_or_default());
-        mvcc_info.set_lock(lock_info);
-    }
-    let vv = extract_2pc_values(mvcc.values);
-    let vw = extract_2pc_writes(mvcc.writes);
-    mvcc_info.set_writes(vw.into());
-    mvcc_info.set_values(vv.into());
-    mvcc_info
-}
-
-fn extract_2pc_values(res: Vec<(TimeStamp, Value)>) -> Vec<MvccValue> {
-    res.into_iter()
-        .map(|(start_ts, value)| {
-            let mut value_info = MvccValue::default();
-            value_info.set_start_ts(start_ts.into_inner());
-            value_info.set_value(value);
-            value_info
-        })
-        .collect()
-}
-
-fn extract_2pc_writes(res: Vec<(TimeStamp, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
-    res.into_iter()
-        .map(|(commit_ts, write)| {
-            let mut write_info = kvrpcpb::MvccWrite::default();
-            let op = match write.write_type {
-                WriteType::Put => Op::Put,
-                WriteType::Delete => Op::Del,
-                WriteType::Lock => Op::Lock,
-                WriteType::Rollback => Op::Rollback,
-            };
-            write_info.set_type(op);
-            write_info.set_start_ts(write.start_ts.into_inner());
-            write_info.set_commit_ts(commit_ts.into_inner());
-            write_info.set_short_value(write.short_value.unwrap_or_default());
-            write_info
-        })
-        .collect()
-}
-
-fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<KeyError> {
-    match res {
-        Ok(res) => res
-            .into_iter()
-            .filter_map(|x| match x {
-                Err(e) => Some(extract_key_error(&e)),
-                Ok(_) => None,
-            })
-            .collect(),
-        Err(e) => vec![extract_key_error(&e)],
-    }
-}
-
 #[cfg(feature = "protobuf-codec")]
 mod batch_commands_response {
     pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
@@ -2891,44 +2650,9 @@ mod batch_commands_request {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
-
-    use tokio_sync::oneshot;
-
     use super::*;
-    use crate::storage;
-    use crate::storage::mvcc::Error as MvccError;
-    use crate::storage::txn::Error as TxnError;
-
-    #[test]
-    fn test_extract_key_error_write_conflict() {
-        let start_ts = 110.into();
-        let conflict_start_ts = 108.into();
-        let conflict_commit_ts = 109.into();
-        let key = b"key".to_vec();
-        let primary = b"primary".to_vec();
-        let case = storage::Error::from(TxnError::from(MvccError::from(
-            MvccErrorInner::WriteConflict {
-                start_ts,
-                conflict_start_ts,
-                conflict_commit_ts,
-                key: key.clone(),
-                primary: primary.clone(),
-            },
-        )));
-        let mut expect = KeyError::default();
-        let mut write_conflict = WriteConflict::default();
-        write_conflict.set_start_ts(start_ts.into_inner());
-        write_conflict.set_conflict_ts(conflict_start_ts.into_inner());
-        write_conflict.set_conflict_commit_ts(conflict_commit_ts.into_inner());
-        write_conflict.set_key(key);
-        write_conflict.set_primary(primary);
-        expect.set_conflict(write_conflict);
-        expect.set_retryable(format!("{:?}", case));
-
-        let got = extract_key_error(&case);
-        assert_eq!(got, expect);
-    }
+    use std::thread;
+    use tokio_sync::oneshot;
 
     #[test]
     fn test_poll_future_notify_with_slow_source() {
