@@ -16,6 +16,7 @@ use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
 use engine_rocks::RocksSnapshot;
 use engine_traits::Peekable as PeekableTrait;
+use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -31,7 +32,6 @@ use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
 use tikv_util::worker::Scheduler;
 
-use super::keys::{self, enc_end_key, enc_start_key};
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};

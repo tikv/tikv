@@ -9,6 +9,7 @@ use grpcio::*;
 use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
 use kvproto::tikvpb::TikvClient;
 
+use keys::Key;
 use test_raftstore::{must_get_equal, must_get_none, new_server_cluster};
 use tikv::storage;
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};

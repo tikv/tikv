@@ -14,9 +14,9 @@ use raft::eraftpb::MessageType;
 use engine::Peekable;
 use rand::RngCore;
 use test_raftstore::*;
+use tikv::raftstore::router::RaftStoreRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
-use tikv::server::transport::RaftStoreRouter;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
