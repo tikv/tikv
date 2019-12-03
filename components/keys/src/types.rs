@@ -131,7 +131,7 @@ impl Key {
         } else {
             let pos = key.len() - number::U64_SIZE;
             let k = &key[..pos];
-            let mut ts = &key[pos..];
+            let ts = &key[pos..];
             Ok((k, NumberCodec::decode_u64_desc(&ts).into()))
         }
     }
@@ -153,7 +153,7 @@ impl Key {
         if len < number::U64_SIZE {
             return Err(codec::ErrorInner::KeyLength.into());
         }
-        let mut ts = &key[len - number::U64_SIZE..];
+        let ts = &key[len - number::U64_SIZE..];
         Ok(NumberCodec::decode_u64_desc(&ts).into())
     }
 
