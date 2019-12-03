@@ -403,13 +403,13 @@ fn rand_with_seed(
 fn init_rng_data(expr: &mut Expr) -> Result<Option<RefCell<XorShiftRng>>> {
     let children = expr.mut_children();
     let n = children.len();
-    for i in (0..n).rev() {
-        let arg = &mut children[i];
+    if n == 1 {
+        let arg = &mut children[0];
         match arg.get_tp() {
-            ExprType::ScalarFunc => return Ok(None),
-            ExprType::ColumnRef => return Ok(Some(RefCell::new(get_rng(None)))),
-            _ => return Ok(None),
-        }
+            ExprType::ScalarFunc => Ok(None),
+            ExprType::ColumnRef => Ok(Some(RefCell::new(get_rng(None)))),
+            _ => Ok(None),
+        };
     }
     Ok(Some(RefCell::new(get_rng(None))))
 }
