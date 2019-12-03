@@ -62,37 +62,24 @@ EOT
 cat <<EOT
 COPY scripts ./scripts
 COPY etc ./etc
-EOT
-
-# Install dependencies at first
-cat <<EOT
-COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p ./cmd/
-COPY cmd/Cargo.toml ./cmd/
+COPY Cargo.lock ./Cargo.lock
 EOT
 
 # Get components, remove test and profiler components
-components=$(ls -d ./components/*  | xargs -n 1 basename | grep -v "test" | grep -v "profiler")
+components=(. ./cmd $(ls -d ./components/* | grep -v "test" | grep -v "profiler"))
 # List components and add their Cargo files
-for i in ${components}; do
-    echo "COPY ./components/${i}/Cargo.toml ./components/${i}/Cargo.toml"
+for i in "${components[@]}"; do
+    echo "COPY ${i}/Cargo.toml ${i}/Cargo.toml"
+    echo "RUN mkdir ${i}/src && echo '' > ${i}/src/lib.rs"
 done
-
 
 # Create dummy files, build the dependencies
 # then remove TiKV fingerprint for following rebuild
 cat <<EOT
 RUN mkdir -p ./cmd/src/bin && \\
     echo 'fn main() {}' > ./cmd/src/bin/tikv-ctl.rs && \\
-    echo 'fn main() {}' > ./cmd/src/bin/tikv-server.rs && \\
-    echo '' > ./cmd/src/lib.rs && \\
-    mkdir -p ./src/ && \\
-    echo '' > ./src/lib.rs
+    echo 'fn main() {}' > ./cmd/src/bin/tikv-server.rs
 EOT
-
-for i in ${components}; do
-    echo "RUN mkdir ./components/${i}/src && echo '' > ./components/${i}/src/lib.rs"
-done
 
 # Remove test dependencies and profile features.
 cat <<EOT
@@ -100,23 +87,23 @@ RUN for cargotoml in \$(find . -name "Cargo.toml"); do \\
         sed -i '/fuzz/d' \${cargotoml} && \\
         sed -i '/test\_/d' \${cargotoml} && \\
         sed -i '/profiling/d' \${cargotoml} && \\
-        sed -i '/profiler/d' \${cargotoml} ; \\
+        sed -i '/profiler/d' \${cargotoml} && \\
+        sed -i '/\"tests\",/d' \${cargotoml} ; \\
     done
 EOT
 
-# 
+# Do the prebuild
 echo "RUN make build_dist_release"
+
 # Remove fingerprints for when we build the real binaries.
-for i in ${components}; do
-    echo "RUN rm -rf ./target/release/.fingerprint/${i}-*"
+for i in "${components[@]}"; do
+    echo "RUN rm -rf ./target/release/.fingerprint/$(basename ${i})-*"
+    echo "COPY ${i}/src ${i}/src"
 done
 echo "RUN rm -rf ./target/release/.fingerprint/tikv-*"
 
 # Build real binaries now
 cat <<EOT
-COPY ./src ./src
-COPY ./cmd/src ./cmd/src
-COPY ./components ./components
 COPY ./.git ./.git
 RUN make build_dist_release
 EOT
