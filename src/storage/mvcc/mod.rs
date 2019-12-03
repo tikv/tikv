@@ -17,6 +17,7 @@ pub use keys::TimeStamp;
 
 use crate::storage::SHORT_VALUE_MAX_LEN;
 use keys::{Key, Value};
+use kvproto::kvrpcpb;
 use std::error;
 use std::fmt;
 use std::io;
@@ -74,6 +75,18 @@ impl Mutation {
         match self {
             Mutation::Insert(_) => true,
             _ => false,
+        }
+    }
+}
+
+impl From<kvrpcpb::Mutation> for Mutation {
+    fn from(mut m: kvrpcpb::Mutation) -> Mutation {
+        match m.get_op() {
+            kvrpcpb::Op::Put => Mutation::Put((Key::from_raw(m.get_key()), m.take_value())),
+            kvrpcpb::Op::Del => Mutation::Delete(Key::from_raw(m.get_key())),
+            kvrpcpb::Op::Lock => Mutation::Lock(Key::from_raw(m.get_key())),
+            kvrpcpb::Op::Insert => Mutation::Insert((Key::from_raw(m.get_key()), m.take_value())),
+            _ => panic!("mismatch Op in prewrite mutations"),
         }
     }
 }

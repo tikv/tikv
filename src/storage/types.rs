@@ -3,12 +3,12 @@
 //! Core data types.
 
 use crate::storage::{
-    mvcc::{Lock, TimeStamp, Write},
+    mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
     txn::ProcessResult,
     Callback, Result,
 };
 use keys::{Key, Value};
-use kvproto::kvrpcpb::LockInfo;
+use kvproto::kvrpcpb;
 use std::fmt::Debug;
 
 /// `MvccInfo` stores all mvcc information of given key.
@@ -20,6 +20,61 @@ pub struct MvccInfo {
     pub writes: Vec<(TimeStamp, Write)>,
     /// start_ts and value
     pub values: Vec<(TimeStamp, Value)>,
+}
+
+impl MvccInfo {
+    pub fn into_proto(self) -> kvrpcpb::MvccInfo {
+        fn extract_2pc_values(res: Vec<(TimeStamp, Value)>) -> Vec<kvrpcpb::MvccValue> {
+            res.into_iter()
+                .map(|(start_ts, value)| {
+                    let mut value_info = kvrpcpb::MvccValue::default();
+                    value_info.set_start_ts(start_ts.into_inner());
+                    value_info.set_value(value);
+                    value_info
+                })
+                .collect()
+        }
+
+        fn extract_2pc_writes(res: Vec<(TimeStamp, Write)>) -> Vec<kvrpcpb::MvccWrite> {
+            res.into_iter()
+                .map(|(commit_ts, write)| {
+                    let mut write_info = kvrpcpb::MvccWrite::default();
+                    let op = match write.write_type {
+                        WriteType::Put => kvrpcpb::Op::Put,
+                        WriteType::Delete => kvrpcpb::Op::Del,
+                        WriteType::Lock => kvrpcpb::Op::Lock,
+                        WriteType::Rollback => kvrpcpb::Op::Rollback,
+                    };
+                    write_info.set_type(op);
+                    write_info.set_start_ts(write.start_ts.into_inner());
+                    write_info.set_commit_ts(commit_ts.into_inner());
+                    write_info.set_short_value(write.short_value.unwrap_or_default());
+                    write_info
+                })
+                .collect()
+        }
+
+        let mut mvcc_info = kvrpcpb::MvccInfo::default();
+        if let Some(lock) = self.lock {
+            let mut lock_info = kvrpcpb::MvccLock::default();
+            let op = match lock.lock_type {
+                LockType::Put => kvrpcpb::Op::Put,
+                LockType::Delete => kvrpcpb::Op::Del,
+                LockType::Lock => kvrpcpb::Op::Lock,
+                LockType::Pessimistic => kvrpcpb::Op::PessimisticLock,
+            };
+            lock_info.set_type(op);
+            lock_info.set_start_ts(lock.ts.into_inner());
+            lock_info.set_primary(lock.primary);
+            lock_info.set_short_value(lock.short_value.unwrap_or_default());
+            mvcc_info.set_lock(lock_info);
+        }
+        let vv = extract_2pc_values(self.values);
+        let vw = extract_2pc_writes(self.writes);
+        mvcc_info.set_writes(vw.into());
+        mvcc_info.set_values(vv.into());
+        mvcc_info
+    }
 }
 
 /// Represents the status of a transaction.
@@ -58,7 +113,7 @@ pub enum StorageCallback {
     Booleans(Callback<Vec<Result<()>>>),
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
-    Locks(Callback<Vec<LockInfo>>),
+    Locks(Callback<Vec<kvrpcpb::LockInfo>>),
     TxnStatus(Callback<TxnStatus>),
 }
 

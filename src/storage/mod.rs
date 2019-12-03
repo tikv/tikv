@@ -10,12 +10,12 @@
 //! [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
 pub mod config;
+pub mod errors;
 pub mod kv;
 pub mod lock_manager;
 pub mod mvcc;
 pub mod txn;
 
-mod errors;
 mod metrics;
 mod read_pool;
 mod types;
@@ -29,7 +29,7 @@ pub use self::{
     mvcc::Mutation,
     read_pool::{build_read_pool, build_read_pool_for_test},
     txn::{Options, ProcessResult, Scanner, SnapshotStore, Store},
-    types::{MvccInfo, StorageCallback, TxnStatus},
+    types::{StorageCallback, TxnStatus},
 };
 
 use crate::storage::{
@@ -43,6 +43,7 @@ use crate::storage::{
         scheduler::Scheduler as TxnScheduler,
         PointGetCommand,
     },
+    types::MvccInfo,
 };
 use engine::{CfName, IterOption, ALL_CFS, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};

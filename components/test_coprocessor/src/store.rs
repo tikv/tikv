@@ -11,7 +11,10 @@ use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tidb_query::codec::{datum, table, Datum};
 use tidb_query::expr::EvalContext;
 use tikv::storage::{
-    txn::FixtureStore, Engine, Mutation, RocksEngine, SnapshotStore, TestEngineBuilder,
+    kv::{Engine, RocksEngine, TestEngineBuilder},
+    mvcc::Mutation,
+    txn::FixtureStore,
+    SnapshotStore,
 };
 use tikv_util::collections::HashMap;
 
