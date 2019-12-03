@@ -7,12 +7,13 @@ use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
+use keys::TimeStamp;
 use test_coprocessor::*;
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query::storage::Range;
 use tikv::coprocessor::dag::TiKVStorage;
 use tikv::coprocessor::*;
-use tikv::storage::{Engine, SnapshotStore, TimeStamp};
+use tikv::storage::{Engine, SnapshotStore};
 
 fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
     let mut ctx = Context::default();

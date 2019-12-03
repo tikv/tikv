@@ -31,20 +31,19 @@ use crate::raftstore::coprocessor::properties::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use crate::raftstore::coprocessor::Config as CopConfig;
-use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
-use crate::server::gc_worker::GCConfig;
+use crate::server::gc_worker::GcConfig;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::config::DEFAULT_DATA_DIR;
-use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::future_pool;
@@ -1385,7 +1384,7 @@ impl Default for TiKvConfig {
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
-            gc: GCConfig::default(),
+            gc: GcConfig::default(),
         }
     }
 }

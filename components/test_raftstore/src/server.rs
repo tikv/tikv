@@ -18,6 +18,7 @@ use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use tikv::raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
@@ -25,8 +26,6 @@ use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::lock_manager::{Config as PessimisticTxnConfig, LockManager};
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::service::DebugService;
-use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::transport::{RaftStoreBlackHole, RaftStoreRouter};
 use tikv::server::Result as ServerResult;
 use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv, Server,
@@ -40,7 +39,7 @@ use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use tikv::server::gc_worker::GCWorker;
+use tikv::server::gc_worker::GcWorker;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
 type SimulateServerTransport =
@@ -137,14 +136,14 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let storage_read_pool = storage::readpool_impl::build_read_pool_for_test(
+        let storage_read_pool = storage::build_read_pool_for_test(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
             raft_engine.clone(),
         );
 
         let engine = RaftKv::new(sim_router.clone());
 
-        let mut gc_worker = GCWorker::new(engine.clone(), None, None, cfg.gc.clone());
+        let mut gc_worker = GcWorker::new(engine.clone(), None, None, cfg.gc.clone());
         gc_worker.start().unwrap();
 
         let mut lock_mgr = LockManager::new();
