@@ -53,7 +53,7 @@ impl Key {
     #[inline]
     pub fn to_raw(&self) -> Result<Vec<u8>, codec::Error> {
         let mut k = Vec::with_capacity(self.0.len() / (MEMCMP_GROUP_SIZE + 1) * MEMCMP_GROUP_SIZE);
-        MemComparableByteCodec::try_decode_first(&mut self.0.as_slice(), &mut k)?;
+        MemComparableByteCodec::try_decode_first(&self.0.as_slice(), &mut k)?;
         Ok(k)
     }
 
@@ -132,7 +132,7 @@ impl Key {
             let pos = key.len() - number::U64_SIZE;
             let k = &key[..pos];
             let mut ts = &key[pos..];
-            Ok((k, NumberCodec::decode_u64_desc(&mut ts).into()))
+            Ok((k, NumberCodec::decode_u64_desc(&ts).into()))
         }
     }
 
@@ -154,7 +154,7 @@ impl Key {
             return Err(codec::ErrorInner::KeyLength.into());
         }
         let mut ts = &key[len - number::U64_SIZE..];
-        Ok(NumberCodec::decode_u64_desc(&mut ts).into())
+        Ok(NumberCodec::decode_u64_desc(&ts).into())
     }
 
     /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to the encoded
