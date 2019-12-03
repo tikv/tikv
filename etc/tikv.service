@@ -10,6 +10,7 @@ Restart=on-failure
 KillSignal=SIGINT
 LimitNOFILE=82920
 ConfigurationDirectory=tikv
+WorkingDirectory=/var/lib/tikv/
 
 [Install]
 WantedBy=multi-user.target
