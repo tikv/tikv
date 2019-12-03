@@ -8,7 +8,7 @@ use std::usize;
 use spin::{Mutex, MutexGuard};
 
 const WAITING_LIST_SHRINK_SIZE: usize = 8;
-const WAITING_LIST_MAX_CAPACITY: usize = 32;
+const WAITING_LIST_MAX_CAPACITY: usize = 16;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
@@ -42,28 +42,37 @@ impl Latch {
         None
     }
 
-    pub fn pop_front(&mut self, s: usize) -> Option<(usize, u64)> {
-        for item in self.waiting.iter_mut() {
-            if let Some((v, _)) = item {
-                if *v == s {
-                    return item.take();
+    pub fn pop_front(&mut self, hash_key: usize) -> Option<(usize, u64)> {
+        if let Some(item) = self.waiting.pop_front() {
+            if let Some((k, _)) = item.as_ref() {
+                if *k == hash_key {
+                    self.maybe_shrink();
+                    return item;
+                }
+                self.waiting.push_front(item);
+            }
+            for item in self.waiting.iter_mut() {
+                if let Some((v, _)) = item {
+                    if *v == hash_key {
+                        return item.take();
+                    }
                 }
             }
         }
         None
     }
 
-    pub fn wait_for_wake(&mut self, s: usize, cid: u64) {
-        self.waiting.push_back(Some((s, cid)));
+    pub fn wait_for_wake(&mut self, hash_key: usize, cid: u64) {
+        self.waiting.push_back(Some((hash_key, cid)));
     }
 
-    pub fn maybe_shrink(&mut self) {
+    // For some hot keys, the waiting list maybe very long, so we should shrink the waiting
+    // VecDeque after pop.
+    fn maybe_shrink(&mut self) {
         // Pop item which is none to make queue not too long.
-        while !self.waiting.is_empty() {
-            let item = self.waiting.front().unwrap();
-            if item.is_none() {
-                self.waiting.pop_front();
-            } else {
+        while let Some(item) = self.waiting.pop_front() {
+            if item.is_some() {
+                self.waiting.push_front(item);
                 break;
             }
         }
@@ -176,9 +185,6 @@ impl Latches {
             if let Some(wakeup) = latch.front(i) {
                 wakeup_list.push(wakeup);
             }
-            // For some hot keys, the waiting list maybe very long, so we should shrink the waiting
-            // VecDeque after pop.
-            latch.maybe_shrink();
         }
         wakeup_list
     }
