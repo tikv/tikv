@@ -34,8 +34,7 @@ fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     OpenOptions::new().append(true).create(true).open(path)
 }
 
-// Rename file with a timestamp
-fn rename_with_timestamp(path: impl AsRef<Path>) -> io::Result<PathBuf> {
+fn rename_by_timestamp(path: impl AsRef<Path>) -> io::Result<PathBuf> {
     fail_point!("file_log_rename", |t| {
         if let Some(t) = t {
             Err(match t.as_ref() {
@@ -71,7 +70,7 @@ pub trait Rotator: Send {
 
     /// Check if the option is enabled in configuration
     /// Return if the `rotator` is valid.
-    fn validate(&self) -> bool;
+    fn is_valid(&self) -> bool;
 }
 
 /// This `FileLogger` will iterate over a series of `Rotators`,
@@ -84,7 +83,7 @@ pub struct RotatingFileLogger {
     path: PathBuf,
     file: File,
 
-    // Path for latest rotated file
+    // Path for the latest rotated file
     renamed: Option<PathBuf>,
 }
 
@@ -110,7 +109,7 @@ impl RotatingFileLoggerBuilder {
     }
 
     pub fn add_rotator<R: 'static + Rotator>(mut self, rotator: R) -> Self {
-        if rotator.validate() {
+        if rotator.is_valid() {
             self.rotators.push(Box::new(rotator));
         }
         self
@@ -178,7 +177,7 @@ impl Rotator for RotateByTime {
     fn rotate(&mut self, path: &Path, file: &mut File) -> io::Result<Option<PathBuf>> {
         file.flush()?;
 
-        let renamed = match rename_with_timestamp(path) {
+        let renamed = match rename_by_timestamp(path) {
             Ok(path) => Some(path),
             Err(ref e) if e.kind() == ErrorKind::NotFound => None,
             Err(e) => return Err(e),
@@ -191,7 +190,7 @@ impl Rotator for RotateByTime {
         Ok(renamed)
     }
 
-    fn validate(&self) -> bool {
+    fn is_valid(&self) -> bool {
         !self.rotation_timespan.is_zero()
     }
 }
@@ -214,7 +213,7 @@ impl Rotator for RotateBySize {
     fn rotate(&mut self, path: &Path, file: &mut File) -> io::Result<Option<PathBuf>> {
         file.flush()?;
 
-        let renamed = match rename_with_timestamp(path) {
+        let renamed = match rename_by_timestamp(path) {
             Ok(path) => Some(path),
             Err(ref e) if e.kind() == ErrorKind::NotFound => None,
             Err(e) => return Err(e),
@@ -225,7 +224,7 @@ impl Rotator for RotateBySize {
         Ok(renamed)
     }
 
-    fn validate(&self) -> bool {
+    fn is_valid(&self) -> bool {
         self.rotation_size != 0
     }
 }
