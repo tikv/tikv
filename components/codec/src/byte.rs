@@ -966,6 +966,15 @@ mod tests {
                 let _ = MemComparableByteCodec::encode_all(src.as_slice(), dest.as_mut_slice());
             });
             assert!(result.is_err());
+
+            let mut src_in_place = vec![0; dest_len];
+            let result = panic_hook::recover_safe(move || {
+                let _ = MemComparableByteCodec::encode_all_in_place(
+                    src_in_place.as_mut_slice(),
+                    src_len,
+                );
+            });
+            assert!(result.is_err());
         }
     }
 
