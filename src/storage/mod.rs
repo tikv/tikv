@@ -15,14 +15,12 @@ pub mod lock_manager;
 pub mod mvcc;
 pub mod txn;
 
-mod commands;
 mod errors;
 mod metrics;
 mod readpool_impl;
 mod types;
 
 pub use self::{
-    commands::{Options, PointGetCommand},
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
         CfStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
@@ -30,18 +28,20 @@ pub use self::{
         RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
     readpool_impl::{build_read_pool, build_read_pool_for_test},
-    txn::{Scanner, SnapshotStore, Store},
-    types::{MvccInfo, ProcessResult, StorageCallback, TxnStatus},
+    txn::{Options, PointGetCommand, ProcessResult, Scanner, SnapshotStore, Store},
+    types::{MvccInfo, StorageCallback, TxnStatus},
 };
 
 use crate::storage::{
-    commands::{get_priority_tag, Command, CommandKind},
     config::Config,
     kv::with_tls_engine,
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     mvcc::Lock,
-    txn::scheduler::Scheduler as TxnScheduler,
+    txn::{
+        commands::{get_priority_tag, Command, CommandKind},
+        scheduler::Scheduler as TxnScheduler,
+    },
 };
 use engine::{
     CfName, IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_KEY_PREFIX_LEN,

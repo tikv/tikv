@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::{types::ProcessResult, StorageCallback, TimeStamp};
+use crate::storage::{txn::ProcessResult, StorageCallback, TimeStamp};
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Lock {

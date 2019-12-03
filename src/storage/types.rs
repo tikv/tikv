@@ -4,7 +4,8 @@
 
 use crate::storage::{
     mvcc::{Lock, TimeStamp, Write},
-    Callback, Command, Error as StorageError, Result,
+    txn::ProcessResult,
+    Callback, Result,
 };
 use kvproto::kvrpcpb::LockInfo;
 use std::fmt::Debug;
@@ -59,18 +60,6 @@ pub enum StorageCallback {
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
     TxnStatus(Callback<TxnStatus>),
-}
-
-/// Process result of a command.
-pub enum ProcessResult {
-    Res,
-    MultiRes { results: Vec<Result<()>> },
-    MvccKey { mvcc: MvccInfo },
-    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
-    Locks { locks: Vec<LockInfo> },
-    TxnStatus { txn_status: TxnStatus },
-    NextCommand { cmd: Command },
-    Failed { err: StorageError },
 }
 
 impl StorageCallback {

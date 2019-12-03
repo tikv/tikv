@@ -9,7 +9,10 @@ mod txn;
 pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use crate::new_txn;
-pub use txn_types::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
+pub use txn_types::{
+    Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
+    SHORT_VALUE_MAX_LEN,
+};
 
 use std::error;
 use std::fmt;
@@ -279,7 +282,7 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 
 pub mod tests {
     use super::*;
-    use crate::storage::{Engine, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
+    use crate::storage::{Engine, Modify, Options, ScanMode, Snapshot, TxnStatus};
     use engine::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
     use txn_types::Key;

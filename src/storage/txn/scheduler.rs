@@ -38,13 +38,13 @@ use crate::storage::metrics::{
     SCHED_LATCH_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC,
     SCHED_WRITING_BYTES_GAUGE,
 };
+use crate::storage::txn::commands::{Command, CommandKind};
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{Executor, MsgScheduler, Task};
 use crate::storage::txn::sched_pool::SchedPool;
-use crate::storage::txn::Error;
+use crate::storage::txn::{Error, ProcessResult};
 use crate::storage::{
-    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner,
-    ProcessResult, StorageCallback, TimeStamp,
+    Engine, Error as StorageError, ErrorInner as StorageErrorInner, StorageCallback, TimeStamp,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
