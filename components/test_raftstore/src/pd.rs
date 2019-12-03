@@ -15,7 +15,7 @@ use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 
-use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
+use tikv::pd::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
@@ -261,8 +261,7 @@ impl Cluster {
         // assert_eq!(region.get_peers().len(), 1);
         let store_id = store.get_id();
         let mut s = Store::default();
-        s.store = store;;
-
+        s.store = store;
 
         s.region_ids.insert(region.get_id());
 
@@ -998,6 +997,12 @@ impl PdClient for TestPdClient {
             "no region contains key {}",
             hex::encode_upper(key)
         ))
+    }
+
+    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
+        let region = self.get_region(key)?;
+        let leader = self.cluster.rl().leaders.get(&region.get_id()).cloned();
+        Ok(RegionInfo::new(region, leader))
     }
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
