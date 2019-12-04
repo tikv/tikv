@@ -46,10 +46,7 @@ use crate::storage::{
 use engine::{CfName, IterOption, ALL_CFS, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
-use std::{
-    cmp,
-    sync::{atomic, Arc},
-};
+use std::sync::{atomic, Arc};
 use tikv_util::{collections::HashMap, future_pool::FuturePool};
 use txn_types::{Key, KvPair, Mutation, TimeStamp, TsSet, Value};
 
@@ -135,6 +132,15 @@ impl<E: Engine, L: LockManager> Drop for Storage<E, L> {
 
         info!("Storage stopped.");
     }
+}
+
+macro_rules! recycle_or_ret {
+    ($id: ident, $exp: expr) => {
+        let $id = match $exp {
+            Some(i) => i,
+            None => return Ok(()),
+        };
+    };
 }
 
 impl<E: Engine, L: LockManager> Storage<E, L> {
@@ -499,6 +505,25 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         Ok(())
     }
 
+    /// Returns `callback` if all key sizes are OK, `None` otherwise.
+    fn check_key_size<'a, T>(
+        &self,
+        keys: impl ::std::iter::Iterator<Item = &'a Vec<u8>>,
+        callback: Callback<T>,
+    ) -> Option<Callback<T>> {
+        for k in keys {
+            let key_size = k.len();
+            if key_size > self.max_key_size {
+                callback(Err(Error::from(ErrorInner::KeyTooLarge(
+                    key_size,
+                    self.max_key_size,
+                ))));
+                return None;
+            }
+        }
+        Some(callback)
+    }
+
     /// The prewrite phase of a transaction. The first phase of 2PC.
     ///
     /// Schedules a [`CommandKind::Prewrite`].
@@ -514,16 +539,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         min_commit_ts: TimeStamp,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
-        for m in &mutations {
-            let key_size = m.key().as_encoded().len();
-            if key_size > self.max_key_size {
-                callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                    key_size,
-                    self.max_key_size,
-                ))));
-                return Ok(());
-            }
-        }
+        recycle_or_ret!(
+            callback,
+            self.check_key_size(mutations.iter().map(|m| m.key().as_encoded()), callback)
+        );
 
         let cmd = commands::Prewrite::new(
             mutations,
@@ -555,16 +574,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         min_commit_ts: TimeStamp,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
-        for (m, _) in &mutations {
-            let key_size = m.key().as_encoded().len();
-            if key_size > self.max_key_size {
-                callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                    key_size,
-                    self.max_key_size,
-                ))));
-                return Ok(());
-            }
+        if !self.pessimistic_txn_enabled {
+            callback(Err(Error::from(ErrorInner::PessimisticTxnNotEnabled)));
+            return Ok(());
         }
+
+        recycle_or_ret!(
+            callback,
+            self.check_key_size(
+                mutations.iter().map(|(m, _)| m.key().as_encoded()),
+                callback
+            )
+        );
 
         let cmd = commands::PrewritePessimistic::new(
             mutations,
@@ -600,16 +621,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             return Ok(());
         }
 
-        for k in &keys {
-            let key_size = k.0.as_encoded().len();
-            if key_size > self.max_key_size {
-                callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                    key_size,
-                    self.max_key_size,
-                ))));
-                return Ok(());
-            }
-        }
+        recycle_or_ret!(
+            callback,
+            self.check_key_size(keys.iter().map(|k| k.0.as_encoded()), callback)
+        );
+
         let cmd = commands::AcquirePessimisticLock::new(
             keys,
             primary,
@@ -1066,13 +1082,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         value: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        if key.len() > self.max_key_size {
-            callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                key.len(),
-                self.max_key_size,
-            ))));
-            return Ok(());
-        }
+        recycle_or_ret!(
+            callback,
+            self.check_key_size(Some(&key).into_iter(), callback)
+        );
+
         self.engine.async_write(
             &ctx,
             vec![Modify::Put(
@@ -1095,15 +1109,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
-        for &(ref key, _) in &pairs {
-            if key.len() > self.max_key_size {
-                callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                    key.len(),
-                    self.max_key_size,
-                ))));
-                return Ok(());
-            }
-        }
+
+        recycle_or_ret!(
+            callback,
+            self.check_key_size(pairs.iter().map(|(ref k, _)| k), callback)
+        );
+
         let requests = pairs
             .into_iter()
             .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
@@ -1125,13 +1136,11 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        if key.len() > self.max_key_size {
-            callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                key.len(),
-                self.max_key_size,
-            ))));
-            return Ok(());
-        }
+        recycle_or_ret!(
+            callback,
+            self.check_key_size(Some(&key).into_iter(), callback)
+        );
+
         self.engine.async_write(
             &ctx,
             vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
@@ -1150,13 +1159,15 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        if start_key.len() > self.max_key_size || end_key.len() > self.max_key_size {
-            callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                cmp::max(start_key.len(), end_key.len()),
-                self.max_key_size,
-            ))));
-            return Ok(());
-        }
+        recycle_or_ret!(
+            callback,
+            self.check_key_size(
+                Some(&start_key)
+                    .into_iter()
+                    .chain(Some(&end_key).into_iter()),
+                callback
+            )
+        );
 
         let cf = Self::rawkv_cf(&cf)?;
         let start_key = Key::from_encoded(start_key);
@@ -1180,15 +1191,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         callback: Callback<()>,
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
-        for key in &keys {
-            if key.len() > self.max_key_size {
-                callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                    key.len(),
-                    self.max_key_size,
-                ))));
-                return Ok(());
-            }
-        }
+        recycle_or_ret!(callback, self.check_key_size(keys.iter(), callback));
+
         let requests = keys
             .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
