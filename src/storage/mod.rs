@@ -418,7 +418,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         end_key: Option<Key>,
         limit: usize,
         start_ts: TimeStamp,
-        options: Options,
+        key_only: bool,
+        reverse_scan: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "scan";
         let priority = get_priority_tag(ctx.get_priority());
@@ -441,20 +442,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                             );
 
                             let mut scanner;
-                            if !options.reverse_scan {
+                            if !reverse_scan {
                                 scanner = snap_store.scanner(
                                     false,
-                                    options.key_only,
+                                    key_only,
                                     Some(start_key),
                                     end_key,
                                 )?;
                             } else {
-                                scanner = snap_store.scanner(
-                                    true,
-                                    options.key_only,
-                                    end_key,
-                                    Some(start_key),
-                                )?;
+                                scanner =
+                                    snap_store.scanner(true, key_only, end_key, Some(start_key))?;
                             };
                             let res = scanner.scan(limit);
 
@@ -1692,7 +1689,8 @@ mod tests {
                     None,
                     1000,
                     1.into(),
-                    Options::default(),
+                    false,
+                    false,
                 )
                 .wait(),
         );
@@ -1762,7 +1760,8 @@ mod tests {
                     None,
                     1000,
                     5.into(),
-                    Options::default(),
+                    false,
+                    false,
                 )
                 .wait(),
         );
@@ -1776,7 +1775,8 @@ mod tests {
                     None,
                     1000,
                     5.into(),
-                    Options::default().reverse_scan(),
+                    false,
+                    true,
                 )
                 .wait(),
         );
@@ -1790,7 +1790,8 @@ mod tests {
                     Some(Key::from_raw(b"c")),
                     1000,
                     5.into(),
-                    Options::default(),
+                    false,
+                    false,
                 )
                 .wait(),
         );
@@ -1804,7 +1805,8 @@ mod tests {
                     Some(Key::from_raw(b"b")),
                     1000,
                     5.into(),
-                    Options::default().reverse_scan(),
+                    false,
+                    true,
                 )
                 .wait(),
         );
@@ -1818,7 +1820,8 @@ mod tests {
                     None,
                     2,
                     5.into(),
-                    Options::default(),
+                    false,
+                    false,
                 )
                 .wait(),
         );
@@ -1832,7 +1835,8 @@ mod tests {
                     None,
                     2,
                     5.into(),
-                    Options::default().reverse_scan(),
+                    false,
+                    true,
                 )
                 .wait(),
         );
@@ -1865,7 +1869,8 @@ mod tests {
                     None,
                     1000,
                     5.into(),
-                    Options::default(),
+                    false,
+                    false,
                 )
                 .wait(),
         );
@@ -1883,7 +1888,8 @@ mod tests {
                     None,
                     1000,
                     5.into(),
-                    Options::default().reverse_scan(),
+                    false,
+                    true,
                 )
                 .wait(),
         );
@@ -1900,7 +1906,8 @@ mod tests {
                     Some(Key::from_raw(b"c")),
                     1000,
                     5.into(),
-                    Options::default(),
+                    false,
+                    false,
                 )
                 .wait(),
         );
@@ -1917,7 +1924,8 @@ mod tests {
                     Some(Key::from_raw(b"b")),
                     1000,
                     5.into(),
-                    Options::default().reverse_scan(),
+                    false,
+                    true,
                 )
                 .wait(),
         );
@@ -1935,7 +1943,8 @@ mod tests {
                     None,
                     2,
                     5.into(),
-                    Options::default(),
+                    false,
+                    false,
                 )
                 .wait(),
         );
@@ -1952,7 +1961,8 @@ mod tests {
                     None,
                     2,
                     5.into(),
-                    Options::default().reverse_scan(),
+                    false,
+                    true,
                 )
                 .wait(),
         );

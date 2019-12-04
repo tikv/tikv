@@ -1543,10 +1543,6 @@ fn future_scan<E: Engine, L: LockManager>(
         Some(Key::from_raw(req.get_end_key()))
     };
 
-    let mut options = Options::default();
-    options.key_only = req.get_key_only();
-    options.reverse_scan = req.get_reverse();
-
     storage
         .async_scan(
             req.take_context(),
@@ -1554,7 +1550,8 @@ fn future_scan<E: Engine, L: LockManager>(
             end_key,
             req.get_limit() as usize,
             req.get_version().into(),
-            options,
+            req.get_key_only(),
+            req.get_reverse(),
         )
         .then(|v| {
             let mut resp = ScanResponse::default();

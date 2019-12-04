@@ -1618,7 +1618,8 @@ mod tests {
                 None,
                 expected_data.len() + 1,
                 1.into(),
-                Options::default(),
+                false,
+                false,
             )
             .wait()
             .unwrap();
