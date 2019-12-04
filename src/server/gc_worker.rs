@@ -1228,12 +1228,7 @@ impl<E: Engine> GcWorker<E> {
         Ok(())
     }
 
-    pub fn async_gc(
-        &self,
-        ctx: Context,
-        safe_point: TimeStamp,
-        callback: Callback<()>,
-    ) -> Result<()> {
+    pub fn gc(&self, ctx: Context, safe_point: TimeStamp, callback: Callback<()>) -> Result<()> {
         GC_COMMAND_COUNTER_VEC_STATIC.gc.inc();
         self.worker_scheduler
             .schedule(GcTask::Gc {
@@ -1249,7 +1244,7 @@ impl<E: Engine> GcWorker<E> {
     /// on RocksDB, bypassing the Raft layer. User must promise that, after calling `destroy_range`,
     /// the range will never be accessed any more. However, `destroy_range` is allowed to be called
     /// multiple times on an single range.
-    pub fn async_unsafe_destroy_range(
+    pub fn unsafe_destroy_range(
         &self,
         ctx: Context,
         start_key: Key,
@@ -1612,7 +1607,7 @@ mod tests {
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = storage
-            .async_scan(
+            .scan(
                 Context::default(),
                 Key::from_encoded_slice(b""),
                 None,
@@ -1672,7 +1667,7 @@ mod tests {
         let start_ts = start_ts.into();
 
         // Write these data to the storage.
-        wait_op!(|cb| storage.async_prewrite(
+        wait_op!(|cb| storage.prewrite(
             Context::default(),
             mutations,
             primary,
@@ -1685,15 +1680,9 @@ mod tests {
 
         // Commit.
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
-        wait_op!(|cb| storage.async_commit(
-            Context::default(),
-            keys,
-            start_ts,
-            commit_ts.into(),
-            cb
-        ))
-        .unwrap()
-        .unwrap();
+        wait_op!(|cb| storage.commit(Context::default(), keys, start_ts, commit_ts.into(), cb))
+            .unwrap()
+            .unwrap();
 
         // Assert these data is successfully written to the storage.
         check_data(&storage, &data);
@@ -1708,14 +1697,9 @@ mod tests {
             .collect();
 
         // Invoke unsafe destroy range.
-        wait_op!(|cb| gc_worker.async_unsafe_destroy_range(
-            Context::default(),
-            start_key,
-            end_key,
-            cb
-        ))
-        .unwrap()
-        .unwrap();
+        wait_op!(|cb| gc_worker.unsafe_destroy_range(Context::default(), start_key, end_key, cb))
+            .unwrap()
+            .unwrap();
 
         // Check remaining data is as expected.
         check_data(&storage, &data);
