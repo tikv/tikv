@@ -62,7 +62,7 @@ pub struct Command {
 /// This prepares the system to commit the transaction. Later a [`Commit`](CommandKind::Commit)
 /// or a [`Rollback`](CommandKind::Rollback) should follow.
 ///
-/// If `options.for_update_ts` is `0`, the transaction is optimistic. Else it is pessimistic.
+/// If `for_update_ts` is `0`, the transaction is optimistic. Else it is pessimistic.
 pub struct Prewrite {
     /// The set of mutations to apply.
     pub mutations: Vec<Mutation>,
@@ -70,7 +70,13 @@ pub struct Prewrite {
     pub primary: Vec<u8>,
     /// The transaction timestamp.
     pub start_ts: TimeStamp,
-    pub options: Options,
+    pub lock_ttl: u64,
+    pub skip_constraint_check: bool,
+    pub for_update_ts: TimeStamp,
+    pub is_pessimistic_lock: Vec<bool>,
+    /// How many keys this transaction involved.
+    pub txn_size: u64,
+    pub min_commit_ts: TimeStamp,
 }
 
 impl Prewrite {
@@ -78,7 +84,12 @@ impl Prewrite {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
-        options: Options,
+        lock_ttl: u64,
+        skip_constraint_check: bool,
+        for_update_ts: TimeStamp,
+        is_pessimistic_lock: Vec<bool>,
+        txn_size: u64,
+        min_commit_ts: TimeStamp,
         ctx: Context,
     ) -> Command {
         Command {
@@ -87,7 +98,12 @@ impl Prewrite {
                 mutations,
                 primary,
                 start_ts,
-                options,
+                lock_ttl,
+                skip_constraint_check,
+                for_update_ts,
+                is_pessimistic_lock,
+                txn_size,
+                min_commit_ts,
             }),
         }
     }
@@ -105,7 +121,12 @@ pub enum CommandKind {
         primary: Vec<u8>,
         /// The transaction timestamp.
         start_ts: TimeStamp,
-        options: Options,
+        lock_ttl: u64,
+        is_first_lock: bool,
+        for_update_ts: TimeStamp,
+        /// Time to wait for lock released in milliseconds when encountering locks.
+        /// 0 means using default timeout. Negative means no wait.
+        wait_timeout: i64,
     },
     /// Commit the transaction that started at `lock_ts`.
     ///
@@ -409,14 +430,14 @@ impl Display for Command {
             CommandKind::AcquirePessimisticLock {
                 ref keys,
                 start_ts,
-                ref options,
+                for_update_ts,
                 ..
             } => write!(
                 f,
                 "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}",
                 keys.len(),
                 start_ts,
-                options.for_update_ts,
+                for_update_ts,
                 self.ctx,
             ),
             CommandKind::Commit {
@@ -531,19 +552,4 @@ pub fn get_priority_tag(priority: CommandPri) -> CommandPriority {
         CommandPri::Normal => CommandPriority::normal,
         CommandPri::High => CommandPriority::high,
     }
-}
-
-#[derive(Clone, Default)]
-pub struct Options {
-    pub lock_ttl: u64,
-    pub skip_constraint_check: bool,
-    pub is_first_lock: bool,
-    pub for_update_ts: TimeStamp,
-    pub is_pessimistic_lock: Vec<bool>,
-    // How many keys this transaction involved.
-    pub txn_size: u64,
-    pub min_commit_ts: TimeStamp,
-    // Time to wait for lock released in milliseconds when encountering locks.
-    // 0 means using default timeout. Negative means no wait.
-    pub wait_timeout: i64,
 }

@@ -9,8 +9,8 @@ use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    Engine, Mutation, Options, RegionInfoProvider, Result, Storage, TestEngineBuilder,
-    TestStorageBuilder, TxnStatus,
+    Engine, Mutation, RegionInfoProvider, Result, Storage, TestEngineBuilder, TestStorageBuilder,
+    TxnStatus,
 };
 use tikv_util::collections::HashMap;
 
@@ -170,7 +170,12 @@ impl<E: Engine> SyncTestStorage<E> {
             mutations,
             primary,
             start_ts.into(),
-            Options::default(),
+            0,
+            false,
+            TimeStamp::default(),
+            vec![],
+            0,
+            TimeStamp::default(),
             cb
         ))
         .unwrap()

@@ -29,9 +29,9 @@ use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
     Statistics,
 };
-use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
+use crate::storage::mvcc::{MvccReader, MvccTxn};
 use crate::storage::{Callback, Error, ErrorInner, Result};
-use keys::Key;
+use keys::{Key, TimeStamp};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
@@ -1283,7 +1283,7 @@ mod tests {
     use crate::raftstore::store::util::new_peer;
     use crate::storage::kv::{Result as EngineResult, TestEngineBuilder};
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{mvcc::Mutation, txn::Options, Storage, TestStorageBuilder};
+    use crate::storage::{mvcc::Mutation, Storage, TestStorageBuilder};
     use futures::Future;
     use kvproto::metapb;
     use std::collections::BTreeMap;
@@ -1671,7 +1671,12 @@ mod tests {
             mutations,
             primary,
             start_ts,
-            Options::default(),
+            0,
+            false,
+            TimeStamp::default(),
+            vec![],
+            0,
+            TimeStamp::default(),
             cb
         ))
         .unwrap()

@@ -21,7 +21,7 @@ use crate::storage::{
     },
     kv::Engine,
     lock_manager::LockManager,
-    txn::{Options, PointGetCommand},
+    txn::PointGetCommand,
     Storage, TxnStatus,
 };
 use futures::executor::{self, Notify, Spawn};
@@ -1569,21 +1569,18 @@ fn future_prewrite<E: Engine, L: LockManager>(
     mut req: PrewriteRequest,
 ) -> impl Future<Item = PrewriteResponse, Error = Error> {
     let mutations = req.take_mutations().into_iter().map(Into::into).collect();
-    let mut options = Options::default();
-    options.lock_ttl = req.get_lock_ttl();
-    options.skip_constraint_check = req.get_skip_constraint_check();
-    options.for_update_ts = req.get_for_update_ts().into();
-    options.is_pessimistic_lock = req.take_is_pessimistic_lock();
-    options.txn_size = req.get_txn_size();
-    options.min_commit_ts = req.get_min_commit_ts().into();
-
     let (cb, f) = paired_future_callback();
     let res = storage.prewrite(
         req.take_context(),
         mutations,
         req.take_primary_lock(),
         req.get_start_version().into(),
-        options,
+        req.get_lock_ttl(),
+        req.get_skip_constraint_check(),
+        req.get_for_update_ts().into(),
+        req.take_is_pessimistic_lock(),
+        req.get_txn_size(),
+        req.get_min_commit_ts().into(),
         cb,
     );
 
@@ -1613,11 +1610,6 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockManager>(
             _ => panic!("mismatch Op in pessimistic lock mutations"),
         })
         .collect();
-    let mut options = Options::default();
-    options.lock_ttl = req.get_lock_ttl();
-    options.is_first_lock = req.get_is_first_lock();
-    options.for_update_ts = req.get_for_update_ts().into();
-    options.wait_timeout = req.get_wait_timeout();
 
     let (cb, f) = paired_future_callback();
     let res = storage.acquire_pessimistic_lock(
@@ -1625,7 +1617,10 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockManager>(
         keys,
         req.take_primary_lock(),
         req.get_start_version().into(),
-        options,
+        req.get_lock_ttl(),
+        req.get_is_first_lock(),
+        req.get_for_update_ts().into(),
+        req.get_wait_timeout(),
         cb,
     );
 
