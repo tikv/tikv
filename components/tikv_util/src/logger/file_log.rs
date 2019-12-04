@@ -13,7 +13,7 @@ fn compute_rotation_time(initial: &DateTime<Utc>, timespan: Duration) -> DateTim
 }
 
 /// Rotates file path with given timestamp.
-fn rotation_file_path_with_timestamp(
+fn rotation_file_path_by_timestamp(
     file_path: impl AsRef<Path>,
     timestamp: &DateTime<Utc>,
 ) -> PathBuf {
@@ -56,7 +56,7 @@ fn rename_by_timestamp(path: impl AsRef<Path>) -> io::Result<PathBuf> {
     });
 
     // Note: renaming files while they're open only works on Linux and macOS.
-    let new_path = rotation_file_path_with_timestamp(&path, &Utc::now());
+    let new_path = rotation_file_path_by_timestamp(&path, &Utc::now());
     fs::rename(&path, &new_path).map(|_| new_path)
 }
 
@@ -69,7 +69,7 @@ pub trait Rotator: Send {
     fn rotate(&mut self, path: &Path, file: &mut File) -> io::Result<Option<PathBuf>>;
 
     /// Check if the option is enabled in configuration
-    /// Return if the `rotator` is valid.
+    /// Return true if the `rotator` is valid.
     fn is_valid(&self) -> bool;
 }
 
@@ -104,7 +104,7 @@ impl RotatingFileLoggerBuilder {
     pub fn new(path: impl AsRef<Path>) -> Self {
         RotatingFileLoggerBuilder {
             rotators: vec![],
-            path: path.as_ref().to_path_buf(),
+            path: path.as_ref().to_owned(),
         }
     }
 
@@ -234,13 +234,8 @@ mod tests {
     use super::*;
 
     use chrono::{Duration, Utc};
-    use std::sync::Mutex;
+    use fail::FailScenario;
     use tempfile::TempDir;
-
-    // Workaround for `failpoint`
-    lazy_static! {
-        static ref FAILPOINT_LOCK: Mutex<()> = Mutex::new(());
-    }
 
     fn file_exists(file: impl AsRef<Path>) -> bool {
         let path = file.as_ref();
@@ -248,9 +243,9 @@ mod tests {
     }
 
     #[test]
-    fn test_rotate_by_time() {
+    fn test_should_rotate_by_time() {
         let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().join("test_rotate_by_time.log");
+        let path = tmp_dir.path().join("test_should_rotate_by_time.log");
 
         let next_rotation_time = Utc::now() - Duration::days(1);
 
@@ -263,11 +258,32 @@ mod tests {
             .build()
             .unwrap();
         // Rotate
-        let lock = FAILPOINT_LOCK.lock().unwrap();
         logger.flush().unwrap();
-        drop(lock);
 
         assert!(file_exists(logger.get_rotated_file().as_ref().unwrap()));
+    }
+
+    #[test]
+    fn test_should_not_rotate_by_time() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("test_should_not_rotate_by_time.log");
+
+        let next_rotation_time = Utc::now() + Duration::days(1);
+
+        // Should rotate right now.
+        let mut logger = RotatingFileLoggerBuilder::new(path)
+            .add_rotator(RotateByTime::new_for_test(
+                next_rotation_time,
+                Duration::days(1),
+            ))
+            .build()
+            .unwrap();
+
+        // Should not trigger rotation
+        logger.write_all(&[0xff; 1024]).unwrap();
+        logger.flush().unwrap();
+
+        assert!(logger.get_rotated_file().is_none());
     }
 
     #[test]
@@ -280,7 +296,6 @@ mod tests {
             .build()
             .unwrap();
 
-        let lock = FAILPOINT_LOCK.lock().unwrap();
         logger.write_all(&[0xff; 512]).unwrap();
         logger.flush().unwrap();
         assert!(logger.get_rotated_file().is_none());
@@ -289,7 +304,6 @@ mod tests {
         logger.flush().unwrap();
 
         assert!(file_exists(logger.get_rotated_file().as_ref().unwrap()));
-        drop(lock);
     }
 
     #[test]
@@ -301,14 +315,14 @@ mod tests {
             .build()
             .unwrap();
 
-        let lock = FAILPOINT_LOCK.lock().unwrap();
         logger.write_all(&[0xff; 1025]).unwrap();
         // trigger fail point
+        let scenario = FailScenario::setup();
         fail::cfg("file_log_rename", "return(NotFound)").unwrap();
         logger.flush().unwrap();
         assert!(logger.get_rotated_file().is_none());
         fail::remove("file_log_rename");
-        drop(lock);
+        scenario.teardown();
 
         // dropping the logger still should not panic.
         drop(logger);
