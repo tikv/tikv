@@ -5,7 +5,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-const BYTES_PER_MIB: usize = 1 << 20;
+use crate::config::ReadableSize;
 
 /// Adds `Duration` to the initial date and time.
 fn compute_rotation_time(initial: &DateTime<Utc>, timespan: Duration) -> DateTime<Utc> {
@@ -196,18 +196,18 @@ impl Rotator for RotateByTime {
 }
 
 pub struct RotateBySize {
-    rotation_size: u64,
+    rotation_size: ReadableSize,
 }
 
 impl RotateBySize {
-    pub fn new(rotation_size: u64) -> Self {
+    pub fn new(rotation_size: ReadableSize) -> Self {
         RotateBySize { rotation_size }
     }
 }
 
 impl Rotator for RotateBySize {
     fn should_rotate(&self, file: &File) -> io::Result<bool> {
-        Ok(file.metadata()?.len() > self.rotation_size * (BYTES_PER_MIB as u64))
+        Ok(file.metadata()?.len() > self.rotation_size.as_b())
     }
 
     fn rotate(&mut self, path: &Path, file: &mut File) -> io::Result<Option<PathBuf>> {
@@ -225,7 +225,7 @@ impl Rotator for RotateBySize {
     }
 
     fn is_valid(&self) -> bool {
-        self.rotation_size != 0
+        self.rotation_size.as_b() != 0
     }
 }
 
@@ -234,7 +234,13 @@ mod tests {
     use super::*;
 
     use chrono::{Duration, Utc};
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    // Workaround for `failpoint`
+    lazy_static! {
+        static ref FAILPOINT_LOCK: Mutex<()> = Mutex::new(());
+    }
 
     fn file_exists(file: impl AsRef<Path>) -> bool {
         let path = file.as_ref();
@@ -257,7 +263,9 @@ mod tests {
             .build()
             .unwrap();
         // Rotate
+        let lock = FAILPOINT_LOCK.lock().unwrap();
         logger.flush().unwrap();
+        drop(lock);
 
         assert!(file_exists(logger.get_rotated_file().as_ref().unwrap()));
     }
@@ -267,23 +275,21 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_rotate_by_size.log");
 
-        // 1 MiB
-        let rotation_size = 1;
-
         let mut logger = RotatingFileLoggerBuilder::new(path)
-            .add_rotator(RotateBySize::new(rotation_size))
+            .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
             .build()
             .unwrap();
 
-        // Write 1 MiB
-        logger.write_all(&[0xff; BYTES_PER_MIB]).unwrap();
+        let lock = FAILPOINT_LOCK.lock().unwrap();
+        logger.write_all(&[0xff; 512]).unwrap();
         logger.flush().unwrap();
         assert!(logger.get_rotated_file().is_none());
 
-        logger.write_all(&[0xff; 1024]).unwrap();
+        logger.write_all(&[0xff; 513]).unwrap();
         logger.flush().unwrap();
 
         assert!(file_exists(logger.get_rotated_file().as_ref().unwrap()));
+        drop(lock);
     }
 
     #[test]
@@ -291,14 +297,19 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let log_file = tmp_dir.path().join("test_no_panic.log");
         let mut logger = RotatingFileLoggerBuilder::new(&log_file)
-            .add_rotator(RotateBySize::new(1024))
+            .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
             .build()
             .unwrap();
+
+        let lock = FAILPOINT_LOCK.lock().unwrap();
+        logger.write_all(&[0xff; 1025]).unwrap();
         // trigger fail point
         fail::cfg("file_log_rename", "return(NotFound)").unwrap();
         logger.flush().unwrap();
         assert!(logger.get_rotated_file().is_none());
         fail::remove("file_log_rename");
+        drop(lock);
+
         // dropping the logger still should not panic.
         drop(logger);
     }

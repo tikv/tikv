@@ -16,6 +16,7 @@ use slog_async::{Async, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 
 use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
+use crate::config::ReadableSize;
 
 pub use slog::Level;
 
@@ -94,7 +95,7 @@ pub type RotatingFileDecorator = PlainDecorator<BufWriter<RotatingFileLogger>>;
 pub fn file_drainer(
     path: impl AsRef<Path>,
     rotation_timespan: Duration,
-    rotation_size: u64,
+    rotation_size: ReadableSize,
 ) -> io::Result<TikvFormat<RotatingFileDecorator>> {
     let logger = BufWriter::new(
         RotatingFileLoggerBuilder::new(path)
