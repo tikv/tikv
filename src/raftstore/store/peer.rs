@@ -1333,7 +1333,12 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply<T, C>(&mut self, ctx: &mut PollContext<T, C>, mut ready: Ready) {
+    pub fn handle_raft_ready_apply<T, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+        ready: &mut Ready,
+        invoke_ctx: &InvokeContext,
+    ) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
@@ -1341,10 +1346,7 @@ impl Peer {
         // updates will soon be removed. But the soft state of raft is still be updated
         // in memory. Hence when handle ready next time, these updates won't be included
         // in `ready.committed_entries` again, which will lead to inconsistency.
-        if self.is_applying_snapshot() {
-            // Snapshot's metadata has been applied.
-            self.last_applying_idx = self.get_store().truncated_index();
-        } else {
+        if !invoke_ctx.has_snapshot() && !self.get_store().is_applying_snapshot() {
             let committed_entries = ready.committed_entries.take().unwrap();
             // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
@@ -1418,8 +1420,14 @@ impl Peer {
             }
         }
 
-        self.apply_reads(ctx, &ready);
+        self.apply_reads(ctx, ready);
+    }
 
+    pub fn handle_raft_ready_advance(&mut self, ready: Ready) {
+        if self.get_store().is_applying_snapshot() {
+            // Snapshot's metadata has been applied.
+            self.last_applying_idx = self.get_store().truncated_index();
+        }
         self.raft_group.advance_append(ready);
         if self.is_applying_snapshot() {
             // Because we only handle raft ready when not applying snapshot, so following
