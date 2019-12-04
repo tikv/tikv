@@ -42,7 +42,7 @@ TiKV has the following key features:
 
 ## Documentation
 
-For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/3.0/tasks/getting-started/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/docs/deep-dive/introduction/).
+For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/3.0/tasks/try/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/docs/deep-dive/introduction/).
 
 > **Note:**
 >
