@@ -9,6 +9,43 @@ pub struct Lock {
     pub hash: u64,
 }
 
+/// Time to wait for lock released when encountering locks.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum WaitTimeout {
+    None,
+    Default,
+    Millis(u64),
+}
+
+impl WaitTimeout {
+    pub fn expect_millis(self) -> u64 {
+        match self {
+            WaitTimeout::Millis(i) => i,
+            _ => panic!("expected WaitTimeout::Millis"),
+        }
+    }
+}
+
+/// Timeouts are encoded as i64s in protobufs where 0 means using default timeout.
+/// Negative means no wait.
+impl From<i64> for WaitTimeout {
+    fn from(i: i64) -> WaitTimeout {
+        if i == 0 {
+            WaitTimeout::Default
+        } else if i < 0 {
+            WaitTimeout::None
+        } else {
+            WaitTimeout::Millis(i as u64)
+        }
+    }
+}
+
+impl From<u64> for WaitTimeout {
+    fn from(i: u64) -> WaitTimeout {
+        WaitTimeout::Millis(i)
+    }
+}
+
 /// `LockManager` manages transactions waiting for locks held by other transactions.
 /// It has responsibility to handle deadlocks between transactions.
 pub trait LockManager: Clone + Send + 'static {
@@ -25,7 +62,7 @@ pub trait LockManager: Clone + Send + 'static {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
-        timeout: i64,
+        timeout: WaitTimeout,
     );
 
     /// The locks with `lock_ts` and `hashes` are released, tries to wake up transactions.
@@ -57,7 +94,7 @@ impl LockManager for DummyLockManager {
         _pr: ProcessResult,
         _lock: Lock,
         _is_first_lock: bool,
-        _wait_timeout: i64,
+        _wait_timeout: WaitTimeout,
     ) {
     }
 

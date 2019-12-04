@@ -6,6 +6,7 @@ use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, RawGetRequest};
 use tikv_util::collections::HashMap;
 use txn_types::{Key, Lock, Mutation, TimeStamp};
 
+use crate::storage::lock_manager::WaitTimeout;
 use crate::storage::metrics::{self, CommandPriority};
 
 /// Get a single value.
@@ -122,8 +123,7 @@ pub struct AcquirePessimisticLock {
     pub is_first_lock: bool,
     pub for_update_ts: TimeStamp,
     /// Time to wait for lock released in milliseconds when encountering locks.
-    /// 0 means using default timeout. Negative means no wait.
-    pub wait_timeout: i64,
+    pub wait_timeout: WaitTimeout,
 }
 
 impl AcquirePessimisticLock {
@@ -134,7 +134,7 @@ impl AcquirePessimisticLock {
         lock_ttl: u64,
         is_first_lock: bool,
         for_update_ts: TimeStamp,
-        wait_timeout: i64,
+        wait_timeout: WaitTimeout,
         ctx: Context,
     ) -> Command {
         Command {

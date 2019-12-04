@@ -34,7 +34,7 @@ pub use self::{
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
-    lock_manager::{DummyLockManager, LockManager},
+    lock_manager::{DummyLockManager, LockManager, WaitTimeout},
     metrics::*,
     txn::{
         commands::{self, get_priority_tag, Command, CommandKind},
@@ -555,7 +555,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         lock_ttl: u64,
         is_first_lock: bool,
         for_update_ts: TimeStamp,
-        wait_timeout: i64,
+        wait_timeout: WaitTimeout,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         if !self.pessimistic_txn_enabled {

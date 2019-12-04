@@ -32,7 +32,7 @@ use tikv_util::{collections::HashMap, time::SlowTimer};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::{with_tls_engine, Engine, Result as EngineResult};
-use crate::storage::lock_manager::{self, LockManager};
+use crate::storage::lock_manager::{self, LockManager, WaitTimeout};
 use crate::storage::metrics::{
     self, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC, SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC,
     SCHED_LATCH_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC,
@@ -79,7 +79,7 @@ pub enum Msg {
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
-        wait_timeout: i64,
+        wait_timeout: WaitTimeout,
     },
 }
 
@@ -455,7 +455,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
-        wait_timeout: i64,
+        wait_timeout: WaitTimeout,
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -590,7 +590,7 @@ mod tests {
                 0,
                 false,
                 TimeStamp::default(),
-                0,
+                WaitTimeout::Default,
                 Context::default(),
             ),
             Command {
