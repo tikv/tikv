@@ -61,8 +61,6 @@ pub struct Command {
 ///
 /// This prepares the system to commit the transaction. Later a [`Commit`](CommandKind::Commit)
 /// or a [`Rollback`](CommandKind::Rollback) should follow.
-///
-/// If `for_update_ts` is `0`, the transaction is optimistic. Else it is pessimistic.
 pub struct Prewrite {
     /// The set of mutations to apply.
     pub mutations: Vec<Mutation>,
@@ -72,8 +70,6 @@ pub struct Prewrite {
     pub start_ts: TimeStamp,
     pub lock_ttl: u64,
     pub skip_constraint_check: bool,
-    pub for_update_ts: TimeStamp,
-    pub is_pessimistic_lock: Vec<bool>,
     /// How many keys this transaction involved.
     pub txn_size: u64,
     pub min_commit_ts: TimeStamp,
@@ -86,8 +82,6 @@ impl Prewrite {
         start_ts: TimeStamp,
         lock_ttl: u64,
         skip_constraint_check: bool,
-        for_update_ts: TimeStamp,
-        is_pessimistic_lock: Vec<bool>,
         txn_size: u64,
         min_commit_ts: TimeStamp,
         ctx: Context,
@@ -100,8 +94,51 @@ impl Prewrite {
                 start_ts,
                 lock_ttl,
                 skip_constraint_check,
+                txn_size,
+                min_commit_ts,
+            }),
+        }
+    }
+}
+
+/// The prewrite phase of a transaction using pessimistic locking. The first phase of 2PC.
+///
+/// This prepares the system to commit the transaction. Later a [`Commit`](CommandKind::Commit)
+/// or a [`Rollback`](CommandKind::Rollback) should follow.
+pub struct PrewritePessimistic {
+    /// The set of mutations to apply; the bool = is pessimistic lock.
+    pub mutations: Vec<(Mutation, bool)>,
+    /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
+    pub primary: Vec<u8>,
+    /// The transaction timestamp.
+    pub start_ts: TimeStamp,
+    pub lock_ttl: u64,
+    pub for_update_ts: TimeStamp,
+    /// How many keys this transaction involved.
+    pub txn_size: u64,
+    pub min_commit_ts: TimeStamp,
+}
+
+impl PrewritePessimistic {
+    pub fn new(
+        mutations: Vec<(Mutation, bool)>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+        lock_ttl: u64,
+        for_update_ts: TimeStamp,
+        txn_size: u64,
+        min_commit_ts: TimeStamp,
+        ctx: Context,
+    ) -> Command {
+        debug_assert!(for_update_ts > TimeStamp::zero());
+        Command {
+            ctx,
+            kind: CommandKind::PrewritePessimistic(PrewritePessimistic {
+                mutations,
+                primary,
+                start_ts,
+                lock_ttl,
                 for_update_ts,
-                is_pessimistic_lock,
                 txn_size,
                 min_commit_ts,
             }),
@@ -154,6 +191,7 @@ impl AcquirePessimisticLock {
 
 pub enum CommandKind {
     Prewrite(Prewrite),
+    PrewritePessimistic(PrewritePessimistic),
     AcquirePessimisticLock(AcquirePessimisticLock),
     /// Commit the transaction that started at `lock_ts`.
     ///
@@ -338,7 +376,9 @@ impl Command {
 
     pub fn tag(&self) -> metrics::CommandKind {
         match self.kind {
-            CommandKind::Prewrite(..) => metrics::CommandKind::prewrite,
+            CommandKind::Prewrite(..) | CommandKind::PrewritePessimistic(..) => {
+                metrics::CommandKind::prewrite
+            }
             CommandKind::AcquirePessimisticLock(..) => {
                 metrics::CommandKind::acquire_pessimistic_lock
             }
@@ -361,6 +401,7 @@ impl Command {
     pub fn ts(&self) -> TimeStamp {
         match self.kind {
             CommandKind::Prewrite(Prewrite { start_ts, .. })
+            | CommandKind::PrewritePessimistic(PrewritePessimistic { start_ts, .. })
             | CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { start_ts, .. })
             | CommandKind::Cleanup { start_ts, .. }
             | CommandKind::Rollback { start_ts, .. }
@@ -384,6 +425,20 @@ impl Command {
         match self.kind {
             CommandKind::Prewrite(Prewrite { ref mutations, .. }) => {
                 for m in mutations {
+                    match *m {
+                        Mutation::Put((ref key, ref value))
+                        | Mutation::Insert((ref key, ref value)) => {
+                            bytes += key.as_encoded().len();
+                            bytes += value.len();
+                        }
+                        Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                            bytes += key.as_encoded().len();
+                        }
+                    }
+                }
+            }
+            CommandKind::PrewritePessimistic(PrewritePessimistic { ref mutations, .. }) => {
+                for (m, _) in mutations {
                     match *m {
                         Mutation::Put((ref key, ref value))
                         | Mutation::Insert((ref key, ref value)) => {
@@ -450,6 +505,17 @@ impl Display for Command {
             }) => write!(
                 f,
                 "kv::command::prewrite mutations({}) @ {} | {:?}",
+                mutations.len(),
+                start_ts,
+                self.ctx,
+            ),
+            CommandKind::PrewritePessimistic(PrewritePessimistic {
+                ref mutations,
+                start_ts,
+                ..
+            }) => write!(
+                f,
+                "kv::command::prewrite_pessimistic mutations({}) @ {} | {:?}",
                 mutations.len(),
                 start_ts,
                 self.ctx,

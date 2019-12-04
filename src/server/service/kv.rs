@@ -1568,21 +1568,40 @@ fn future_prewrite<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: PrewriteRequest,
 ) -> impl Future<Item = PrewriteResponse, Error = Error> {
-    let mutations = req.take_mutations().into_iter().map(Into::into).collect();
+    let for_update_ts = req.get_for_update_ts();
     let (cb, f) = paired_future_callback();
-    let res = storage.prewrite(
-        req.take_context(),
-        mutations,
-        req.take_primary_lock(),
-        req.get_start_version().into(),
-        req.get_lock_ttl(),
-        req.get_skip_constraint_check(),
-        req.get_for_update_ts().into(),
-        req.take_is_pessimistic_lock(),
-        req.get_txn_size(),
-        req.get_min_commit_ts().into(),
-        cb,
-    );
+    let res = if for_update_ts == 0 {
+        storage.prewrite(
+            req.take_context(),
+            req.take_mutations().into_iter().map(Into::into).collect(),
+            req.take_primary_lock(),
+            req.get_start_version().into(),
+            req.get_lock_ttl(),
+            req.get_skip_constraint_check(),
+            req.get_txn_size(),
+            req.get_min_commit_ts().into(),
+            cb,
+        )
+    } else {
+        let is_pessimistic_lock = req.take_is_pessimistic_lock();
+        let mutations = req
+            .take_mutations()
+            .into_iter()
+            .map(Into::into)
+            .zip(is_pessimistic_lock.into_iter())
+            .collect();
+        storage.prewrite_pessimistic(
+            req.take_context(),
+            mutations,
+            req.take_primary_lock(),
+            req.get_start_version().into(),
+            req.get_lock_ttl(),
+            for_update_ts.into(),
+            req.get_txn_size(),
+            req.get_min_commit_ts().into(),
+            cb,
+        )
+    };
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PrewriteResponse::default();

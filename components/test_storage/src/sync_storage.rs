@@ -171,8 +171,6 @@ impl<E: Engine> SyncTestStorage<E> {
             start_ts.into(),
             0,
             false,
-            TimeStamp::default(),
-            vec![],
             0,
             TimeStamp::default(),
             cb
