@@ -272,10 +272,6 @@ docker-tag-with-git-hash:
 docker-tag-with-git-tag:
 	docker tag pingcap/tikv pingcap/tikv:${TIKV_BUILD_GIT_TAG}
 
-# This builds an RPM on the host system, expecting a standard rpmbuild toolchain.
-.PHONY: rpm
-rpm: dist/tikv-${TIKV_BUILD_VERSION}.rpm
-
 ## Testing
 ## -------
 
