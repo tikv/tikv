@@ -249,7 +249,6 @@ mod tests {
 
         let next_rotation_time = Utc::now() - Duration::days(1);
 
-        // Should rotate right now.
         let mut logger = RotatingFileLoggerBuilder::new(path)
             .add_rotator(RotateByTime::new_for_test(
                 next_rotation_time,
@@ -257,7 +256,7 @@ mod tests {
             ))
             .build()
             .unwrap();
-        // Rotate
+        // Rotate normally
         logger.flush().unwrap();
 
         assert!(file_exists(logger.get_rotated_file().as_ref().unwrap()));
@@ -270,7 +269,6 @@ mod tests {
 
         let next_rotation_time = Utc::now() + Duration::days(1);
 
-        // Should rotate right now.
         let mut logger = RotatingFileLoggerBuilder::new(path)
             .add_rotator(RotateByTime::new_for_test(
                 next_rotation_time,
