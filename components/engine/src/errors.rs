@@ -1,5 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[cfg(feature = "prost-codec")]
+use prost;
+use protobuf::ProtobufError;
 use std::{error, result};
 
 quick_error! {
@@ -19,11 +22,22 @@ quick_error! {
                 hex::encode_upper(&key), region_id, hex::encode_upper(&start), hex::encode_upper(&end)
             )
         }
-        Protobuf(err: protobuf::ProtobufError) {
+        Protobuf(err: ProtobufError) {
             from()
             cause(err)
             description(err.description())
-            display("Protobuf {}", err)
+        }
+        #[cfg(feature = "prost-codec")]
+        ProstDecode(err: prost::DecodeError) {
+            cause(err)
+            description(err.description())
+            display("Prost Decode {}", err)
+        }
+        #[cfg(feature = "prost-codec")]
+        ProstEncode(err: prost::EncodeError) {
+            cause(err)
+            description(err.description())
+            display("Prost Encode {}", err)
         }
         Io(err: std::io::Error) {
             from()
@@ -46,6 +60,20 @@ pub type Result<T> = result::Result<T, Error>;
 impl From<Error> for raft::Error {
     fn from(err: Error) -> raft::Error {
         raft::Error::Store(raft::StorageError::Other(err.into()))
+    }
+}
+
+#[cfg(feature = "prost-codec")]
+impl From<prost::EncodeError> for Error {
+    fn from(err: prost::EncodeError) -> Error {
+        Error::ProstEncode(err.into())
+    }
+}
+
+#[cfg(feature = "prost-codec")]
+impl From<prost::DecodeError> for Error {
+    fn from(err: prost::DecodeError) -> Error {
+        Error::ProstDecode(err.into())
     }
 }
 

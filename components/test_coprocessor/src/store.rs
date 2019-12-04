@@ -6,11 +6,12 @@ use std::collections::BTreeMap;
 
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 
+use keys::{Key, TimeStamp};
 use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tidb_query::codec::{datum, table, Datum};
 use tidb_query::expr::EvalContext;
 use tikv::storage::{
-    Engine, FixtureStore, Key, Mutation, RocksEngine, SnapshotStore, TestEngineBuilder,
+    txn::FixtureStore, Engine, Mutation, RocksEngine, SnapshotStore, TestEngineBuilder,
 };
 use tikv_util::collections::HashMap;
 
@@ -102,8 +103,8 @@ impl<'a, E: Engine> Delete<'a, E> {
 /// A store that operates over MVCC and support transactions.
 pub struct Store<E: Engine> {
     store: SyncTestStorage<E>,
-    current_ts: u64,
-    last_committed_ts: u64,
+    current_ts: TimeStamp,
+    last_committed_ts: TimeStamp,
     handles: Vec<Vec<u8>>,
 }
 
@@ -117,14 +118,14 @@ impl<E: Engine> Store<E> {
     pub fn from_engine(engine: E) -> Self {
         Self {
             store: SyncTestStorageBuilder::from_engine(engine).build().unwrap(),
-            current_ts: 1,
-            last_committed_ts: 0,
+            current_ts: 1.into(),
+            last_committed_ts: TimeStamp::zero(),
             handles: vec![],
         }
     }
 
     pub fn begin(&mut self) {
-        self.current_ts = next_id() as u64;
+        self.current_ts = (next_id() as u64).into();
         self.handles.clear();
     }
 
@@ -159,7 +160,7 @@ impl<E: Engine> Store<E> {
     }
 
     pub fn commit_with_ctx(&mut self, ctx: Context) {
-        let commit_ts = next_id() as u64;
+        let commit_ts = (next_id() as u64).into();
         let handles: Vec<_> = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
         if !handles.is_empty() {
             self.store

@@ -32,6 +32,7 @@ pub use self::util::RECONNECT_INTERVAL_SEC;
 use std::ops::Deref;
 
 use futures::Future;
+use keys::UnixSecs;
 use kvproto::metapb;
 use kvproto::pdpb;
 
@@ -48,7 +49,7 @@ pub struct RegionStat {
     pub read_keys: u64,
     pub approximate_size: u64,
     pub approximate_keys: u64,
-    pub last_report_ts: u64,
+    pub last_report_ts: UnixSecs,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -148,9 +149,8 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Gets Region info which the key belongs to.
-    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
-        self.get_region(key)
-            .map(|region| RegionInfo::new(region, None))
+    fn get_region_info(&self, _key: &[u8]) -> Result<RegionInfo> {
+        unimplemented!();
     }
 
     /// Gets Region by Region id.
