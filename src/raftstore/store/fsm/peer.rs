@@ -650,13 +650,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
+    #[inline]
+    pub fn handle_raft_ready_apply(&mut self, ready: &mut Ready, invoke_ctx: &InvokeContext) {
+        self.fsm
+            .peer
+            .handle_raft_ready_apply(self.ctx, ready, invoke_ctx);
+    }
+
     pub fn post_raft_ready_append(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
         let is_merging = self.fsm.peer.pending_merge_state.is_some();
         let res = self
             .fsm
             .peer
             .post_raft_ready_append(self.ctx, &mut ready, invoke_ctx);
-        self.fsm.peer.handle_raft_ready_apply(self.ctx, ready);
+        self.fsm.peer.handle_raft_ready_advance(ready);
         let mut has_snapshot = false;
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
