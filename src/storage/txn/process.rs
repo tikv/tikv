@@ -13,7 +13,7 @@ use crate::storage::kv::{
     with_tls_engine, CbContext, Engine, Modify, Result as EngineResult, ScanMode, Snapshot,
     Statistics,
 };
-use crate::storage::lock_manager::{self, Lock, LockManager};
+use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
     MvccReader, MvccTxn, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
@@ -474,7 +474,7 @@ struct WriteResult {
     rows: usize,
     pr: ProcessResult,
     // (lock, is_first_lock, wait_timeout)
-    lock_info: Option<(lock_manager::Lock, bool, i64)>,
+    lock_info: Option<(lock_manager::Lock, bool, WaitTimeout)>,
 }
 
 fn process_write_impl<S: Snapshot, L: LockManager>(

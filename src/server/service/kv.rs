@@ -1620,7 +1620,7 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockManager>(
         req.get_lock_ttl(),
         req.get_is_first_lock(),
         req.get_for_update_ts().into(),
-        req.get_wait_timeout(),
+        req.get_wait_timeout().into(),
         cb,
     );
 
