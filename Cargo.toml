@@ -12,6 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
+default = ["protobuf-codec"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -93,7 +94,6 @@ sys-info = "0.5.7"
 tempfile = "3.0"
 test_util = { path = "components/test_util" }
 tidb_query = { path = "components/tidb_query" }
-
 tikv_alloc = { path = "components/tikv_alloc", default-features = false }
 tikv_util = { path = "components/tikv_util" }
 time = "0.1"

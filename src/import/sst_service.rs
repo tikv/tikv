@@ -12,8 +12,8 @@ use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::Callback;
-use crate::server::transport::RaftStoreRouter;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::{RocksEngine, RocksIOLimiter};
 use engine_traits::IOLimiter;
