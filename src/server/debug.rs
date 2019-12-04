@@ -30,16 +30,15 @@ use crate::raftstore::coprocessor::{
     get_region_approximate_keys_cf, get_region_approximate_middle,
 };
 use crate::raftstore::store::util as raftstore_util;
+use crate::raftstore::store::PeerStorage;
 use crate::raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use crate::raftstore::store::{keys, PeerStorage};
-use crate::server::gc_worker::GCWorker;
+use crate::server::gc_worker::GcWorker;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use crate::storage::types::Key;
-use crate::storage::Engine;
-use crate::storage::Iterator as EngineIterator;
+use crate::storage::{Engine, Iterator as EngineIterator};
+use keys::Key;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
@@ -137,11 +136,11 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 #[derive(Clone)]
 pub struct Debugger<E: Engine> {
     engines: Engines,
-    gc_worker: Option<GCWorker<E>>,
+    gc_worker: Option<GcWorker<E>>,
 }
 
 impl<E: Engine> Debugger<E> {
-    pub fn new(engines: Engines, gc_worker: Option<GCWorker<E>>) -> Debugger<E> {
+    pub fn new(engines: Engines, gc_worker: Option<GcWorker<E>>) -> Debugger<E> {
         Debugger { engines, gc_worker }
     }
 
@@ -482,7 +481,9 @@ impl<E: Engine> Debugger<E> {
         let fake_snap_worker = Worker::new("fake-snap-worker");
 
         let check_value = |value: Vec<u8>| -> Result<()> {
-            let local_state = box_try!(protobuf::parse_from_bytes::<RegionLocalState>(&value));
+            let mut local_state = RegionLocalState::default();
+            box_try!(local_state.merge_from_bytes(&value));
+
             match local_state.get_state() {
                 PeerState::Tombstone | PeerState::Applying => return Ok(()),
                 _ => {}
@@ -1536,7 +1537,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::server::gc_worker::GCConfig;
+    use crate::server::gc_worker::GcConfig;
     use crate::storage::mvcc::{Lock, LockType};
     use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;
@@ -1659,7 +1660,7 @@ mod tests {
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
         let test_engine = TestEngineBuilder::new().build().unwrap();
-        let mut gc_worker = GCWorker::new(test_engine, None, None, GCConfig::default());
+        let mut gc_worker = GcWorker::new(test_engine, None, None, GcConfig::default());
         gc_worker.start().unwrap();
         Debugger::new(engines, Some(gc_worker))
     }

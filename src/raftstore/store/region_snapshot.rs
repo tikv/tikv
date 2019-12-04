@@ -5,13 +5,16 @@ use engine::{self, IterOption};
 use engine_rocks::{RocksDBVector, RocksEngineIterator, RocksSnapshot, RocksSyncSnapshot};
 use engine_traits::{Peekable, ReadOptions, Result as EngineResult, Snapshot as SnapshotTrait};
 use kvproto::metapb::Region;
+use kvproto::raft_serverpb::RaftApplyState;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::raftstore::store::keys::DATA_PREFIX_KEY;
-use crate::raftstore::store::{keys, util, PeerStorage};
+use crate::raftstore::store::{util, PeerStorage};
 use crate::raftstore::Result;
 use engine_traits::util::check_key_in_range;
+use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
+use keys::DATA_PREFIX_KEY;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -23,6 +26,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 pub struct RegionSnapshot {
     snap: RocksSyncSnapshot,
     region: Arc<Region>,
+    apply_index: Arc<AtomicU64>,
 }
 
 impl RegionSnapshot {
@@ -38,11 +42,39 @@ impl RegionSnapshot {
         RegionSnapshot {
             snap,
             region: Arc::new(region),
+            // Use 0 to indicate that the apply index is missing and we need to KvGet it,
+            // since apply index must be >= RAFT_INIT_LOG_INDEX.
+            apply_index: Arc::new(AtomicU64::new(0)),
         }
     }
 
+    #[inline]
     pub fn get_region(&self) -> &Region {
         &self.region
+    }
+
+    #[inline]
+    pub fn get_apply_index(&self) -> Result<u64> {
+        let apply_index = self.apply_index.load(Ordering::SeqCst);
+        if apply_index == 0 {
+            self.get_apply_index_from_storage()
+        } else {
+            Ok(apply_index)
+        }
+    }
+
+    fn get_apply_index_from_storage(&self) -> Result<u64> {
+        let apply_state: Option<RaftApplyState> = self
+            .snap
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(self.region.get_id()))?;
+        match apply_state {
+            Some(s) => {
+                let apply_index = s.get_applied_index();
+                self.apply_index.store(apply_index, Ordering::SeqCst);
+                Ok(apply_index)
+            }
+            None => Err(box_err!("Unable to get applied index")),
+        }
     }
 
     pub fn iter(&self, iter_opt: IterOption) -> RegionIterator {
@@ -118,10 +150,12 @@ impl RegionSnapshot {
         Ok(prop)
     }
 
+    #[inline]
     pub fn get_start_key(&self) -> &[u8] {
         self.region.get_start_key()
     }
 
+    #[inline]
     pub fn get_end_key(&self) -> &[u8] {
         self.region.get_end_key()
     }
@@ -132,6 +166,7 @@ impl Clone for RegionSnapshot {
         RegionSnapshot {
             snap: self.snap.clone(),
             region: Arc::clone(&self.region),
+            apply_index: Arc::clone(&self.apply_index),
         }
     }
 }
@@ -273,7 +308,7 @@ impl RegionIterator {
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
         fail_point!("region_snapshot_seek", |_| {
-            return Err(box_err!("region seek error"));
+            Err(box_err!("region seek error"))
         });
         self.should_seekable(key)?;
         let key = keys::data_key(key);
@@ -354,14 +389,13 @@ mod tests {
     use tempfile::{Builder, TempDir};
 
     use crate::config::TiKvConfig;
-    use crate::raftstore::store::keys::*;
     use crate::raftstore::store::snap::snap_io::{apply_sst_cf_file, build_sst_cf_file};
     use crate::raftstore::store::PeerStorage;
     use crate::raftstore::Result;
     use crate::storage::mvcc::ScannerBuilder;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::txn::Scanner;
-    use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
+    use crate::storage::{CfStatistics, Cursor, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
     use engine::rocks::{IngestExternalFileOptions, Writable};
@@ -372,6 +406,7 @@ mod tests {
     use engine_rocks::RocksIOLimiter;
     use engine_rocks::{RocksSnapshot, RocksSstWriterBuilder};
     use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
+    use keys::{data_key, Key};
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;
 
@@ -692,7 +727,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engines.clone());
 
         let snap = RegionSnapshot::new(&store);
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(!iter

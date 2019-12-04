@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::coprocessor::Endpoint;
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::{Callback, CasualMessage};
-use crate::server::gc_worker::GCWorker;
+use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
-use crate::server::transport::RaftStoreRouter;
 use crate::server::Error;
 use crate::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
 use crate::storage::lock_manager::LockManager;
@@ -21,9 +21,7 @@ use crate::storage::mvcc::{
     WriteType,
 };
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use crate::storage::{
-    self, Engine, Key, Mutation, Options, PointGetCommand, Storage, TxnStatus, Value,
-};
+use crate::storage::{self, Engine, Mutation, Options, PointGetCommand, Storage, TxnStatus};
 use crate::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
@@ -31,6 +29,7 @@ use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
+use keys::{self, Key, Value};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::{self, *};
@@ -455,7 +454,7 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
 #[derive(Clone)]
 pub struct Service<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> {
     /// Used to handle requests related to GC.
-    gc_worker: GCWorker<E>,
+    gc_worker: GcWorker<E>,
     // For handling KV requests.
     storage: Storage<E, L>,
     // For handling coprocessor requests.
@@ -480,7 +479,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
         storage: Storage<E, L>,
-        gc_worker: GCWorker<E>,
+        gc_worker: GcWorker<E>,
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
@@ -1612,7 +1611,7 @@ fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
 
 fn handle_batch_commands_request<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    gc_worker: &GCWorker<E>,
+    gc_worker: &GcWorker<E>,
     cop: &Endpoint<E>,
     peer: &str,
     id: u64,
@@ -2239,7 +2238,7 @@ fn future_check_txn_status<E: Engine, L: LockManager>(
         } else {
             match v {
                 Ok(txn_status) => match txn_status {
-                    TxnStatus::Rollbacked => resp.set_action(Action::NoAction),
+                    TxnStatus::RolledBack => resp.set_action(Action::NoAction),
                     TxnStatus::TtlExpire => resp.set_action(Action::TtlExpireRollback),
                     TxnStatus::LockNotExist => resp.set_action(Action::LockNotExistRollback),
                     TxnStatus::Committed { commit_ts } => {
@@ -2333,7 +2332,7 @@ fn future_resolve_lock<E: Engine, L: LockManager>(
 }
 
 fn future_gc<E: Engine>(
-    gc_worker: &GCWorker<E>,
+    gc_worker: &GcWorker<E>,
     mut req: GcRequest,
 ) -> impl Future<Item = GcResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
@@ -2662,7 +2661,7 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
-        Err(Error(box ErrorInner::GCWorkerTooBusy)) => {
+        Err(Error(box ErrorInner::GcWorkerTooBusy)) => {
             let mut err = RegionError::default();
             let mut server_is_busy_err = ServerIsBusy::default();
             server_is_busy_err.set_reason(GC_WORKER_IS_BUSY.to_owned());
@@ -2778,7 +2777,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
     key_error
 }
 
-fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>) -> Vec<KvPair> {
+fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<keys::KvPair>>>) -> Vec<KvPair> {
     match res {
         Ok(res) => res
             .into_iter()
@@ -2870,6 +2869,7 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
     }
 }
 
+#[cfg(feature = "protobuf-codec")]
 mod batch_commands_response {
     pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
 
@@ -2878,6 +2878,7 @@ mod batch_commands_response {
     }
 }
 
+#[cfg(feature = "protobuf-codec")]
 mod batch_commands_request {
     pub type Request = kvproto::tikvpb::BatchCommandsRequestRequest;
 

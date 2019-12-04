@@ -11,6 +11,7 @@ use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use protobuf::Message;
 use raft::{Ready, StateRole};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -36,7 +37,6 @@ use crate::raftstore::store::fsm::{
     BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
 };
 use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
-use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use crate::raftstore::store::local_metrics::RaftMetrics;
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
@@ -56,6 +56,7 @@ use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
+use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -727,7 +728,9 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
             total_count += 1;
 
-            let local_state = protobuf::parse_from_bytes::<RegionLocalState>(value)?;
+            let mut local_state = RegionLocalState::default();
+            local_state.merge_from_bytes(value)?;
+
             let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
                 tombstone_count += 1;

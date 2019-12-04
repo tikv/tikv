@@ -349,7 +349,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val: f64 = try_opt!(self.children[0].eval_real(ctx, row));
-        let val = if self.children[0].field_type().tp() == FieldTypeTp::Float {
+        let val = if self.children[0].field_type().as_accessor().tp() == FieldTypeTp::Float {
             let val = val as f32;
             val.to_string()
         } else {
@@ -418,8 +418,11 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let s = format!("{}", val);
-        Ok(Some(self.produce_time_with_str(ctx, &s)?))
+        let time_type: TimeType = self.field_type.as_accessor().tp().try_into()?;
+        let fsp = self.field_type.get_decimal() as i8;
+        Time::parse_from_i64(ctx, val, time_type, fsp)
+            .map(Cow::Owned)
+            .map(Some)
     }
 
     pub fn cast_real_as_time<'a, 'b: 'a>(

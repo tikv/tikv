@@ -8,7 +8,9 @@ mod comparison;
 mod path_expr;
 mod serde;
 // json functions
+mod json_depth;
 mod json_extract;
+mod json_keys;
 mod json_length;
 mod json_merge;
 mod json_modify;

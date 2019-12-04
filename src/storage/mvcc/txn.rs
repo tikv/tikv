@@ -7,9 +7,9 @@ use super::write::{Write, WriteType};
 use super::{ErrorInner, Result, TimeStamp};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
-    is_short_value, Key, Mutation, Options, Statistics, TxnStatus, Value, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    is_short_value, Mutation, Options, Statistics, TxnStatus, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
+use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
 
@@ -295,7 +295,7 @@ impl<S: Snapshot> MvccTxn<S> {
             // as well as commit timestamp, the lock is already rollbacked.
             if write.start_ts == self.start_ts && commit_ts == self.start_ts {
                 assert!(write.write_type == WriteType::Rollback);
-                return Err(ErrorInner::PessimisticLockRollbacked {
+                return Err(ErrorInner::PessimisticLockRolledBack {
                     start_ts: self.start_ts,
                     key: key.into_raw()?,
                 }
@@ -308,7 +308,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         assert!(
                             commit_ts == self.start_ts && write.write_type == WriteType::Rollback
                         );
-                        return Err(ErrorInner::PessimisticLockRollbacked {
+                        return Err(ErrorInner::PessimisticLockRolledBack {
                             start_ts: self.start_ts,
                             key: key.into_raw()?,
                         }
@@ -555,7 +555,7 @@ impl<S: Snapshot> MvccTxn<S> {
         {
             Some((ts, write_type)) => {
                 if write_type == WriteType::Rollback {
-                    Ok(TxnStatus::Rollbacked)
+                    Ok(TxnStatus::RolledBack)
                 } else {
                     Ok(TxnStatus::committed(ts))
                 }
@@ -619,7 +619,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                     Err(ErrorInner::Committed { commit_ts }.into())
                 }
-                TxnStatus::Rollbacked => {
+                TxnStatus::RolledBack => {
                     // Return Ok on Rollback already exist.
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
                     Ok(false)
@@ -825,17 +825,14 @@ macro_rules! new_txn {
 
 #[cfg(test)]
 mod tests {
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use super::*;
 
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::WriteType;
-    use crate::storage::mvcc::{Error, ErrorInner, MvccReader, TimeStamp};
-    use crate::storage::{
-        Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN,
-    };
-
-    use std::u64;
+    use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
+    use crate::storage::{TestEngineBuilder, SHORT_VALUE_MAX_LEN};
+    use keys::TimeStamp;
+    use kvproto::kvrpcpb::Context;
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -859,9 +856,9 @@ mod tests {
         // should read pending locks
         must_get_err(&engine, k1, 7);
         // should ignore the primary lock and get none when reading the latest record
-        must_get_none(&engine, k1, u64::MAX);
+        must_get_none(&engine, k1, u64::max_value());
         // should read secondary locks even when reading the latest record
-        must_get_err(&engine, k2, u64::MAX);
+        must_get_err(&engine, k2, u64::max_value());
 
         must_commit(&engine, k1, 5, 10);
         must_commit(&engine, k2, 5, 10);
@@ -870,12 +867,12 @@ mod tests {
         must_get_none(&engine, k1, 7);
         // should read with ts > commit_ts
         must_get(&engine, k1, 13, v);
-        // should read the latest record if `ts == u64::MAX`
-        must_get(&engine, k1, u64::MAX, v);
+        // should read the latest record if `ts == u64::max_value()`
+        must_get(&engine, k1, u64::max_value(), v);
 
         must_prewrite_delete(&engine, k1, k1, 15);
         // should ignore the lock and get previous record when reading the latest record
-        must_get(&engine, k1, u64::MAX, v);
+        must_get(&engine, k1, u64::max_value(), v);
         must_commit(&engine, k1, 15, 20);
         must_get_none(&engine, k1, 3);
         must_get_none(&engine, k1, 7);
@@ -892,9 +889,9 @@ mod tests {
         must_get(&engine, k1, 30, v);
         must_pessimistic_prewrite_delete(&engine, k1, k1, 23, 29, true);
         must_get_err(&engine, k1, 30);
-        // should read the latest record when `ts == u64::MAX`
+        // should read the latest record when `ts == u64::max_value()`
         // even if lock.start_ts(23) < latest write.commit_ts(27)
-        must_get(&engine, k1, u64::MAX, v);
+        must_get(&engine, k1, u64::max_value(), v);
         must_commit(&engine, k1, 23, 31);
         must_get(&engine, k1, 30, v);
         must_get_none(&engine, k1, 32);
@@ -1150,8 +1147,7 @@ mod tests {
 
         // Shortcuts
         let ts = TimeStamp::compose;
-        use super::TxnStatus;
-        let uncommitted = TxnStatus::uncommitted;
+        let uncommitted = super::TxnStatus::uncommitted;
 
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(10, 0), 100, 0);
         must_check_txn_status(
@@ -1962,7 +1958,7 @@ mod tests {
         let ts = TimeStamp::compose;
 
         // Shortcuts
-        use super::TxnStatus::{self, *};
+        use super::TxnStatus::*;
         let committed = TxnStatus::committed;
         let uncommitted = TxnStatus::uncommitted;
         let r = rollback_if_not_exist;
@@ -2175,7 +2171,7 @@ mod tests {
             r,
             committed(ts(15, 0)),
         );
-        must_check_txn_status(&engine, k, ts(20, 0), ts(10, 0), ts(10, 0), r, Rollbacked);
+        must_check_txn_status(&engine, k, ts(20, 0), ts(10, 0), ts(10, 0), r, RolledBack);
 
         // Rollback expired pessimistic lock.
         must_acquire_pessimistic_lock_for_large_txn(&engine, k, k, ts(150, 0), ts(150, 0), 100);
@@ -2201,7 +2197,7 @@ mod tests {
             WriteType::Rollback,
         );
 
-        // Rollback when current_ts is u64::MAX
+        // Rollback when current_ts is u64::max_value()
         must_prewrite_put_for_large_txn(&engine, k, v, k, ts(270, 0), 100, 0);
         must_large_txn_locked(&engine, k, ts(270, 0), 100, ts(270, 1), false);
         must_check_txn_status(
