@@ -27,7 +27,7 @@ pub use self::{
         RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
     },
     read_pool::{build_read_pool, build_read_pool_for_test},
-    txn::{Options, ProcessResult, Scanner, SnapshotStore, Store},
+    txn::{ProcessResult, Scanner, SnapshotStore, Store},
     types::{StorageCallback, TxnStatus},
 };
 
@@ -508,7 +508,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
-        options: Options,
+        lock_ttl: u64,
+        skip_constraint_check: bool,
+        for_update_ts: TimeStamp,
+        is_pessimistic_lock: Vec<bool>,
+        txn_size: u64,
+        min_commit_ts: TimeStamp,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         for m in &mutations {
@@ -522,7 +527,18 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             }
         }
 
-        let cmd = commands::Prewrite::new(mutations, primary, start_ts, options, ctx);
+        let cmd = commands::Prewrite::new(
+            mutations,
+            primary,
+            start_ts,
+            lock_ttl,
+            skip_constraint_check,
+            for_update_ts,
+            is_pessimistic_lock,
+            txn_size,
+            min_commit_ts,
+            ctx,
+        );
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
         Ok(())
@@ -536,7 +552,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<(Key, bool)>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
-        options: Options,
+        lock_ttl: u64,
+        is_first_lock: bool,
+        for_update_ts: TimeStamp,
+        wait_timeout: i64,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         if !self.pessimistic_txn_enabled {
@@ -560,7 +579,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 keys,
                 primary,
                 start_ts,
-                options,
+                lock_ttl,
+                is_first_lock,
+                for_update_ts,
+                wait_timeout,
             },
         };
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
@@ -1592,7 +1614,12 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -1647,7 +1674,12 @@ mod tests {
                 ],
                 b"a".to_vec(),
                 1.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
@@ -1740,7 +1772,12 @@ mod tests {
                 ],
                 b"a".to_vec(),
                 1.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -1977,7 +2014,12 @@ mod tests {
                 ],
                 b"a".to_vec(),
                 1.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2041,7 +2083,12 @@ mod tests {
                 ],
                 b"a".to_vec(),
                 1.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2110,7 +2157,12 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2120,7 +2172,12 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
                 b"y".to_vec(),
                 101.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2164,7 +2221,12 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec()))],
                 b"x".to_vec(),
                 105.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_fail_callback(tx.clone(), 6, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::WriteConflict { .. },
@@ -2201,7 +2263,12 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
                 b"y".to_vec(),
                 101.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_too_busy_callback(tx.clone(), 2),
             )
             .unwrap();
@@ -2213,7 +2280,12 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec()))],
                 b"y".to_vec(),
                 102.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 3),
             )
             .unwrap();
@@ -2230,7 +2302,12 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2257,8 +2334,6 @@ mod tests {
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
 
-        let mut options = Options::default();
-        options.lock_ttl = 100;
         let ts = TimeStamp::compose;
         storage
             .prewrite(
@@ -2266,7 +2341,12 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"x"), b"110".to_vec()))],
                 b"x".to_vec(),
                 ts(110, 0),
-                options,
+                100,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -2320,7 +2400,12 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2365,7 +2450,12 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                 b"x".to_vec(),
                 100.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
@@ -2414,7 +2504,12 @@ mod tests {
                 ],
                 b"x".to_vec(),
                 100.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -3469,15 +3564,17 @@ mod tests {
                 ],
                 b"x".to_vec(),
                 100.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
         rx.recv().unwrap();
 
-        let mut options = Options::default();
-        options.lock_ttl = 123;
-        options.txn_size = 3;
         storage
             .prewrite(
                 Context::default(),
@@ -3488,7 +3585,12 @@ mod tests {
                 ],
                 b"c".to_vec(),
                 101.into(),
-                options,
+                123,
+                false,
+                TimeStamp::default(),
+                vec![],
+                3,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -3692,7 +3794,12 @@ mod tests {
                 ],
                 b"c".to_vec(),
                 99.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -3756,7 +3863,12 @@ mod tests {
                         mutations,
                         b"x".to_vec(),
                         ts,
-                        Options::default(),
+                        0,
+                        false,
+                        TimeStamp::default(),
+                        vec![],
+                        0,
+                        TimeStamp::default(),
                         expect_ok_callback(tx.clone(), 0),
                     )
                     .unwrap();
@@ -3816,7 +3928,12 @@ mod tests {
                 ],
                 b"c".to_vec(),
                 99.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -3876,7 +3993,12 @@ mod tests {
                 ],
                 b"c".to_vec(),
                 101.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -3942,15 +4064,18 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        let mut options = Options::default();
-        options.lock_ttl = 100;
         storage
             .prewrite(
                 Context::default(),
                 vec![Mutation::Put((k.clone(), v))],
                 k.as_encoded().to_vec(),
                 10.into(),
-                options,
+                100,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4053,7 +4178,12 @@ mod tests {
                 vec![Mutation::Put((k.clone(), v.clone()))],
                 k.as_encoded().to_vec(),
                 ts(9, 0),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::WriteConflict { .. },
@@ -4064,15 +4194,18 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        let mut options = Options::default();
-        options.lock_ttl = 100;
         storage
             .prewrite(
                 Context::default(),
                 vec![Mutation::Put((k.clone(), v.clone()))],
                 k.as_encoded().to_vec(),
                 ts(10, 0),
-                options.clone(),
+                100,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();
@@ -4125,7 +4258,12 @@ mod tests {
                 vec![Mutation::Put((k.clone(), v))],
                 k.as_encoded().to_vec(),
                 ts(25, 0),
-                options,
+                100,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 expect_ok_callback(tx.clone(), 0),
             )
             .unwrap();

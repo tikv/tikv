@@ -488,12 +488,16 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             mut mutations,
             primary,
             start_ts,
-            mut options,
-            ..
+            lock_ttl,
+            mut skip_constraint_check,
+            for_update_ts,
+            is_pessimistic_lock,
+            txn_size,
+            min_commit_ts,
         }) => {
             let mut scan_mode = None;
             let rows = mutations.len();
-            if options.for_update_ts.is_zero() && rows > FORWARD_MIN_MUTATIONS_NUM {
+            if for_update_ts.is_zero() && rows > FORWARD_MIN_MUTATIONS_NUM {
                 mutations.sort_by(|a, b| a.key().cmp(b.key()));
                 let left_key = mutations.first().unwrap().key();
                 let right_key = mutations
@@ -512,7 +516,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     // If there is no data in range, we could skip constraint check, and use Forward seek for CF_LOCK.
                     // Because in most instances, there won't be more than one transaction write the same key. Seek
                     // operation could skip nonexistent key in CF_LOCK.
-                    options.skip_constraint_check = true;
+                    skip_constraint_check = true;
                     scan_mode = Some(ScanMode::Forward)
                 }
             }
@@ -523,11 +527,19 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())
             };
 
-            // If `options.for_update_ts` is 0, the transaction is optimistic
+            // If `for_update_ts` is 0, the transaction is optimistic
             // or else pessimistic.
-            if options.for_update_ts.is_zero() {
+            if for_update_ts.is_zero() {
                 for m in mutations {
-                    match txn.prewrite(m, &primary, &options) {
+                    match txn.prewrite(
+                        m,
+                        &primary,
+                        skip_constraint_check,
+                        lock_ttl,
+                        for_update_ts,
+                        txn_size,
+                        min_commit_ts,
+                    ) {
                         Ok(_) => {}
                         e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                             locks.push(e.map_err(Error::from).map_err(StorageError::from));
@@ -540,8 +552,11 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     match txn.pessimistic_prewrite(
                         m,
                         &primary,
-                        options.is_pessimistic_lock[i],
-                        &options,
+                        is_pessimistic_lock[i],
+                        lock_ttl,
+                        for_update_ts,
+                        txn_size,
+                        min_commit_ts,
                     ) {
                         Ok(_) => {}
                         e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
@@ -567,14 +582,23 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             keys,
             primary,
             start_ts,
-            options,
+            lock_ttl,
+            is_first_lock,
+            for_update_ts,
+            wait_timeout,
             ..
         } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let mut locks = vec![];
             let rows = keys.len();
             for (k, should_not_exist) in keys {
-                match txn.acquire_pessimistic_lock(k, &primary, should_not_exist, &options) {
+                match txn.acquire_pessimistic_lock(
+                    k,
+                    &primary,
+                    should_not_exist,
+                    lock_ttl,
+                    for_update_ts,
+                ) {
                     Ok(_) => {}
                     e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                         locks.push(e.map_err(Error::from).map_err(StorageError::from));
@@ -593,7 +617,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             } else {
                 let lock = extract_lock_from_result(&locks[0]);
                 let pr = ProcessResult::MultiRes { results: locks };
-                let lock_info = Some((lock, options.is_first_lock, options.wait_timeout));
+                let lock_info = Some((lock, is_first_lock, wait_timeout));
                 // Wait for lock released
                 (pr, vec![], 0, cmd.ctx, lock_info)
             }
@@ -931,7 +955,7 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 mod tests {
     use super::*;
     use crate::storage::kv::{Snapshot, TestEngineBuilder};
-    use crate::storage::{mvcc::Mutation, txn::commands::Options, DummyLockManager};
+    use crate::storage::{mvcc::Mutation, DummyLockManager};
 
     #[test]
     fn test_extract_lock_from_result() {
@@ -1076,7 +1100,12 @@ mod tests {
             mutations,
             primary,
             TimeStamp::from(start_ts),
-            Options::default(),
+            0,
+            false,
+            TimeStamp::default(),
+            vec![],
+            0,
+            TimeStamp::default(),
             ctx,
         );
         let m = DummyLockManager {};

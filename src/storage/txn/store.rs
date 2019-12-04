@@ -522,7 +522,6 @@ mod tests {
         TestEngineBuilder,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
-    use crate::storage::txn::commands::Options;
     use engine::{CfName, IterOption};
     use kvproto::kvrpcpb::Context;
 
@@ -568,7 +567,11 @@ mod tests {
                     txn.prewrite(
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
-                        &Options::default(),
+                        false,
+                        0,
+                        TimeStamp::default(),
+                        0,
+                        TimeStamp::default(),
                     )
                     .unwrap();
                 }

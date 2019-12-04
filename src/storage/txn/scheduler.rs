@@ -537,7 +537,6 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
 mod tests {
     use super::*;
     use crate::storage::mvcc::{self, Mutation};
-    use crate::storage::txn::commands::Options;
     use crate::storage::txn::latch::*;
     use kvproto::kvrpcpb::Context;
 
@@ -576,7 +575,12 @@ mod tests {
                 vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
                 b"k".to_vec(),
                 10.into(),
-                Options::default(),
+                0,
+                false,
+                TimeStamp::default(),
+                vec![],
+                0,
+                TimeStamp::default(),
                 Context::default(),
             ),
             Command {
@@ -585,7 +589,10 @@ mod tests {
                     keys: vec![(Key::from_raw(b"k"), false)],
                     primary: b"k".to_vec(),
                     start_ts: 10.into(),
-                    options: Options::default(),
+                    lock_ttl: 0,
+                    is_first_lock: false,
+                    for_update_ts: TimeStamp::default(),
+                    wait_timeout: 0,
                 },
             },
             Command {
