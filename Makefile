@@ -258,14 +258,6 @@ endif
 dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make dist_release
 
-
-# Build gzipped tarballs of the binaries and docker images.
-# Used to build a `dist/` folder containing the release artifacts.
-# .PHONY: dist_tarballs
-# dist_tarballs: dist/tikv-${TIKV_BUILD_VERSION}.tar.gz
-# dist/tikv-${TIKV_BUILD_VERSION}.tar: bin/ dist/ dist/tikv-${TIKV_BUILD_VERSION}-docker.tar.gz
-
-
 # Create tags of the docker images
 .PHONY: docker-tag
 docker-tag: docker-tag-with-git-hash docker-tag-with-git-tag
@@ -283,23 +275,6 @@ docker-tag-with-git-tag:
 # This builds an RPM on the host system, expecting a standard rpmbuild toolchain.
 .PHONY: rpm
 rpm: dist/tikv-${TIKV_BUILD_VERSION}.rpm
-
-# Build an RPM in a docker image.
-# .PHONY: docker-rpm
-# docker-rpm:
-# 	docker build -t tikv-rpm-builder:${TIKV_BUILD_VERSION} -f scripts/docker/rpm-builder.dockerfile .
-# 	docker run --rm -ti -v $(CURDIR):/tikv tikv-rpm-builder:${TIKV_BUILD_VERSION}
-
-# dist/tikv-${TIKV_BUILD_VERSION}.rpm: dist/ # dist/tikv-${TIKV_BUILD_VERSION}.tar.gz
-# 	cp etc/rpm/tikv.spec ${HOME}/rpmbuild/SPECS/tikv.spec 
-# 	zcat dist/tikv-${TIKV_BUILD_VERSION}.tar.gz > dist/tikv-${TIKV_BUILD_VERSION}.tar
-# 	tar rvf dist/tikv-${TIKV_BUILD_VERSION}.tar etc/tikv.service --transform s,^,tikv-${TIKV_BUILD_VERSION}/,
-# 	tar rvf dist/tikv-${TIKV_BUILD_VERSION}.tar etc/tikv.sysconfig --transform s,^,tikv-${TIKV_BUILD_VERSION}/,
-# 	tar rvf dist/tikv-${TIKV_BUILD_VERSION}.tar etc/config-template.toml --transform s,^,tikv-${TIKV_BUILD_VERSION}/,
-# 	mv dist/tikv-${TIKV_BUILD_VERSION}.tar ${HOME}/rpmbuild/SOURCES/tikv-${TIKV_BUILD_VERSION}.tar
-# 	rpmbuild -bb ${HOME}/rpmbuild/SPECS/tikv.spec
-# 	cp ${HOME}/rpmbuild/RPMS/x86_64/tikv-${TIKV_BUILD_VERSION}-1.el7.x86_64.rpm dist/tikv-${TIKV_BUILD_VERSION}.rpm
-# 	rm -rf dist/tikv-${TIKV_BUILD_VERSION}.tar
 
 ## Testing
 ## -------
