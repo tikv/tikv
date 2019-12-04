@@ -37,7 +37,7 @@ use crate::storage::{
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     txn::{
-        commands::{get_priority_tag, Command, CommandKind},
+        commands::{self, get_priority_tag, Command, CommandKind},
         scheduler::Scheduler as TxnScheduler,
         PointGetCommand,
     },
@@ -524,15 +524,8 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 return Ok(());
             }
         }
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::Prewrite {
-                mutations,
-                primary,
-                start_ts,
-                options,
-            },
-        };
+
+        let cmd = commands::Prewrite::new(mutations, primary, start_ts, options, ctx);
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
         Ok(())
@@ -1445,7 +1438,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         let cmd = Command {
             ctx,
-            kind: CommandKind::MvccByKey { key },
+            kind: CommandKind::MvccByKey(key),
         };
         self.schedule(cmd, StorageCallback::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.key_mvcc.inc();
@@ -1463,7 +1456,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         let cmd = Command {
             ctx,
-            kind: CommandKind::MvccByStartTs { start_ts },
+            kind: CommandKind::MvccByStartTs(start_ts),
         };
         self.schedule(cmd, StorageCallback::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
