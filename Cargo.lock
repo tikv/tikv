@@ -412,6 +412,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "coarsetime"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bac87404ed1c708d9cdd0094449e70aadc1ab73c291d2cf536e946a413594e5"
+dependencies = [
+ "lazy_static",
+ "libc",
+]
+
+[[package]]
 name = "codec"
 version = "0.0.1"
 dependencies = [
@@ -3357,6 +3367,7 @@ dependencies = [
  "panic_hook",
  "profiler",
  "prometheus",
+ "prometheus-static-metric",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "rand 0.6.5",
@@ -3509,6 +3520,7 @@ dependencies = [
  "backtrace",
  "byteorder",
  "chrono",
+ "coarsetime",
  "crc32fast",
  "crossbeam",
  "fail",
