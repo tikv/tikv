@@ -1,11 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::IsolationLevel;
-
 use crate::storage::mvcc::write::{WriteRef, WriteType};
 use crate::storage::mvcc::{default_not_found_error, Lock, Result, TimeStamp, TsSet};
-use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value, CF_LOCK};
+use crate::storage::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics, CF_LOCK};
 use crate::storage::{CF_DEFAULT, CF_WRITE};
+use keys::{Key, Value};
+use kvproto::kvrpcpb::IsolationLevel;
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -270,11 +270,11 @@ mod tests {
     use super::*;
 
     use engine_rocks::RocksSyncSnapshot;
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use kvproto::kvrpcpb::Context;
 
     use crate::storage::mvcc::tests::*;
     use crate::storage::SHORT_VALUE_MAX_LEN;
-    use crate::storage::{CFStatistics, Engine, Key, RocksEngine, TestEngineBuilder};
+    use crate::storage::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
@@ -310,7 +310,7 @@ mod tests {
         assert!(point_getter.get(&Key::from_raw(key)).is_err());
     }
 
-    fn assert_seek_next_prev(stat: &CFStatistics, seek: usize, next: usize, prev: usize) {
+    fn assert_seek_next_prev(stat: &CfStatistics, seek: usize, next: usize, prev: usize) {
         assert_eq!(
             stat.seek, seek,
             "expect seek to be {}, got {}",

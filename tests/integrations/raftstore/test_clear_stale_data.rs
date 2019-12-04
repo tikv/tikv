@@ -3,7 +3,6 @@
 use engine::rocks::{CompactOptions, Writable, DB};
 use engine::{CF_DEFAULT, CF_LOCK};
 use test_raftstore::*;
-use tikv::raftstore::store::keys;
 
 fn init_db_with_sst_files(db: &DB, level: i32, n: u8) {
     let mut opts = CompactOptions::new();

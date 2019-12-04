@@ -6,9 +6,9 @@ use crate::storage::mvcc::lock::Lock;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{default_not_found_error, WriteRef};
 use crate::storage::mvcc::{Result, TimeStamp};
-use crate::storage::{Key, Value};
 use engine::IterOption;
 use engine::{CF_LOCK, CF_WRITE};
+use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -428,25 +428,21 @@ impl<S: Snapshot> MvccReader<S> {
 
 #[cfg(test)]
 mod tests {
-    use crate::raftstore::coprocessor::properties::{
-        MvccProperties, MvccPropertiesCollectorFactory,
-    };
-    use crate::raftstore::store::keys;
+    use super::*;
+
+    use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
-    use crate::storage::mvcc::lock::{Lock, LockType};
-    use crate::storage::mvcc::write::{Write, WriteType};
-    use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
-    use crate::storage::{Key, Mutation, Options};
+    use crate::storage::mvcc::lock::LockType;
+    use crate::storage::mvcc::{MvccReader, MvccTxn};
+    use crate::storage::{Mutation, Options};
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
-    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use kvproto::kvrpcpb::IsolationLevel;
+    use engine::{ALL_CFS, CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::{Peer, Region};
     use std::sync::Arc;
     use std::u64;
-    use tempfile::Builder;
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -653,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_need_gc() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("test_storage_mvcc_reader")
             .tempdir()
             .unwrap();
@@ -753,7 +749,7 @@ mod tests {
 
     #[test]
     fn test_get_txn_commit_info() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_get_txn_commit_info")
             .tempdir()
             .unwrap();
@@ -839,7 +835,7 @@ mod tests {
 
     #[test]
     fn test_get_txn_commit_info_of_pessimistic_txn() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_get_txn_commit_info_of_pessimistic_txn")
             .tempdir()
             .unwrap();
@@ -874,7 +870,7 @@ mod tests {
 
     #[test]
     fn test_seek_write() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_seek_write")
             .tempdir()
             .unwrap();
@@ -982,7 +978,7 @@ mod tests {
 
     #[test]
     fn test_get_write() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_get_write")
             .tempdir()
             .unwrap();
@@ -1073,7 +1069,7 @@ mod tests {
 
     #[test]
     fn test_check_lock() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_check_lock")
             .tempdir()
             .unwrap();
@@ -1128,7 +1124,7 @@ mod tests {
 
     #[test]
     fn test_scan_locks() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_scan_locks")
             .tempdir()
             .unwrap();
