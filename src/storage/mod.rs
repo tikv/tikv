@@ -573,18 +573,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 return Ok(());
             }
         }
-        let cmd = Command {
+        let cmd = commands::AcquirePessimisticLock::new(
+            keys,
+            primary,
+            start_ts,
+            lock_ttl,
+            is_first_lock,
+            for_update_ts,
+            wait_timeout,
             ctx,
-            kind: CommandKind::AcquirePessimisticLock {
-                keys,
-                primary,
-                start_ts,
-                lock_ttl,
-                is_first_lock,
-                for_update_ts,
-                wait_timeout,
-            },
-        };
+        );
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.acquire_pessimistic_lock.inc();
         Ok(())

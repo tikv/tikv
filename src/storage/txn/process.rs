@@ -19,7 +19,7 @@ use crate::storage::mvcc::{
     MvccReader, MvccTxn, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{
-    commands::{Command, CommandKind, Prewrite},
+    commands::{AcquirePessimisticLock, Command, CommandKind, Prewrite},
     sched_pool::*,
     scheduler::Msg,
     Error, ErrorInner, ProcessResult, Result,
@@ -578,7 +578,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 (pr, vec![], 0, cmd.ctx, None)
             }
         }
-        CommandKind::AcquirePessimisticLock {
+        CommandKind::AcquirePessimisticLock(AcquirePessimisticLock {
             keys,
             primary,
             start_ts,
@@ -587,7 +587,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for_update_ts,
             wait_timeout,
             ..
-        } => {
+        }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let mut locks = vec![];
             let rows = keys.len();
