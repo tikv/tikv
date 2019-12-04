@@ -5,7 +5,6 @@ use std::sync::*;
 
 use futures::{future, Future, Stream};
 use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
-
 use kvproto::coprocessor::*;
 use kvproto::debugpb::DebugClient;
 use kvproto::kvrpcpb::*;
@@ -17,16 +16,15 @@ use raft::eraftpb;
 use engine::rocks::Writable;
 use engine::*;
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
+use keys::Key;
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::keys;
 use tikv::raftstore::store::SnapManager;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv::storage::Key;
 use tikv_util::worker::FutureWorker;
 use tikv_util::HandyRwLock;
 
