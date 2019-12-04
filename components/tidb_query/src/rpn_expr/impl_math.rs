@@ -355,23 +355,6 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn(capture = [metadata],metadata_ctor = init_rng_data)]
-fn rand(metadata: &Option<RefCell<XorShiftRng>>) -> Result<Option<Real>> {
-    match metadata {
-        Some(metadata) => {
-            let mut rng = metadata.borrow_mut();
-            let res = rng.gen::<f64>();
-            Ok(Real::new(res).ok())
-        }
-        None => {
-            let mut rng = get_rng(None);
-            let res = rng.gen::<f64>();
-            Ok(Real::new(res).ok())
-        }
-    }
-}
-
-#[inline]
-#[rpn_fn(capture = [metadata],metadata_ctor = init_rng_data)]
 fn rand_with_seed(
     metadata: &Option<RefCell<XorShiftRng>>,
     seed: &Option<Int>,
@@ -1091,24 +1074,6 @@ mod tests {
                 .evaluate::<Real>(ScalarFuncSig::Pow)
                 .is_err());
         }
-    }
-
-    #[test]
-    fn test_rand() {
-        let got1 = RpnFnScalarEvaluator::new()
-            .evaluate::<Real>(ScalarFuncSig::Rand)
-            .unwrap()
-            .unwrap();
-        let got2 = RpnFnScalarEvaluator::new()
-            .evaluate::<Real>(ScalarFuncSig::Rand)
-            .unwrap()
-            .unwrap();
-
-        assert!(got1 < Real::from(1.0));
-        assert!(got1 >= Real::from(0.0));
-        assert!(got2 < Real::from(1.0));
-        assert!(got2 >= Real::from(0.0));
-        assert_ne!(got1, got2);
     }
 
     #[test]
