@@ -39,7 +39,7 @@ use crate::storage::metrics::{
     SCHED_WRITING_BYTES_GAUGE,
 };
 use crate::storage::txn::{
-    commands::{Command, CommandKind, Prewrite},
+    commands::{AcquirePessimisticLock, Command, CommandKind, Prewrite},
     latch::{Latches, Lock},
     process::{Executor, MsgScheduler, Task},
     sched_pool::SchedPool,
@@ -506,7 +506,7 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
             let keys: Vec<&Key> = key_locks.iter().map(|x| &x.0).collect();
             latches.gen_lock(&keys)
         }
-        CommandKind::AcquirePessimisticLock { ref keys, .. } => {
+        CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { ref keys, .. }) => {
             let keys: Vec<&Key> = keys.iter().map(|x| &x.0).collect();
             latches.gen_lock(&keys)
         }
@@ -583,18 +583,16 @@ mod tests {
                 TimeStamp::default(),
                 Context::default(),
             ),
-            Command {
-                ctx: Context::default(),
-                kind: CommandKind::AcquirePessimisticLock {
-                    keys: vec![(Key::from_raw(b"k"), false)],
-                    primary: b"k".to_vec(),
-                    start_ts: 10.into(),
-                    lock_ttl: 0,
-                    is_first_lock: false,
-                    for_update_ts: TimeStamp::default(),
-                    wait_timeout: 0,
-                },
-            },
+            AcquirePessimisticLock::new(
+                vec![(Key::from_raw(b"k"), false)],
+                b"k".to_vec(),
+                10.into(),
+                0,
+                false,
+                TimeStamp::default(),
+                0,
+                Context::default(),
+            ),
             Command {
                 ctx: Context::default(),
                 kind: CommandKind::Commit {

@@ -109,25 +109,53 @@ impl Prewrite {
     }
 }
 
-pub enum CommandKind {
-    Prewrite(Prewrite),
-    /// Acquire a Pessimistic lock on the keys.
-    ///
-    /// This can be rolled back with a [`PessimisticRollback`](CommandKind::PessimisticRollback) command.
-    AcquirePessimisticLock {
-        /// The set of keys to lock.
+/// Acquire a Pessimistic lock on the keys.
+///
+/// This can be rolled back with a [`PessimisticRollback`](CommandKind::PessimisticRollback) command.
+pub struct AcquirePessimisticLock {
+    /// The set of keys to lock.
+    pub keys: Vec<(Key, bool)>,
+    /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
+    pub primary: Vec<u8>,
+    /// The transaction timestamp.
+    pub start_ts: TimeStamp,
+    pub lock_ttl: u64,
+    pub is_first_lock: bool,
+    pub for_update_ts: TimeStamp,
+    /// Time to wait for lock released in milliseconds when encountering locks.
+    /// 0 means using default timeout. Negative means no wait.
+    pub wait_timeout: i64,
+}
+
+impl AcquirePessimisticLock {
+    pub fn new(
         keys: Vec<(Key, bool)>,
-        /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
         primary: Vec<u8>,
-        /// The transaction timestamp.
         start_ts: TimeStamp,
         lock_ttl: u64,
         is_first_lock: bool,
         for_update_ts: TimeStamp,
-        /// Time to wait for lock released in milliseconds when encountering locks.
-        /// 0 means using default timeout. Negative means no wait.
         wait_timeout: i64,
-    },
+        ctx: Context,
+    ) -> Command {
+        Command {
+            ctx,
+            kind: CommandKind::AcquirePessimisticLock(AcquirePessimisticLock {
+                keys,
+                primary,
+                start_ts,
+                lock_ttl,
+                is_first_lock,
+                for_update_ts,
+                wait_timeout,
+            }),
+        }
+    }
+}
+
+pub enum CommandKind {
+    Prewrite(Prewrite),
+    AcquirePessimisticLock(AcquirePessimisticLock),
     /// Commit the transaction that started at `lock_ts`.
     ///
     /// This should be following a [`Prewrite`](CommandKind::Prewrite).
@@ -311,8 +339,8 @@ impl Command {
 
     pub fn tag(&self) -> metrics::CommandKind {
         match self.kind {
-            CommandKind::Prewrite { .. } => metrics::CommandKind::prewrite,
-            CommandKind::AcquirePessimisticLock { .. } => {
+            CommandKind::Prewrite(..) => metrics::CommandKind::prewrite,
+            CommandKind::AcquirePessimisticLock(..) => {
                 metrics::CommandKind::acquire_pessimistic_lock
             }
             CommandKind::Commit { .. } => metrics::CommandKind::commit,
@@ -334,7 +362,7 @@ impl Command {
     pub fn ts(&self) -> TimeStamp {
         match self.kind {
             CommandKind::Prewrite(Prewrite { start_ts, .. })
-            | CommandKind::AcquirePessimisticLock { start_ts, .. }
+            | CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { start_ts, .. })
             | CommandKind::Cleanup { start_ts, .. }
             | CommandKind::Rollback { start_ts, .. }
             | CommandKind::PessimisticRollback { start_ts, .. }
@@ -369,7 +397,7 @@ impl Command {
                     }
                 }
             }
-            CommandKind::AcquirePessimisticLock { ref keys, .. } => {
+            CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { ref keys, .. }) => {
                 for (key, _) in keys {
                     bytes += key.as_encoded().len();
                 }
@@ -427,12 +455,12 @@ impl Display for Command {
                 start_ts,
                 self.ctx,
             ),
-            CommandKind::AcquirePessimisticLock {
+            CommandKind::AcquirePessimisticLock(AcquirePessimisticLock {
                 ref keys,
                 start_ts,
                 for_update_ts,
                 ..
-            } => write!(
+            }) => write!(
                 f,
                 "kv::command::acquirepessimisticlock keys({}) @ {} {} | {:?}",
                 keys.len(),
