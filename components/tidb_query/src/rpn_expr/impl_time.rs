@@ -5,8 +5,7 @@ use tidb_query_codegen::rpn_fn;
 use super::super::expr::EvalContext;
 
 use crate::codec::data_type::*;
-use crate::codec::mysql::time::extension::DateTimeExtension;
-use crate::codec::mysql::time::WeekdayExtension;
+use crate::codec::mysql::time::{DateTimeExtension, MonthExtension, WeekdayExtension};
 use crate::codec::mysql::Time;
 use crate::codec::Error;
 use crate::expr::SqlMode;
@@ -150,6 +149,22 @@ pub fn day_of_month(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Optio
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
+pub fn month_name(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Bytes>> {
+    match t {
+        Some(t) => {
+            if t.is_zero() && ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
+                ctx.handle_invalid_time_error(Error::incorrect_datetime_value(t))
+                    .map(|_| Ok(None))?
+            } else {
+                Ok(t.month_name().map(|s| s.to_string().into_bytes()))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
 pub fn day_name(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Bytes>> {
     match t {
         Some(t) => {
@@ -171,7 +186,9 @@ mod tests {
     use tipb::ScalarFuncSig;
 
     use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
+    use crate::expr::{EvalConfig, EvalContext, SqlMode};
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+    use std::sync::Arc;
     use tidb_query_datatype::FieldTypeTp;
 
     #[test]
@@ -513,6 +530,53 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect);
         }
+    }
+
+    #[test]
+    fn test_month_name() {
+        let cases = vec![
+            (None, None),
+            (Some("0000-00-00 00:00:00.000000"), None),
+            (Some("2019-01-01 00:00:00.000000"), Some("January")),
+            (Some("2019-02-01 00:00:00.000000"), Some("February")),
+            (Some("2019-03-01 00:00:00.000000"), Some("March")),
+            (Some("2019-04-01 00:00:00.000000"), Some("April")),
+            (Some("2019-05-01 00:00:00.000000"), Some("May")),
+            (Some("2019-06-01 00:00:00.000000"), Some("June")),
+            (Some("2019-07-01 00:00:00.000000"), Some("July")),
+            (Some("2019-08-01 00:00:00.000000"), Some("August")),
+            (Some("2019-09-01 00:00:00.000000"), Some("September")),
+            (Some("2019-10-01 00:00:00.000000"), Some("October")),
+            (Some("2019-11-01 00:00:00.000000"), Some("November")),
+            (Some("2019-12-01 00:00:00.000000"), Some("December")),
+            (Some("2019-12-00 00:00:00.000000"), Some("December")),
+            (Some("2019-00-01 00:00:00.000000"), None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let arg: Option<Time> = arg.map(|arg: &str| Time::parse_date(&mut ctx, arg).unwrap());
+            let output: Option<Bytes> = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate(ScalarFuncSig::MonthName)
+                .unwrap();
+            let exp = exp.map(|v| v.as_bytes().to_vec());
+            assert_eq!(output, exp);
+        }
+
+        // case SqlMode::NO_ZERO_DATE
+        let mut cfg = EvalConfig::new();
+        cfg.set_sql_mode(SqlMode::NO_ZERO_DATE);
+        let ctx = EvalContext::new(Arc::new(cfg));
+        let (output, ctx) = RpnFnScalarEvaluator::new()
+            .context(ctx)
+            .push_param(Some(Time(0)))
+            .evaluate_raw(FieldTypeTp::String, ScalarFuncSig::MonthName);
+
+        assert_eq!(
+            ctx.warnings.warnings[0].get_code(),
+            ERR_TRUNCATE_WRONG_VALUE
+        );
+        assert!(output.unwrap().is_none());
     }
 
     #[test]
