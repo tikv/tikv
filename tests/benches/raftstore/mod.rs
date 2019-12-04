@@ -6,7 +6,6 @@ use criterion::{Bencher, Criterion};
 use engine::rocks::{Writable, WriteBatch, DB};
 use test_raftstore::*;
 use test_util::*;
-use tikv::raftstore::store::keys;
 
 const DEFAULT_DATA_SIZE: usize = 100_000;
 
