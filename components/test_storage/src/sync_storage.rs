@@ -132,7 +132,8 @@ impl<E: Engine> SyncTestStorage<E> {
                 end_key,
                 limit,
                 start_ts.into(),
-                Options::new(0, false, key_only),
+                key_only,
+                false,
             )
             .wait()
     }
@@ -153,7 +154,8 @@ impl<E: Engine> SyncTestStorage<E> {
                 end_key,
                 limit,
                 start_ts.into(),
-                Options::new(0, false, key_only).reverse_scan(),
+                key_only,
+                true,
             )
             .wait()
     }
