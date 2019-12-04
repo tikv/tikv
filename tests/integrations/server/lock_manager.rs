@@ -30,7 +30,12 @@ fn acquire_pessimistic_lock(
     req.for_update_ts = ts;
     req.lock_ttl = 20;
     req.is_first_lock = false;
-    client.kv_pessimistic_lock(&req).unwrap()
+    let mut resp = client.kv_pessimistic_lock(&req).unwrap();
+    if resp.get_region_error().has_stale_command() {
+        sleep_ms(100);
+        resp = client.kv_pessimistic_lock(&req).unwrap();
+    }
+    resp
 }
 
 fn must_acquire_pessimistic_lock(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
