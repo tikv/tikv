@@ -165,7 +165,7 @@ ARTIFACT_DEB=${ARTIFACT_DIR}/tikv.deb
 ${BINARY_DIR}:
 	mkdir -p ${BINARY_DIR}
 
-${BINARY_SERVER}: ${BINARY_DIR} # ${ARTIFACT_DOCKER}
+${BINARY_SERVER}: ${BINARY_DIR} ${ARTIFACT_DOCKER}
 	docker load -i ${ARTIFACT_DOCKER}
 	docker run --rm \
 		--entrypoint=/bin/cp \
@@ -173,7 +173,7 @@ ${BINARY_SERVER}: ${BINARY_DIR} # ${ARTIFACT_DOCKER}
 		${DOCKER_IMAGE_NAME} \
 		/tikv-server /out
 
-${BINARY_CTL}: ${BINARY_DIR} # ${ARTIFACT_DOCKER}
+${BINARY_CTL}: ${BINARY_DIR} ${ARTIFACT_DOCKER}
 	docker load -i ${ARTIFACT_DOCKER}
 	docker run --rm \
 		--entrypoint=/bin/cp \
