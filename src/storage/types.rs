@@ -6,10 +6,9 @@ use crate::storage::{
     mvcc::{Lock, TimeStamp, Write},
     Callback, Command, Error as StorageError, Result,
 };
+use keys::{Key, Value};
 use kvproto::kvrpcpb::LockInfo;
 use std::fmt::Debug;
-
-pub use keys::{Key, KvPair, Value};
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.
@@ -68,7 +67,7 @@ impl Mutation {
 #[derive(PartialEq, Debug)]
 pub enum TxnStatus {
     /// The txn was already rolled back before.
-    Rollbacked,
+    RolledBack,
     /// The txn is just rolled back due to expiration.
     TtlExpire,
     /// The txn is just rolled back due to lock not exist.
