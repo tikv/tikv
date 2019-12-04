@@ -57,22 +57,44 @@ pub struct Command {
     pub kind: CommandKind,
 }
 
-pub enum CommandKind {
-    /// The prewrite phase of a transaction. The first phase of 2PC.
-    ///
-    /// This prepares the system to commit the transaction. Later a [`Commit`](CommandKind::Commit)
-    /// or a [`Rollback`](CommandKind::Rollback) should follow.
-    ///
-    /// If `options.for_update_ts` is `0`, the transaction is optimistic. Else it is pessimistic.
-    Prewrite {
-        /// The set of mutations to apply.
+/// The prewrite phase of a transaction. The first phase of 2PC.
+///
+/// This prepares the system to commit the transaction. Later a [`Commit`](CommandKind::Commit)
+/// or a [`Rollback`](CommandKind::Rollback) should follow.
+///
+/// If `options.for_update_ts` is `0`, the transaction is optimistic. Else it is pessimistic.
+pub struct Prewrite {
+    /// The set of mutations to apply.
+    pub mutations: Vec<Mutation>,
+    /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
+    pub primary: Vec<u8>,
+    /// The transaction timestamp.
+    pub start_ts: TimeStamp,
+    pub options: Options,
+}
+
+impl Prewrite {
+    pub fn new(
         mutations: Vec<Mutation>,
-        /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
         primary: Vec<u8>,
-        /// The transaction timestamp.
         start_ts: TimeStamp,
         options: Options,
-    },
+        ctx: Context,
+    ) -> Command {
+        Command {
+            ctx,
+            kind: CommandKind::Prewrite(Prewrite {
+                mutations,
+                primary,
+                start_ts,
+                options,
+            }),
+        }
+    }
+}
+
+pub enum CommandKind {
+    Prewrite(Prewrite),
     /// Acquire a Pessimistic lock on the keys.
     ///
     /// This can be rolled back with a [`PessimisticRollback`](CommandKind::PessimisticRollback) command.
@@ -225,9 +247,9 @@ pub enum CommandKind {
         duration: u64,
     },
     /// Retrieve MVCC information for the given key.
-    MvccByKey { key: Key },
+    MvccByKey(Key),
     /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
-    MvccByStartTs { start_ts: TimeStamp },
+    MvccByStartTs(TimeStamp),
 }
 
 impl Command {
@@ -238,8 +260,8 @@ impl Command {
             // must guarantee that there is no other read or write on these keys, so
             // we can treat DeleteRange as readonly Command.
             CommandKind::DeleteRange { .. } |
-            CommandKind::MvccByKey { .. } |
-            CommandKind::MvccByStartTs { .. } => true,
+            CommandKind::MvccByKey(..) |
+            CommandKind::MvccByStartTs(..) => true,
             CommandKind::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
             _ => false,
         }
@@ -283,19 +305,19 @@ impl Command {
             CommandKind::ResolveLockLite { .. } => metrics::CommandKind::resolve_lock_lite,
             CommandKind::DeleteRange { .. } => metrics::CommandKind::delete_range,
             CommandKind::Pause { .. } => metrics::CommandKind::pause,
-            CommandKind::MvccByKey { .. } => metrics::CommandKind::key_mvcc,
-            CommandKind::MvccByStartTs { .. } => metrics::CommandKind::start_ts_mvcc,
+            CommandKind::MvccByKey(..) => metrics::CommandKind::key_mvcc,
+            CommandKind::MvccByStartTs(..) => metrics::CommandKind::start_ts_mvcc,
         }
     }
 
     pub fn ts(&self) -> TimeStamp {
         match self.kind {
-            CommandKind::Prewrite { start_ts, .. }
+            CommandKind::Prewrite(Prewrite { start_ts, .. })
             | CommandKind::AcquirePessimisticLock { start_ts, .. }
             | CommandKind::Cleanup { start_ts, .. }
             | CommandKind::Rollback { start_ts, .. }
             | CommandKind::PessimisticRollback { start_ts, .. }
-            | CommandKind::MvccByStartTs { start_ts, .. }
+            | CommandKind::MvccByStartTs(start_ts)
             | CommandKind::TxnHeartBeat { start_ts, .. } => start_ts,
             CommandKind::Commit { lock_ts, .. } | CommandKind::CheckTxnStatus { lock_ts, .. } => {
                 lock_ts
@@ -305,14 +327,14 @@ impl Command {
             CommandKind::ResolveLock { .. }
             | CommandKind::DeleteRange { .. }
             | CommandKind::Pause { .. }
-            | CommandKind::MvccByKey { .. } => TimeStamp::zero(),
+            | CommandKind::MvccByKey(..) => TimeStamp::zero(),
         }
     }
 
     pub fn write_bytes(&self) -> usize {
         let mut bytes = 0;
         match self.kind {
-            CommandKind::Prewrite { ref mutations, .. } => {
+            CommandKind::Prewrite(Prewrite { ref mutations, .. }) => {
                 for m in mutations {
                     match *m {
                         Mutation::Put((ref key, ref value))
@@ -373,11 +395,11 @@ impl Command {
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.kind {
-            CommandKind::Prewrite {
+            CommandKind::Prewrite(Prewrite {
                 ref mutations,
                 start_ts,
                 ..
-            } => write!(
+            }) => write!(
                 f,
                 "kv::command::prewrite mutations({}) @ {} | {:?}",
                 mutations.len(),
@@ -485,10 +507,10 @@ impl Display for Command {
                 duration,
                 self.ctx,
             ),
-            CommandKind::MvccByKey { ref key } => {
+            CommandKind::MvccByKey(ref key) => {
                 write!(f, "kv::command::mvccbykey {:?} | {:?}", key, self.ctx)
             }
-            CommandKind::MvccByStartTs { ref start_ts } => write!(
+            CommandKind::MvccByStartTs(ref start_ts) => write!(
                 f,
                 "kv::command::mvccbystartts {:?} | {:?}",
                 start_ts, self.ctx

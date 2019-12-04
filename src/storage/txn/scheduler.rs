@@ -39,7 +39,7 @@ use crate::storage::metrics::{
     SCHED_WRITING_BYTES_GAUGE,
 };
 use crate::storage::txn::{
-    commands::{Command, CommandKind},
+    commands::{Command, CommandKind, Prewrite},
     latch::{Latches, Lock},
     process::{Executor, MsgScheduler, Task},
     sched_pool::SchedPool,
@@ -498,7 +498,7 @@ impl<E: Engine, L: LockManager> MsgScheduler for Scheduler<E, L> {
 
 fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
     match cmd.kind {
-        CommandKind::Prewrite { ref mutations, .. } => {
+        CommandKind::Prewrite(Prewrite { ref mutations, .. }) => {
             let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
             latches.gen_lock(&keys)
         }
@@ -528,8 +528,8 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         // Avoid using wildcard _ here to avoid forgetting add new commands here.
         CommandKind::ScanLock { .. }
         | CommandKind::DeleteRange { .. }
-        | CommandKind::MvccByKey { .. }
-        | CommandKind::MvccByStartTs { .. } => Lock::new(vec![]),
+        | CommandKind::MvccByKey(..)
+        | CommandKind::MvccByStartTs(..) => Lock::new(vec![]),
     }
 }
 
@@ -564,27 +564,21 @@ mod tests {
             },
             Command {
                 ctx: Context::default(),
-                kind: CommandKind::MvccByKey {
-                    key: Key::from_raw(b"k"),
-                },
+                kind: CommandKind::MvccByKey(Key::from_raw(b"k")),
             },
             Command {
                 ctx: Context::default(),
-                kind: CommandKind::MvccByStartTs {
-                    start_ts: 25.into(),
-                },
+                kind: CommandKind::MvccByStartTs(25.into()),
             },
         ];
         let write_cmds = vec![
-            Command {
-                ctx: Context::default(),
-                kind: CommandKind::Prewrite {
-                    mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
-                    primary: b"k".to_vec(),
-                    start_ts: 10.into(),
-                    options: Options::default(),
-                },
-            },
+            Prewrite::new(
+                vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
+                b"k".to_vec(),
+                10.into(),
+                Options::default(),
+                Context::default(),
+            ),
             Command {
                 ctx: Context::default(),
                 kind: CommandKind::AcquirePessimisticLock {

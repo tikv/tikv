@@ -19,7 +19,10 @@ use crate::storage::mvcc::{
     MvccReader, MvccTxn, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{
-    sched_pool::*, scheduler::Msg, Command, CommandKind, Error, ErrorInner, ProcessResult, Result,
+    commands::{Command, CommandKind, Prewrite},
+    sched_pool::*,
+    scheduler::Msg,
+    Error, ErrorInner, ProcessResult, Result,
 };
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
@@ -304,7 +307,7 @@ fn process_read_impl<E: Engine>(
 ) -> Result<ProcessResult> {
     let tag = cmd.tag();
     match cmd.kind {
-        CommandKind::MvccByKey { ref key } => {
+        CommandKind::MvccByKey(ref key) => {
             let mut reader = MvccReader::new(
                 snapshot,
                 Some(ScanMode::Forward),
@@ -322,7 +325,7 @@ fn process_read_impl<E: Engine>(
                 },
             })
         }
-        CommandKind::MvccByStartTs { start_ts } => {
+        CommandKind::MvccByStartTs(start_ts) => {
             let mut reader = MvccReader::new(
                 snapshot,
                 Some(ScanMode::Forward),
@@ -481,13 +484,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
     statistics: &mut Statistics,
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd.kind {
-        CommandKind::Prewrite {
+        CommandKind::Prewrite(Prewrite {
             mut mutations,
             primary,
             start_ts,
             mut options,
             ..
-        } => {
+        }) => {
             let mut scan_mode = None;
             let rows = mutations.len();
             if options.for_update_ts.is_zero() && rows > FORWARD_MIN_MUTATIONS_NUM {
@@ -1069,15 +1072,13 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let cmd = Command {
+        let cmd = Prewrite::new(
+            mutations,
+            primary,
+            TimeStamp::from(start_ts),
+            Options::default(),
             ctx,
-            kind: CommandKind::Prewrite {
-                mutations,
-                primary,
-                start_ts: TimeStamp::from(start_ts),
-                options: Options::default(),
-            },
-        };
+        );
         let m = DummyLockManager {};
         let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
         if let ProcessResult::MultiRes { results } = ret.pr {
