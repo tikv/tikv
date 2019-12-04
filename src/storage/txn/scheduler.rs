@@ -39,7 +39,7 @@ use crate::storage::metrics::{
     SCHED_WRITING_BYTES_GAUGE,
 };
 use crate::storage::txn::{
-    commands::{AcquirePessimisticLock, Command, CommandKind, Prewrite},
+    commands::{AcquirePessimisticLock, Command, CommandKind, Prewrite, PrewritePessimistic},
     latch::{Latches, Lock},
     process::{Executor, MsgScheduler, Task},
     sched_pool::SchedPool,
@@ -502,6 +502,10 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
             let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
             latches.gen_lock(&keys)
         }
+        CommandKind::PrewritePessimistic(PrewritePessimistic { ref mutations, .. }) => {
+            let keys: Vec<&Key> = mutations.iter().map(|(x, _)| x.key()).collect();
+            latches.gen_lock(&keys)
+        }
         CommandKind::ResolveLock { ref key_locks, .. } => {
             let keys: Vec<&Key> = key_locks.iter().map(|x| &x.0).collect();
             latches.gen_lock(&keys)
@@ -577,8 +581,6 @@ mod tests {
                 10.into(),
                 0,
                 false,
-                TimeStamp::default(),
-                vec![],
                 0,
                 TimeStamp::default(),
                 Context::default(),

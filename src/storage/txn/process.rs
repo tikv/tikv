@@ -19,7 +19,7 @@ use crate::storage::mvcc::{
     MvccReader, MvccTxn, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{
-    commands::{AcquirePessimisticLock, Command, CommandKind, Prewrite},
+    commands::{AcquirePessimisticLock, Command, CommandKind, Prewrite, PrewritePessimistic},
     sched_pool::*,
     scheduler::Msg,
     Error, ErrorInner, ProcessResult, Result,
@@ -490,14 +490,12 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             start_ts,
             lock_ttl,
             mut skip_constraint_check,
-            for_update_ts,
-            is_pessimistic_lock,
             txn_size,
             min_commit_ts,
         }) => {
             let mut scan_mode = None;
             let rows = mutations.len();
-            if for_update_ts.is_zero() && rows > FORWARD_MIN_MUTATIONS_NUM {
+            if rows > FORWARD_MIN_MUTATIONS_NUM {
                 mutations.sort_by(|a, b| a.key().cmp(b.key()));
                 let left_key = mutations.first().unwrap().key();
                 let right_key = mutations
@@ -520,50 +518,70 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     scan_mode = Some(ScanMode::Forward)
                 }
             }
-            let mut locks = vec![];
             let mut txn = if scan_mode.is_some() {
                 MvccTxn::for_scan(snapshot, scan_mode, start_ts, !cmd.ctx.get_not_fill_cache())
             } else {
                 MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())
             };
 
-            // If `for_update_ts` is 0, the transaction is optimistic
-            // or else pessimistic.
-            if for_update_ts.is_zero() {
-                for m in mutations {
-                    match txn.prewrite(
-                        m,
-                        &primary,
-                        skip_constraint_check,
-                        lock_ttl,
-                        for_update_ts,
-                        txn_size,
-                        min_commit_ts,
-                    ) {
-                        Ok(_) => {}
-                        e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                            locks.push(e.map_err(Error::from).map_err(StorageError::from));
-                        }
-                        Err(e) => return Err(Error::from(e)),
+            let mut locks = vec![];
+            for m in mutations {
+                match txn.prewrite(
+                    m,
+                    &primary,
+                    skip_constraint_check,
+                    lock_ttl,
+                    TimeStamp::default(),
+                    txn_size,
+                    min_commit_ts,
+                ) {
+                    Ok(_) => {}
+                    e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
+                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
                     }
+                    Err(e) => return Err(Error::from(e)),
                 }
+            }
+
+            statistics.add(&txn.take_statistics());
+            if locks.is_empty() {
+                let pr = ProcessResult::MultiRes { results: vec![] };
+                let modifies = txn.into_modifies();
+                (pr, modifies, rows, cmd.ctx, None)
             } else {
-                for (i, m) in mutations.into_iter().enumerate() {
-                    match txn.pessimistic_prewrite(
-                        m,
-                        &primary,
-                        is_pessimistic_lock[i],
-                        lock_ttl,
-                        for_update_ts,
-                        txn_size,
-                        min_commit_ts,
-                    ) {
-                        Ok(_) => {}
-                        e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                            locks.push(e.map_err(Error::from).map_err(StorageError::from));
-                        }
-                        Err(e) => return Err(Error::from(e)),
+                // Skip write stage if some keys are locked.
+                let pr = ProcessResult::MultiRes { results: locks };
+                (pr, vec![], 0, cmd.ctx, None)
+            }
+        }
+        CommandKind::PrewritePessimistic(PrewritePessimistic {
+            mutations,
+            primary,
+            start_ts,
+            lock_ttl,
+            for_update_ts,
+            txn_size,
+            min_commit_ts,
+        }) => {
+            let rows = mutations.len();
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())?;
+
+            let mut locks = vec![];
+            for (m, is_pessimistic_lock) in mutations.into_iter() {
+                match txn.pessimistic_prewrite(
+                    m,
+                    &primary,
+                    is_pessimistic_lock,
+                    lock_ttl,
+                    for_update_ts,
+                    txn_size,
+                    min_commit_ts,
+                ) {
+                    Ok(_) => {}
+                    e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
+                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
                     }
+                    Err(e) => return Err(Error::from(e)),
                 }
             }
 
@@ -1102,8 +1120,6 @@ mod tests {
             TimeStamp::from(start_ts),
             0,
             false,
-            TimeStamp::default(),
-            vec![],
             0,
             TimeStamp::default(),
             ctx,

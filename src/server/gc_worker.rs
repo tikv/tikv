@@ -1673,8 +1673,6 @@ mod tests {
             start_ts,
             0,
             false,
-            TimeStamp::default(),
-            vec![],
             0,
             TimeStamp::default(),
             cb
