@@ -297,11 +297,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
         let encode_type = req.get_encode_type();
-        let mut encode_endian = Endian::LittleEndian;
-        if encode_type == EncodeType::TypeChunk {
+        let encode_endian = if encode_type == EncodeType::TypeChunk {
             let chunk_memory_layout = req.get_chunk_memory_layout();
-            encode_endian = chunk_memory_layout.get_endian();
-        }
+            chunk_memory_layout.get_endian()
+        } else {
+            Endian::LittleEndian
+        };
 
         let out_most_executor =
             build_executors(req.take_executors().into(), storage, ranges, config.clone())?;
