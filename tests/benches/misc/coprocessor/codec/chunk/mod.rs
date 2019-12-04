@@ -29,7 +29,7 @@ fn bench_encode_chunk(b: &mut Bencher) {
         field_type(FieldTypeTp::NewDecimal),
         field_type(FieldTypeTp::JSON),
     ];
-    let mut chunk = Chunk::new(&fields, rows);
+    let mut chunk = Chunk::new(&fields, rows, true);
     for row_id in 0..rows {
         let s = format!("{}.123435", row_id);
         let bs = Datum::Bytes(s.as_bytes().to_vec());
@@ -58,7 +58,7 @@ fn bench_chunk_build_tidb(b: &mut Bencher) {
     ];
 
     b.iter(|| {
-        let mut chunk = Chunk::new(&fields, rows);
+        let mut chunk = Chunk::new(&fields, rows, true);
         for row_id in 0..rows {
             chunk.append_datum(0, &Datum::Null).unwrap();
             chunk.append_datum(1, &Datum::I64(row_id as i64)).unwrap();
@@ -91,7 +91,7 @@ fn bench_chunk_iter_tidb(b: &mut Bencher) {
         field_type(FieldTypeTp::LongLong),
         field_type(FieldTypeTp::Double),
     ];
-    let mut chunk = Chunk::new(&fields, rows);
+    let mut chunk = Chunk::new(&fields, rows, true);
     let mut ctx = EvalContext::default();
     for row_id in 0..rows {
         if row_id & 1 == 0 {
