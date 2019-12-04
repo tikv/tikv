@@ -6,6 +6,7 @@ use std::time::Duration;
 use std::{mem, thread, u64};
 
 use futures::future;
+use keys::{Key, Value};
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use crate::storage::kv::with_tls_engine;
@@ -19,8 +20,8 @@ use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, ErrorInner, Resu
 use crate::storage::types::ProcessResult;
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, Key,
-    MvccInfo, Result as StorageResult, ScanMode, Snapshot, Statistics, TxnStatus, Value,
+    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, MvccInfo,
+    Result as StorageResult, ScanMode, Snapshot, Statistics, TxnStatus,
 };
 use engine::CF_WRITE;
 use tikv_util::collections::HashMap;
@@ -861,7 +862,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                         is_pessimistic_txn,
                     );
                 }
-                TxnStatus::Rollbacked
+                TxnStatus::RolledBack
                 | TxnStatus::Committed { .. }
                 | TxnStatus::Uncommitted { .. } => {}
             };

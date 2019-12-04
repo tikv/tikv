@@ -42,7 +42,7 @@ quick_error! {
         SchedTooBusy {
             description("scheduler is too busy")
         }
-        GCWorkerTooBusy {
+        GcWorkerTooBusy {
             description("gc worker is too busy")
         }
         KeyTooLarge(size: usize, limit: usize) {
