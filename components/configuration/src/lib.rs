@@ -42,7 +42,7 @@ macro_rules! impl_into {
                     v
                 } else {
                     panic!(
-                        "expext : {:?} got: {:?}",
+                        "expect: {:?}, got: {:?}",
                         format!("ConfigValue::{:}", stringify!($from)),
                         self
                     );

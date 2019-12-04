@@ -74,7 +74,7 @@ impl Into<ReadableSize> for ConfigValue {
         if let ConfigValue::Size(s) = self {
             ReadableSize(s)
         } else {
-            unreachable!()
+            panic!("expect: ConfigValue::Size, got: {:?}", self);
         }
     }
 }
@@ -256,7 +256,7 @@ impl Into<ReadableDuration> for ConfigValue {
         if let ConfigValue::Duration(d) = self {
             ReadableDuration(Duration::from_millis(d))
         } else {
-            unreachable!()
+            panic!("expect: ConfigValue::Duration, got: {:?}", self);
         }
     }
 }
