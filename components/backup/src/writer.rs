@@ -3,13 +3,14 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use engine::rocks::util::io_limiter::{IOLimiter, LimitReader};
-use engine::rocks::{SstWriter, SstWriterBuilder};
 use engine::{CF_DEFAULT, CF_WRITE, DB};
+use engine_rocks::RocksIOLimiter;
+use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
+use engine_traits::LimitReader;
+use engine_traits::{SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
-use tikv::raftstore::store::keys;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{self, box_err};
 
@@ -17,19 +18,21 @@ use crate::metrics::*;
 use crate::{Error, Result};
 
 struct Writer {
-    writer: SstWriter,
+    writer: RocksSstWriter,
     total_kvs: u64,
     total_bytes: u64,
     checksum: u64,
+    digest: crc64fast::Digest,
 }
 
 impl Writer {
-    fn new(writer: SstWriter) -> Self {
+    fn new(writer: RocksSstWriter) -> Self {
         Writer {
             writer,
             total_kvs: 0,
             total_bytes: 0,
             checksum: 0,
+            digest: crc64fast::Digest::new(),
         }
     }
 
@@ -49,7 +52,7 @@ impl Writer {
                 .into_kvpair()
                 .map_err(|err| Error::Other(box_err!("Decode error: {:?}", err)))?;
             self.total_bytes += (k.len() + v.len()) as u64;
-            self.checksum = checksum_crc64_xor(self.checksum, &[], &k, &v);
+            self.checksum = checksum_crc64_xor(self.checksum, self.digest.clone(), &k, &v);
         }
         Ok(())
     }
@@ -59,7 +62,7 @@ impl Writer {
         name: &str,
         cf: &'static str,
         buf: &mut Vec<u8>,
-        limiter: Option<Arc<IOLimiter>>,
+        limiter: Option<Arc<RocksIOLimiter>>,
         storage: &dyn ExternalStorage,
     ) -> Result<File> {
         buf.reserve(self.writer.file_size() as _);
@@ -73,7 +76,7 @@ impl Writer {
         let mut contents = buf as &[u8];
         let mut limit_reader = LimitReader::new(limiter, &mut contents);
         storage.write(&file_name, &mut limit_reader)?;
-        let mut file = File::new();
+        let mut file = File::default();
         file.set_name(file_name);
         file.set_sha256(sha256);
         file.set_crc64xor(self.checksum);
@@ -92,21 +95,25 @@ pub struct BackupWriter {
     name: String,
     default: Writer,
     write: Writer,
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Option<Arc<RocksIOLimiter>>,
 }
 
 impl BackupWriter {
     /// Create a new BackupWriter.
-    pub fn new(db: Arc<DB>, name: &str, limiter: Option<Arc<IOLimiter>>) -> Result<BackupWriter> {
-        let default = SstWriterBuilder::new()
+    pub fn new(
+        db: Arc<DB>,
+        name: &str,
+        limiter: Option<Arc<RocksIOLimiter>>,
+    ) -> Result<BackupWriter> {
+        let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)
-            .set_db(db.clone())
+            .set_db(RocksEngine::from_ref(&db))
             .build(name)?;
-        let write = SstWriterBuilder::new()
+        let write = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_WRITE)
-            .set_db(db.clone())
+            .set_db(RocksEngine::from_ref(&db))
             .build(name)?;
         let name = name.to_owned();
         Ok(BackupWriter {

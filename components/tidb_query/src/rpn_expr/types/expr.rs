@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::any::Any;
+
 use tipb::FieldType;
 
 use super::super::function::RpnFnMeta;
@@ -14,6 +16,7 @@ pub enum RpnExpressionNode {
         args_len: usize,
         field_type: FieldType,
         implicit_args: Vec<ScalarValue>,
+        metadata: Box<dyn Any + Send>,
     },
 
     /// Represents a scalar constant value.
@@ -34,6 +37,26 @@ impl RpnExpressionNode {
             RpnExpressionNode::FnCall { field_type, .. } => field_type,
             RpnExpressionNode::Constant { field_type, .. } => field_type,
             RpnExpressionNode::ColumnRef { .. } => panic!(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn expr_tp(&self) -> tipb::ExprType {
+        use tidb_query_datatype::EvalType;
+        use tipb::ExprType;
+
+        match self {
+            RpnExpressionNode::FnCall { .. } => ExprType::ScalarFunc,
+            RpnExpressionNode::Constant { value, .. } => match value.eval_type() {
+                EvalType::Bytes => ExprType::Bytes,
+                EvalType::DateTime => ExprType::MysqlTime,
+                EvalType::Decimal => ExprType::MysqlDecimal,
+                EvalType::Duration => ExprType::MysqlDuration,
+                EvalType::Int => ExprType::Int64,
+                EvalType::Json => ExprType::MysqlJson,
+                EvalType::Real => ExprType::Float64,
+            },
+            RpnExpressionNode::ColumnRef { .. } => ExprType::ColumnRef,
         }
     }
 

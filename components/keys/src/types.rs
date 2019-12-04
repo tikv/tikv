@@ -1,3 +1,4 @@
+use crate::timestamp::TimeStamp;
 use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -82,9 +83,9 @@ impl Key {
 
     /// Creates a new key by appending a `u64` timestamp to this key.
     #[inline]
-    pub fn append_ts(self, ts: u64) -> Key {
+    pub fn append_ts(self, ts: TimeStamp) -> Key {
         let mut encoded = self.0;
-        encoded.encode_u64_desc(ts).unwrap();
+        encoded.encode_u64_desc(ts.into_inner()).unwrap();
         Key(encoded)
     }
 
@@ -93,7 +94,7 @@ impl Key {
     /// Preconditions: the caller must ensure this is actually a timestamped
     /// key.
     #[inline]
-    pub fn decode_ts(&self) -> Result<u64, codec::Error> {
+    pub fn decode_ts(&self) -> Result<TimeStamp, codec::Error> {
         Ok(Self::decode_ts_from(&self.0)?)
     }
 
@@ -122,14 +123,14 @@ impl Key {
 
     /// Split a ts encoded key, return the user key and timestamp.
     #[inline]
-    pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
+    pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], TimeStamp), codec::Error> {
         if key.len() < number::U64_SIZE {
             Err(codec::Error::KeyLength)
         } else {
             let pos = key.len() - number::U64_SIZE;
             let k = &key[..pos];
             let mut ts = &key[pos..];
-            Ok((k, number::decode_u64_desc(&mut ts)?))
+            Ok((k, number::decode_u64_desc(&mut ts)?.into()))
         }
     }
 
@@ -145,13 +146,13 @@ impl Key {
 
     /// Decode the timestamp from a ts encoded key.
     #[inline]
-    pub fn decode_ts_from(key: &[u8]) -> Result<u64, codec::Error> {
+    pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp, codec::Error> {
         let len = key.len();
         if len < number::U64_SIZE {
             return Err(codec::Error::KeyLength);
         }
         let mut ts = &key[len - number::U64_SIZE..];
-        number::decode_u64_desc(&mut ts)
+        Ok(number::decode_u64_desc(&mut ts)?.into())
     }
 
     /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to the encoded
@@ -187,6 +188,11 @@ impl Key {
     pub fn is_encoded_from(&self, raw_key: &[u8]) -> bool {
         bytes::is_encoded_from(&self.0, raw_key, false)
     }
+
+    /// TiDB uses the same hash algorithm.
+    pub fn gen_hash(&self) -> u64 {
+        farmhash::fingerprint64(&self.to_raw().unwrap())
+    }
 }
 
 impl Clone for Key {
@@ -214,16 +220,6 @@ impl Display for Key {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_split_ts() {
-        let k = b"k";
-        let ts = 123;
-        assert!(Key::split_on_ts_for(k).is_err());
-        let enc = Key::from_encoded_slice(k).append_ts(ts);
-        let res = Key::split_on_ts_for(enc.as_encoded()).unwrap();
-        assert_eq!(res, (k.as_ref(), ts));
-    }
 
     #[test]
     fn test_is_user_key_eq() {

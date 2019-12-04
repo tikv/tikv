@@ -5,11 +5,15 @@ pub mod types;
 pub mod impl_arithmetic;
 pub mod impl_cast;
 pub mod impl_compare;
+pub mod impl_compare_in;
 pub mod impl_control;
+pub mod impl_encryption;
 pub mod impl_json;
 pub mod impl_like;
 pub mod impl_math;
+pub mod impl_miscellaneous;
 pub mod impl_op;
+pub mod impl_string;
 pub mod impl_time;
 
 pub use self::types::*;
@@ -23,11 +27,15 @@ use crate::Result;
 use self::impl_arithmetic::*;
 use self::impl_cast::*;
 use self::impl_compare::*;
+use self::impl_compare_in::*;
 use self::impl_control::*;
+use self::impl_encryption::*;
 use self::impl_json::*;
 use self::impl_like::*;
 use self::impl_math::*;
+use self::impl_miscellaneous::*;
 use self::impl_op::*;
+use self::impl_string::*;
 use self::impl_time::*;
 
 fn map_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
@@ -109,6 +117,26 @@ fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     }
 }
 
+pub fn map_unary_minus_int_func(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+    if children.len() != 1 {
+        return Err(other_err!(
+            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
+            value,
+            children.len()
+        ));
+    }
+    if children[0]
+        .get_field_type()
+        .as_accessor()
+        .flag()
+        .contains(FieldTypeFlag::UNSIGNED)
+    {
+        Ok(unary_minus_uint_fn_meta())
+    } else {
+        Ok(unary_minus_int_fn_meta())
+    }
+}
+
 #[rustfmt::skip]
 fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
     let value = expr.get_sig();
@@ -178,9 +206,19 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::DecimalIsFalse => decimal_is_false_fn_meta(),
         ScalarFuncSig::LogicalAnd => logical_and_fn_meta(),
         ScalarFuncSig::LogicalOr => logical_or_fn_meta(),
+        ScalarFuncSig::LogicalXor => logical_xor_fn_meta(),
         ScalarFuncSig::UnaryNotInt => unary_not_int_fn_meta(),
         ScalarFuncSig::UnaryNotReal => unary_not_real_fn_meta(),
         ScalarFuncSig::UnaryNotDecimal => unary_not_decimal_fn_meta(),
+        ScalarFuncSig::UnaryMinusInt => map_unary_minus_int_func(value, children)?,
+        ScalarFuncSig::UnaryMinusReal => unary_minus_real_fn_meta(),
+        ScalarFuncSig::UnaryMinusDecimal => unary_minus_decimal_fn_meta(),
+        ScalarFuncSig::BitAndSig => bit_and_fn_meta(),
+        ScalarFuncSig::BitOrSig => bit_or_fn_meta(),
+        ScalarFuncSig::BitXorSig => bit_xor_fn_meta(),
+        ScalarFuncSig::BitNegSig => bit_neg_fn_meta(),
+        ScalarFuncSig::LeftShift => left_shift_fn_meta(),
+        ScalarFuncSig::RightShift => right_shift_fn_meta(),
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
         ScalarFuncSig::PlusReal => arithmetic_fn_meta::<RealPlus>(),
         ScalarFuncSig::PlusDecimal => arithmetic_fn_meta::<DecimalPlus>(),
@@ -213,7 +251,18 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CaseWhenTime => case_when_fn_meta::<DateTime>(),
         ScalarFuncSig::CaseWhenDuration => case_when_fn_meta::<Duration>(),
         ScalarFuncSig::CaseWhenJson => case_when_fn_meta::<Json>(),
+        ScalarFuncSig::Md5 => md5_fn_meta(),
+        ScalarFuncSig::Sha1 => sha1_fn_meta(),
+        ScalarFuncSig::UncompressedLength => uncompressed_length_fn_meta(),
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
+        ScalarFuncSig::DayOfYear => day_of_year_fn_meta(),
+        ScalarFuncSig::WeekDay => week_day_fn_meta(),
+        ScalarFuncSig::FromDays => from_days_fn_meta(),
+        ScalarFuncSig::Month => month_fn_meta(),
+        ScalarFuncSig::Hour => hour_fn_meta(),
+        ScalarFuncSig::Minute => minute_fn_meta(),
+        ScalarFuncSig::Second => second_fn_meta(),
+        ScalarFuncSig::MicroSecond => micro_second_fn_meta(),
         ScalarFuncSig::AbsInt => abs_int_fn_meta(),
         ScalarFuncSig::AbsUInt => abs_uint_fn_meta(),
         ScalarFuncSig::AbsReal => abs_real_fn_meta(),
@@ -222,10 +271,26 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CeilDecToDec => ceil_fn_meta::<CeilDecToDec>(),
         ScalarFuncSig::CeilDecToInt => ceil_fn_meta::<CeilDecToInt>(),
         ScalarFuncSig::CeilIntToInt => ceil_fn_meta::<CeilIntToInt>(),
+        ScalarFuncSig::CeilIntToDec => ceil_fn_meta::<CeilIntToDec>(),
         ScalarFuncSig::FloorReal => floor_fn_meta::<FloorReal>(),
         ScalarFuncSig::FloorDecToInt => floor_fn_meta::<FloorDecToInt>(),
         ScalarFuncSig::FloorDecToDec => floor_fn_meta::<FloorDecToDec>(),
         ScalarFuncSig::FloorIntToInt => floor_fn_meta::<FloorIntToInt>(),
+        ScalarFuncSig::Pi => pi_fn_meta(),
+        ScalarFuncSig::Crc32 => crc32_fn_meta(),
+        ScalarFuncSig::Log1Arg => log_1_arg_fn_meta(),
+        ScalarFuncSig::Log2Args => log_2_arg_fn_meta(),
+        ScalarFuncSig::Log2 => log2_fn_meta(),
+        ScalarFuncSig::Log10 => log10_fn_meta(),
+        ScalarFuncSig::Sin => sin_fn_meta(),
+        ScalarFuncSig::Cos => cos_fn_meta(),
+        ScalarFuncSig::Tan => tan_fn_meta(),
+        ScalarFuncSig::Cot => cot_fn_meta(),
+        ScalarFuncSig::Pow => pow_fn_meta(),
+        ScalarFuncSig::Asin => asin_fn_meta(),
+        ScalarFuncSig::Acos => acos_fn_meta(),
+        ScalarFuncSig::Atan1Arg => atan_1_arg_fn_meta(),
+        ScalarFuncSig::Atan2Args => atan_2_args_fn_meta(),
         ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
         ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),
         ScalarFuncSig::CoalesceString => coalesce_fn_meta::<Bytes>(),
@@ -233,13 +298,19 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CoalesceTime => coalesce_fn_meta::<DateTime>(),
         ScalarFuncSig::CoalesceDuration => coalesce_fn_meta::<Duration>(),
         ScalarFuncSig::CoalesceJson => coalesce_fn_meta::<Json>(),
-        ScalarFuncSig::InInt => compare_in_fn_meta::<Int>(),
-        ScalarFuncSig::InReal => compare_in_fn_meta::<Real>(),
-        ScalarFuncSig::InString => compare_in_fn_meta::<Bytes>(),
-        ScalarFuncSig::InDecimal => compare_in_fn_meta::<Decimal>(),
-        ScalarFuncSig::InTime => compare_in_fn_meta::<DateTime>(),
-        ScalarFuncSig::InDuration => compare_in_fn_meta::<Duration>(),
-        ScalarFuncSig::InJson => compare_in_fn_meta::<Json>(),
+        ScalarFuncSig::Sign => sign_fn_meta(),
+        ScalarFuncSig::Sqrt => sqrt_fn_meta(),
+        ScalarFuncSig::Exp => exp_fn_meta(),
+        ScalarFuncSig::Degrees => degrees_fn_meta(),
+        ScalarFuncSig::Radians => radians_fn_meta(),
+        ScalarFuncSig::Conv => conv_fn_meta(),
+        ScalarFuncSig::InInt => compare_in_by_hash_fn_meta::<Int>(),
+        ScalarFuncSig::InReal => compare_in_by_hash_fn_meta::<Real>(),
+        ScalarFuncSig::InString => compare_in_by_hash_fn_meta::<Bytes>(),
+        ScalarFuncSig::InDecimal => compare_in_by_hash_fn_meta::<Decimal>(),
+        ScalarFuncSig::InTime => compare_in_by_compare_fn_meta::<DateTime>(),
+        ScalarFuncSig::InDuration => compare_in_by_hash_fn_meta::<Duration>(),
+        ScalarFuncSig::InJson => compare_in_by_compare_fn_meta::<Json>(),
         ScalarFuncSig::IfReal => if_condition_fn_meta::<Real>(),
         ScalarFuncSig::IfJson => if_condition_fn_meta::<Json>(),
         ScalarFuncSig::IfInt => if_condition_fn_meta::<Int>(),
@@ -257,6 +328,15 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonUnquoteSig => json_unquote_fn_meta(),
         ScalarFuncSig::JsonExtractSig => json_extract_fn_meta(),
         ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
+        ScalarFuncSig::InetNtoa => inet_ntoa_fn_meta(),
+        ScalarFuncSig::Bin => bin_fn_meta(),
+        ScalarFuncSig::IsIPv4 => is_ipv4_fn_meta(),
+        ScalarFuncSig::IsIPv4Compat => is_ipv4_compat_fn_meta(),
+        ScalarFuncSig::IsIPv4Mapped => is_ipv4_mapped_fn_meta(),
+        ScalarFuncSig::IsIPv6 => is_ipv6_fn_meta(),
+        ScalarFuncSig::Inet6Ntoa => inet6_ntoa_fn_meta(),
+        ScalarFuncSig::Inet6Aton => inet6_aton_fn_meta(),
+        ScalarFuncSig::InetAton => inet_aton_fn_meta(),
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
         ScalarFuncSig::CastIntAsString |
@@ -306,6 +386,30 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CastJsonAsTime |
         ScalarFuncSig::CastJsonAsDuration |
         ScalarFuncSig::CastJsonAsJson => map_cast_func(expr)?,
+        ScalarFuncSig::Length => length_fn_meta(),
+        ScalarFuncSig::BitLength => bit_length_fn_meta(),
+        ScalarFuncSig::Concat => concat_fn_meta(),
+        ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
+        ScalarFuncSig::Ascii => ascii_fn_meta(),
+        ScalarFuncSig::Reverse => reverse_fn_meta(),
+        ScalarFuncSig::ReverseBinary => reverse_binary_fn_meta(),
+        ScalarFuncSig::HexIntArg => hex_int_arg_fn_meta(),
+        ScalarFuncSig::HexStrArg => hex_str_arg_fn_meta(),
+        ScalarFuncSig::LTrim => ltrim_fn_meta(),
+        ScalarFuncSig::RTrim => rtrim_fn_meta(),
+        ScalarFuncSig::Replace => replace_fn_meta(),
+        ScalarFuncSig::Left => left_fn_meta(),
+        ScalarFuncSig::Right => right_fn_meta(),
+        ScalarFuncSig::LocateBinary2Args => locate_binary_2_args_fn_meta(),
+        ScalarFuncSig::LocateBinary3Args => locate_binary_3_args_fn_meta(),
+        ScalarFuncSig::FieldInt => field_fn_meta::<Int>(),
+        ScalarFuncSig::FieldReal => field_fn_meta::<Real>(),
+        ScalarFuncSig::FieldString => field_fn_meta::<Bytes>(),
+        ScalarFuncSig::Elt => elt_fn_meta(),
+        ScalarFuncSig::Space => space_fn_meta(),
+        ScalarFuncSig::Strcmp => strcmp_fn_meta(),
+        ScalarFuncSig::Year => year_fn_meta(),
+        ScalarFuncSig::DayOfMonth => day_of_month_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

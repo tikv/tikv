@@ -9,7 +9,6 @@ pub mod scan_executor;
 use tipb::FieldType;
 
 use crate::codec::batch::LazyBatchColumnVec;
-use crate::codec::mysql::Tz;
 use crate::expr::EvalContext;
 use crate::rpn_expr::RpnExpression;
 use crate::rpn_expr::RpnStackNode;
@@ -17,14 +16,14 @@ use crate::Result;
 
 /// Decodes all columns that are not decoded.
 pub fn ensure_columns_decoded(
-    tz: &Tz,
+    ctx: &mut EvalContext,
     exprs: &[RpnExpression],
     schema: &[FieldType],
     input_physical_columns: &mut LazyBatchColumnVec,
     input_logical_rows: &[usize],
 ) -> Result<()> {
     for expr in exprs {
-        expr.ensure_columns_decoded(tz, schema, input_physical_columns, input_logical_rows)?;
+        expr.ensure_columns_decoded(ctx, schema, input_physical_columns, input_logical_rows)?;
     }
     Ok(())
 }

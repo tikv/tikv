@@ -8,7 +8,6 @@ use super::expr::{RpnExpression, RpnExpressionNode};
 use super::RpnFnCallExtra;
 use crate::codec::batch::LazyBatchColumnVec;
 use crate::codec::data_type::{ScalarValue, ScalarValueRef, VectorValue};
-use crate::codec::mysql::time::Tz;
 use crate::expr::EvalContext;
 use crate::Result;
 
@@ -155,12 +154,7 @@ impl RpnExpression {
         // We iterate two times. The first time we decode all referred columns. The second time
         // we evaluate. This is to make Rust's borrow checker happy because there will be
         // mutable reference during the first iteration and we can't keep these references.
-        self.ensure_columns_decoded(
-            &ctx.cfg.tz,
-            schema,
-            input_physical_columns,
-            input_logical_rows,
-        )?;
+        self.ensure_columns_decoded(ctx, schema, input_physical_columns, input_logical_rows)?;
         self.eval_decoded(
             ctx,
             schema,
@@ -174,7 +168,7 @@ impl RpnExpression {
     /// all referred columns are decoded.
     pub fn ensure_columns_decoded<'a>(
         &'a self,
-        tz: &Tz,
+        ctx: &mut EvalContext,
         schema: &'a [FieldType],
         input_physical_columns: &'a mut LazyBatchColumnVec,
         input_logical_rows: &[usize],
@@ -182,7 +176,7 @@ impl RpnExpression {
         for node in self.as_ref() {
             if let RpnExpressionNode::ColumnRef { offset, .. } = node {
                 input_physical_columns[*offset].ensure_decoded(
-                    tz,
+                    ctx,
                     &schema[*offset],
                     input_logical_rows,
                 )?;
@@ -241,6 +235,7 @@ impl RpnExpression {
                     args_len,
                     field_type: ret_field_type,
                     implicit_args,
+                    metadata,
                 } => {
                     // Suppose that we have function call `Foo(A, B, C)`, the RPN nodes looks like
                     // `[A, B, C, Foo]`.
@@ -254,7 +249,13 @@ impl RpnExpression {
                         ret_field_type,
                         implicit_args,
                     };
-                    let ret = (func_meta.fn_ptr)(ctx, output_rows, stack_slice, &mut call_extra)?;
+                    let ret = (func_meta.fn_ptr)(
+                        ctx,
+                        output_rows,
+                        stack_slice,
+                        &mut call_extra,
+                        &**metadata,
+                    )?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Generated {
@@ -507,19 +508,26 @@ mod tests {
             Ok(Some(v.unwrap() + 5))
         }
 
+        let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::raw_with_capacity(3);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(-5)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(-5)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(-7)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(-7)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(3)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(3)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             col
@@ -710,19 +718,26 @@ mod tests {
             Ok(Some(v1.unwrap() * v2.unwrap()))
         }
 
+        let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::raw_with_capacity(3);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(-5)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(-5)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(-7)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(-7)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
-            datum_raw.write_datum(&[Datum::I64(3)], false).unwrap();
+            datum_raw
+                .write_datum(&mut ctx, &[Datum::I64(3)], false)
+                .unwrap();
             col.mut_raw().push(&datum_raw);
 
             col
@@ -1042,6 +1057,94 @@ mod tests {
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
     }
 
+    #[test]
+    fn test_rpn_fn_data() {
+        use crate::codec::data_type::Evaluable;
+        use tipb::{Expr, ScalarFuncSig};
+
+        #[allow(clippy::trivially_copy_pass_by_ref)]
+        #[rpn_fn(capture = [metadata], metadata_ctor = prepare_a::<T>)]
+        fn fn_a<T: Evaluable>(metadata: &i64, v: &Option<Int>) -> Result<Option<Int>> {
+            assert_eq!(*metadata, 42);
+            Ok(v.map(|v| v + *metadata))
+        }
+
+        fn prepare_a<T: Evaluable>(_expr: &mut Expr) -> Result<i64> {
+            Ok(42)
+        }
+
+        #[allow(clippy::trivially_copy_pass_by_ref, clippy::ptr_arg)]
+        #[rpn_fn(varg, capture = [metadata], metadata_ctor = prepare_b::<T>)]
+        fn fn_b<T: Evaluable>(metadata: &String, v: &[&Option<T>]) -> Result<Option<T>> {
+            assert_eq!(metadata, &format!("{}", std::mem::size_of::<T>()));
+            Ok(v[0].clone())
+        }
+
+        fn prepare_b<T: Evaluable>(_expr: &mut Expr) -> Result<String> {
+            Ok(format!("{}", std::mem::size_of::<T>()))
+        }
+
+        #[allow(clippy::trivially_copy_pass_by_ref)]
+        #[rpn_fn(raw_varg, capture = [metadata], metadata_ctor = prepare_c::<T>)]
+        fn fn_c<T: Evaluable>(
+            _data: &std::marker::PhantomData<T>,
+            args: &[ScalarValueRef<'_>],
+        ) -> Result<Option<Int>> {
+            Ok(Some(args.len() as i64))
+        }
+
+        fn prepare_c<T: Evaluable>(_expr: &mut Expr) -> Result<std::marker::PhantomData<T>> {
+            Ok(std::marker::PhantomData)
+        }
+
+        fn fn_mapper(expr: &Expr) -> Result<RpnFnMeta> {
+            // fn_a: CastIntAsInt
+            // fn_b: CastIntAsReal
+            // fn_c: CastIntAsString
+            Ok(match expr.get_sig() {
+                ScalarFuncSig::CastIntAsInt => fn_a_fn_meta::<Real>(),
+                ScalarFuncSig::CastIntAsReal => fn_b_fn_meta::<Real>(),
+                ScalarFuncSig::CastIntAsString => fn_c_fn_meta::<Int>(),
+                _ => unreachable!(),
+            })
+        }
+
+        let node =
+            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsString, FieldTypeTp::LongLong)
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsReal, FieldTypeTp::Double)
+                        .push_child(ExprDefBuilder::constant_real(0.5)),
+                )
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsInt, FieldTypeTp::LongLong)
+                        .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong)),
+                )
+                .build();
+
+        // Build RPN expression from this expression tree.
+        let exp =
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, fn_mapper, 1).unwrap();
+
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(2, EvalType::Int);
+            col.mut_decoded().push_int(Some(1)); // row 1
+            col.mut_decoded().push_int(None); // row 0
+            col
+        }]);
+        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
+
+        let mut ctx = EvalContext::default();
+        let result = exp.eval(&mut ctx, schema, &mut columns, &[1, 0], 2);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_ref().as_int_slice(),
+            [Some(2), Some(2)]
+        );
+        assert_eq!(val.vector_value().unwrap().logical_rows(), &[0, 1]);
+        assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
+    }
+
     #[bench]
     fn bench_eval_plus_1024_rows(b: &mut Bencher) {
         let mut columns = LazyBatchColumnVec::from(vec![{
@@ -1061,7 +1164,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..1024).collect();
 
-        profiler::start("bench_eval_plus_1024_rows.profile");
+        profiler::start("./bench_eval_plus_1024_rows.profile");
         b.iter(|| {
             let result = black_box(&exp).eval(
                 black_box(&mut ctx),
@@ -1098,7 +1201,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..1024).collect();
 
-        profiler::start("eval_compare_1024_rows.profile");
+        profiler::start("./eval_compare_1024_rows.profile");
         b.iter(|| {
             let result = black_box(&exp).eval(
                 black_box(&mut ctx),
@@ -1135,7 +1238,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let logical_rows: Vec<_> = (0..5).collect();
 
-        profiler::start("bench_eval_compare_5_rows.profile");
+        profiler::start("./bench_eval_compare_5_rows.profile");
         b.iter(|| {
             let result = black_box(&exp).eval(
                 black_box(&mut ctx),

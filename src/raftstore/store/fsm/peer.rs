@@ -10,8 +10,9 @@ use std::{cmp, u64};
 
 use crate::raftstore::{Error, Result};
 use engine::Engines;
+use engine::Peekable;
 use engine::CF_RAFT;
-use engine::{Peekable, Snapshot as EngineSnapshot};
+use engine_rocks::RocksSnapshot;
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -41,7 +42,6 @@ use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, CatchUpLogs, ChangePeer,
     ExecResult, Fsm, RegionProposal,
 };
-use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::Callback;
 use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
@@ -57,6 +57,7 @@ use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
+use keys::{self, enc_end_key, enc_start_key};
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -812,6 +813,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_apply_res(&mut self, res: ApplyTaskRes) {
+        fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
                 debug!(
@@ -1781,11 +1783,22 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let entries = if low > state.get_commit() {
                 vec![]
             } else {
-                self.fsm
+                match self
+                    .fsm
                     .peer
                     .get_store()
                     .entries(low, state.get_commit() + 1, NO_LIMIT)
-                    .unwrap()
+                {
+                    Ok(ents) => ents,
+                    Err(e) => panic!(
+                        "[region {}] {} failed to get merge entires: {:?}, low:{}, commit: {}",
+                        self.fsm.region_id(),
+                        self.fsm.peer_id(),
+                        e,
+                        low,
+                        state.get_commit()
+                    ),
+                }
             };
 
             let sibling_peer = util::find_peer(&sibling_region, self.store_id()).unwrap();
@@ -2329,6 +2342,24 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.ctx.raft_metrics.invalid_proposal.mismatch_peer_id += 1;
             return Err(e);
         }
+        // check whether the peer is initialized.
+        if !self.fsm.peer.is_initialized() {
+            self.ctx
+                .raft_metrics
+                .invalid_proposal
+                .region_not_initialized += 1;
+            return Err(Error::RegionNotInitialized(region_id));
+        }
+        // If the peer is applying snapshot, it may drop some sending messages, that could
+        // make clients wait for response until timeout.
+        if self.fsm.peer.mut_store().check_applying_snap() {
+            self.ctx.raft_metrics.invalid_proposal.is_applying_snapshot += 1;
+            // TODO: replace to a more suitable error.
+            return Err(Error::Other(box_err!(
+                "{} peer is applying snapshot",
+                self.fsm.peer.tag
+            )));
+        }
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg, self.fsm.peer.term()) {
             self.ctx.raft_metrics.invalid_proposal.stale_command += 1;
@@ -2436,6 +2467,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.register_raft_gc_log_tick();
         }
         debug_assert!(!self.fsm.stopped);
+        fail_point!("on_raft_gc_log_tick", |_| {});
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
@@ -2608,7 +2640,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
             match t {
                 PdTask::AskBatchSplit { callback, .. } => {
-                    callback.invoke_with_response(new_error(box_err!("failed to split: Stopped")));
+                    callback.invoke_with_response(new_error(box_err!(
+                        "{} failed to split: Stopped",
+                        self.fsm.peer.tag
+                    )));
                 }
                 _ => unreachable!(),
             }
@@ -2855,7 +2890,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: RocksSnapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!(
@@ -3062,7 +3097,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut response = match cmd_type {
             StatusCmdType::RegionLeader => self.execute_region_leader(),
             StatusCmdType::RegionDetail => self.execute_region_detail(request),
-            StatusCmdType::InvalidStatus => Err(box_err!("invalid status command!")),
+            StatusCmdType::InvalidStatus => {
+                Err(box_err!("{} invalid status command!", self.fsm.peer.tag))
+            }
         }?;
         response.set_cmd_type(cmd_type);
 

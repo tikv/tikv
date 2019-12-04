@@ -6,6 +6,7 @@ use std::time::Duration;
 use std::{thread, usize};
 
 use grpcio::{EnvBuilder, Error as GrpcError};
+use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::create_debug;
 use kvproto::import_sstpb::create_import_sst;
 use kvproto::raft_cmdpb::*;
@@ -17,14 +18,14 @@ use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use tikv::raftstore::router::{RaftStoreBlackHole, RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
+use tikv::server::lock_manager::{Config as PessimisticTxnConfig, LockManager};
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::service::DebugService;
-use tikv::server::transport::ServerRaftStoreRouter;
-use tikv::server::transport::{RaftStoreBlackHole, RaftStoreRouter};
 use tikv::server::Result as ServerResult;
 use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv, Server,
@@ -38,7 +39,7 @@ use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
-use tikv::server::gc_worker::GCWorker;
+use tikv::server::gc_worker::GcWorker;
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
 type SimulateServerTransport =
@@ -135,17 +136,23 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let storage_read_pool = storage::readpool_impl::build_read_pool_for_test(
+        let storage_read_pool = storage::build_read_pool_for_test(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
             raft_engine.clone(),
         );
 
         let engine = RaftKv::new(sim_router.clone());
 
-        let mut gc_worker = GCWorker::new(engine.clone(), None, None, cfg.gc.clone());
+        let mut gc_worker = GcWorker::new(engine.clone(), None, None, cfg.gc.clone());
         gc_worker.start().unwrap();
 
-        let store = create_raft_storage(engine, &cfg.storage, storage_read_pool, None)?;
+        let mut lock_mgr = LockManager::new();
+        let store = create_raft_storage(
+            engine,
+            &cfg.storage,
+            storage_read_pool,
+            Some(lock_mgr.clone()),
+        )?;
         self.storages.insert(node_id, raft_engine);
 
         // Create import service.
@@ -160,7 +167,19 @@ impl Simulator for ServerCluster {
             Arc::clone(&importer),
         );
         // Create Debug service.
-        let debug_service = DebugService::new(engines.clone(), raft_router.clone());
+        let pool = futures_cpupool::Builder::new()
+            .name_prefix(thd_name!("debugger"))
+            .pool_size(1)
+            .create();
+        let debug_service = DebugService::new(
+            engines.clone(),
+            pool,
+            raft_router.clone(),
+            gc_worker.clone(),
+        );
+
+        // Create deadlock service.
+        let deadlock_service = lock_mgr.deadlock_service();
 
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
@@ -187,6 +206,7 @@ impl Simulator for ServerCluster {
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));
             svr.register_service(create_debug(debug_service.clone()));
+            svr.register_service(create_deadlock(deadlock_service.clone()));
             match svr.build_and_bind() {
                 Ok(_) => {
                     server = Some(svr);
@@ -222,6 +242,9 @@ impl Simulator for ServerCluster {
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
 
+        // Register the role change observer of the lock manager.
+        lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
+
         node.start(
             engines.clone(),
             simulate_trans.clone(),
@@ -239,6 +262,17 @@ impl Simulator for ServerCluster {
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
         self.importers.insert(node_id, importer);
+
+        lock_mgr
+            .start(
+                node.id(),
+                Arc::clone(&self.pd_client),
+                resolver,
+                Arc::clone(&security_mgr),
+                &PessimisticTxnConfig::default(),
+            )
+            .unwrap();
+
         server.start(server_cfg, security_mgr).unwrap();
 
         self.metas.insert(
