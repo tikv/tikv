@@ -12,7 +12,6 @@ use engine::rocks::Writable;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
 use test_raftstore::*;
-use tikv::raftstore::store::keys;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);

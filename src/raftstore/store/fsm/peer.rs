@@ -42,7 +42,6 @@ use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, CatchUpLogs, ChangePeer,
     ExecResult, Fsm, RegionProposal,
 };
-use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::Callback;
 use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
@@ -58,6 +57,7 @@ use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
+use keys::{self, enc_end_key, enc_start_key};
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
