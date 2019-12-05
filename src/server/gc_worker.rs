@@ -21,17 +21,17 @@ use kvproto::metapb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
 
-use crate::raftstore::store::keys;
+use crate::raftstore::router::ServerRaftStoreRouter;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
-use crate::server::transport::ServerRaftStoreRouter;
+use crate::server::metrics::*;
 use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
     Statistics,
 };
-use crate::storage::metrics::*;
 use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
-use crate::storage::{Callback, Error, ErrorInner, Key, Result};
+use crate::storage::{Callback, Error, ErrorInner, Result};
+use keys::Key;
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
@@ -65,15 +65,15 @@ const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
-pub struct GCConfig {
+pub struct GcConfig {
     pub ratio_threshold: f64,
     pub batch_keys: usize,
     pub max_write_bytes_per_sec: ReadableSize,
 }
 
-impl Default for GCConfig {
-    fn default() -> GCConfig {
-        GCConfig {
+impl Default for GcConfig {
+    fn default() -> GcConfig {
+        GcConfig {
             ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             batch_keys: DEFAULT_GC_BATCH_KEYS,
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
@@ -81,7 +81,7 @@ impl Default for GCConfig {
     }
 }
 
-impl GCConfig {
+impl GcConfig {
     pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if self.batch_keys == 0 {
             return Err(("gc.batch_keys should not be 0.").into());
@@ -92,11 +92,11 @@ impl GCConfig {
 
 /// Provides safe point.
 /// TODO: Give it a better name?
-pub trait GCSafePointProvider: Send + 'static {
+pub trait GcSafePointProvider: Send + 'static {
     fn get_safe_point(&self) -> Result<TimeStamp>;
 }
 
-impl<T: PdClient + 'static> GCSafePointProvider for Arc<T> {
+impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
     fn get_safe_point(&self) -> Result<TimeStamp> {
         let future = self.get_gc_safe_point();
         future
@@ -106,8 +106,8 @@ impl<T: PdClient + 'static> GCSafePointProvider for Arc<T> {
     }
 }
 
-enum GCTask {
-    GC {
+enum GcTask {
+    Gc {
         ctx: Context,
         safe_point: TimeStamp,
         callback: Callback<()>,
@@ -120,13 +120,13 @@ enum GCTask {
     },
 }
 
-impl GCTask {
+impl GcTask {
     pub fn take_callback(&mut self) -> Callback<()> {
         let callback = match self {
-            GCTask::GC {
+            GcTask::Gc {
                 ref mut callback, ..
             } => callback,
-            GCTask::UnsafeDestroyRange {
+            GcTask::UnsafeDestroyRange {
                 ref mut callback, ..
             } => callback,
         };
@@ -135,16 +135,16 @@ impl GCTask {
 
     pub fn get_label(&self) -> &'static str {
         match self {
-            GCTask::GC { .. } => "gc",
-            GCTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
+            GcTask::Gc { .. } => "gc",
+            GcTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
         }
     }
 }
 
-impl Display for GCTask {
+impl Display for GcTask {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            GCTask::GC {
+            GcTask::Gc {
                 ctx, safe_point, ..
             } => {
                 let epoch = format!("{:?}", ctx.region_epoch.as_ref());
@@ -154,7 +154,7 @@ impl Display for GCTask {
                     .field("safe_point", safe_point)
                     .finish()
             }
-            GCTask::UnsafeDestroyRange {
+            GcTask::UnsafeDestroyRange {
                 start_key, end_key, ..
             } => f
                 .debug_struct("UnsafeDestroyRange")
@@ -166,7 +166,7 @@ impl Display for GCTask {
 }
 
 /// Used to perform GC operations on the engine.
-struct GCRunner<E: Engine> {
+struct GcRunner<E: Engine> {
     engine: E,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
@@ -174,18 +174,18 @@ struct GCRunner<E: Engine> {
     /// Used to limit the write flow of GC.
     limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
 
-    cfg: GCConfig,
+    cfg: GcConfig,
 
     stats: Statistics,
 }
 
-impl<E: Engine> GCRunner<E> {
+impl<E: Engine> GcRunner<E> {
     pub fn new(
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
         limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
-        cfg: GCConfig,
+        cfg: GcConfig,
     ) -> Self {
         Self {
             engine,
@@ -234,7 +234,7 @@ impl<E: Engine> GCRunner<E> {
         // skip gc before scanning all data.
         let skip_gc = is_range_start && !reader.need_gc(safe_point, self.cfg.ratio_threshold);
         let res = if skip_gc {
-            KV_GC_SKIPPED_COUNTER.inc();
+            GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
         } else {
             reader
@@ -244,7 +244,7 @@ impl<E: Engine> GCRunner<E> {
                     if keys.is_empty() {
                         assert!(next.is_none());
                         if is_range_start {
-                            KV_GC_EMPTY_RANGE_COUNTER.inc();
+                            GC_EMPTY_RANGE_COUNTER.inc();
                         }
                     }
                     Ok((keys, next))
@@ -263,7 +263,13 @@ impl<E: Engine> GCRunner<E> {
         mut next_scan_key: Option<Key>,
     ) -> Result<Option<Key>> {
         let snapshot = self.get_snapshot(ctx)?;
-        let mut txn = MvccTxn::new(snapshot, TimeStamp::zero(), !ctx.get_not_fill_cache()).unwrap();
+        let mut txn = MvccTxn::for_scan(
+            snapshot,
+            Some(ScanMode::Forward),
+            TimeStamp::zero(),
+            !ctx.get_not_fill_cache(),
+        )
+        .unwrap();
         for k in keys {
             let gc_info = txn.gc(k.clone(), safe_point)?;
 
@@ -313,7 +319,7 @@ impl<E: Engine> GCRunner<E> {
 
         let mut next_key = None;
         loop {
-            // Scans at most `GCConfig.batch_keys` keys
+            // Scans at most `GcConfig.batch_keys` keys
             let (keys, next) = self
                 .scan_keys(ctx, safe_point, next_key, self.cfg.batch_keys)
                 .map_err(|e| {
@@ -424,17 +430,17 @@ impl<E: Engine> GCRunner<E> {
         Ok(())
     }
 
-    fn handle_gc_worker_task(&mut self, mut task: GCTask) {
+    fn handle_gc_worker_task(&mut self, mut task: GcTask) {
         let label = task.get_label();
         GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
 
         let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
 
         let result = match &mut task {
-            GCTask::GC {
+            GcTask::Gc {
                 ctx, safe_point, ..
             } => self.gc(ctx, *safe_point),
-            GCTask::UnsafeDestroyRange {
+            GcTask::UnsafeDestroyRange {
                 ctx,
                 start_key,
                 end_key,
@@ -454,16 +460,16 @@ impl<E: Engine> GCRunner<E> {
     }
 }
 
-impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
+impl<E: Engine> Runnable<GcTask> for GcRunner<E> {
     #[inline]
-    fn run(&mut self, task: GCTask) {
+    fn run(&mut self, task: GcTask) {
         self.handle_gc_worker_task(task);
     }
 
     // The default implementation of `run_batch` prints a warning to log when it takes over 1 second
     // to handle a task. It's not proper here, so override it to remove the log.
     #[inline]
-    fn run_batch(&mut self, tasks: &mut Vec<GCTask>) {
+    fn run_batch(&mut self, tasks: &mut Vec<GcTask>) {
         for task in tasks.drain(..) {
             self.run(task);
         }
@@ -481,27 +487,27 @@ impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
     }
 }
 
-/// When we failed to schedule a `GCTask` to `GCRunner`, use this to handle the `ScheduleError`.
-fn handle_gc_task_schedule_error(e: ScheduleError<GCTask>) -> Result<()> {
+/// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
+fn handle_gc_task_schedule_error(e: ScheduleError<GcTask>) -> Result<()> {
     match e {
         ScheduleError::Full(mut task) => {
             GC_TOO_BUSY_COUNTER.inc();
-            (task.take_callback())(Err(Error::from(ErrorInner::GCWorkerTooBusy)));
+            (task.take_callback())(Err(Error::from(ErrorInner::GcWorkerTooBusy)));
             Ok(())
         }
         _ => Err(box_err!("failed to schedule gc task: {:?}", e)),
     }
 }
 
-/// Schedules a `GCTask` to the `GCRunner`.
+/// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
-    scheduler: &worker::Scheduler<GCTask>,
+    scheduler: &worker::Scheduler<GcTask>,
     ctx: Context,
     safe_point: TimeStamp,
     callback: Callback<()>,
 ) -> Result<()> {
     scheduler
-        .schedule(GCTask::GC {
+        .schedule(GcTask::Gc {
             ctx,
             safe_point,
             callback,
@@ -510,7 +516,7 @@ fn schedule_gc(
 }
 
 /// Does GC synchronously.
-fn gc(scheduler: &worker::Scheduler<GCTask>, ctx: Context, safe_point: TimeStamp) -> Result<()> {
+fn gc(scheduler: &worker::Scheduler<GcTask>, ctx: Context, safe_point: TimeStamp) -> Result<()> {
     wait_op!(|callback| schedule_gc(scheduler, ctx, safe_point, callback)).unwrap_or_else(|| {
         error!("failed to receive result of gc");
         Err(box_err!("gc_worker: failed to receive result of gc"))
@@ -518,7 +524,7 @@ fn gc(scheduler: &worker::Scheduler<GCTask>, ctx: Context, safe_point: TimeStamp
 }
 
 /// The configurations of automatic GC.
-pub struct AutoGCConfig<S: GCSafePointProvider, R: RegionInfoProvider> {
+pub struct AutoGcConfig<S: GcSafePointProvider, R: RegionInfoProvider> {
     pub safe_point_provider: S,
     pub region_info_provider: R,
 
@@ -537,7 +543,7 @@ pub struct AutoGCConfig<S: GCSafePointProvider, R: RegionInfoProvider> {
     pub post_a_round_of_gc: Option<Box<dyn Fn() + Send>>,
 }
 
-impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
+impl<S: GcSafePointProvider, R: RegionInfoProvider> AutoGcConfig<S, R> {
     /// Creates a new config.
     pub fn new(safe_point_provider: S, region_info_provider: R, self_store_id: u64) -> Self {
         Self {
@@ -568,28 +574,28 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
     }
 }
 
-/// The only error that will break `GCManager`'s process is that the `GCManager` is interrupted by
+/// The only error that will break `GcManager`'s process is that the `GcManager` is interrupted by
 /// others, maybe due to TiKV shutting down.
 #[derive(Debug)]
-enum GCManagerError {
+enum GcManagerError {
     Stopped,
 }
 
-type GCManagerResult<T> = std::result::Result<T, GCManagerError>;
+type GcManagerResult<T> = std::result::Result<T, GcManagerError>;
 
-/// Used to check if `GCManager` should be stopped.
+/// Used to check if `GcManager` should be stopped.
 ///
-/// When `GCManager` is running, it might take very long time to GC a round. It should be able to
+/// When `GcManager` is running, it might take very long time to GC a round. It should be able to
 /// break at any time so that we can shut down TiKV in time.
-struct GCManagerContext {
-    /// Used to receive stop signal. The sender side is hold in `GCManagerHandler`.
-    /// If this field is `None`, the `GCManagerContext` will never stop.
+struct GcManagerContext {
+    /// Used to receive stop signal. The sender side is hold in `GcManagerHandler`.
+    /// If this field is `None`, the `GcManagerContext` will never stop.
     stop_signal_receiver: Option<mpsc::Receiver<()>>,
     /// Whether an stop signal is received.
     is_stopped: bool,
 }
 
-impl GCManagerContext {
+impl GcManagerContext {
     pub fn new() -> Self {
         Self {
             stop_signal_receiver: None,
@@ -597,23 +603,23 @@ impl GCManagerContext {
         }
     }
 
-    /// Sets the receiver that used to receive the stop signal. `GCManagerContext` will be
+    /// Sets the receiver that used to receive the stop signal. `GcManagerContext` will be
     /// considered to be stopped as soon as a message is received from the receiver.
     pub fn set_stop_signal_receiver(&mut self, rx: mpsc::Receiver<()>) {
         self.stop_signal_receiver = Some(rx);
     }
 
     /// Sleeps for a while. if a stop message is received, returns immediately with
-    /// `GCManagerError::Stopped`.
-    fn sleep_or_stop(&mut self, timeout: Duration) -> GCManagerResult<()> {
+    /// `GcManagerError::Stopped`.
+    fn sleep_or_stop(&mut self, timeout: Duration) -> GcManagerResult<()> {
         if self.is_stopped {
-            return Err(GCManagerError::Stopped);
+            return Err(GcManagerError::Stopped);
         }
         match self.stop_signal_receiver.as_ref() {
             Some(rx) => match rx.recv_timeout(timeout) {
                 Ok(_) => {
                     self.is_stopped = true;
-                    Err(GCManagerError::Stopped)
+                    Err(GcManagerError::Stopped)
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -627,22 +633,22 @@ impl GCManagerContext {
         }
     }
 
-    /// Checks if a stop message has been fired. Returns `GCManagerError::Stopped` if there's such
+    /// Checks if a stop message has been fired. Returns `GcManagerError::Stopped` if there's such
     /// a message.
-    fn check_stopped(&mut self) -> GCManagerResult<()> {
+    fn check_stopped(&mut self) -> GcManagerResult<()> {
         if self.is_stopped {
-            return Err(GCManagerError::Stopped);
+            return Err(GcManagerError::Stopped);
         }
         match self.stop_signal_receiver.as_ref() {
             Some(rx) => match rx.try_recv() {
                 Ok(_) => {
                     self.is_stopped = true;
-                    Err(GCManagerError::Stopped)
+                    Err(GcManagerError::Stopped)
                 }
                 Err(mpsc::TryRecvError::Empty) => Ok(()),
                 Err(mpsc::TryRecvError::Disconnected) => {
                     error!("stop_signal_receiver unexpectedly disconnected, gc_manager will stop");
-                    Err(GCManagerError::Stopped)
+                    Err(GcManagerError::Stopped)
                 }
             },
             None => Ok(()),
@@ -660,32 +666,32 @@ fn make_context(mut region: metapb::Region, peer: metapb::Peer) -> Context {
     ctx
 }
 
-/// Used to represent the state of `GCManager`.
+/// Used to represent the state of `GcManager`.
 #[derive(PartialEq)]
-enum GCManagerState {
+enum GcManagerState {
     None,
     Init,
     Idle,
     Working,
 }
 
-impl GCManagerState {
+impl GcManagerState {
     pub fn tag(&self) -> &str {
         match self {
-            GCManagerState::None => "",
-            GCManagerState::Init => "initializing",
-            GCManagerState::Idle => "idle",
-            GCManagerState::Working => "working",
+            GcManagerState::None => "",
+            GcManagerState::Init => "initializing",
+            GcManagerState::Idle => "idle",
+            GcManagerState::Working => "working",
         }
     }
 }
 
 #[inline]
-fn set_status_metrics(state: GCManagerState) {
+fn set_status_metrics(state: GcManagerState) {
     for s in &[
-        GCManagerState::Init,
-        GCManagerState::Idle,
-        GCManagerState::Working,
+        GcManagerState::Init,
+        GcManagerState::Idle,
+        GcManagerState::Working,
     ] {
         AUTO_GC_STATUS_GAUGE_VEC
             .with_label_values(&[s.tag()])
@@ -693,14 +699,14 @@ fn set_status_metrics(state: GCManagerState) {
     }
 }
 
-/// Wraps `JoinHandle` of `GCManager` and helps to stop the `GCManager` synchronously.
-struct GCManagerHandle {
+/// Wraps `JoinHandle` of `GcManager` and helps to stop the `GcManager` synchronously.
+struct GcManagerHandle {
     join_handle: JoinHandle<()>,
     stop_signal_sender: mpsc::Sender<()>,
 }
 
-impl GCManagerHandle {
-    /// Stops the `GCManager`.
+impl GcManagerHandle {
+    /// Stops the `GcManager`.
     pub fn stop(self) -> Result<()> {
         let res: Result<()> = self
             .stop_signal_sender
@@ -716,42 +722,42 @@ impl GCManagerHandle {
 }
 
 /// Controls how GC runs automatically on the TiKV.
-/// It polls safe point periodically, and when the safe point is updated, `GCManager` will start to
+/// It polls safe point periodically, and when the safe point is updated, `GcManager` will start to
 /// scan all regions (whose leader is on this TiKV), and does GC on all those regions.
-struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
-    cfg: AutoGCConfig<S, R>,
+struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
+    cfg: AutoGcConfig<S, R>,
 
-    /// The current safe point. `GCManager` will try to update it periodically. When `safe_point` is
+    /// The current safe point. `GcManager` will try to update it periodically. When `safe_point` is
     /// updated, `GCManager` will start to do GC on all regions.
     safe_point: TimeStamp,
 
     safe_point_last_check_time: Instant,
 
-    /// Used to schedule `GCTask`s.
-    worker_scheduler: worker::Scheduler<GCTask>,
+    /// Used to schedule `GcTask`s.
+    worker_scheduler: worker::Scheduler<GcTask>,
 
-    /// Holds the running status. It will tell us if `GCManager` should stop working and exit.
-    gc_manager_ctx: GCManagerContext,
+    /// Holds the running status. It will tell us if `GcManager` should stop working and exit.
+    gc_manager_ctx: GcManagerContext,
 }
 
-impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
+impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     pub fn new(
-        cfg: AutoGCConfig<S, R>,
-        worker_scheduler: worker::Scheduler<GCTask>,
-    ) -> GCManager<S, R> {
-        GCManager {
+        cfg: AutoGcConfig<S, R>,
+        worker_scheduler: worker::Scheduler<GcTask>,
+    ) -> GcManager<S, R> {
+        GcManager {
             cfg,
             safe_point: TimeStamp::zero(),
             safe_point_last_check_time: Instant::now(),
             worker_scheduler,
-            gc_manager_ctx: GCManagerContext::new(),
+            gc_manager_ctx: GcManagerContext::new(),
         }
     }
 
-    /// Starts working in another thread. This function moves the `GCManager` and returns a handler
+    /// Starts working in another thread. This function moves the `GcManager` and returns a handler
     /// of it.
-    fn start(mut self) -> Result<GCManagerHandle> {
-        set_status_metrics(GCManagerState::Init);
+    fn start(mut self) -> Result<GcManagerHandle> {
+        set_status_metrics(GcManagerState::Init);
         self.initialize();
 
         let (tx, rx) = mpsc::channel();
@@ -762,22 +768,22 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                 self.run();
             })
             .map_err(|e| box_err!("failed to start gc manager: {:?}", e));
-        res.map(|join_handle| GCManagerHandle {
+        res.map(|join_handle| GcManagerHandle {
             join_handle,
             stop_signal_sender: tx,
         })
     }
 
     /// Polls safe point and does GC in a loop, again and again, until interrupted by invoking
-    /// `GCManagerHandle::stop`.
+    /// `GcManagerHandle::stop`.
     fn run(&mut self) {
         debug!("gc-manager is started");
         self.run_impl().unwrap_err();
-        set_status_metrics(GCManagerState::None);
+        set_status_metrics(GcManagerState::None);
         debug!("gc-manager is stopped");
     }
 
-    fn run_impl(&mut self) -> GCManagerResult<()> {
+    fn run_impl(&mut self) -> GcManagerResult<()> {
         loop {
             AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
                 .with_label_values(&[PROCESS_TYPE_GC])
@@ -786,10 +792,10 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                 .with_label_values(&[PROCESS_TYPE_SCAN])
                 .set(0);
 
-            set_status_metrics(GCManagerState::Idle);
+            set_status_metrics(GcManagerState::Idle);
             self.wait_for_next_safe_point()?;
 
-            set_status_metrics(GCManagerState::Working);
+            set_status_metrics(GcManagerState::Working);
             self.gc_a_round()?;
 
             if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
@@ -810,7 +816,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     }
 
     /// Waits until the safe_point updates. Returns the new safe point.
-    fn wait_for_next_safe_point(&mut self) -> GCManagerResult<TimeStamp> {
+    fn wait_for_next_safe_point(&mut self) -> GcManagerResult<TimeStamp> {
         loop {
             if self.try_update_safe_point() {
                 return Ok(self.safe_point);
@@ -895,7 +901,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// If safe point updates again at some time, it will still try to GC all regions with the
     /// latest safe point. If safe point always updates before `gc_a_round` finishes, `gc_a_round`
     /// may never stop, but it doesn't matter.
-    fn gc_a_round(&mut self) -> GCManagerResult<()> {
+    fn gc_a_round(&mut self) -> GcManagerResult<()> {
         let mut need_rewind = false;
         // Represents where we should stop doing GC. `None` means the very end of the TiKV.
         let mut end = None;
@@ -1005,7 +1011,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         &mut self,
         from_key: Key,
         processed_regions: &mut usize,
-    ) -> GCManagerResult<Option<Key>> {
+    ) -> GcManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
         let (ctx, next_key) = self.get_next_gc_context(from_key);
         if ctx.is_none() {
@@ -1096,26 +1102,26 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 }
 
 /// Used to schedule GC operations.
-pub struct GCWorker<E: Engine> {
+pub struct GcWorker<E: Engine> {
     engine: E,
     /// `local_storage` represent the underlying RocksDB of the `engine`.
     local_storage: Option<Arc<DB>>,
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
     raft_store_router: Option<ServerRaftStoreRouter>,
 
-    cfg: Option<GCConfig>,
+    cfg: Option<GcConfig>,
     limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
 
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<atomic::AtomicUsize>,
-    worker: Arc<Mutex<Worker<GCTask>>>,
-    worker_scheduler: worker::Scheduler<GCTask>,
+    worker: Arc<Mutex<Worker<GcTask>>>,
+    worker_scheduler: worker::Scheduler<GcTask>,
 
-    gc_manager_handle: Arc<Mutex<Option<GCManagerHandle>>>,
+    gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
 }
 
-impl<E: Engine> Clone for GCWorker<E> {
+impl<E: Engine> Clone for GcWorker<E> {
     #[inline]
     fn clone(&self) -> Self {
         self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -1134,7 +1140,7 @@ impl<E: Engine> Clone for GCWorker<E> {
     }
 }
 
-impl<E: Engine> Drop for GCWorker<E> {
+impl<E: Engine> Drop for GcWorker<E> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -1150,13 +1156,13 @@ impl<E: Engine> Drop for GCWorker<E> {
     }
 }
 
-impl<E: Engine> GCWorker<E> {
+impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        cfg: GCConfig,
-    ) -> GCWorker<E> {
+        cfg: GcConfig,
+    ) -> GcWorker<E> {
         let worker = Arc::new(Mutex::new(
             WorkerBuilder::new("gc-worker")
                 .pending_capacity(GC_MAX_PENDING_TASKS)
@@ -1170,7 +1176,7 @@ impl<E: Engine> GCWorker<E> {
         } else {
             None
         };
-        GCWorker {
+        GcWorker {
             engine,
             local_storage,
             raft_store_router,
@@ -1183,19 +1189,19 @@ impl<E: Engine> GCWorker<E> {
         }
     }
 
-    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
         &self,
-        cfg: AutoGCConfig<S, R>,
+        cfg: AutoGcConfig<S, R>,
     ) -> Result<()> {
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
-        let new_handle = GCManager::new(cfg, self.worker_scheduler.clone()).start()?;
+        let new_handle = GcManager::new(cfg, self.worker_scheduler.clone()).start()?;
         *handle = Some(new_handle);
         Ok(())
     }
 
     pub fn start(&mut self) -> Result<()> {
-        let runner = GCRunner::new(
+        let runner = GcRunner::new(
             self.engine.clone(),
             self.local_storage.take(),
             self.raft_store_router.take(),
@@ -1210,7 +1216,7 @@ impl<E: Engine> GCWorker<E> {
     }
 
     pub fn stop(&self) -> Result<()> {
-        // Stop GCManager.
+        // Stop GcManager.
         if let Some(h) = self.gc_manager_handle.lock().unwrap().take() {
             h.stop()?;
         }
@@ -1229,9 +1235,9 @@ impl<E: Engine> GCWorker<E> {
         safe_point: TimeStamp,
         callback: Callback<()>,
     ) -> Result<()> {
-        KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
+        GC_COMMAND_COUNTER_VEC_STATIC.gc.inc();
         self.worker_scheduler
-            .schedule(GCTask::GC {
+            .schedule(GcTask::Gc {
                 ctx,
                 safe_point,
                 callback,
@@ -1251,9 +1257,9 @@ impl<E: Engine> GCWorker<E> {
         end_key: Key,
         callback: Callback<()>,
     ) -> Result<()> {
-        KV_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
+        GC_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
         self.worker_scheduler
-            .schedule(GCTask::UnsafeDestroyRange {
+            .schedule(GcTask::UnsafeDestroyRange {
                 ctx,
                 start_key,
                 end_key,
@@ -1293,9 +1299,9 @@ mod tests {
         rx: Receiver<TimeStamp>,
     }
 
-    impl GCSafePointProvider for MockSafePointProvider {
+    impl GcSafePointProvider for MockSafePointProvider {
         fn get_safe_point(&self) -> Result<TimeStamp> {
-            // Error will be ignored by `GCManager`, which is equivalent to that the safe_point
+            // Error will be ignored by `GcManager`, which is equivalent to that the safe_point
             // is not updated.
             self.rx.try_recv().map_err(|e| box_err!(e))
         }
@@ -1315,36 +1321,36 @@ mod tests {
         }
     }
 
-    struct MockGCRunner {
-        tx: Sender<GCTask>,
+    struct MockGcRunner {
+        tx: Sender<GcTask>,
     }
 
-    impl Runnable<GCTask> for MockGCRunner {
-        fn run(&mut self, mut t: GCTask) {
+    impl Runnable<GcTask> for MockGcRunner {
+        fn run(&mut self, mut t: GcTask) {
             let cb = t.take_callback();
             self.tx.send(t).unwrap();
             cb(Ok(()));
         }
     }
 
-    /// A set of utilities that helps testing `GCManager`.
+    /// A set of utilities that helps testing `GcManager`.
     /// The safe_point polling interval is set to 100 ms.
-    struct GCManagerTestUtil {
-        gc_manager: Option<GCManager<MockSafePointProvider, MockRegionInfoProvider>>,
-        worker: Worker<GCTask>,
+    struct GcManagerTestUtil {
+        gc_manager: Option<GcManager<MockSafePointProvider, MockRegionInfoProvider>>,
+        worker: Worker<GcTask>,
         safe_point_sender: Sender<TimeStamp>,
-        gc_task_receiver: Receiver<GCTask>,
+        gc_task_receiver: Receiver<GcTask>,
     }
 
-    impl GCManagerTestUtil {
+    impl GcManagerTestUtil {
         pub fn new(regions: BTreeMap<Vec<u8>, RegionInfo>) -> Self {
             let mut worker = WorkerBuilder::new("test-gc-worker").create();
             let (gc_task_sender, gc_task_receiver) = channel();
-            worker.start(MockGCRunner { tx: gc_task_sender }).unwrap();
+            worker.start(MockGcRunner { tx: gc_task_sender }).unwrap();
 
             let (safe_point_sender, safe_point_receiver) = channel();
 
-            let mut cfg = AutoGCConfig::new(
+            let mut cfg = AutoGcConfig::new(
                 MockSafePointProvider {
                     rx: safe_point_receiver,
                 },
@@ -1354,7 +1360,7 @@ mod tests {
             cfg.poll_safe_point_interval = Duration::from_millis(100);
             cfg.always_check_safe_point = true;
 
-            let gc_manager = GCManager::new(cfg, worker.scheduler());
+            let gc_manager = GcManager::new(cfg, worker.scheduler());
             Self {
                 gc_manager: Some(gc_manager),
                 worker,
@@ -1363,8 +1369,8 @@ mod tests {
             }
         }
 
-        /// Collect `GCTask`s that `GCManager` tried to execute.
-        pub fn collect_scheduled_tasks(&self) -> Vec<GCTask> {
+        /// Collect `GcTask`s that `GcManager` tried to execute.
+        pub fn collect_scheduled_tasks(&self) -> Vec<GcTask> {
             self.gc_task_receiver.try_iter().collect()
         }
 
@@ -1381,7 +1387,7 @@ mod tests {
     ///
     /// Param `regions` is a `Vec` of tuples which is `(start_key, end_key, region_id)`
     ///
-    /// The first value in param `safe_points` will be used to initialize the GCManager, and the remaining
+    /// The first value in param `safe_points` will be used to initialize the GcManager, and the remaining
     /// values will be checked before every time GC-ing a region. If the length of `safe_points` is
     /// less than executed GC tasks, the last value will be used for extra GC tasks.
     ///
@@ -1404,7 +1410,7 @@ mod tests {
             })
             .collect();
 
-        let mut test_util = GCManagerTestUtil::new(regions);
+        let mut test_util = GcManagerTestUtil::new(regions);
 
         for safe_point in &safe_points {
             test_util.add_next_safe_point(*safe_point);
@@ -1418,7 +1424,7 @@ mod tests {
             .collect_scheduled_tasks()
             .iter()
             .map(|task| match task {
-                GCTask::GC {
+                GcTask::Gc {
                     ctx, safe_point, ..
                 } => (ctx.get_region_id(), *safe_point),
                 _ => unreachable!(),
@@ -1456,7 +1462,7 @@ mod tests {
 
     #[test]
     fn test_update_safe_point() {
-        let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
+        let mut test_util = GcManagerTestUtil::new(BTreeMap::new());
         let mut gc_manager = test_util.gc_manager.take().unwrap();
         assert_eq!(gc_manager.safe_point, TimeStamp::zero());
         test_util.add_next_safe_point(233);
@@ -1480,7 +1486,7 @@ mod tests {
 
     #[test]
     fn test_gc_manager_initialize() {
-        let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
+        let mut test_util = GcManagerTestUtil::new(BTreeMap::new());
         let mut gc_manager = test_util.gc_manager.take().unwrap();
         assert_eq!(gc_manager.safe_point, TimeStamp::zero());
         test_util.add_next_safe_point(0);
@@ -1639,7 +1645,7 @@ mod tests {
             .build()
             .unwrap();
         let db = engine.get_rocksdb();
-        let mut gc_worker = GCWorker::new(engine, Some(db), None, GCConfig::default());
+        let mut gc_worker = GcWorker::new(engine, Some(db), None, GcConfig::default());
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1803,10 +1809,10 @@ mod tests {
 
     #[test]
     fn test_gc_config_validate() {
-        let cfg = GCConfig::default();
+        let cfg = GcConfig::default();
         cfg.validate().unwrap();
 
-        let mut invalid_cfg = GCConfig::default();
+        let mut invalid_cfg = GcConfig::default();
         invalid_cfg.batch_keys = 0;
         assert!(invalid_cfg.validate().is_err());
     }
@@ -1814,7 +1820,7 @@ mod tests {
     #[test]
     fn test_change_io_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let mut gc_worker = GCWorker::new(engine, None, None, GCConfig::default());
+        let mut gc_worker = GcWorker::new(engine, None, None, GcConfig::default());
         gc_worker.start().unwrap();
         assert!(gc_worker.limiter.lock().unwrap().is_none());
 

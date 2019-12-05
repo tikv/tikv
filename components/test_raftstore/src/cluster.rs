@@ -24,7 +24,7 @@ use tikv::raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSy
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
-use tikv::storage::DEFAULT_ROCKSDB_SUB_DIR;
+use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 

@@ -528,6 +528,17 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         Ok(None)
     }
+
+    #[inline]
+    pub fn from_days<'a>(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        let days = try_opt!(self.children[0].eval_int(ctx, row)) as u32;
+        let time = Time::from_days(ctx, days)?;
+        Ok(Some(Cow::Owned(time)))
+    }
 }
 
 #[inline]
@@ -1739,5 +1750,39 @@ mod tests {
     fn test_add_sub_time_string_null() {
         let mut ctx = EvalContext::default();
         test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::AddTimeStringNull, Datum::Null);
+    }
+
+    #[test]
+    fn test_from_days() {
+        let cases = vec![
+            (-140, "0000-00-00"), // mysql FROM_DAYS returns 0000-00-00 for any day <= 365.
+            (140, "0000-00-00"),  // mysql FROM_DAYS returns 0000-00-00 for any day <= 365.
+            (735_000, "2012-05-12"), // Leap year.
+            (735_030, "2012-06-11"),
+            (735_130, "2012-09-19"),
+            (734_909, "2012-02-11"),
+            (734_878, "2012-01-11"),
+            (734_927, "2012-02-29"),
+            (734_634, "2011-05-12"), // Non Leap year.
+            (734_664, "2011-06-11"),
+            (734_764, "2011-09-19"),
+            (734_544, "2011-02-11"),
+            (734_513, "2011-01-11"),
+            (3_652_424, "9999-12-31"),
+            (3_652_425, "0000-00-00"), // mysql FROM_DAYS returns 0000-00-00 for any day >= 3652425
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let datetime = Time::parse_date(&mut ctx, exp).unwrap();
+            test_ok_case_one_arg(
+                &mut ctx,
+                ScalarFuncSig::FromDays,
+                Datum::I64(arg),
+                Datum::Time(datetime),
+            );
+        }
+
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::Month, Datum::Null);
     }
 }
