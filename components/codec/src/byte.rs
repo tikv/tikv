@@ -2,7 +2,6 @@
 
 use std::intrinsics::unlikely;
 use std::io::Read;
-use std::slice;
 
 use crate::buffer::BufferReader;
 use crate::number::{self, NumberCodec, NumberDecoder, NumberEncoder};
@@ -391,51 +390,6 @@ impl MemComparableByteCodec {
                 }
             }
         }
-    }
-
-    /// Returns whether `encoded` bytes is encoded from `raw`. Returns `false` if `encoded` is invalid.
-    pub fn is_encoded_from(encoded: &[u8], raw: &[u8]) -> bool {
-        let group_count = raw.len() / MEMCMP_GROUP_SIZE + 1;
-        if encoded.len() != group_count * (MEMCMP_GROUP_SIZE + 1) {
-            return false;
-        }
-
-        // Check the last group first
-        let last_encoded_group = &encoded[encoded.len() - MEMCMP_GROUP_SIZE - 1..];
-        let last_group_len = raw.len() % MEMCMP_GROUP_SIZE;
-        let last_raw_group = &raw[raw.len() - last_group_len..];
-        let pad_len = MEMCMP_GROUP_SIZE - last_group_len;
-        let pad_marker = !(pad_len as u8);
-        const PADDING_BUF: [u8; 8] = [!MEMCMP_PAD_BYTE; 8];
-        if last_encoded_group[MEMCMP_GROUP_SIZE] != pad_marker
-            || &last_encoded_group[..last_group_len] != last_raw_group
-            || last_encoded_group[last_group_len..MEMCMP_GROUP_SIZE] != PADDING_BUF[..pad_len]
-        {
-            return false;
-        }
-
-        let mut encoded_group_ptr = last_encoded_group.as_ptr();
-        let mut raw_group_ptr = last_raw_group.as_ptr();
-        // Unsafe is used here to eliminate bound checkings by hand.
-        // Safety: At the beginning of the function, we've checked `encoded` and `raw` have the
-        // same group number. After checking the last group, `encoded` and `raw` both only have complete
-        // groups left, which means each encoded group consists of MEMCMP_GROUP_SIZE bytes of data plus
-        // one padding byte and each raw group left has MEMCMP_GROUP_SIZE bytes of data. So we can make
-        // sure we don't move the pointers out of the bounds of the two slices.
-        while encoded_group_ptr > encoded.as_ptr() {
-            unsafe {
-                let pad_ptr = encoded_group_ptr.sub(1);
-                encoded_group_ptr = pad_ptr.sub(MEMCMP_GROUP_SIZE);
-                raw_group_ptr = raw_group_ptr.sub(MEMCMP_GROUP_SIZE);
-                if *pad_ptr != !0
-                    || slice::from_raw_parts(encoded_group_ptr, MEMCMP_GROUP_SIZE)
-                        != slice::from_raw_parts(raw_group_ptr, MEMCMP_GROUP_SIZE)
-                {
-                    return false;
-                }
-            }
-        }
-        true
     }
 }
 
@@ -1268,113 +1222,6 @@ mod tests {
             assert_eq!(x.cmp(y), ord);
             assert_eq!(encode_asc(x).cmp(&encode_asc(y)), ord);
             assert_eq!(encode_desc(x).cmp(&encode_desc(y)), ord.reverse());
-        }
-    }
-
-    #[test]
-    fn test_is_encoded_from() {
-        let cases: Vec<(&[u8])> = vec![
-            (b""),
-            (b"a"),
-            (b"\x00"),
-            (b"\xFF"),
-            (b"\x00"),
-            (b"\x00\x01"),
-            (b"\x00\x00\x00"),
-            (b"\x01\x02\x03\x00"),
-            (b"\x01\x03\x03\x04"),
-            (b"\x01\x02\x03\x04\x05\x06\x07"),
-            (b"\x00\x00\x00\x00\x00\x00\x00\x00"),
-            (b"\x01\x02\x03\x04\x05\x06\x07\x08\x09"),
-            (b"\x01\x02\x03\x04\x05\x06\x07\x08\x00"),
-        ];
-
-        for raw in cases {
-            let raw_len = raw.len();
-            let encoded_len = MemComparableByteCodec::encoded_len(raw_len);
-            let mut encoded = vec![0; encoded_len];
-            MemComparableByteCodec::encode_all(&raw, encoded.as_mut_slice());
-            assert!(
-                MemComparableByteCodec::is_encoded_from(&encoded, &raw),
-                "Encoded: {:?}, Raw: {:?}",
-                encoded,
-                raw
-            );
-
-            // Should return false if we modify one byte in raw
-            for i in 0..raw.len() {
-                let mut invalid_raw = raw.to_vec();
-                invalid_raw[i] = invalid_raw[i].wrapping_add(1);
-                let invalid_raw = invalid_raw.as_slice();
-                assert!(
-                    !MemComparableByteCodec::is_encoded_from(&encoded, &invalid_raw),
-                    "Encoded: {:?}, Raw: {:?}",
-                    encoded,
-                    invalid_raw
-                );
-            }
-
-            // Should return false if we modify one byte in encoded
-            for i in 0..encoded.len() {
-                let mut invalid_encoded = encoded.to_vec();
-                invalid_encoded[i] = invalid_encoded[i].wrapping_add(1);
-                let invalid_encoded = invalid_encoded.as_slice();
-                assert!(
-                    !MemComparableByteCodec::is_encoded_from(&invalid_encoded, &raw),
-                    "Encoded: {:?}, Raw: {:?}",
-                    invalid_encoded,
-                    raw
-                );
-            }
-
-            // Should return false if encoded length is not a multiple of 9
-            let invalid_encoded = &encoded[..encoded_len - 1];
-            assert!(
-                !MemComparableByteCodec::is_encoded_from(&invalid_encoded, &raw),
-                "Encoded: {:?}, Raw: {:?}",
-                invalid_encoded,
-                raw
-            );
-
-            // Should return false if encoded has less or more chunks
-            let shorter_encoded = &encoded[..encoded_len - MEMCMP_GROUP_SIZE - 1];
-            assert!(
-                !MemComparableByteCodec::is_encoded_from(shorter_encoded, &raw),
-                "Encoded: {:?}, Raw: {:?}",
-                shorter_encoded,
-                raw
-            );
-            let mut longer_encoded = vec![b'0'; encoded_len + MEMCMP_GROUP_SIZE + 1];
-            longer_encoded.clone_from_slice(&encoded);
-            longer_encoded[encoded_len..].clone_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0xFF]);
-            let longer_encoded = longer_encoded.as_slice();
-            assert!(
-                !MemComparableByteCodec::is_encoded_from(longer_encoded, &raw),
-                "Encoded: {:?}, Raw: {:?}",
-                longer_encoded,
-                raw
-            );
-
-            // Should return false if raw is longer or shorter
-            if !raw.is_empty() {
-                let shorter_raw = &raw[..raw_len - 1];
-                assert!(
-                    !MemComparableByteCodec::is_encoded_from(&encoded, shorter_raw),
-                    "Encoded: {:?}, Raw: {:?}",
-                    encoded,
-                    shorter_raw
-                );
-            }
-            let mut longer_raw = vec![b'0'; raw_len + 1];
-            longer_raw.clone_from_slice(&raw);
-            longer_raw[raw_len..].clone_from_slice(&[0]);
-            let longer_raw = longer_raw.as_slice();
-            assert!(
-                !MemComparableByteCodec::is_encoded_from(&encoded, &longer_raw),
-                "Encoded: {:?}, Raw: {:?}",
-                encoded,
-                longer_raw
-            );
         }
     }
 }

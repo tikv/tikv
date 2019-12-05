@@ -7,6 +7,7 @@ use codec;
 use codec::byte::MemComparableByteCodec;
 use codec::number::{self, NumberCodec};
 use codec::prelude::{MemComparableByteEncoder, NumberDecoder};
+use tikv_util::codec::bytes;
 
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
@@ -195,7 +196,7 @@ impl Key {
 
     /// Returns whether the encoded key is encoded from `raw_key`.
     pub fn is_encoded_from(&self, raw_key: &[u8]) -> bool {
-        MemComparableByteCodec::is_encoded_from(&self.0, raw_key)
+        bytes::is_encoded_from(&self.0, raw_key, false)
     }
 
     /// TiDB uses the same hash algorithm.
