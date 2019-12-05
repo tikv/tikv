@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::u64;
 
-use keys::{Key, TimeStamp};
+use keys::TimeStamp;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::{collections::HashMap, time::SlowTimer};
@@ -39,11 +39,7 @@ use crate::storage::metrics::{
     SCHED_WRITING_BYTES_GAUGE,
 };
 use crate::storage::txn::{
-    commands::{
-        AcquirePessimisticLock, CheckTxnStatus, Cleanup, Command, CommandKind, Commit, Pause,
-        PessimisticRollback, Prewrite, PrewritePessimistic, ResolveLock, ResolveLockLite, Rollback,
-        TxnHeartBeat,
-    },
+    commands::Command,
     latch::{Latches, Lock},
     process::{Executor, MsgScheduler, Task},
     sched_pool::SchedPool,
@@ -124,7 +120,7 @@ struct TaskContext {
 impl TaskContext {
     fn new(task: Task, latches: &Latches, cb: StorageCallback) -> TaskContext {
         let tag = task.cmd().tag();
-        let lock = gen_command_lock(latches, task.cmd());
+        let lock = task.cmd().gen_lock(latches);
         // Write command should acquire write lock.
         if !task.cmd().readonly() && !lock.is_write_lock() {
             panic!("write lock is expected for command {}", task.cmd());
@@ -500,57 +496,12 @@ impl<E: Engine, L: LockManager> MsgScheduler for Scheduler<E, L> {
     }
 }
 
-fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
-    match cmd.kind {
-        CommandKind::Prewrite(Prewrite { ref mutations, .. }) => {
-            let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
-            latches.gen_lock(&keys)
-        }
-        CommandKind::PrewritePessimistic(PrewritePessimistic { ref mutations, .. }) => {
-            let keys: Vec<&Key> = mutations.iter().map(|(x, _)| x.key()).collect();
-            latches.gen_lock(&keys)
-        }
-        CommandKind::ResolveLock(ResolveLock { ref key_locks, .. }) => {
-            let keys: Vec<&Key> = key_locks.iter().map(|x| &x.0).collect();
-            latches.gen_lock(&keys)
-        }
-        CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { ref keys, .. }) => {
-            let keys: Vec<&Key> = keys.iter().map(|x| &x.0).collect();
-            latches.gen_lock(&keys)
-        }
-        CommandKind::ResolveLockLite(ResolveLockLite {
-            ref resolve_keys, ..
-        }) => latches.gen_lock(resolve_keys),
-        CommandKind::Commit(Commit { ref keys, .. })
-        | CommandKind::Rollback(Rollback { ref keys, .. })
-        | CommandKind::PessimisticRollback(PessimisticRollback { ref keys, .. }) => {
-            latches.gen_lock(keys)
-        }
-        CommandKind::Cleanup(Cleanup { ref key, .. }) => latches.gen_lock(&[key]),
-        CommandKind::Pause(Pause { ref keys, .. }) => latches.gen_lock(keys),
-        CommandKind::TxnHeartBeat(TxnHeartBeat {
-            ref primary_key, ..
-        }) => latches.gen_lock(&[primary_key]),
-        CommandKind::CheckTxnStatus(CheckTxnStatus {
-            ref primary_key, ..
-        }) => latches.gen_lock(&[primary_key]),
-
-        // Avoid using wildcard _ here to avoid forgetting add new commands here.
-        CommandKind::ScanLock(_)
-        | CommandKind::DeleteRange(_)
-        | CommandKind::MvccByKey(_)
-        | CommandKind::MvccByStartTs(_) => Lock::new(vec![]),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::storage::mvcc::{self, Mutation};
-    use crate::storage::txn::{
-        commands::{MvccByKey, MvccByStartTs, ScanLock},
-        latch::*,
-    };
+    use crate::storage::txn::{commands, latch::*};
+    use keys::Key;
     use kvproto::kvrpcpb::Context;
 
     #[test]
@@ -558,13 +509,13 @@ mod tests {
         let mut temp_map = HashMap::default();
         temp_map.insert(10.into(), 20.into());
         let readonly_cmds = vec![
-            ScanLock::new(5.into(), None, 0, Context::default()),
-            ResolveLock::new(temp_map.clone(), None, vec![], Context::default()),
-            MvccByKey::new(Key::from_raw(b"k"), Context::default()),
-            MvccByStartTs::new(25.into(), Context::default()),
+            commands::ScanLock::new(5.into(), None, 0, Context::default()),
+            commands::ResolveLock::new(temp_map.clone(), None, vec![], Context::default()),
+            commands::MvccByKey::new(Key::from_raw(b"k"), Context::default()),
+            commands::MvccByStartTs::new(25.into(), Context::default()),
         ];
         let write_cmds = vec![
-            Prewrite::new(
+            commands::Prewrite::new(
                 vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
                 b"k".to_vec(),
                 10.into(),
@@ -574,7 +525,7 @@ mod tests {
                 TimeStamp::default(),
                 Context::default(),
             ),
-            AcquirePessimisticLock::new(
+            commands::AcquirePessimisticLock::new(
                 vec![(Key::from_raw(b"k"), false)],
                 b"k".to_vec(),
                 10.into(),
@@ -584,26 +535,26 @@ mod tests {
                 WaitTimeout::Default,
                 Context::default(),
             ),
-            Commit::new(
+            commands::Commit::new(
                 vec![Key::from_raw(b"k")],
                 10.into(),
                 20.into(),
                 Context::default(),
             ),
-            Cleanup::new(
+            commands::Cleanup::new(
                 Key::from_raw(b"k"),
                 10.into(),
                 20.into(),
                 Context::default(),
             ),
-            Rollback::new(vec![Key::from_raw(b"k")], 10.into(), Context::default()),
-            PessimisticRollback::new(
+            commands::Rollback::new(vec![Key::from_raw(b"k")], 10.into(), Context::default()),
+            commands::PessimisticRollback::new(
                 vec![Key::from_raw(b"k")],
                 10.into(),
                 20.into(),
                 Context::default(),
             ),
-            ResolveLock::new(
+            commands::ResolveLock::new(
                 temp_map.clone(),
                 None,
                 vec![(
@@ -621,13 +572,13 @@ mod tests {
                 )],
                 Context::default(),
             ),
-            ResolveLockLite::new(
+            commands::ResolveLockLite::new(
                 10.into(),
                 TimeStamp::zero(),
                 vec![Key::from_raw(b"k")],
                 Context::default(),
             ),
-            TxnHeartBeat::new(Key::from_raw(b"k"), 10.into(), 100, Context::default()),
+            commands::TxnHeartBeat::new(Key::from_raw(b"k"), 10.into(), 100, Context::default()),
         ];
 
         let latches = Latches::new(1024);
@@ -635,14 +586,14 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(id, cmd)| {
-                let mut lock = gen_command_lock(&latches, &cmd);
+                let mut lock = cmd.gen_lock(&latches);
                 assert_eq!(latches.acquire(&mut lock, id as u64), id == 0);
                 lock
             })
             .collect();
 
         for (id, cmd) in readonly_cmds.iter().enumerate() {
-            let mut lock = gen_command_lock(&latches, cmd);
+            let mut lock = cmd.gen_lock(&latches);
             assert!(latches.acquire(&mut lock, id as u64));
         }
 

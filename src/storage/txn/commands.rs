@@ -9,6 +9,7 @@ use tikv_util::collections::HashMap;
 use crate::storage::lock_manager::WaitTimeout;
 use crate::storage::metrics::{self, CommandPriority};
 use crate::storage::mvcc::{Lock, Mutation, TimeStamp};
+use crate::storage::txn::latch::{self, Latches};
 
 /// Get a single value.
 pub struct PointGetCommand {
@@ -695,6 +696,49 @@ impl Command {
             _ => {}
         }
         bytes
+    }
+
+    pub fn gen_lock(&self, latches: &Latches) -> latch::Lock {
+        match &self.kind {
+            CommandKind::Prewrite(Prewrite { mutations, .. }) => {
+                let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
+                latches.gen_lock(&keys)
+            }
+            CommandKind::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
+                let keys: Vec<&Key> = mutations.iter().map(|(x, _)| x.key()).collect();
+                latches.gen_lock(&keys)
+            }
+            CommandKind::ResolveLock(ResolveLock { key_locks, .. }) => {
+                let keys: Vec<&Key> = key_locks.iter().map(|x| &x.0).collect();
+                latches.gen_lock(&keys)
+            }
+            CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
+                let keys: Vec<&Key> = keys.iter().map(|x| &x.0).collect();
+                latches.gen_lock(&keys)
+            }
+            CommandKind::ResolveLockLite(ResolveLockLite { resolve_keys, .. }) => {
+                latches.gen_lock(resolve_keys)
+            }
+            CommandKind::Commit(Commit { keys, .. })
+            | CommandKind::Rollback(Rollback { keys, .. })
+            | CommandKind::PessimisticRollback(PessimisticRollback { keys, .. }) => {
+                latches.gen_lock(keys)
+            }
+            CommandKind::Cleanup(Cleanup { key, .. }) => latches.gen_lock(&[key]),
+            CommandKind::Pause(Pause { keys, .. }) => latches.gen_lock(keys),
+            CommandKind::TxnHeartBeat(TxnHeartBeat { primary_key, .. }) => {
+                latches.gen_lock(&[primary_key])
+            }
+            CommandKind::CheckTxnStatus(CheckTxnStatus { primary_key, .. }) => {
+                latches.gen_lock(&[primary_key])
+            }
+
+            // Avoid using wildcard _ here to avoid forgetting add new commands here.
+            CommandKind::ScanLock(_)
+            | CommandKind::DeleteRange(_)
+            | CommandKind::MvccByKey(_)
+            | CommandKind::MvccByStartTs(_) => latch::Lock::new(vec![]),
+        }
     }
 }
 
