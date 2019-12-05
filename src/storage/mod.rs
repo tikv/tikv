@@ -39,7 +39,7 @@ use crate::storage::{
     metrics::*,
     mvcc::TsSet,
     txn::{
-        commands::{self, get_priority_tag, Command, CommandKind},
+        commands::{self, get_priority_tag, Command},
         scheduler::Scheduler as TxnScheduler,
         PointGetCommand,
     },
@@ -501,10 +501,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         duration: u64,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::Pause { keys, duration },
-        };
+        let cmd = commands::Pause::new(keys, duration, ctx);
         self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.pause.inc();
         Ok(())
@@ -657,14 +654,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         commit_ts: TimeStamp,
         callback: Callback<TxnStatus>,
     ) -> Result<()> {
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::Commit {
-                keys,
-                lock_ts,
-                commit_ts,
-            },
-        };
+        let cmd = commands::Commit::new(keys, lock_ts, commit_ts, ctx);
         self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
         Ok(())
@@ -717,14 +707,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         current_ts: TimeStamp,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::Cleanup {
-                key,
-                start_ts,
-                current_ts,
-            },
-        };
+        let cmd = commands::Cleanup::new(key, start_ts, current_ts, ctx);
         self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
         Ok(())
@@ -740,10 +723,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         start_ts: TimeStamp,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::Rollback { keys, start_ts },
-        };
+        let cmd = commands::Rollback::new(keys, start_ts, ctx);
         self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc();
         Ok(())
@@ -765,14 +745,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             return Ok(());
         }
 
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::PessimisticRollback {
-                keys,
-                start_ts,
-                for_update_ts,
-            },
-        };
+        let cmd = commands::PessimisticRollback::new(keys, start_ts, for_update_ts, ctx);
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
         Ok(())
@@ -789,14 +762,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         advise_ttl: u64,
         callback: Callback<TxnStatus>,
     ) -> Result<()> {
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::TxnHeartBeat {
-                primary_key,
-                start_ts,
-                advise_ttl,
-            },
-        };
+        let cmd = commands::TxnHeartBeat::new(primary_key, start_ts, advise_ttl, ctx);
         self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.txn_heart_beat.inc();
         Ok(())
@@ -822,16 +788,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         rollback_if_not_exist: bool,
         callback: Callback<TxnStatus>,
     ) -> Result<()> {
-        let cmd = Command {
+        let cmd = commands::CheckTxnStatus::new(
+            primary_key,
+            lock_ts,
+            caller_start_ts,
+            current_ts,
+            rollback_if_not_exist,
             ctx,
-            kind: CommandKind::CheckTxnStatus {
-                primary_key,
-                lock_ts,
-                caller_start_ts,
-                current_ts,
-                rollback_if_not_exist,
-            },
-        };
+        );
         self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.check_txn_status.inc();
         Ok(())
@@ -848,18 +812,16 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         limit: usize,
         callback: Callback<Vec<LockInfo>>,
     ) -> Result<()> {
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::ScanLock {
-                max_ts,
-                start_key: if start_key.is_empty() {
-                    None
-                } else {
-                    Some(Key::from_raw(&start_key))
-                },
-                limit,
+        let cmd = commands::ScanLock::new(
+            max_ts,
+            if start_key.is_empty() {
+                None
+            } else {
+                Some(Key::from_raw(&start_key))
             },
-        };
+            limit,
+            ctx,
+        );
         self.schedule(cmd, StorageCallback::Locks(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.scan_lock.inc();
         Ok(())
@@ -880,14 +842,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         txn_status: HashMap<TimeStamp, TimeStamp>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::ResolveLock {
-                txn_status,
-                scan_key: None,
-                key_locks: vec![],
-            },
-        };
+        let cmd = commands::ResolveLock::new(txn_status, None, vec![], ctx);
         self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock.inc();
         Ok(())
@@ -907,14 +862,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         resolve_keys: Vec<Key>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::ResolveLockLite {
-                start_ts,
-                commit_ts,
-                resolve_keys,
-            },
-        };
+        let cmd = commands::ResolveLockLite::new(start_ts, commit_ts, resolve_keys, ctx);
         self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc();
         Ok(())
@@ -1494,10 +1442,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
     /// Get MVCC info of a transactional key.
     pub fn mvcc_by_key(&self, ctx: Context, key: Key, callback: Callback<MvccInfo>) -> Result<()> {
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::MvccByKey(key),
-        };
+        let cmd = commands::MvccByKey::new(key, ctx);
         self.schedule(cmd, StorageCallback::MvccInfoByKey(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.key_mvcc.inc();
 
@@ -1512,10 +1457,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         start_ts: TimeStamp,
         callback: Callback<Option<(Key, MvccInfo)>>,
     ) -> Result<()> {
-        let cmd = Command {
-            ctx,
-            kind: CommandKind::MvccByStartTs(start_ts),
-        };
+        let cmd = commands::MvccByStartTs::new(start_ts, ctx);
         self.schedule(cmd, StorageCallback::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
         Ok(())
