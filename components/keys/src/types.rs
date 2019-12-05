@@ -6,7 +6,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use codec;
 use codec::byte::{MemComparableByteCodec, MEMCMP_GROUP_SIZE};
 use codec::number::{self, NumberCodec};
-use codec::prelude::MemComparableByteEncoder;
+use codec::prelude::{MemComparableByteEncoder, NumberDecoder};
 
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
@@ -52,7 +52,7 @@ impl Key {
     /// Gets the raw representation of this key.
     #[inline]
     pub fn to_raw(&self) -> Result<Vec<u8>, codec::Error> {
-        let mut k = Vec::with_capacity(self.0.len() / (MEMCMP_GROUP_SIZE + 1) * MEMCMP_GROUP_SIZE);
+        let mut k = Vec::with_capacity(self.0.len());
         MemComparableByteCodec::try_decode_first(&self.0.as_slice(), &mut k)?;
         Ok(k)
     }
@@ -153,8 +153,8 @@ impl Key {
         if len < number::U64_SIZE {
             return Err(codec::ErrorInner::KeyLength.into());
         }
-        let ts = &key[len - number::U64_SIZE..];
-        Ok(NumberCodec::decode_u64_desc(&ts).into())
+        let ts = key.read_u64_desc()?.into();
+        Ok(ts)
     }
 
     /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to the encoded
