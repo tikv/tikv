@@ -46,14 +46,21 @@ impl Key {
     pub fn into_raw(self) -> Result<Vec<u8>, codec::Error> {
         let mut k = self.0;
         MemComparableByteCodec::try_decode_first_in_place(&mut k)?;
+        k.shrink_to_fit();
         Ok(k)
     }
 
     /// Gets the raw representation of this key.
     #[inline]
     pub fn to_raw(&self) -> Result<Vec<u8>, codec::Error> {
-        let mut k = Vec::with_capacity(self.0.len());
+        let len = self.0.len();
+        if len == 0 {
+            let k = Vec::with_capacity(len);
+            return Ok(k);
+        }
+        let mut k = Vec::with_capacity(len);
         MemComparableByteCodec::try_decode_first(&self.0.as_slice(), &mut k)?;
+        k.shrink_to_fit();
         Ok(k)
     }
 
@@ -131,8 +138,8 @@ impl Key {
         } else {
             let pos = key.len() - number::U64_SIZE;
             let k = &key[..pos];
-            let ts = &key[pos..];
-            Ok((k, NumberCodec::decode_u64_desc(&ts).into()))
+            let mut ts = &key[pos..];
+            Ok((k, ts.read_u64_desc()?.into()))
         }
     }
 
