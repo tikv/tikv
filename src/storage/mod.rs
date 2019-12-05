@@ -39,16 +39,15 @@ use crate::storage::{
     metrics::*,
     mvcc::TsSet,
     txn::{
-        commands::{self, get_priority_tag, Command},
+        commands::{self, Command},
         scheduler::Scheduler as TxnScheduler,
-        PointGetCommand,
     },
     types::MvccInfo,
 };
 use engine::{CfName, IterOption, ALL_CFS, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use keys::{Key, KvPair, TimeStamp, Value};
-use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
 use std::sync::{atomic, Arc};
 use tikv_util::{collections::HashMap, future_pool::FuturePool};
 
@@ -599,6 +598,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             min_commit_ts,
             ctx,
         );
+
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
         Ok(())
@@ -1461,6 +1461,49 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.schedule(cmd, StorageCallback::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
         Ok(())
+    }
+}
+
+/// Get a single value.
+pub struct PointGetCommand {
+    pub ctx: Context,
+    pub key: Key,
+    /// None if this is a raw get, Some if this is a transactional get.
+    pub ts: Option<TimeStamp>,
+}
+
+impl PointGetCommand {
+    pub fn from_get(request: &mut GetRequest) -> Self {
+        PointGetCommand {
+            ctx: request.take_context(),
+            key: Key::from_raw(request.get_key()),
+            ts: Some(request.get_version().into()),
+        }
+    }
+
+    pub fn from_raw_get(request: &mut RawGetRequest) -> Self {
+        PointGetCommand {
+            ctx: request.take_context(),
+            key: Key::from_raw(request.get_key()),
+            ts: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn from_key_ts(key: Key, ts: Option<TimeStamp>) -> Self {
+        PointGetCommand {
+            ctx: Context::default(),
+            key,
+            ts,
+        }
+    }
+}
+
+fn get_priority_tag(priority: CommandPri) -> CommandPriority {
+    match priority {
+        CommandPri::Low => CommandPriority::low,
+        CommandPri::Normal => CommandPriority::normal,
+        CommandPri::High => CommandPriority::high,
     }
 }
 

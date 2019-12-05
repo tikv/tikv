@@ -46,7 +46,8 @@ use crate::storage::txn::{
     Error, ProcessResult,
 };
 use crate::storage::{
-    types::StorageCallback, Error as StorageError, ErrorInner as StorageErrorInner,
+    get_priority_tag, types::StorageCallback, Error as StorageError,
+    ErrorInner as StorageErrorInner,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -322,7 +323,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
 
         let tag = cmd.tag();
-        let priority_tag = cmd.priority_tag();
+        let priority_tag = get_priority_tag(cmd.priority());
         let task = Task::new(cid, cmd);
         // TODO: enqueue_task should return an reference of the tctx.
         self.inner.enqueue_task(task, callback);

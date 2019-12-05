@@ -3,48 +3,13 @@
 use std::fmt::{self, Debug, Display, Formatter};
 
 use keys::Key;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, RawGetRequest};
+use kvproto::kvrpcpb::{CommandPri, Context};
 use tikv_util::collections::HashMap;
 
 use crate::storage::lock_manager::WaitTimeout;
-use crate::storage::metrics::{self, CommandPriority};
+use crate::storage::metrics;
 use crate::storage::mvcc::{Lock, Mutation, TimeStamp};
 use crate::storage::txn::latch::{self, Latches};
-
-/// Get a single value.
-pub struct PointGetCommand {
-    pub ctx: Context,
-    pub key: Key,
-    /// None if this is a raw get, Some if this is a transactional get.
-    pub ts: Option<TimeStamp>,
-}
-
-impl PointGetCommand {
-    pub fn from_get(request: &mut GetRequest) -> Self {
-        PointGetCommand {
-            ctx: request.take_context(),
-            key: Key::from_raw(request.get_key()),
-            ts: Some(request.get_version().into()),
-        }
-    }
-
-    pub fn from_raw_get(request: &mut RawGetRequest) -> Self {
-        PointGetCommand {
-            ctx: request.take_context(),
-            key: Key::from_raw(request.get_key()),
-            ts: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn from_key_ts(key: Key, ts: Option<TimeStamp>) -> Self {
-        PointGetCommand {
-            ctx: Context::default(),
-            key,
-            ts,
-        }
-    }
-}
 
 /// Store Transaction scheduler commands.
 ///
@@ -571,10 +536,6 @@ impl Command {
         }
     }
 
-    pub fn priority_tag(&self) -> CommandPriority {
-        get_priority_tag(self.ctx.get_priority())
-    }
-
     pub fn need_flow_control(&self) -> bool {
         !self.readonly() && self.priority() != CommandPri::High
     }
@@ -883,13 +844,5 @@ impl Display for Command {
 impl Debug for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
-    }
-}
-
-pub fn get_priority_tag(priority: CommandPri) -> CommandPriority {
-    match priority {
-        CommandPri::Low => CommandPriority::low,
-        CommandPri::Normal => CommandPriority::normal,
-        CommandPri::High => CommandPriority::high,
     }
 }
