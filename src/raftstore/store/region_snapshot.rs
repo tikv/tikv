@@ -9,13 +9,13 @@ use kvproto::raft_serverpb::RaftApplyState;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::raftstore::store::keys::DATA_PREFIX_KEY;
-use crate::raftstore::store::{keys, util, PeerStorage};
+use crate::raftstore::store::{util, PeerStorage};
 use crate::raftstore::Result;
 use engine_rocks::RocksEngine;
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
 use engine_traits::{Error as EngineError, Iterable, Iterator};
+use keys::DATA_PREFIX_KEY;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -409,14 +409,13 @@ mod tests {
     use tempfile::{Builder, TempDir};
 
     use crate::config::TiKvConfig;
-    use crate::raftstore::store::keys::*;
     use crate::raftstore::store::snap::snap_io::{apply_sst_cf_file, build_sst_cf_file};
     use crate::raftstore::store::PeerStorage;
     use crate::raftstore::Result;
     use crate::storage::mvcc::ScannerBuilder;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::txn::Scanner;
-    use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
+    use crate::storage::{CfStatistics, Cursor, ScanMode};
     use engine::rocks;
     use engine::rocks::util::compact_files_in_range;
     use engine::rocks::{IngestExternalFileOptions, Writable};
@@ -427,6 +426,7 @@ mod tests {
     use engine_rocks::RocksIOLimiter;
     use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
     use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
+    use keys::{data_key, Key};
     use tikv_util::config::{ReadableDuration, ReadableSize};
     use tikv_util::worker;
 
@@ -748,7 +748,7 @@ mod tests {
         let (store, test_data) = load_default_dataset(engines.clone());
 
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(!iter

@@ -22,11 +22,11 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use crate::raftstore::errors::Error as RaftStoreError;
-use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
 use engine_rocks::RocksIOLimiter;
 use engine_traits::{IOLimiter, LimitWriter};
+use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size, sync_dir};
 use tikv_util::time::duration_to_sec;
@@ -1381,7 +1381,7 @@ pub mod tests {
     };
 
     use crate::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
-    use crate::raftstore::store::{keys, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
+    use crate::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
     use crate::raftstore::Result;
 
     const TEST_STORE_ID: u64 = 1;

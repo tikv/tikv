@@ -11,6 +11,7 @@ use engine::IterOption;
 use engine::CF_DEFAULT;
 use engine_rocks::RocksEngine;
 use engine_traits::Peekable;
+use keys::{Key, Value};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
@@ -20,14 +21,14 @@ use kvproto::raft_cmdpb::{
 
 use super::metrics::*;
 use crate::raftstore::errors::Error as RaftServerError;
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use crate::raftstore::store::{RegionIterator, RegionSnapshot};
-use crate::server::transport::RaftStoreRouter;
 use crate::storage::kv::{
     Callback, CbContext, Cursor, Engine, Error as KvError, ErrorInner as KvErrorInner,
     Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
-use crate::storage::{self, kv, Key, Value};
+use crate::storage::{self, kv};
 
 quick_error! {
     #[derive(Debug)]

@@ -13,7 +13,7 @@ use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::{bootstrap_store, fsm, keys, SnapManager};
+use tikv::raftstore::store::{bootstrap_store, fsm, SnapManager};
 use tikv::server::Node;
 use tikv_util::worker::FutureWorker;
 

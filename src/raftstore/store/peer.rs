@@ -36,11 +36,11 @@ use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
 };
-use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::PdTask;
-use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
+use crate::raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
+use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};

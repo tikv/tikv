@@ -39,7 +39,7 @@ use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::KeysInfoFormatter;
-use crate::raftstore::store::{cmd_resp, keys, util, Config};
+use crate::raftstore::store::{cmd_resp, util, Config};
 use crate::raftstore::{Error, Result};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
