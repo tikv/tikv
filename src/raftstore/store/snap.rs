@@ -5,7 +5,6 @@ use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
-use std::marker::PhantomData;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -299,10 +298,7 @@ struct MetaFile {
     pub tmp_path: PathBuf,
 }
 
-pub struct Snap<S>
-where
-    S: EngineSnapshot,
-{
+pub struct Snap {
     key: SnapKey,
     is_sending: bool,
     display_path: String,
@@ -313,13 +309,9 @@ where
     size_track: Arc<AtomicU64>,
     limiter: Option<Arc<RocksIOLimiter>>,
     hold_tmp_files: bool,
-    _s: PhantomData<S>,
 }
 
-impl<S> Snap<S>
-where
-    S: EngineSnapshot,
-{
+impl Snap {
     fn new<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
@@ -328,7 +320,7 @@ where
         to_build: bool,
         deleter: Box<dyn SnapshotDeleter>,
         limiter: Option<Arc<RocksIOLimiter>>,
-    ) -> RaftStoreResult<Snap<S>> {
+    ) -> RaftStoreResult<Snap> {
         let dir_path = dir.into();
         if !dir_path.exists() {
             fs::create_dir_all(dir_path.as_path())?;
@@ -339,7 +331,7 @@ where
             SNAP_REV_PREFIX
         };
         let prefix = format!("{}_{}", snap_prefix, key);
-        let display_path = Snap::<S>::get_display_path(&dir_path, &prefix);
+        let display_path = Snap::get_display_path(&dir_path, &prefix);
 
         let mut cf_files = Vec::with_capacity(SNAPSHOT_CFS.len());
         for cf in SNAPSHOT_CFS {
@@ -377,7 +369,6 @@ where
             size_track,
             limiter,
             hold_tmp_files: false,
-            _s: PhantomData,
         };
 
         // load snapshot meta if meta_file exists
@@ -409,7 +400,7 @@ where
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
         limiter: Option<Arc<RocksIOLimiter>>,
-    ) -> RaftStoreResult<Snap<S>> {
+    ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, true, true, deleter, limiter)?;
         s.init_for_building()?;
         Ok(s)
@@ -420,7 +411,7 @@ where
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
-    ) -> RaftStoreResult<Snap<S>> {
+    ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, true, false, deleter, None)?;
 
         if !s.exists() {
@@ -444,7 +435,7 @@ where
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
         limiter: Option<Arc<RocksIOLimiter>>,
-    ) -> RaftStoreResult<Snap<S>> {
+    ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, false, false, deleter, limiter)?;
         s.set_snapshot_meta(snapshot_meta)?;
         if s.exists() {
@@ -477,7 +468,7 @@ where
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
         deleter: Box<dyn SnapshotDeleter>,
-    ) -> RaftStoreResult<Snap<S>> {
+    ) -> RaftStoreResult<Snap> {
         let s = Snap::new(dir, key, size_track, false, false, deleter, None)?;
         Ok(s)
     }
@@ -699,9 +690,7 @@ where
     }
 }
 
-impl<S> fmt::Debug for Snap<S>
-where
-    S: EngineSnapshot,
+impl fmt::Debug for Snap
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Snap")
@@ -711,9 +700,7 @@ where
     }
 }
 
-impl<S> Snapshot for Snap<S>
-where
-    S: EngineSnapshot,
+impl Snapshot for Snap
 {
     fn build(
         &mut self,
@@ -882,9 +869,7 @@ impl snap_io::StaleDetector for ApplyAbortChecker {
     }
 }
 
-impl<S> Read for Snap<S>
-where
-    S: EngineSnapshot,
+impl Read for Snap
 {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
@@ -911,9 +896,7 @@ where
     }
 }
 
-impl<S> Write for Snap<S>
-where
-    S: EngineSnapshot,
+impl Write for Snap
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.is_empty() {
@@ -963,10 +946,7 @@ where
     }
 }
 
-impl<S> Drop for Snap<S>
-where
-    S: EngineSnapshot,
-{
+impl Drop for Snap {
     fn drop(&mut self) {
         // cleanup if some of the cf files and meta file is partly written
         if self
@@ -1156,7 +1136,7 @@ impl SnapManager {
             let core = self.core.rl();
             (core.base.clone(), Arc::clone(&core.snap_size))
         };
-        let f = Snap::<RocksSnapshot>::new_for_building(
+        let f = Snap::new_for_building(
             dir,
             key,
             snap_size,
@@ -1168,7 +1148,7 @@ impl SnapManager {
 
     pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<dyn Snapshot>> {
         let core = self.core.rl();
-        let s = Snap::<RocksSnapshot>::new_for_sending(
+        let s = Snap::new_for_sending(
             &core.base,
             key,
             Arc::clone(&core.snap_size),
@@ -1185,7 +1165,7 @@ impl SnapManager {
         let core = self.core.rl();
         let mut snapshot_data = RaftSnapshotData::default();
         snapshot_data.merge_from_bytes(data)?;
-        let f = Snap::<RocksSnapshot>::new_for_receiving(
+        let f = Snap::new_for_receiving(
             &core.base,
             key,
             snapshot_data.take_meta(),
@@ -1198,7 +1178,7 @@ impl SnapManager {
 
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<dyn Snapshot>> {
         let core = self.core.rl();
-        let s = Snap::<RocksSnapshot>::new_for_applying(
+        let s = Snap::new_for_applying(
             &core.base,
             key,
             Arc::clone(&core.snap_size),
@@ -1601,7 +1581,7 @@ pub mod tests {
             .unwrap();
         let key = SnapKey::new(1, 1, 1);
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
-        let display_path = Snap::<RocksSnapshot>::get_display_path(dir.path(), &prefix);
+        let display_path = Snap::get_display_path(dir.path(), &prefix);
         assert_ne!(display_path, "");
     }
 
@@ -1634,7 +1614,7 @@ pub mod tests {
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::<RocksSnapshot>::new_for_building(
+        let mut s1 = Snap::new_for_building(
             src_dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -1668,7 +1648,7 @@ pub mod tests {
         assert_eq!(stat.kv_count, get_kv_count(&snapshot));
 
         // Ensure this snapshot could be read for sending.
-        let mut s2 = Snap::<RocksSnapshot>::new_for_sending(
+        let mut s2 = Snap::new_for_sending(
             src_dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -1685,7 +1665,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
 
-        let mut s3 = Snap::<RocksSnapshot>::new_for_receiving(
+        let mut s3 = Snap::new_for_receiving(
             dst_dir.path(),
             &key,
             snap_data.take_meta(),
@@ -1713,7 +1693,7 @@ pub mod tests {
         assert_eq!(size_track.load(Ordering::SeqCst), size);
 
         // Ensure a snapshot could be applied to DB.
-        let mut s4 = Snap::<RocksSnapshot>::new_for_applying(
+        let mut s4 = Snap::new_for_applying(
             dst_dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -1777,7 +1757,7 @@ pub mod tests {
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::<RocksSnapshot>::new_for_building(
+        let mut s1 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -1800,7 +1780,7 @@ pub mod tests {
         .unwrap();
         assert!(s1.exists());
 
-        let mut s2 = Snap::<RocksSnapshot>::new_for_building(
+        let mut s2 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -1922,7 +1902,7 @@ pub mod tests {
         snapshot_meta: SnapshotMeta,
         deleter: Box<DummyDeleter>,
     ) {
-        let mut from = Snap::<RocksSnapshot>::new_for_sending(
+        let mut from = Snap::new_for_sending(
             from_dir.path(),
             key,
             Arc::clone(&size_track),
@@ -1931,7 +1911,7 @@ pub mod tests {
         .unwrap();
         assert!(from.exists());
 
-        let mut to = Snap::<RocksSnapshot>::new_for_receiving(
+        let mut to = Snap::new_for_receiving(
             to_dir.path(),
             key,
             snapshot_meta,
@@ -1965,7 +1945,7 @@ pub mod tests {
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::<RocksSnapshot>::new_for_building(
+        let mut s1 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -1990,7 +1970,7 @@ pub mod tests {
 
         corrupt_snapshot_size_in(dir.path());
 
-        assert!(Snap::<RocksSnapshot>::new_for_sending(
+        assert!(Snap::new_for_sending(
             dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -1998,7 +1978,7 @@ pub mod tests {
         )
         .is_err());
 
-        let mut s2 = Snap::<RocksSnapshot>::new_for_building(
+        let mut s2 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -2034,7 +2014,7 @@ pub mod tests {
         assert_eq!(1, metas.len());
         let snap_meta = metas.pop().unwrap();
 
-        let mut s5 = Snap::<RocksSnapshot>::new_for_applying(
+        let mut s5 = Snap::new_for_applying(
             dst_dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -2057,7 +2037,7 @@ pub mod tests {
         assert!(s5.apply(options).is_err());
 
         corrupt_snapshot_size_in(dst_dir.path());
-        assert!(Snap::<RocksSnapshot>::new_for_receiving(
+        assert!(Snap::new_for_receiving(
             dst_dir.path(),
             &key,
             snap_meta,
@@ -2066,7 +2046,7 @@ pub mod tests {
             None,
         )
         .is_err());
-        assert!(Snap::<RocksSnapshot>::new_for_applying(
+        assert!(Snap::new_for_applying(
             dst_dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -2093,7 +2073,7 @@ pub mod tests {
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::<RocksSnapshot>::new_for_building(
+        let mut s1 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -2118,7 +2098,7 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-        assert!(Snap::<RocksSnapshot>::new_for_sending(
+        assert!(Snap::new_for_sending(
             dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -2126,7 +2106,7 @@ pub mod tests {
         )
         .is_err());
 
-        let mut s2 = Snap::<RocksSnapshot>::new_for_building(
+        let mut s2 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -2160,14 +2140,14 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
-        assert!(Snap::<RocksSnapshot>::new_for_applying(
+        assert!(Snap::new_for_applying(
             dst_dir.path(),
             &key,
             Arc::clone(&size_track),
             deleter.clone()
         )
         .is_err());
-        assert!(Snap::<RocksSnapshot>::new_for_receiving(
+        assert!(Snap::new_for_receiving(
             dst_dir.path(),
             &key,
             snap_data.take_meta(),
@@ -2216,7 +2196,7 @@ pub mod tests {
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(mgr.clone());
-        let mut s1 = Snap::<RocksSnapshot>::new_for_building(
+        let mut s1 = Snap::new_for_building(
             &path,
             &key1,
             Arc::clone(&size_track),
@@ -2236,7 +2216,7 @@ pub mod tests {
             deleter.clone(),
         )
         .unwrap();
-        let mut s = Snap::<RocksSnapshot>::new_for_sending(
+        let mut s = Snap::new_for_sending(
             &path,
             &key1,
             Arc::clone(&size_track),
@@ -2244,7 +2224,7 @@ pub mod tests {
         )
         .unwrap();
         let expected_size = s.total_size().unwrap();
-        let mut s2 = Snap::<RocksSnapshot>::new_for_receiving(
+        let mut s2 = Snap::new_for_receiving(
             &path,
             &key1,
             snap_data.get_meta().clone(),
@@ -2260,7 +2240,7 @@ pub mod tests {
         let key2 = SnapKey::new(2, 1, 1);
         region.set_id(2);
         snap_data.set_region(region);
-        let s3 = Snap::<RocksSnapshot>::new_for_building(
+        let s3 = Snap::new_for_building(
             &path,
             &key2,
             Arc::clone(&size_track),
@@ -2268,7 +2248,7 @@ pub mod tests {
             None,
         )
         .unwrap();
-        let s4 = Snap::<RocksSnapshot>::new_for_receiving(
+        let s4 = Snap::new_for_receiving(
             &path,
             &key2,
             snap_data.take_meta(),
