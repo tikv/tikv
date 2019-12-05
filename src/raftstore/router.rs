@@ -9,8 +9,8 @@ use crate::raftstore::store::{
     Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg,
 };
 use crate::raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
-use raft::SnapshotStatus;
 use engine_rocks::RocksEngine;
+use raft::SnapshotStatus;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter: Send + Clone {

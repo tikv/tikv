@@ -690,8 +690,7 @@ impl Snap {
     }
 }
 
-impl fmt::Debug for Snap
-{
+impl fmt::Debug for Snap {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Snap")
             .field("key", &self.key)
@@ -700,8 +699,7 @@ impl fmt::Debug for Snap
     }
 }
 
-impl Snapshot for Snap
-{
+impl Snapshot for Snap {
     fn build(
         &mut self,
         kv_snap: &RocksSnapshot,
@@ -869,8 +867,7 @@ impl snap_io::StaleDetector for ApplyAbortChecker {
     }
 }
 
-impl Read for Snap
-{
+impl Read for Snap {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -896,8 +893,7 @@ impl Read for Snap
     }
 }
 
-impl Write for Snap
-{
+impl Write for Snap {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -1693,13 +1689,8 @@ pub mod tests {
         assert_eq!(size_track.load(Ordering::SeqCst), size);
 
         // Ensure a snapshot could be applied to DB.
-        let mut s4 = Snap::new_for_applying(
-            dst_dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter,
-        )
-        .unwrap();
+        let mut s4 =
+            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter).unwrap();
         assert!(s4.exists());
 
         let dst_db_dir = Builder::new()
@@ -1970,13 +1961,10 @@ pub mod tests {
 
         corrupt_snapshot_size_in(dir.path());
 
-        assert!(Snap::new_for_sending(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone()
-        )
-        .is_err());
+        assert!(
+            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone())
+                .is_err()
+        );
 
         let mut s2 = Snap::new_for_building(
             dir.path(),
@@ -2098,13 +2086,10 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-        assert!(Snap::new_for_sending(
-            dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone()
-        )
-        .is_err());
+        assert!(
+            Snap::new_for_sending(dir.path(), &key, Arc::clone(&size_track), deleter.clone())
+                .is_err()
+        );
 
         let mut s2 = Snap::new_for_building(
             dir.path(),
@@ -2196,14 +2181,9 @@ pub mod tests {
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(mgr.clone());
-        let mut s1 = Snap::new_for_building(
-            &path,
-            &key1,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            None,
-        )
-        .unwrap();
+        let mut s1 =
+            Snap::new_for_building(&path, &key1, Arc::clone(&size_track), deleter.clone(), None)
+                .unwrap();
         let mut region = gen_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
@@ -2216,13 +2196,8 @@ pub mod tests {
             deleter.clone(),
         )
         .unwrap();
-        let mut s = Snap::new_for_sending(
-            &path,
-            &key1,
-            Arc::clone(&size_track),
-            deleter.clone(),
-        )
-        .unwrap();
+        let mut s =
+            Snap::new_for_sending(&path, &key1, Arc::clone(&size_track), deleter.clone()).unwrap();
         let expected_size = s.total_size().unwrap();
         let mut s2 = Snap::new_for_receiving(
             &path,
@@ -2240,14 +2215,9 @@ pub mod tests {
         let key2 = SnapKey::new(2, 1, 1);
         region.set_id(2);
         snap_data.set_region(region);
-        let s3 = Snap::new_for_building(
-            &path,
-            &key2,
-            Arc::clone(&size_track),
-            deleter.clone(),
-            None,
-        )
-        .unwrap();
+        let s3 =
+            Snap::new_for_building(&path, &key2, Arc::clone(&size_track), deleter.clone(), None)
+                .unwrap();
         let s4 = Snap::new_for_receiving(
             &path,
             &key2,
