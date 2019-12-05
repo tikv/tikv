@@ -4,7 +4,7 @@ use hex::ToHex;
 use std::fmt::{self, Debug, Display, Formatter};
 
 use codec;
-use codec::byte::{MemComparableByteCodec, MEMCMP_GROUP_SIZE};
+use codec::byte::MemComparableByteCodec;
 use codec::number::{self, NumberCodec};
 use codec::prelude::{MemComparableByteEncoder, NumberDecoder};
 

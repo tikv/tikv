@@ -8,8 +8,8 @@ use crate::buffer::BufferReader;
 use crate::number::{self, NumberCodec, NumberDecoder, NumberEncoder};
 use crate::{ErrorInner, Result};
 
-pub const MEMCMP_GROUP_SIZE: usize = 8;
-pub const MEMCMP_PAD_BYTE: u8 = 0;
+const MEMCMP_GROUP_SIZE: usize = 8;
+const MEMCMP_PAD_BYTE: u8 = 0;
 
 /// Memory-comparable encoding and decoding utility for bytes.
 pub struct MemComparableByteCodec;
