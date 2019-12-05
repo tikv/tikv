@@ -153,8 +153,8 @@ impl Key {
         if len < number::U64_SIZE {
             return Err(codec::ErrorInner::KeyLength.into());
         }
-        let ts = key.read_u64_desc()?.into();
-        Ok(ts)
+        let mut ts = &key[len - number::U64_SIZE..];
+        Ok(ts.read_u64_desc()?.into())
     }
 
     /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to the encoded
