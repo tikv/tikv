@@ -414,19 +414,28 @@ mod tests {
         recv(&rx);
 
         // If key_hashes is none, no wake up
-        let prev_wake_up = TASK_COUNTER_VEC.wake_up.get();
+        let prev_wake_up = LOCK_MANAGER_METRICS.with(|m| m.task_counter.wake_up.get());
         lock_mgr.wake_up(70.into(), None, 70.into(), false);
-        assert_eq!(TASK_COUNTER_VEC.wake_up.get(), prev_wake_up);
+        assert_eq!(
+            LOCK_MANAGER_METRICS.with(|m| m.task_counter.wake_up.get()),
+            prev_wake_up
+        );
 
         // If it's non-pessimistic-txn, no clean up
-        let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
+        let prev_clean_up = LOCK_MANAGER_METRICS.with(|m| m.task_counter.clean_up.get());
         lock_mgr.wake_up(80.into(), None, 80.into(), false);
-        assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
+        assert_eq!(
+            LOCK_MANAGER_METRICS.with(|m| m.task_counter.clean_up.get()),
+            prev_clean_up
+        );
 
         // If the txn doesn't wait for locks, no clean up
-        let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
+        let prev_clean_up = LOCK_MANAGER_METRICS.with(|m| m.task_counter.clean_up.get());
         lock_mgr.wake_up(80.into(), None, 80.into(), true);
-        assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
+        assert_eq!(
+            LOCK_MANAGER_METRICS.with(|m| m.task_counter.clean_up.get()),
+            prev_clean_up
+        );
     }
 
     #[test]

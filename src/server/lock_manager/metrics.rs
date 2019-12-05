@@ -2,9 +2,10 @@
 
 use prometheus::*;
 use prometheus_static_metric::*;
+use tikv_util::metrics::{TLSMetricGroup, TLSMetricGroupInner};
 
 make_static_metric! {
-    pub struct TaskCounterVec: IntCounter {
+    pub struct LocalTaskCounter: LocalIntCounter {
         "type" => {
             wait_for,
             wake_up,
@@ -15,7 +16,7 @@ make_static_metric! {
         },
     }
 
-    pub struct ErrorCounterVec: IntCounter {
+    pub struct LocalErrorCounter: LocalIntCounter {
         "type" => {
             dropped,
             not_leader,
@@ -34,15 +35,13 @@ make_static_metric! {
 }
 
 lazy_static! {
-    pub static ref TASK_COUNTER_VEC: TaskCounterVec = register_static_int_counter_vec!(
-        TaskCounterVec,
+    pub static ref TASK_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_lock_manager_task_counter",
         "Total number of tasks received",
         &["type"]
     )
     .unwrap();
-    pub static ref ERROR_COUNTER_VEC: ErrorCounterVec = register_static_int_counter_vec!(
-        ErrorCounterVec,
+    pub static ref ERROR_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_lock_manager_error_counter",
         "Total number of errors",
         &["type"]
@@ -62,4 +61,30 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+}
+
+pub struct LockManagerMetrics {
+    pub task_counter: LocalTaskCounter,
+    pub error_counter: LocalErrorCounter,
+}
+
+impl LockManagerMetrics {
+    fn new() -> Self {
+        Self {
+            task_counter: LocalTaskCounter::from(&TASK_COUNTER_VEC),
+            error_counter: LocalErrorCounter::from(&ERROR_COUNTER_VEC),
+        }
+    }
+}
+
+impl TLSMetricGroupInner for LockManagerMetrics {
+    fn flush_all(&self) {
+        self.task_counter.flush();
+        self.error_counter.flush();
+    }
+}
+
+thread_local! {
+    pub static LOCK_MANAGER_METRICS: TLSMetricGroup<LockManagerMetrics> =
+        TLSMetricGroup::new(LockManagerMetrics::new());
 }
