@@ -4,16 +4,17 @@ mod backward;
 mod forward;
 mod txn_entry;
 
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
-use crate::storage::mvcc::{default_not_found_error, Result, TsSet, Write};
+use crate::storage::mvcc::{default_not_found_error, Result, TimeStamp, TsSet};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
-    Cursor, CursorBuilder, Iterator, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics,
-    Value,
+    CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Scanner as StoreScanner, Snapshot,
+    Statistics,
 };
 
 pub use self::txn_entry::Scanner as EntryScanner;
@@ -22,7 +23,7 @@ pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
 
 impl<S: Snapshot> ScannerBuilder<S> {
     /// Initialize a new `ScannerBuilder`
-    pub fn new(snapshot: S, ts: u64, desc: bool) -> Self {
+    pub fn new(snapshot: S, ts: TimeStamp, desc: bool) -> Self {
         Self(ScannerConfig::new(snapshot, ts, desc))
     }
 
@@ -146,14 +147,14 @@ pub struct ScannerConfig<S: Snapshot> {
     lower_bound: Option<Key>,
     upper_bound: Option<Key>,
 
-    ts: u64,
+    ts: TimeStamp,
     desc: bool,
 
     bypass_locks: TsSet,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
-    fn new(snapshot: S, ts: u64, desc: bool) -> Self {
+    fn new(snapshot: S, ts: TimeStamp, desc: bool) -> Self {
         Self {
             snapshot,
             fill_cache: true,
@@ -209,21 +210,19 @@ impl<S: Snapshot> ScannerConfig<S> {
 fn near_load_data_by_write<I>(
     default_cursor: &mut Cursor<I>, // TODO: make it `ForwardCursor`.
     user_key: &Key,
-    write: Write,
+    write_start_ts: TimeStamp,
     statistics: &mut Statistics,
 ) -> Result<Value>
 where
     I: Iterator,
 {
-    assert!(write.short_value.is_none());
-    let seek_key = user_key.clone().append_ts(write.start_ts);
+    let seek_key = user_key.clone().append_ts(write_start_ts);
     default_cursor.near_seek(&seek_key, &mut statistics.data)?;
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
             user_key.to_raw()?,
-            write,
             "near_load_data_by_write",
         ));
     }
@@ -236,21 +235,19 @@ where
 fn near_reverse_load_data_by_write<I>(
     default_cursor: &mut Cursor<I>, // TODO: make it `BackwardCursor`.
     user_key: &Key,
-    write: Write,
+    write_start_ts: TimeStamp,
     statistics: &mut Statistics,
 ) -> Result<Value>
 where
     I: Iterator,
 {
-    assert!(write.short_value.is_none());
-    let seek_key = user_key.clone().append_ts(write.start_ts);
+    let seek_key = user_key.clone().append_ts(write_start_ts);
     default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
         return Err(default_not_found_error(
             user_key.to_raw()?,
-            write,
             "near_reverse_load_data_by_write",
         ));
     }
@@ -258,13 +255,30 @@ where
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
 
+pub fn has_data_in_range<S: Snapshot>(
+    snapshot: S,
+    cf: CfName,
+    left: &Key,
+    right: &Key,
+    statistic: &mut CfStatistics,
+) -> Result<bool> {
+    let iter_opt = IterOption::new(None, None, true);
+    let mut iter = snapshot.iter_cf(cf, iter_opt, ScanMode::Forward)?;
+    if iter.seek(left, statistic)? {
+        if iter.key(statistic) < right.as_encoded().as_slice() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
-    use crate::storage::mvcc::Error as MvccError;
-    use crate::storage::txn::Error as TxnError;
+    use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+    use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
     use crate::storage::RocksEngine;
     use crate::storage::TestEngineBuilder;
     use kvproto::kvrpcpb::Context;
@@ -281,9 +295,9 @@ mod tests {
             match scanner.next() {
                 Ok(None) => break,
                 Ok(Some((key, value))) => scan_result.push((key.to_raw().unwrap(), Some(value))),
-                Err(TxnError::Mvcc(MvccError::KeyIsLocked(mut info))) => {
-                    scan_result.push((info.take_key(), None))
-                }
+                Err(TxnError(box TxnErrorInner::Mvcc(MvccError(
+                    box MvccErrorInner::KeyIsLocked(mut info),
+                )))) => scan_result.push((info.take_key(), None)),
                 e => panic!("got error while scanning: {:?}", e),
             }
         }
@@ -292,9 +306,9 @@ mod tests {
     }
 
     fn test_scan_with_lock_and_write_impl(desc: bool) {
-        const SCAN_TS: u64 = 10;
-        const PREV_TS: u64 = 4;
-        const POST_TS: u64 = 5;
+        const SCAN_TS: TimeStamp = TimeStamp::new(10);
+        const PREV_TS: TimeStamp = TimeStamp::new(4);
+        const POST_TS: TimeStamp = TimeStamp::new(5);
 
         let new_engine = || TestEngineBuilder::new().build().unwrap();
         let add_write_at_ts = |commit_ts, engine, key, value| {
@@ -403,17 +417,17 @@ mod tests {
             expected_result = expected_result.into_iter().rev().collect();
         }
 
-        let scanner = ScannerBuilder::new(snapshot.clone(), 30, desc)
+        let scanner = ScannerBuilder::new(snapshot.clone(), 30.into(), desc)
             .build()
             .unwrap();
         check_scan_result(scanner, &expected_result);
 
-        let scanner = ScannerBuilder::new(snapshot.clone(), 70, desc)
+        let scanner = ScannerBuilder::new(snapshot.clone(), 70.into(), desc)
             .build()
             .unwrap();
         check_scan_result(scanner, &expected_result);
 
-        let scanner = ScannerBuilder::new(snapshot.clone(), 103, desc)
+        let scanner = ScannerBuilder::new(snapshot.clone(), 103.into(), desc)
             .build()
             .unwrap();
         check_scan_result(scanner, &expected_result);
@@ -424,7 +438,9 @@ mod tests {
         } else {
             expected_result[4].1 = None;
         }
-        let scanner = ScannerBuilder::new(snapshot, 106, desc).build().unwrap();
+        let scanner = ScannerBuilder::new(snapshot, 106.into(), desc)
+            .build()
+            .unwrap();
         check_scan_result(scanner, &expected_result);
     }
 
@@ -453,7 +469,7 @@ mod tests {
             must_prewrite_put(&engine, &[i], &[b'v', i], &[i], 30 + u64::from(i) * 10);
         }
 
-        let bypass_locks = TsSet::new(vec![30, 41, 50]);
+        let bypass_locks = TsSet::from_u64s(vec![30, 41, 50]);
 
         // Scan at ts 65 will meet locks at 40 and 60.
         let mut expected_result = vec![
@@ -469,7 +485,7 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let scanner = ScannerBuilder::new(snapshot.clone(), 65, desc)
+        let scanner = ScannerBuilder::new(snapshot.clone(), 65.into(), desc)
             .bypass_locks(bypass_locks)
             .build()
             .unwrap();

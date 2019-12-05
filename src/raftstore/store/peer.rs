@@ -8,8 +8,10 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64};
 
-use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
-use engine::{Engines, Peekable};
+use engine::rocks::{WriteBatch, WriteOptions, DB};
+use engine::Engines;
+use engine_rocks::{RocksSnapshot, RocksSyncSnapshot};
+use engine_traits::{Peekable, Snapshot};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -34,11 +36,11 @@ use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
 };
-use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::PdTask;
-use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
+use crate::raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
+use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -1076,7 +1078,12 @@ impl Peer {
         // problem if the leader applies fewer values than the follower, the follower read
         // could get a newer value, and after that, the leader may read a stale value,
         // which violates linearizability.
-        self.get_store().applied_index() >= read_index && !self.is_splitting() && !self.is_merging()
+        self.get_store().applied_index() >= read_index
+            && !self.is_splitting()
+            && !self.is_merging()
+            // a peer which is applying snapshot will clean up its data and ingest a snapshot file,
+            // during between the two operations a replica read could read empty data.
+            && !self.is_applying_snapshot()
     }
 
     #[inline]
@@ -1428,6 +1435,7 @@ impl Peer {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+                assert!(read.read_index.is_some());
 
                 let is_read_index_request = read.cmds.len() == 1
                     && read.cmds[0].0.get_requests().len() == 1
@@ -1451,6 +1459,7 @@ impl Peer {
                         "peer_id" => self.peer.get_id(),
                     );
                     for (req, cb) in read.cmds.drain(..) {
+                        // We should check epoch since the range could be changed
                         if req.get_header().get_replica_read() {
                             cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                         } else {
@@ -1471,14 +1480,14 @@ impl Peer {
         // guarantee the orders are consistent with read_states. `advance` will
         // update the `read_index` of read request that before this successful
         // `ready`.
-        if !self.is_leader() && !ready.read_states().is_empty() {
+        if !self.is_leader() {
             // NOTE: there could still be some read requests following, which will be cleared in
             // `clear_uncommitted` later.
             for state in ready.read_states() {
                 self.pending_reads
                     .advance(state.request_ctx.as_slice(), state.index);
-                self.post_pending_read_index_on_replica(ctx);
             }
+            self.post_pending_read_index_on_replica(ctx);
         } else if self.ready_to_handle_read() {
             for state in ready.read_states() {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
@@ -1808,7 +1817,7 @@ impl Peer {
                     "peer_id" => self.peer.get_id(),
                     "request" => ?change_peer,
                 );
-                return Err(box_err!("invalid conf change request"));
+                return Err(box_err!("{} invalid conf change request", self.tag));
             }
             _ => {}
         }
@@ -1823,7 +1832,7 @@ impl Peer {
                 "peer_id" => self.peer.get_id(),
                 "request" => ?change_peer,
             );
-            return Err(box_err!("ignore remove leader"));
+            return Err(box_err!("{} ignore remove leader", self.tag));
         }
 
         let status = self.raft_group.status_ref();
@@ -1938,16 +1947,19 @@ impl Peer {
             |s| if s.map_or(true, |s| s.parse().unwrap_or(true)) {
                 Ok(())
             } else {
-                Err(box_err!("can not read due to injected failure"))
+                Err(box_err!(
+                    "{} can not read due to injected failure",
+                    self.tag
+                ))
             }
         );
 
         // See more in ready_to_handle_read().
         if self.is_splitting() {
-            return Err(box_err!("can not read index due to split"));
+            return Err(box_err!("{} can not read index due to split", self.tag));
         }
         if self.is_merging() {
-            return Err(box_err!("can not read index due to merge"));
+            return Err(box_err!("{} can not read index due to merge", self.tag));
         }
         Ok(())
     }
@@ -2007,7 +2019,7 @@ impl Peer {
         if !self.is_leader() && self.leader_id() == INVALID_ID {
             cmd_resp::bind_error(
                 &mut err_resp,
-                box_err!("can not read index due to no leader"),
+                box_err!("{} can not read index due to no leader", self.tag),
             );
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             cb.invoke_with_response(err_resp);
@@ -2107,7 +2119,10 @@ impl Peer {
         for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
             entry_size += entry.get_data().len();
             if entry.get_entry_type() == EntryType::EntryConfChange {
-                return Err(box_err!("log gap contains conf change, skip merging."));
+                return Err(box_err!(
+                    "{} log gap contains conf change, skip merging.",
+                    self.tag
+                ));
             }
             if entry.get_data().is_empty() {
                 continue;
@@ -2179,7 +2194,10 @@ impl Peer {
         if self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
         {
-            return Err(box_err!("peer in merging mode, can't do proposal."));
+            return Err(box_err!(
+                "{} peer in merging mode, can't do proposal.",
+                self.tag
+            ));
         }
 
         poll_ctx.raft_metrics.propose.normal += 1;
@@ -2270,7 +2288,10 @@ impl Peer {
         req: &RaftCmdRequest,
     ) -> Result<u64> {
         if self.pending_merge_state.is_some() {
-            return Err(box_err!("peer in merging mode, can't do proposal."));
+            return Err(box_err!(
+                "{} peer in merging mode, can't do proposal.",
+                self.tag
+            ));
         }
         if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!(
@@ -2523,7 +2544,7 @@ pub trait RequestInspector {
             }
 
             if has_read && has_write {
-                return Err(box_err!("read and write can't be mixed in one batch."));
+                return Err(box_err!("read and write can't be mixed in one batch"));
             }
         }
 
@@ -2582,7 +2603,7 @@ impl RequestInspector for Peer {
 pub struct ReadExecutor {
     check_epoch: bool,
     engine: Arc<DB>,
-    snapshot: Option<SyncSnapshot>,
+    snapshot: Option<RocksSyncSnapshot>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
 }
@@ -2610,7 +2631,7 @@ impl ReadExecutor {
             return;
         }
         let engine = self.engine.clone();
-        self.snapshot = Some(Snapshot::new(engine).into_sync());
+        self.snapshot = Some(RocksSnapshot::new(engine).into_sync());
         // Reading current timespec after snapshot, in case we do not
         // expire lease in time.
         atomic::fence(atomic::Ordering::Release);
@@ -2802,6 +2823,7 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "protobuf-codec")]
     use protobuf::ProtobufEnum;
 
     use super::*;

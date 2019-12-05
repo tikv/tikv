@@ -1,8 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryFrom;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::util::{compact_files_in_range, io_limiter::IOLimiter};
+use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
@@ -11,10 +12,11 @@ use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::Callback;
-use crate::server::transport::RaftStoreRouter;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksIOLimiter};
+use engine_traits::IOLimiter;
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
@@ -36,7 +38,7 @@ pub struct ImportSSTService<Router> {
     threads: CpuPool,
     importer: Arc<SSTImporter>,
     switcher: Arc<Mutex<ImportModeSwitcher>>,
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Option<Arc<RocksIOLimiter>>,
 }
 
 impl<Router: RaftStoreRouter> ImportSSTService<Router> {
@@ -293,10 +295,21 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let label = "set_download_speed_limit";
         let timer = Instant::now_coarse();
 
-        match (req.get_speed_limit(), &mut self.limiter) {
+        let s = i64::try_from(req.get_speed_limit());
+        let s = if let Ok(s) = s {
+            s
+        } else {
+            warn!(
+                "SetDownloadSpeedLimitRequest out of range: {}. Using i64::max_value",
+                req.get_speed_limit()
+            );
+            i64::max_value()
+        };
+
+        match (s, &mut self.limiter) {
             (0, limiter) => *limiter = None,
-            (s, Some(l)) => l.set_bytes_per_second(s as i64),
-            (s, limiter) => *limiter = Some(Arc::new(IOLimiter::new(s))),
+            (s, Some(l)) => l.set_bytes_per_second(s),
+            (s, limiter) => *limiter = Some(Arc::new(RocksIOLimiter::new(s))),
         }
 
         ctx.spawn(

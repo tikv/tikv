@@ -10,8 +10,9 @@ use std::{cmp, u64};
 
 use crate::raftstore::{Error, Result};
 use engine::Engines;
+use engine::Peekable;
 use engine::CF_RAFT;
-use engine::{Peekable, Snapshot as EngineSnapshot};
+use engine_rocks::RocksSnapshot;
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -41,7 +42,6 @@ use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, CatchUpLogs, ChangePeer,
     ExecResult, Fsm, RegionProposal,
 };
-use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::Callback;
 use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
@@ -57,6 +57,7 @@ use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
+use keys::{self, enc_end_key, enc_start_key};
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -2354,7 +2355,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.peer.mut_store().check_applying_snap() {
             self.ctx.raft_metrics.invalid_proposal.is_applying_snapshot += 1;
             // TODO: replace to a more suitable error.
-            return Err(Error::Other(box_err!("peer is applying snapshot.")));
+            return Err(Error::Other(box_err!(
+                "{} peer is applying snapshot",
+                self.fsm.peer.tag
+            )));
         }
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg, self.fsm.peer.term()) {
@@ -2636,7 +2640,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
             match t {
                 PdTask::AskBatchSplit { callback, .. } => {
-                    callback.invoke_with_response(new_error(box_err!("failed to split: Stopped")));
+                    callback.invoke_with_response(new_error(box_err!(
+                        "{} failed to split: Stopped",
+                        self.fsm.peer.tag
+                    )));
                 }
                 _ => unreachable!(),
             }
@@ -2883,7 +2890,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: RocksSnapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!(
@@ -3090,7 +3097,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut response = match cmd_type {
             StatusCmdType::RegionLeader => self.execute_region_leader(),
             StatusCmdType::RegionDetail => self.execute_region_detail(request),
-            StatusCmdType::InvalidStatus => Err(box_err!("invalid status command!")),
+            StatusCmdType::InvalidStatus => {
+                Err(box_err!("{} invalid status command!", self.fsm.peer.tag))
+            }
         }?;
         response.set_cmd_type(cmd_type);
 

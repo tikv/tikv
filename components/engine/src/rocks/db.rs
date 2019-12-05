@@ -3,6 +3,7 @@
 use std::option::Option;
 
 use super::{util, DBIterator, DBVector, WriteBatch, DB};
+use crate::iterable::IterOptionsExt;
 use crate::{IterOption, Iterable, Mutable, Peekable, Result};
 
 impl Peekable for DB {

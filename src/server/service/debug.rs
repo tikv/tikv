@@ -4,7 +4,7 @@ use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
 use fail;
 use futures::{future, stream, Future, Stream};
-use futures_cpupool::{Builder, CpuPool};
+use futures_cpupool::CpuPool;
 use grpcio::{Error as GrpcError, WriteFlags};
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::{self, *};
@@ -14,9 +14,11 @@ use kvproto::raft_cmdpb::{
 };
 use tokio_sync::oneshot;
 
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};
-use crate::server::transport::RaftStoreRouter;
+use crate::server::gc_worker::GcWorker;
+use crate::storage::kv::Engine;
 use tikv_util::metrics;
 
 use tikv_alloc;
@@ -43,20 +45,21 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 
 /// Service handles the RPC messages for the `Debug` service.
 #[derive(Clone)]
-pub struct Service<T: RaftStoreRouter> {
+pub struct Service<T: RaftStoreRouter, E: Engine> {
     pool: CpuPool,
-    debugger: Debugger,
+    debugger: Debugger<E>,
     raft_router: T,
 }
 
-impl<T: RaftStoreRouter> Service<T> {
-    /// Constructs a new `Service` with `Engines` and a `RaftStoreRouter`.
-    pub fn new(engines: Engines, raft_router: T) -> Service<T> {
-        let pool = Builder::new()
-            .name_prefix(thd_name!("debugger"))
-            .pool_size(1)
-            .create();
-        let debugger = Debugger::new(engines);
+impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
+    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
+    pub fn new(
+        engines: Engines,
+        pool: CpuPool,
+        raft_router: T,
+        gc_worker: GcWorker<E>,
+    ) -> Service<T, E> {
+        let debugger = Debugger::new(engines, Some(gc_worker));
         Service {
             pool,
             debugger,
@@ -82,7 +85,7 @@ impl<T: RaftStoreRouter> Service<T> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
+impl<T: RaftStoreRouter + 'static, E: Engine + 'static> debugpb::Debug for Service<T, E> {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
@@ -521,10 +524,12 @@ fn consistency_check<T: RaftStoreRouter>(
         })
 }
 
+#[cfg(feature = "protobuf-codec")]
 mod region_size_response {
     pub type Entry = kvproto::debugpb::RegionSizeResponseEntry;
 }
 
+#[cfg(feature = "protobuf-codec")]
 mod list_fail_points_response {
     pub type Entry = kvproto::debugpb::ListFailPointsResponseEntry;
 }

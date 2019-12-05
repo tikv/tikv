@@ -9,7 +9,9 @@ use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
-use crate::storage::kv::{CFStatistics, Iterator, Key, Result, ScanMode, Snapshot, SEEK_BOUND};
+use crate::storage::kv::{
+    CfStatistics, Error, Iterator, Key, Result, ScanMode, Snapshot, SEEK_BOUND,
+};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -69,9 +71,9 @@ impl<I: Iterator> Cursor<I> {
         self.cur_value_has_read.replace(true)
     }
 
-    pub fn seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         fail_point!("kv_cursor_seek", |_| {
-            return Err(box_err!("kv cursor seek error"));
+            Err(box_err!("kv cursor seek error"))
         });
 
         assert_ne!(self.scan_mode, ScanMode::Backward);
@@ -102,7 +104,7 @@ impl<I: Iterator> Cursor<I> {
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `seek` instead.
-    pub fn near_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn near_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if !self.valid()? {
             return self.seek(key, statistics);
@@ -154,7 +156,7 @@ impl<I: Iterator> Cursor<I> {
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should `seek` first.
-    pub fn get(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<Option<&[u8]>> {
+    pub fn get(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<Option<&[u8]>> {
         if self.scan_mode != ScanMode::Backward {
             if self.near_seek(key, statistics)? && self.key(statistics) == &**key.as_encoded() {
                 return Ok(Some(self.value(statistics)));
@@ -168,7 +170,7 @@ impl<I: Iterator> Cursor<I> {
         Ok(None)
     }
 
-    pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn seek_for_prev(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if self
             .min_key
@@ -194,7 +196,7 @@ impl<I: Iterator> Cursor<I> {
     }
 
     /// Find the largest key that is not greater than the specific key.
-    pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
         if !self.valid()? {
             return self.seek_for_prev(key, statistics);
@@ -243,7 +245,7 @@ impl<I: Iterator> Cursor<I> {
         Ok(true)
     }
 
-    pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn reverse_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         if !self.seek_for_prev(key, statistics)? {
             return Ok(false);
         }
@@ -261,7 +263,7 @@ impl<I: Iterator> Cursor<I> {
     ///
     /// This method assume the current position of cursor is
     /// around `key`, otherwise you should use `reverse_seek` instead.
-    pub fn near_reverse_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn near_reverse_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         if !self.near_seek_for_prev(key, statistics)? {
             return Ok(false);
         }
@@ -274,7 +276,7 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn key(&self, statistics: &mut CFStatistics) -> &[u8] {
+    pub fn key(&self, statistics: &mut CfStatistics) -> &[u8] {
         let key = self.iter.key();
         if !self.mark_key_read() {
             statistics.flow_stats.read_bytes += key.len();
@@ -284,7 +286,7 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn value(&self, statistics: &mut CFStatistics) -> &[u8] {
+    pub fn value(&self, statistics: &mut CfStatistics) -> &[u8] {
         let value = self.iter.value();
         if !self.mark_value_read() {
             statistics.flow_stats.read_bytes += value.len();
@@ -293,21 +295,21 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
+    pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
         self.iter.seek_to_first()
     }
 
     #[inline]
-    pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
+    pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
         self.iter.seek_to_last()
     }
 
     #[inline]
-    pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
+    pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         statistics.seek += 1;
         self.mark_unread();
         self.iter.seek(key)
@@ -317,7 +319,7 @@ impl<I: Iterator> Cursor<I> {
     pub fn internal_seek_for_prev(
         &mut self,
         key: &Key,
-        statistics: &mut CFStatistics,
+        statistics: &mut CfStatistics,
     ) -> Result<bool> {
         statistics.seek_for_prev += 1;
         self.mark_unread();
@@ -325,14 +327,14 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
+    pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.next += 1;
         self.mark_unread();
         self.iter.next()
     }
 
     #[inline]
-    pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
+    pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.prev += 1;
         self.mark_unread();
         self.iter.prev()
@@ -346,28 +348,34 @@ impl<I: Iterator> Cursor<I> {
     pub fn valid(&self) -> Result<bool> {
         if !self.iter.valid() {
             if let Err(e) = self.iter.status() {
-                CRITICAL_ERROR.with_label_values(&["rocksdb iter"]).inc();
-                if panic_when_unexpected_key_or_data() {
-                    set_panic_mark();
-                    panic!(
-                        "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
-                        e,
-                        self.min_key.as_ref().map(|k| hex::encode_upper(k)),
-                        self.max_key.as_ref().map(|k| hex::encode_upper(k))
-                    );
-                } else {
-                    error!(
-                        "failed to iterate";
-                        "min_key" => ?self.min_key.as_ref().map(|k| hex::encode_upper(k)),
-                        "max_key" => ?self.max_key.as_ref().map(|k| hex::encode_upper(k)),
-                        "error" => ?e,
-                    );
-                }
-                return Err(e);
+                self.handle_error_status(e)?;
             }
             Ok(false)
         } else {
             Ok(true)
+        }
+    }
+
+    #[inline(never)]
+    fn handle_error_status(&self, e: Error) -> Result<()> {
+        // Split out the error case to reduce hot-path code size.
+        CRITICAL_ERROR.with_label_values(&["rocksdb iter"]).inc();
+        if panic_when_unexpected_key_or_data() {
+            set_panic_mark();
+            panic!(
+                "failed to iterate: {:?}, min_key: {:?}, max_key: {:?}",
+                e,
+                self.min_key.as_ref().map(|v| hex::encode_upper(v)),
+                self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+            );
+        } else {
+            error!(
+                "failed to iterate";
+                "min_key" => ?self.min_key.as_ref().map(|v| hex::encode_upper(v)),
+                "max_key" => ?self.max_key.as_ref().map(|v| hex::encode_upper(v)),
+                "error" => ?e,
+            );
+            Err(e)
         }
     }
 }

@@ -1,17 +1,19 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::UnsafeCell;
+use std::fmt;
 use std::time::Duration;
 use std::{error, ptr, result};
 
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
+use keys::{Key, Value};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 
+use crate::into_other::IntoOther;
 use crate::raftstore::coprocessor::SeekRegionCallback;
-use crate::storage::{Key, Value};
 
 mod btree_engine;
 mod compact_listener;
@@ -26,7 +28,7 @@ pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
-    CFStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
+    CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
 
 pub const SEEK_BOUND: u64 = 8;
@@ -64,7 +66,7 @@ pub trait Engine: Send + Clone + 'static {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_write(ctx, batch, cb), timeout) {
             Some((_, res)) => res,
-            None => Err(Error::Timeout(timeout)),
+            None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }
     }
 
@@ -72,7 +74,7 @@ pub trait Engine: Send + Clone + 'static {
         let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
         match wait_op!(|cb| self.async_snapshot(ctx, cb), timeout) {
             Some((_, res)) => res,
-            None => Err(Error::Timeout(timeout)),
+            None => Err(Error::from(ErrorInner::Timeout(timeout))),
         }
     }
 
@@ -121,6 +123,15 @@ pub trait Snapshot: Send + Clone {
     fn upper_bound(&self) -> Option<&[u8]> {
         None
     }
+
+    /// Retrieves a version that represents the modification status of the underlying data.
+    /// Version should be changed when underlying data is changed.
+    ///
+    /// If the engine does not support data version, then `None` is returned.
+    #[inline]
+    fn get_data_version(&self) -> Option<u64> {
+        None
+    }
 }
 
 pub trait Iterator: Send {
@@ -156,7 +167,7 @@ pub enum ScanMode {
 
 quick_error! {
     #[derive(Debug)]
-    pub enum Error {
+    pub enum ErrorInner {
         Request(err: ErrorHeader) {
             from()
             description("request to underhook engine failed")
@@ -179,20 +190,71 @@ quick_error! {
     }
 }
 
-impl From<engine::Error> for Error {
-    fn from(err: engine::Error) -> Error {
-        Error::Request(err.into())
+impl From<engine::Error> for ErrorInner {
+    fn from(err: engine::Error) -> ErrorInner {
+        ErrorInner::Request(err.into())
     }
 }
 
+impl From<engine_traits::Error> for ErrorInner {
+    fn from(err: engine_traits::Error) -> ErrorInner {
+        ErrorInner::Request(err.into_other())
+    }
+}
+
+impl ErrorInner {
+    pub fn maybe_clone(&self) -> Option<ErrorInner> {
+        match *self {
+            ErrorInner::Request(ref e) => Some(ErrorInner::Request(e.clone())),
+            ErrorInner::Timeout(d) => Some(ErrorInner::Timeout(d)),
+            ErrorInner::EmptyRequest => Some(ErrorInner::EmptyRequest),
+            ErrorInner::Other(_) => None,
+        }
+    }
+}
+
+pub struct Error(pub Box<ErrorInner>);
+
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
-        match *self {
-            Error::Request(ref e) => Some(Error::Request(e.clone())),
-            Error::Timeout(d) => Some(Error::Timeout(d)),
-            Error::EmptyRequest => Some(Error::EmptyRequest),
-            Error::Other(_) => None,
-        }
+        self.0.maybe_clone().map(Error::from)
+    }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        std::error::Error::description(&self.0)
+    }
+
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(&self.0)
+    }
+}
+
+impl From<ErrorInner> for Error {
+    #[inline]
+    fn from(e: ErrorInner) -> Self {
+        Error(Box::new(e))
+    }
+}
+
+impl<T: Into<ErrorInner>> From<T> for Error {
+    #[inline]
+    default fn from(err: T) -> Self {
+        let err = err.into();
+        err.into()
     }
 }
 
@@ -248,10 +310,6 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::storage::{CfName, Key};
-    use engine::IterOption;
-    use engine::CF_DEFAULT;
-    use kvproto::kvrpcpb::Context;
     use tikv_util::codec::bytes;
 
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
@@ -308,7 +366,7 @@ pub mod tests {
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
         assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
         assert_eq!(cursor.value(&mut statistics), pair.1);
@@ -319,7 +377,7 @@ pub mod tests {
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         cursor
             .reverse_seek(&Key::from_raw(key), &mut statistics)
             .unwrap();
@@ -328,7 +386,7 @@ pub mod tests {
     }
 
     fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         assert!(
             cursor
                 .near_seek(&Key::from_raw(key), &mut statistics)
@@ -344,7 +402,7 @@ pub mod tests {
         key: &[u8],
         pair: (&[u8], &[u8]),
     ) {
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         assert!(
             cursor
                 .near_reverse_seek(&Key::from_raw(key), &mut statistics)
@@ -413,7 +471,7 @@ pub mod tests {
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         assert!(!iter
             .seek(&Key::from_raw(b"z\x00"), &mut statistics)
             .unwrap());
@@ -437,7 +495,7 @@ pub mod tests {
         assert_near_reverse_seek(&mut cursor, b"x1", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
         assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         assert!(!cursor
             .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
             .unwrap());
@@ -466,7 +524,7 @@ pub mod tests {
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         assert!(!cursor
             .near_reverse_seek(&Key::from_raw(b"x"), &mut statistics)
             .unwrap());
@@ -489,7 +547,7 @@ pub mod tests {
 
     macro_rules! assert_seek {
         ($cursor:ident, $func:ident, $k:expr, $res:ident) => {{
-            let mut statistics = CFStatistics::default();
+            let mut statistics = CfStatistics::default();
             assert_eq!(
                 $cursor.$func(&$k, &mut statistics).unwrap(),
                 $res.is_some(),
@@ -660,7 +718,7 @@ pub mod tests {
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
 
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
             .unwrap();
 
@@ -668,7 +726,7 @@ pub mod tests {
         assert_eq!(iter.value(&mut statistics), b"bar4");
         assert_eq!(statistics.seek, 1);
 
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
 
@@ -677,7 +735,7 @@ pub mod tests {
         assert_eq!(statistics.seek, 0);
         assert_eq!(statistics.next, 1);
 
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         iter.prev(&mut statistics);
 
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));

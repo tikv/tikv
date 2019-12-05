@@ -261,9 +261,8 @@ mod tests {
 
     use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-    use crate::raftstore::store::keys::data_key;
-    use crate::storage::mvcc::{Write, WriteType};
-    use crate::storage::types::Key as MvccKey;
+    use crate::storage::mvcc::{TimeStamp, Write, WriteType};
+    use keys::{data_key, Key as MvccKey};
 
     use super::*;
 
@@ -322,14 +321,15 @@ mod tests {
         assert!(old_sst_files_size > new_sst_files_size);
     }
 
-    fn mvcc_put(db: &DB, k: &[u8], v: &[u8], start_ts: u64, commit_ts: u64) {
+    fn mvcc_put(db: &DB, k: &[u8], v: &[u8], start_ts: TimeStamp, commit_ts: TimeStamp) {
         let cf = get_cf_handle(db, CF_WRITE).unwrap();
         let k = MvccKey::from_encoded(data_key(k)).append_ts(commit_ts);
         let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
-        db.put_cf(cf, k.as_encoded(), &w.to_bytes()).unwrap();
+        db.put_cf(cf, k.as_encoded(), &w.as_ref().to_bytes())
+            .unwrap();
     }
 
-    fn delete(db: &DB, k: &[u8], commit_ts: u64) {
+    fn delete(db: &DB, k: &[u8], commit_ts: TimeStamp) {
         let cf = get_cf_handle(db, CF_WRITE).unwrap();
         let k = MvccKey::from_encoded(data_key(k)).append_ts(commit_ts);
         db.delete_cf(cf, k.as_encoded()).unwrap();
@@ -359,14 +359,14 @@ mod tests {
         // mvcc_put 0..5
         for i in 0..5 {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
-            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1, 2);
+            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         }
         engine.flush_cf(cf, true).unwrap();
 
         // gc 0..5
         for i in 0..5 {
             let k = format!("k{}", i);
-            delete(&engine, k.as_bytes(), 2);
+            delete(&engine, k.as_bytes(), 2.into());
         }
         engine.flush_cf(cf, true).unwrap();
 
@@ -378,7 +378,7 @@ mod tests {
         // mvcc_put 5..10
         for i in 5..10 {
             let (k, v) = (format!("k{}", i), format!("value{}", i));
-            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1, 2);
+            mvcc_put(&engine, k.as_bytes(), v.as_bytes(), 1.into(), 2.into());
         }
         engine.flush_cf(cf, true).unwrap();
 
@@ -402,7 +402,7 @@ mod tests {
         // gc 5..10
         for i in 5..10 {
             let k = format!("k{}", i);
-            delete(&engine, k.as_bytes(), 2);
+            delete(&engine, k.as_bytes(), 2.into());
         }
         engine.flush_cf(cf, true).unwrap();
 

@@ -15,9 +15,10 @@ use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::SnapManager;
-use crate::server::gc_worker::GCWorker;
-use crate::storage::lock_manager::LockMgr;
+use crate::server::gc_worker::GcWorker;
+use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -29,7 +30,7 @@ use super::raft_client::RaftClient;
 use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
-use super::transport::{RaftStoreRouter, ServerTransport};
+use super::transport::ServerTransport;
 use super::{Config, Result};
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
@@ -66,7 +67,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<E: Engine, L: LockMgr>(
+    pub fn new<E: Engine, L: LockManager>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
@@ -74,7 +75,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        gc_worker: GCWorker<E>,
+        gc_worker: GcWorker<E>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = ThreadPoolBuilder::new()
@@ -269,7 +270,6 @@ mod tests {
     use super::*;
 
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};
@@ -348,7 +348,7 @@ mod tests {
         cfg.addr = "127.0.0.1:0".to_owned();
 
         let storage = TestStorageBuilder::new().build().unwrap();
-        let mut gc_worker = GCWorker::new(storage.get_engine(), None, None, Default::default());
+        let mut gc_worker = GcWorker::new(storage.get_engine(), None, None, Default::default());
         gc_worker.start().unwrap();
 
         let (tx, rx) = mpsc::channel();
