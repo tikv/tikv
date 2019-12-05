@@ -21,8 +21,7 @@ use crate::storage::{
     },
     kv::Engine,
     lock_manager::{LockManager, WaitTimeout},
-    txn::PointGetCommand,
-    Storage, TxnStatus,
+    PointGetCommand, Storage, TxnStatus,
 };
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};

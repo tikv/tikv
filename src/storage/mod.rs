@@ -38,16 +38,15 @@ use crate::storage::{
     lock_manager::{DummyLockManager, LockManager, WaitTimeout},
     metrics::*,
     txn::{
-        commands::{self, get_priority_tag, Command},
+        commands::{self, Command},
         scheduler::Scheduler as TxnScheduler,
-        PointGetCommand,
     },
     types::MvccInfo,
 };
 use engine::{CfName, IterOption, ALL_CFS, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
-use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
 use rand::prelude::*;
 use std::sync::{atomic, Arc};
 use tikv_util::collections::HashMap;
@@ -557,6 +556,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             min_commit_ts,
             ctx,
         );
+
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
         Ok(())
@@ -1376,6 +1376,51 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         self.schedule(cmd, StorageCallback::MvccInfoByStartTs(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
         Ok(())
+    }
+}
+
+/// Get a single value.
+pub struct PointGetCommand {
+    pub ctx: Context,
+    pub key: Key,
+    /// None if this is a raw get, Some if this is a transactional get.
+    pub ts: Option<TimeStamp>,
+}
+
+impl PointGetCommand {
+    pub fn from_get(request: &mut GetRequest) -> Self {
+        PointGetCommand {
+            ctx: request.take_context(),
+            key: Key::from_raw(request.get_key()),
+            ts: Some(request.get_version().into()),
+        }
+    }
+
+    pub fn from_raw_get(request: &mut RawGetRequest) -> Self {
+        PointGetCommand {
+            ctx: request.take_context(),
+            // FIXME: It is weird in semantics because the key in the request is actually in the
+            // raw format. We should fix it when the meaning of type `Key` is well defined.
+            key: Key::from_encoded(request.take_key()),
+            ts: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn from_key_ts(key: Key, ts: Option<TimeStamp>) -> Self {
+        PointGetCommand {
+            ctx: Context::default(),
+            key,
+            ts,
+        }
+    }
+}
+
+fn get_priority_tag(priority: CommandPri) -> CommandPriority {
+    match priority {
+        CommandPri::Low => CommandPriority::low,
+        CommandPri::Normal => CommandPriority::normal,
+        CommandPri::High => CommandPriority::high,
     }
 }
 
@@ -4136,5 +4181,35 @@ mod tests {
             )
             .unwrap();
         rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_construct_point_get_command_from_get_request() {
+        let mut context = Context::default();
+        context.set_region_id(1);
+        let raw_key = b"raw_key".to_vec();
+        let version = 10;
+        let mut req = GetRequest::default();
+        req.set_context(context.clone());
+        req.set_key(raw_key.clone());
+        req.set_version(version);
+        let cmd = PointGetCommand::from_get(&mut req);
+        assert_eq!(cmd.ctx, context);
+        assert_eq!(cmd.key, Key::from_raw(&raw_key));
+        assert_eq!(cmd.ts, Some(TimeStamp::new(version)));
+    }
+
+    #[test]
+    fn test_construct_point_get_command_from_raw_get_request() {
+        let mut context = Context::default();
+        context.set_region_id(1);
+        let raw_key = b"raw_key".to_vec();
+        let mut req = RawGetRequest::default();
+        req.set_context(context.clone());
+        req.set_key(raw_key.clone());
+        let cmd = PointGetCommand::from_raw_get(&mut req);
+        assert_eq!(cmd.ctx, context);
+        assert_eq!(cmd.key.into_encoded(), raw_key);
+        assert_eq!(cmd.ts, None);
     }
 }
