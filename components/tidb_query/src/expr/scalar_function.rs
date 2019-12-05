@@ -528,7 +528,6 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonQuoteSig
             | ScalarFuncSig::JsonSearchSig
             | ScalarFuncSig::JsonStorageSizeSig
-            | ScalarFuncSig::JsonDepthSig
             | ScalarFuncSig::JsonKeysSig
             | ScalarFuncSig::JsonLengthSig
             | ScalarFuncSig::JsonValidJsonSig
@@ -1389,6 +1388,7 @@ mod tests {
                     ScalarFuncSig::UncompressedLength,
                     ScalarFuncSig::Quote,
                     ScalarFuncSig::OctInt,
+                    ScalarFuncSig::JsonDepthSig,
                 ],
                 1,
                 1,
