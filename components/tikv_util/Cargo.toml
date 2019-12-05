@@ -11,7 +11,9 @@ prost-codec = ["prost"]
 [dependencies]
 backtrace = "0.3.9"
 byteorder = "1.2"
+configuration = { path = "../configuration" }
 chrono = "0.4"
+coarsetime = "0.1"
 crc32fast = "1.2"
 crossbeam = "0.7.2"
 fail = "0.3"

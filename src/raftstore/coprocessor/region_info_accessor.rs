@@ -11,8 +11,8 @@ use super::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RoleObserver,
 };
-use crate::raftstore::store::keys::{data_end_key, data_key};
 use crate::storage::kv::{RegionInfoProvider, Result as EngineResult};
+use keys::{data_end_key, data_key};
 use kvproto::metapb::Region;
 use raft::StateRole;
 use tikv_util::collections::HashMap;

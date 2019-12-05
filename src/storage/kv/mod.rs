@@ -8,12 +8,12 @@ use std::{error, ptr, result};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
+use keys::{Key, Value};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 
 use crate::into_other::IntoOther;
 use crate::raftstore::coprocessor::SeekRegionCallback;
-use crate::storage::{Key, Value};
 
 mod btree_engine;
 mod compact_listener;
@@ -28,7 +28,7 @@ pub use self::cursor::{Cursor, CursorBuilder};
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 pub use self::stats::{
-    CFStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
+    CfStatistics, FlowStatistics, FlowStatsReporter, Statistics, StatisticsSummary,
 };
 
 pub const SEEK_BOUND: u64 = 8;
@@ -310,10 +310,6 @@ pub unsafe fn destroy_tls_engine<E: Engine>() {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::storage::{CfName, Key};
-    use engine::IterOption;
-    use engine::CF_DEFAULT;
-    use kvproto::kvrpcpb::Context;
     use tikv_util::codec::bytes;
 
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
@@ -370,7 +366,7 @@ pub mod tests {
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
         assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
         assert_eq!(cursor.value(&mut statistics), pair.1);
@@ -381,7 +377,7 @@ pub mod tests {
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         cursor
             .reverse_seek(&Key::from_raw(key), &mut statistics)
             .unwrap();
@@ -390,7 +386,7 @@ pub mod tests {
     }
 
     fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         assert!(
             cursor
                 .near_seek(&Key::from_raw(key), &mut statistics)
@@ -406,7 +402,7 @@ pub mod tests {
         key: &[u8],
         pair: (&[u8], &[u8]),
     ) {
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         assert!(
             cursor
                 .near_reverse_seek(&Key::from_raw(key), &mut statistics)
@@ -475,7 +471,7 @@ pub mod tests {
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         assert!(!iter
             .seek(&Key::from_raw(b"z\x00"), &mut statistics)
             .unwrap());
@@ -499,7 +495,7 @@ pub mod tests {
         assert_near_reverse_seek(&mut cursor, b"x1", (b"x", b"1"));
         assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
         assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         assert!(!cursor
             .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
             .unwrap());
@@ -528,7 +524,7 @@ pub mod tests {
         let mut cursor = snapshot
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         assert!(!cursor
             .near_reverse_seek(&Key::from_raw(b"x"), &mut statistics)
             .unwrap());
@@ -551,7 +547,7 @@ pub mod tests {
 
     macro_rules! assert_seek {
         ($cursor:ident, $func:ident, $k:expr, $res:ident) => {{
-            let mut statistics = CFStatistics::default();
+            let mut statistics = CfStatistics::default();
             assert_eq!(
                 $cursor.$func(&$k, &mut statistics).unwrap(),
                 $res.is_some(),
@@ -722,7 +718,7 @@ pub mod tests {
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
 
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)
             .unwrap();
 
@@ -730,7 +726,7 @@ pub mod tests {
         assert_eq!(iter.value(&mut statistics), b"bar4");
         assert_eq!(statistics.seek, 1);
 
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         iter.near_seek(&Key::from_raw(b"foo55"), &mut statistics)
             .unwrap();
 
@@ -739,7 +735,7 @@ pub mod tests {
         assert_eq!(statistics.seek, 0);
         assert_eq!(statistics.next, 1);
 
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
         iter.prev(&mut statistics);
 
         assert_eq!(iter.key(&mut statistics), &*bytes::encode_bytes(b"foo4"));
