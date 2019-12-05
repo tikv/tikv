@@ -12,8 +12,8 @@ const WAITING_LIST_MAX_CAPACITY: usize = 16;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
-/// Latches are indexed by slot IDs. The keys of a command are hashed to slot IDs, then the command
-/// is added to the waiting queues of the latches.
+/// Latches are indexed by slot IDs. The keys of a command are hashed into unsigned number,
+/// then the command is added to the waiting queues of the latches.
 ///
 /// If command A is ahead of command B in one latch, it must be ahead of command B in all the
 /// overlapping latches. This is an invariant ensured by the `gen_lock`, `acquire` and `release`.
@@ -31,7 +31,8 @@ impl Latch {
         }
     }
 
-    pub fn front(&self, s: usize) -> Option<u64> {
+    /// Find the first command ID in the queue whose hash value is equal to s.
+    pub fn get_first_req_by_hash(&self, s: usize) -> Option<u64> {
         for item in self.waiting.iter() {
             if let Some((x, y)) = item {
                 if *x == s {
@@ -42,6 +43,10 @@ impl Latch {
         None
     }
 
+    /// Remove the first command ID in the queue whose hash value is equal to hash_key.
+    /// If the element which would be removed does not appear at the front of the queue, it will leave
+    /// a hole in the queue. So we must remove consecutive hole when remove the head of the
+    /// queue to make the queue not too long.
     pub fn pop_front(&mut self, hash_key: usize) -> Option<(usize, u64)> {
         if let Some(item) = self.waiting.pop_front() {
             if let Some((k, _)) = item.as_ref() {
@@ -70,11 +75,11 @@ impl Latch {
     // VecDeque after pop.
     fn maybe_shrink(&mut self) {
         // Pop item which is none to make queue not too long.
-        while let Some(item) = self.waiting.pop_front() {
+        while let Some(item) = self.waiting.front() {
             if item.is_some() {
-                self.waiting.push_front(item);
                 break;
             }
+            self.waiting.pop_front().unwrap();
         }
         if self.waiting.capacity() > WAITING_LIST_MAX_CAPACITY
             && self.waiting.len() < WAITING_LIST_SHRINK_SIZE
@@ -87,7 +92,7 @@ impl Latch {
 /// Lock required for a command.
 #[derive(Clone)]
 pub struct Lock {
-    /// The slot IDs of the latches that a command must acquire before being able to be processed.
+    /// The hash value of the keys that a command must acquire before being able to be processed.
     pub required_slots: Vec<usize>,
 
     /// The number of latches that the command has acquired.
@@ -148,13 +153,13 @@ impl Latches {
     /// Tries to acquire the latches specified by the `lock` for command with ID `who`.
     ///
     /// This method will enqueue the command ID into the waiting queues of the latches. A latch is
-    /// considered acquired if the command ID is at the front of the queue. Returns true if all the
-    /// Latches are acquired, false otherwise.
+    /// considered acquired if the command ID is the first one of elements in the queue which have
+    /// the same hash value. Returns true if all the Latches are acquired, false otherwise.
     pub fn acquire(&self, lock: &mut Lock, who: u64) -> bool {
         let mut acquired_count: usize = 0;
         for &i in &lock.required_slots[lock.owned_count..] {
             let mut latch = self.lock_latch(i);
-            match latch.front(i) {
+            match latch.get_first_req_by_hash(i) {
                 Some(cid) => {
                     if cid == who {
                         acquired_count += 1;
@@ -180,21 +185,21 @@ impl Latches {
         let mut wakeup_list: Vec<u64> = vec![];
         for &i in &lock.required_slots[..lock.owned_count] {
             let mut latch = self.lock_latch(i);
-            let (_, front) = latch.pop_front(i).unwrap();
+            let (slot, front) = latch.pop_front(i).unwrap();
             assert_eq!(front, who);
-            if let Some(wakeup) = latch.front(i) {
+            assert_eq!(slot, i);
+            if let Some(wakeup) = latch.get_first_req_by_hash(i) {
                 wakeup_list.push(wakeup);
             }
         }
         wakeup_list
     }
 
-    /// Calculates the slot ID by hashing the `key`.
+    /// Calculates the hash value of the `key`.
     fn calc_slot<H>(&self, key: &H) -> usize
     where
         H: Hash,
     {
-        // TODO: avoid Hasher construct
         let mut s = DefaultHasher::new();
         key.hash(&mut s);
 
