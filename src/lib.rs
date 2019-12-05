@@ -64,7 +64,6 @@ pub mod raftstore;
 pub mod server;
 pub mod storage;
 
-// Detect tikv enabled features.
 fn detect_enabled_features() -> String {
     macro_rules! detect {
         ($f:expr, $feat:tt) => {
@@ -89,7 +88,6 @@ fn detect_enabled_features() -> String {
     flags
 }
 
-// Detect tikv build profile.
 fn detect_build_profile() -> &'static str {
     // Detect build profile by debug_assertions see more:
     // https://users.rust-lang.org/t/conditional-compilation-for-debug-release/1098
