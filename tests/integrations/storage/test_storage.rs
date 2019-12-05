@@ -81,7 +81,7 @@ fn test_txn_store_cleanup_commit() {
     );
     store.get_err(b"secondary", 8);
     store.get_err(b"secondary", 12);
-    store.commit_ok(vec![b"primary"], 5, 10, 10);
+    store.commit_ok(vec![b"primary"], 5, 10);
     store.cleanup_err(b"primary", 5, 0);
     store.rollback_err(vec![b"primary"], 5);
 }
