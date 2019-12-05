@@ -197,7 +197,7 @@ fn json_with_path_validator(expr: &tipb::Expr) -> Result<()> {
     valid_paths(expr)
 }
 
-#[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_path_validator)]
+#[rpn_fn(raw_varg,min_args= 1, max_args = 2, extra_validator = json_with_path_validator)]
 #[inline]
 fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
     assert!(!args.is_empty() && args.len() <= 2);
