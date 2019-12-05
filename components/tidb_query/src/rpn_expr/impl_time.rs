@@ -164,6 +164,18 @@ pub fn day_name(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<By
     }
 }
 
+#[rpn_fn]
+#[inline]
+pub fn date_diff(
+    start_time: &Option<DateTime>,
+    end_time: &Option<DateTime>,
+) -> Result<Option<i64>> {
+    match (start_time, end_time) {
+        (Some(start_time), Some(end_time)) => Ok(start_time.date_diff(*end_time)),
+        _ => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,6 +558,58 @@ mod tests {
             if let Some(err_code) = err_code {
                 assert_eq!(ctx.warnings.warnings[0].get_code(), err_code);
             }
+        }
+    }
+
+    #[test]
+    fn test_date_diff() {
+        let cases = vec![
+            (
+                Some("0000-01-01 00:00:00.000000"),
+                Some("0000-01-01 00:00:00.000000"),
+                Some(0),
+            ),
+            (
+                Some("2018-02-01 00:00:00.000000"),
+                Some("2018-02-01 00:00:00.000000"),
+                Some(0),
+            ),
+            (
+                Some("2018-02-02 00:00:00.000000"),
+                Some("2018-02-01 00:00:00.000000"),
+                Some(1),
+            ),
+            (
+                Some("2018-02-01 00:00:00.000000"),
+                Some("2018-02-02 00:00:00.000000"),
+                Some(-1),
+            ),
+            (
+                Some("2018-02-02 00:00:00.000000"),
+                Some("2018-02-01 23:59:59.999999"),
+                Some(1),
+            ),
+            (
+                Some("2018-02-01 23:59:59.999999"),
+                Some("2018-02-02 00:00:00.000000"),
+                Some(-1),
+            ),
+            (None, Some("2018-02-02 00:00:00.000000"), None),
+            (Some("2018-02-02 00:00:00.000000"), None, None),
+            (None, None, None),
+        ];
+
+        for (arg1, arg2, exp) in cases {
+            let mut ctx = EvalContext::default();
+            let arg1 = arg1.map(|arg: &str| Time::parse_date(&mut ctx, arg).unwrap());
+            let arg2 = arg2.map(|arg: &str| Time::parse_date(&mut ctx, arg).unwrap());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg1)
+                .push_param(arg2)
+                .context(ctx)
+                .evaluate(ScalarFuncSig::DateDiff);
+            let output = output.unwrap();
+            assert_eq!(output, exp);
         }
     }
 }
