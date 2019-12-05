@@ -765,7 +765,11 @@ impl<S: Snapshot> MvccTxn<S> {
 
                 // If this is a large transaction and the lock is active, push forward the minCommitTS.
                 // lock.minCommitTS == 0 may be a secondary lock, or not a large transaction.
-                if !lock.min_commit_ts.is_zero() && caller_start_ts >= lock.min_commit_ts {
+                if !lock.min_commit_ts.is_zero()
+                    // Not a parallel-commit transaction.
+                    && lock.secondaries.is_none()
+                    && caller_start_ts >= lock.min_commit_ts
+                {
                     lock.min_commit_ts = caller_start_ts.next();
 
                     if lock.min_commit_ts < current_ts {
