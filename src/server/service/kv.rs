@@ -715,6 +715,10 @@ impl<E: Engine, L: LockManager> Batcher<E, L> for WriteBatcher {
                                 if let Some(err) = extract_region_error(&v) {
                                     resp.set_region_error(err);
                                 } else {
+                                    let v = v.and_then(|(v, max_read_ts)| {
+                                        resp.set_max_read_ts(max_read_ts.into_inner());
+                                        Ok(v)
+                                    });
                                     resp.set_errors(extract_key_errors(v).into());
                                 }
                                 let mut res = batch_commands_response::Response::default();
@@ -2575,14 +2579,8 @@ fn future_commit<E: Engine, L: LockManager>(
         let mut resp = CommitResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
-        } else {
-            match v {
-                Ok(TxnStatus::Committed { commit_ts }) => {
-                    resp.set_commit_version(commit_ts.into_inner())
-                }
-                Ok(_) => unreachable!(),
-                Err(e) => resp.set_error(extract_key_error(&e)),
-            }
+        } else if let Err(e) = v {
+            resp.set_error(extract_key_error(&e));
         }
         resp
     })

@@ -770,10 +770,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
 
             wake_up_waiters_if_needed(lock_mgr, lock_ts, key_hashes, commit_ts, is_pessimistic_txn);
             statistics.add(&txn.take_statistics());
-            let pr = ProcessResult::TxnStatus {
-                txn_status: TxnStatus::committed(commit_ts),
-            };
-            (pr, txn.into_modifies(), rows, cmd.ctx, None)
+            (ProcessResult::Res, txn.into_modifies(), rows, cmd.ctx, None)
         }
         CommandKind::Cleanup {
             key,

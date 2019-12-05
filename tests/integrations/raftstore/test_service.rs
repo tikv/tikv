@@ -129,7 +129,6 @@ fn must_kv_commit(
     keys: Vec<Vec<u8>>,
     start_ts: u64,
     commit_ts: u64,
-    expect_commit_ts: u64,
 ) {
     let mut commit_req = CommitRequest::default();
     commit_req.set_context(ctx);
@@ -143,7 +142,6 @@ fn must_kv_commit(
         commit_resp.get_region_error()
     );
     assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
-    assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
 }
 
 #[test]
@@ -176,7 +174,6 @@ fn test_mvcc_basic() {
         ctx.clone(),
         vec![k.clone()],
         prewrite_start_version,
-        commit_version,
         commit_version,
     );
 
@@ -255,7 +252,6 @@ fn test_mvcc_rollback_and_cleanup() {
         ctx.clone(),
         vec![k.clone()],
         prewrite_start_version,
-        commit_version,
         commit_version,
     );
 
@@ -365,7 +361,6 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
         ctx.clone(),
         vec![k.clone()],
         prewrite_start_version,
-        commit_version,
         commit_version,
     );
 

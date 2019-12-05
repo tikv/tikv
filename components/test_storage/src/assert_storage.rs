@@ -9,7 +9,7 @@ use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{
     self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, Key, KvPair, Mutation,
-    TxnStatus, Value,
+    Value,
 };
 use tikv_util::HandyRwLock;
 
@@ -258,14 +258,12 @@ impl<E: Engine> AssertionStorage<E> {
         }
     }
 
-    fn expect_invalid_tso_err<T>(
+    fn expect_invalid_tso_err(
         &self,
-        resp: Result<T, storage::Error>,
+        resp: Result<(), storage::Error>,
         sts: impl Into<TimeStamp>,
         cmt_ts: impl Into<TimeStamp>,
-    ) where
-        T: std::fmt::Debug,
-    {
+    ) {
         assert!(resp.is_err());
         let err = resp.unwrap_err();
         match err {
@@ -508,14 +506,11 @@ impl<E: Engine> AssertionStorage<E> {
         keys: Vec<&[u8]>,
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
-        actual_commit_ts: impl Into<TimeStamp>,
     ) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
-        let txn_status = self
-            .store
+        self.store
             .commit(self.ctx.clone(), keys, start_ts.into(), commit_ts.into())
             .unwrap();
-        assert_eq!(txn_status, TxnStatus::committed(actual_commit_ts.into()));
     }
 
     pub fn commit_with_illegal_tso(

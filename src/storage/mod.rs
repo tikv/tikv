@@ -580,6 +580,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 return Ok(());
             }
         }
+        self.ts_cache.update(start_ts);
         // TODO: write fake locks first
         let cmd = Command {
             ctx,
@@ -591,7 +592,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 max_read_ts: self.ts_cache.get(),
             },
         };
-        self.ts_cache.update(start_ts);
         let ts_cache = self.ts_cache.clone();
         let callback = Box::new(move |res: Result<Vec<Result<()>>>| {
             callback(res.map(|res| (res, ts_cache.get())));
@@ -607,13 +607,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn async_batch_prewrite_command(
         &self,
         mut command: Command,
-        callback: BatchCallback<Vec<Result<()>>>,
+        callback: BatchCallback<(Vec<Result<()>>, TimeStamp)>,
     ) -> Result<()> {
         if let CommandKind::Batch {
             ref mut ids,
             ref mut commands,
         } = command.kind
         {
+            let mut max_ts = TimeStamp::zero();
             let cached_ts = self.ts_cache.get();
             let results: Vec<(u64, _)> = ids
                 .iter_mut()
@@ -622,10 +623,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                     if id.is_some() {
                         if let CommandKind::Prewrite {
                             ref mutations,
+                            ref start_ts,
                             ref mut max_read_ts,
                             ..
                         } = command.kind
                         {
+                            if *start_ts > max_ts {
+                                max_ts = *start_ts;
+                            }
                             *max_read_ts = cached_ts;
                             for m in mutations {
                                 let key_size = m.key().as_encoded().len();
@@ -651,8 +656,17 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             if len == commands.len() {
                 return Ok(());
             }
+            self.ts_cache.update(max_ts);
         }
-        self.schedule(command, StorageCallback::BatchBooleans(callback))?;
+        let ts_cache = self.ts_cache.clone();
+        let cb = Box::new(move |res: BatchResults<Vec<Result<()>>>| {
+            callback(
+                res.into_iter()
+                    .map(|(id, r)| (id, r.map(|r| (r, ts_cache.get()))))
+                    .collect(),
+            );
+        });
+        self.schedule(command, StorageCallback::BatchBooleans(cb))?;
         KV_COMMAND_COUNTER_VEC_STATIC.batch_prewrite.inc();
         Ok(())
     }
@@ -706,7 +720,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Key>,
         lock_ts: TimeStamp,
         commit_ts: TimeStamp,
-        callback: Callback<TxnStatus>,
+        callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command {
             ctx,
@@ -716,7 +730,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                 commit_ts,
             },
         };
-        self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
+        self.schedule(cmd, StorageCallback::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
         Ok(())
     }
@@ -2455,7 +2469,7 @@ mod tests {
                 vec![Key::from_raw(b"x")],
                 100.into(),
                 110.into(),
-                expect_value_callback(tx.clone(), 2, TxnStatus::committed(110.into())),
+                expect_ok_callback(tx.clone(), 2),
             )
             .unwrap();
         storage
@@ -2464,7 +2478,7 @@ mod tests {
                 vec![Key::from_raw(b"y")],
                 101.into(),
                 111.into(),
-                expect_value_callback(tx.clone(), 3, TxnStatus::committed(111.into())),
+                expect_ok_callback(tx.clone(), 3),
             )
             .unwrap();
         rx.recv().unwrap();
