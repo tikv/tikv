@@ -665,28 +665,6 @@ impl ResolveLockLite {
     }
 }
 
-/// Delete all keys in the range [`start_key`, `end_key`).
-///
-/// **This is an unsafe action.**
-///
-/// All keys in the range will be deleted permanently regardless of their timestamps.
-/// This means that deleted keys will not be retrievable by specifying an older timestamp.
-pub struct DeleteRange {
-    /// The inclusive start key.
-    pub start_key: Key,
-    /// The exclusive end key.
-    pub end_key: Key,
-}
-
-impl DeleteRange {
-    pub fn new(start_key: Key, end_key: Key, ctx: Context) -> Command {
-        Command {
-            ctx,
-            kind: CommandKind::DeleteRange(DeleteRange { start_key, end_key }),
-        }
-    }
-}
-
 /// **Testing functionality:** Latch the given keys for given duration.
 ///
 /// This means other write operations that involve these keys will be blocked.
@@ -747,7 +725,6 @@ pub enum CommandKind {
     ScanLock(ScanLock),
     ResolveLock(ResolveLock),
     ResolveLockLite(ResolveLockLite),
-    DeleteRange(DeleteRange),
     Pause(Pause),
     MvccByKey(MvccByKey),
     MvccByStartTs(MvccByStartTs),
@@ -756,13 +733,9 @@ pub enum CommandKind {
 impl Command {
     pub fn readonly(&self) -> bool {
         match self.kind {
-            CommandKind::ScanLock(_) |
-            // DeleteRange only called by DDL bg thread after table is dropped and
-            // must guarantee that there is no other read or write on these keys, so
-            // we can treat DeleteRange as readonly Command.
-            CommandKind::DeleteRange(_) |
-            CommandKind::MvccByKey(_) |
-            CommandKind::MvccByStartTs(_) => true,
+            CommandKind::ScanLock(_)
+            | CommandKind::MvccByKey(_)
+            | CommandKind::MvccByStartTs(_) => true,
             CommandKind::ResolveLock(ResolveLock { ref key_locks, .. }) => key_locks.is_empty(),
             _ => false,
         }
@@ -802,7 +775,6 @@ impl Command {
             CommandKind::ScanLock(_) => metrics::CommandKind::scan_lock,
             CommandKind::ResolveLock(_) => metrics::CommandKind::resolve_lock,
             CommandKind::ResolveLockLite(_) => metrics::CommandKind::resolve_lock_lite,
-            CommandKind::DeleteRange(_) => metrics::CommandKind::delete_range,
             CommandKind::Pause(_) => metrics::CommandKind::pause,
             CommandKind::MvccByKey(_) => metrics::CommandKind::key_mvcc,
             CommandKind::MvccByStartTs(_) => metrics::CommandKind::start_ts_mvcc,
@@ -823,10 +795,9 @@ impl Command {
             | CommandKind::CheckTxnStatus(CheckTxnStatus { lock_ts, .. }) => lock_ts,
             CommandKind::ScanLock(ScanLock { max_ts, .. }) => max_ts,
             CommandKind::ResolveLockLite(ResolveLockLite { start_ts, .. }) => start_ts,
-            CommandKind::ResolveLock(_)
-            | CommandKind::DeleteRange(_)
-            | CommandKind::Pause(_)
-            | CommandKind::MvccByKey(_) => TimeStamp::zero(),
+            CommandKind::ResolveLock(_) | CommandKind::Pause(_) | CommandKind::MvccByKey(_) => {
+                TimeStamp::zero()
+            }
         }
     }
 
@@ -941,7 +912,6 @@ impl Command {
 
             // Avoid using wildcard _ here to avoid forgetting add new commands here.
             CommandKind::ScanLock(_)
-            | CommandKind::DeleteRange(_)
             | CommandKind::MvccByKey(_)
             | CommandKind::MvccByStartTs(_) => latch::Lock::new(vec![]),
         }
@@ -1059,14 +1029,6 @@ impl Display for Command {
             ),
             CommandKind::ResolveLock(_) => write!(f, "kv::resolve_lock"),
             CommandKind::ResolveLockLite(_) => write!(f, "kv::resolve_lock_lite"),
-            CommandKind::DeleteRange(DeleteRange {
-                ref start_key,
-                ref end_key,
-            }) => write!(
-                f,
-                "kv::command::delete range [{:?}, {:?}) | {:?}",
-                start_key, end_key, self.ctx,
-            ),
             CommandKind::Pause(Pause { ref keys, duration }) => write!(
                 f,
                 "kv::command::pause keys:({}) {} ms | {:?}",

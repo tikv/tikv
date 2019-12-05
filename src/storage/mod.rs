@@ -566,8 +566,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// If `notify_only` is set, the data will not be immediately deleted, but the operation will
     /// still be replicated via Raft. This is used to notify that the data will be deleted by
     /// `unsafe_destroy_range` soon.
-    ///
-    /// Schedules a [`CommandKind::DeleteRange`].
     pub fn delete_range(
         &self,
         ctx: Context,
