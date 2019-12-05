@@ -26,4 +26,4 @@ pub use self::raft_client::RaftClient;
 pub use self::raftkv::RaftKv;
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};
 pub use self::server::Server;
-pub use self::transport::{ServerRaftStoreRouter, ServerTransport};
+pub use self::transport::ServerTransport;

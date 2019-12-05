@@ -8,12 +8,12 @@ use super::{Error, Result};
 use crate::raftstore::coprocessor::{Coprocessor, ObserverContext, RoleObserver};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
-use crate::storage::TimeStamp;
 use futures::{Future, Sink, Stream};
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
     WriteFlags,
 };
+use keys::TimeStamp;
 use kvproto::deadlock::*;
 use kvproto::metapb::Region;
 use pd_client::{PdClient, INVALID_ID};
@@ -224,7 +224,12 @@ const LEADER_KEY: &[u8] = b"";
 
 /// Returns true if the region containing the LEADER_KEY.
 fn is_leader_region(region: &'_ Region) -> bool {
-    region.get_start_key() <= LEADER_KEY
+    // The key range of a new created region is empty which misleads the leader
+    // of the deadlock detector stepping down.
+    //
+    // If the peers of a region is not empty, the region info is complete.
+    !region.get_peers().is_empty()
+        && region.get_start_key() <= LEADER_KEY
         && (region.get_end_key().is_empty() || LEADER_KEY < region.get_end_key())
 }
 

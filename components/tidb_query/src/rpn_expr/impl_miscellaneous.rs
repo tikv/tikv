@@ -12,6 +12,9 @@ use crate::Result;
 const IPV4_LENGTH: usize = 4;
 const IPV6_LENGTH: usize = 16;
 const PREFIX_COMPAT: [u8; 12] = [0x00; 12];
+const PREFIX_MAPPED: [u8; 12] = [
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff,
+];
 
 #[rpn_fn]
 #[inline]
@@ -113,6 +116,21 @@ pub fn inet_aton(addr: &Option<Bytes>) -> Result<Option<i64>> {
         .as_ref()
         .map(|addr| String::from_utf8_lossy(addr))
         .and_then(expr_util::miscellaneous::inet_aton))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn is_ipv4_mapped(addr: &Option<Bytes>) -> Result<Option<i64>> {
+    Ok(match addr {
+        Some(addr) => {
+            if addr.len() != IPV6_LENGTH || !addr.starts_with(&PREFIX_MAPPED) {
+                Some(0)
+            } else {
+                Some(1)
+            }
+        }
+        None => Some(0),
+    })
 }
 
 #[cfg(test)]
@@ -375,6 +393,41 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
                 .evaluate(ScalarFuncSig::InetAton)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_is_ipv4_mapped() {
+        let test_cases = vec![
+            (
+                Some(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x1, 0x2, 0x3, 0x4,
+                ]),
+                Some(0),
+            ),
+            (
+                Some(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x2, 0x3, 0x4,
+                ]),
+                Some(0),
+            ),
+            (Some(vec![0x10, 0x10, 0x10, 0x10]), Some(0)),
+            (
+                Some(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xff, 0xff, 0x1, 0x2, 0x3,
+                    0x4,
+                ]),
+                Some(1),
+            ),
+            (Some(vec![0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6]), Some(0)),
+            (None, Some(0)),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::IsIPv4Mapped)
                 .unwrap();
             assert_eq!(output, expect);
         }

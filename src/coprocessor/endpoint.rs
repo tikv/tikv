@@ -141,10 +141,11 @@ impl<E: Engine> Endpoint<E> {
             "unsupported tp (failpoint)"
         )));
 
-        let (context, data, ranges) = (
+        let (context, data, ranges, mut start_ts) = (
             req.take_context(),
             req.take_data(),
             req.take_ranges().to_vec(),
+            req.get_start_ts(),
         );
         let cache_match_version = if req.get_is_cache_enabled() {
             Some(req.get_cache_if_match_version())
@@ -172,6 +173,10 @@ impl<E: Engine> Endpoint<E> {
                         is_desc_scan = scan.get_idx_scan().get_desc();
                     }
                 }
+                if start_ts == 0 {
+                    start_ts = dag.get_start_ts();
+                }
+
                 req_ctx = ReqContext::new(
                     make_tag(table_scan),
                     context,
@@ -179,7 +184,7 @@ impl<E: Engine> Endpoint<E> {
                     self.max_handle_duration,
                     peer,
                     Some(is_desc_scan),
-                    Some(dag.get_start_ts()),
+                    Some(start_ts),
                     cache_match_version,
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
@@ -189,7 +194,7 @@ impl<E: Engine> Endpoint<E> {
                     let data_version = snap.get_data_version();
                     let store = SnapshotStore::new(
                         snap,
-                        dag.get_start_ts().into(),
+                        start_ts.into(),
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
                         req_ctx.bypass_locks.clone(),
@@ -197,6 +202,7 @@ impl<E: Engine> Endpoint<E> {
                     dag::build_handler(
                         dag,
                         ranges,
+                        start_ts,
                         store,
                         data_version,
                         req_ctx.deadline,
@@ -210,6 +216,10 @@ impl<E: Engine> Endpoint<E> {
                 let mut analyze = AnalyzeReq::default();
                 parser.merge_to(&mut analyze)?;
                 let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
+                if start_ts == 0 {
+                    start_ts = analyze.get_start_ts();
+                }
+
                 req_ctx = ReqContext::new(
                     make_tag(table_scan),
                     context,
@@ -217,19 +227,25 @@ impl<E: Engine> Endpoint<E> {
                     self.max_handle_duration,
                     peer,
                     None,
-                    Some(analyze.get_start_ts()),
+                    Some(start_ts),
                     cache_match_version,
                 );
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
-                    statistics::analyze::AnalyzeContext::new(analyze, ranges, snap, req_ctx)
-                        .map(|h| h.into_boxed())
+                    statistics::analyze::AnalyzeContext::new(
+                        analyze, ranges, start_ts, snap, req_ctx,
+                    )
+                    .map(|h| h.into_boxed())
                 });
             }
             REQ_TYPE_CHECKSUM => {
                 let mut checksum = ChecksumRequest::default();
                 parser.merge_to(&mut checksum)?;
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
+                if start_ts == 0 {
+                    start_ts = checksum.get_start_ts();
+                }
+
                 req_ctx = ReqContext::new(
                     make_tag(table_scan),
                     context,
@@ -237,12 +253,12 @@ impl<E: Engine> Endpoint<E> {
                     self.max_handle_duration,
                     peer,
                     None,
-                    Some(checksum.get_start_ts()),
+                    Some(start_ts),
                     cache_match_version,
                 );
                 builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
-                    checksum::ChecksumContext::new(checksum, ranges, snap, req_ctx)
+                    checksum::ChecksumContext::new(checksum, ranges, start_ts, snap, req_ctx)
                         .map(|h| h.into_boxed())
                 });
             }
@@ -742,11 +758,13 @@ mod tests {
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        cop.recursion_limit = 100;
 
         let req = {
             let mut expr = Expr::default();
-            // The recursion limit in Prost and rust-protobuf (by default) is 100.
+            // The recursion limit in Prost and rust-protobuf (by default) is 100 (for rust-protobuf,
+            // that limit is set to 1000 as a configuration default).
             for _ in 0..101 {
                 let mut e = Expr::default();
                 e.mut_children().push(expr);
