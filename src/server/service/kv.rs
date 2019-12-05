@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::iter::{self, FromIterator};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -29,14 +28,13 @@ use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use keys::{self, Key, TimeStamp};
+use keys::{self, Key};
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use prometheus::HistogramTimer;
-use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -809,16 +807,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     fn mvcc_get_by_key(
         &mut self,
         ctx: RpcContext<'_>,
-        mut req: MvccGetByKeyRequest,
+        req: MvccGetByKeyRequest,
         sink: UnarySink<MvccGetByKeyResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.mvcc_get_by_key.start_coarse_timer();
 
-        let key = Key::from_raw(req.get_key());
         let (cb, f) = paired_future_callback();
-        let res = self
-            .storage
-            .mvcc_by_key(req.take_context(), key.clone(), cb);
+        let res = self.storage.mvcc_by_key(req.into(), cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
@@ -850,7 +845,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     fn mvcc_get_by_start_ts(
         &mut self,
         ctx: RpcContext<'_>,
-        mut req: MvccGetByStartTsRequest,
+        req: MvccGetByStartTsRequest,
         sink: UnarySink<MvccGetByStartTsResponse>,
     ) {
         let timer = GRPC_MSG_HISTOGRAM_VEC
@@ -858,9 +853,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .start_coarse_timer();
 
         let (cb, f) = paired_future_callback();
-        let res = self
-            .storage
-            .mvcc_by_start_ts(req.take_context(), req.get_start_ts().into(), cb);
+        let res = self.storage.mvcc_by_start_ts(req.into(), cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
@@ -1565,42 +1558,10 @@ fn future_scan<E: Engine, L: LockManager>(
 
 fn future_prewrite<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    mut req: PrewriteRequest,
+    req: PrewriteRequest,
 ) -> impl Future<Item = PrewriteResponse, Error = Error> {
-    let for_update_ts = req.get_for_update_ts();
     let (cb, f) = paired_future_callback();
-    let res = if for_update_ts == 0 {
-        storage.prewrite(
-            req.take_context(),
-            req.take_mutations().into_iter().map(Into::into).collect(),
-            req.take_primary_lock(),
-            req.get_start_version().into(),
-            req.get_lock_ttl(),
-            req.get_skip_constraint_check(),
-            req.get_txn_size(),
-            req.get_min_commit_ts().into(),
-            cb,
-        )
-    } else {
-        let is_pessimistic_lock = req.take_is_pessimistic_lock();
-        let mutations = req
-            .take_mutations()
-            .into_iter()
-            .map(Into::into)
-            .zip(is_pessimistic_lock.into_iter())
-            .collect();
-        storage.prewrite_pessimistic(
-            req.take_context(),
-            mutations,
-            req.take_primary_lock(),
-            req.get_start_version().into(),
-            req.get_lock_ttl(),
-            for_update_ts.into(),
-            req.get_txn_size(),
-            req.get_min_commit_ts().into(),
-            cb,
-        )
-    };
+    let res = storage.prewrite(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PrewriteResponse::default();
@@ -1615,32 +1576,10 @@ fn future_prewrite<E: Engine, L: LockManager>(
 
 fn future_acquire_pessimistic_lock<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    mut req: PessimisticLockRequest,
+    req: PessimisticLockRequest,
 ) -> impl Future<Item = PessimisticLockResponse, Error = Error> {
-    let keys = req
-        .take_mutations()
-        .into_iter()
-        .map(|x| match x.get_op() {
-            Op::PessimisticLock => (
-                Key::from_raw(x.get_key()),
-                x.get_assertion() == Assertion::NotExist,
-            ),
-            _ => panic!("mismatch Op in pessimistic lock mutations"),
-        })
-        .collect();
-
     let (cb, f) = paired_future_callback();
-    let res = storage.acquire_pessimistic_lock(
-        req.take_context(),
-        keys,
-        req.take_primary_lock(),
-        req.get_start_version().into(),
-        req.get_lock_ttl(),
-        req.get_is_first_lock(),
-        req.get_for_update_ts().into(),
-        req.get_wait_timeout().into(),
-        cb,
-    );
+    let res = storage.acquire_pessimistic_lock(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PessimisticLockResponse::default();
@@ -1655,17 +1594,10 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockManager>(
 
 fn future_pessimistic_rollback<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    mut req: PessimisticRollbackRequest,
+    req: PessimisticRollbackRequest,
 ) -> impl Future<Item = PessimisticRollbackResponse, Error = Error> {
-    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let (cb, f) = paired_future_callback();
-    let res = storage.pessimistic_rollback(
-        req.take_context(),
-        keys,
-        req.get_start_version().into(),
-        req.get_for_update_ts().into(),
-        cb,
-    );
+    let res = storage.pessimistic_rollback(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PessimisticRollbackResponse::default();
@@ -1680,17 +1612,10 @@ fn future_pessimistic_rollback<E: Engine, L: LockManager>(
 
 fn future_commit<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    mut req: CommitRequest,
+    req: CommitRequest,
 ) -> impl Future<Item = CommitResponse, Error = Error> {
-    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let (cb, f) = paired_future_callback();
-    let res = storage.commit(
-        req.take_context(),
-        keys,
-        req.get_start_version().into(),
-        req.get_commit_version().into(),
-        cb,
-    );
+    let res = storage.commit(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = CommitResponse::default();
@@ -1711,16 +1636,10 @@ fn future_commit<E: Engine, L: LockManager>(
 
 fn future_cleanup<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    mut req: CleanupRequest,
+    req: CleanupRequest,
 ) -> impl Future<Item = CleanupResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.cleanup(
-        req.take_context(),
-        Key::from_raw(req.get_key()),
-        req.get_start_version().into(),
-        req.get_current_ts().into(),
-        cb,
-    );
+    let res = storage.cleanup(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = CleanupResponse::default();
@@ -1757,12 +1676,10 @@ fn future_batch_get<E: Engine, L: LockManager>(
 
 fn future_batch_rollback<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    mut req: BatchRollbackRequest,
+    req: BatchRollbackRequest,
 ) -> impl Future<Item = BatchRollbackResponse, Error = Error> {
-    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
-
     let (cb, f) = paired_future_callback();
-    let res = storage.rollback(req.take_context(), keys, req.get_start_version().into(), cb);
+    let res = storage.rollback(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = BatchRollbackResponse::default();
@@ -1777,18 +1694,10 @@ fn future_batch_rollback<E: Engine, L: LockManager>(
 
 fn future_txn_heart_beat<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    mut req: TxnHeartBeatRequest,
+    req: TxnHeartBeatRequest,
 ) -> impl Future<Item = TxnHeartBeatResponse, Error = Error> {
-    let primary_key = Key::from_raw(req.get_primary_lock());
-
     let (cb, f) = paired_future_callback();
-    let res = storage.txn_heart_beat(
-        req.take_context(),
-        primary_key,
-        req.get_start_version().into(),
-        req.get_advise_lock_ttl(),
-        cb,
-    );
+    let res = storage.txn_heart_beat(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = TxnHeartBeatResponse::default();
@@ -1812,22 +1721,13 @@ fn future_txn_heart_beat<E: Engine, L: LockManager>(
 
 fn future_check_txn_status<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    mut req: CheckTxnStatusRequest,
+    req: CheckTxnStatusRequest,
 ) -> impl Future<Item = CheckTxnStatusResponse, Error = Error> {
-    let primary_key = Key::from_raw(req.get_primary_key());
+    let caller_start_ts = req.get_caller_start_ts().into();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.check_txn_status(
-        req.take_context(),
-        primary_key,
-        req.get_lock_ts().into(),
-        req.get_caller_start_ts().into(),
-        req.get_current_ts().into(),
-        req.get_rollback_if_not_exist(),
-        cb,
-    );
+    let res = storage.check_txn_status(req.into(), cb);
 
-    let caller_start_ts = req.get_caller_start_ts().into();
     AndThenWith::new(res, f.map_err(Error::from)).map(move |v| {
         let mut resp = CheckTxnStatusResponse::default();
         if let Some(err) = extract_region_error(&v) {
@@ -1860,16 +1760,10 @@ fn future_check_txn_status<E: Engine, L: LockManager>(
 
 fn future_scan_lock<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    mut req: ScanLockRequest,
+    req: ScanLockRequest,
 ) -> impl Future<Item = ScanLockResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.scan_locks(
-        req.take_context(),
-        req.get_max_version().into(),
-        req.take_start_key(),
-        req.get_limit() as usize,
-        cb,
-    );
+    let res = storage.scan_locks(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = ScanLockResponse::default();
@@ -1887,35 +1781,10 @@ fn future_scan_lock<E: Engine, L: LockManager>(
 
 fn future_resolve_lock<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
-    mut req: ResolveLockRequest,
+    req: ResolveLockRequest,
 ) -> impl Future<Item = ResolveLockResponse, Error = Error> {
-    let resolve_keys: Vec<Key> = req
-        .get_keys()
-        .iter()
-        .map(|key| Key::from_raw(key))
-        .collect();
-    let txn_status = if req.get_start_version() > 0 {
-        HashMap::from_iter(iter::once((
-            req.get_start_version().into(),
-            req.get_commit_version().into(),
-        )))
-    } else {
-        HashMap::from_iter(
-            req.take_txn_infos()
-                .into_iter()
-                .map(|info| (info.txn.into(), info.status.into())),
-        )
-    };
-
     let (cb, f) = paired_future_callback();
-    let res = if !resolve_keys.is_empty() {
-        let start_ts: TimeStamp = req.get_start_version().into();
-        assert!(!start_ts.is_zero());
-        let commit_ts = req.get_commit_version().into();
-        storage.resolve_lock_lite(req.take_context(), start_ts, commit_ts, resolve_keys, cb)
-    } else {
-        storage.resolve_lock(req.take_context(), txn_status, cb)
-    };
+    let res = storage.resolve_lock(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = ResolveLockResponse::default();

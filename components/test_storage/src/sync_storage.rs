@@ -9,8 +9,8 @@ use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    Engine, Mutation, RegionInfoProvider, Result, Storage, TestEngineBuilder, TestStorageBuilder,
-    TxnStatus,
+    txn::commands, Engine, Mutation, RegionInfoProvider, Result, Storage, TestEngineBuilder,
+    TestStorageBuilder, TxnStatus,
 };
 use tikv_util::collections::HashMap;
 
@@ -166,14 +166,7 @@ impl<E: Engine> SyncTestStorage<E> {
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<()>>> {
         wait_op!(|cb| self.store.prewrite(
-            ctx,
-            mutations,
-            primary,
-            start_ts.into(),
-            0,
-            false,
-            0,
-            TimeStamp::default(),
+            commands::Prewrite::with_context(mutations, primary, start_ts.into(), ctx,),
             cb
         ))
         .unwrap()
@@ -186,9 +179,10 @@ impl<E: Engine> SyncTestStorage<E> {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
     ) -> Result<TxnStatus> {
-        wait_op!(|cb| self
-            .store
-            .commit(ctx, keys, start_ts.into(), commit_ts.into(), cb))
+        wait_op!(|cb| self.store.commit(
+            commands::Commit::new(keys, start_ts.into(), commit_ts.into(), ctx,),
+            cb
+        ))
         .unwrap()
     }
 
@@ -199,9 +193,10 @@ impl<E: Engine> SyncTestStorage<E> {
         start_ts: impl Into<TimeStamp>,
         current_ts: impl Into<TimeStamp>,
     ) -> Result<()> {
-        wait_op!(|cb| self
-            .store
-            .cleanup(ctx, key, start_ts.into(), current_ts.into(), cb))
+        wait_op!(|cb| self.store.cleanup(
+            commands::Cleanup::new(key, start_ts.into(), current_ts.into(), ctx),
+            cb
+        ))
         .unwrap()
     }
 
@@ -211,7 +206,10 @@ impl<E: Engine> SyncTestStorage<E> {
         keys: Vec<Key>,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<()> {
-        wait_op!(|cb| self.store.rollback(ctx, keys, start_ts.into(), cb)).unwrap()
+        wait_op!(|cb| self
+            .store
+            .rollback(commands::Rollback::new(keys, start_ts.into(), ctx), cb))
+        .unwrap()
     }
 
     pub fn scan_locks(
@@ -221,9 +219,10 @@ impl<E: Engine> SyncTestStorage<E> {
         start_key: Vec<u8>,
         limit: usize,
     ) -> Result<Vec<LockInfo>> {
-        wait_op!(|cb| self
-            .store
-            .scan_locks(ctx, max_ts.into(), start_key, limit, cb))
+        wait_op!(|cb| self.store.scan_locks(
+            commands::ScanLock::new(max_ts.into(), &start_key, limit, ctx),
+            cb
+        ))
         .unwrap()
     }
 
@@ -238,7 +237,11 @@ impl<E: Engine> SyncTestStorage<E> {
             start_ts.into(),
             commit_ts.map(Into::into).unwrap_or_else(TimeStamp::zero),
         );
-        wait_op!(|cb| self.store.resolve_lock(ctx, txn_status, cb)).unwrap()
+        wait_op!(|cb| self.store.resolve_lock(
+            commands::ResolveLock::new(txn_status, None, vec![], ctx),
+            cb
+        ))
+        .unwrap()
     }
 
     pub fn resolve_lock_batch(
@@ -247,7 +250,11 @@ impl<E: Engine> SyncTestStorage<E> {
         txns: Vec<(TimeStamp, TimeStamp)>,
     ) -> Result<()> {
         let txn_status: HashMap<TimeStamp, TimeStamp> = txns.into_iter().collect();
-        wait_op!(|cb| self.store.resolve_lock(ctx, txn_status, cb)).unwrap()
+        wait_op!(|cb| self.store.resolve_lock(
+            commands::ResolveLock::new(txn_status, None, vec![], ctx),
+            cb
+        ))
+        .unwrap()
     }
 
     pub fn gc(&self, ctx: Context, safe_point: impl Into<TimeStamp>) -> Result<()> {

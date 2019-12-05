@@ -1,15 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Debug, Display, Formatter};
+use std::iter::{self, FromIterator};
 
 use keys::Key;
-use kvproto::kvrpcpb::{CommandPri, Context};
+use kvproto::kvrpcpb::*;
 use tikv_util::collections::HashMap;
 
+use crate::storage::errors::{Error, ErrorInner};
 use crate::storage::lock_manager::WaitTimeout;
-use crate::storage::metrics;
 use crate::storage::mvcc::{Lock, Mutation, TimeStamp};
 use crate::storage::txn::latch::{self, Latches};
+use crate::storage::{metrics, Callback};
 
 /// Store Transaction scheduler commands.
 ///
@@ -22,6 +24,191 @@ use crate::storage::txn::latch::{self, Latches};
 pub struct Command {
     pub ctx: Context,
     pub kind: CommandKind,
+}
+
+impl From<PrewriteRequest> for Command {
+    fn from(mut req: PrewriteRequest) -> Command {
+        let for_update_ts = req.get_for_update_ts();
+        if for_update_ts == 0 {
+            Prewrite::new(
+                req.take_mutations().into_iter().map(Into::into).collect(),
+                req.take_primary_lock(),
+                req.get_start_version().into(),
+                req.get_lock_ttl(),
+                req.get_skip_constraint_check(),
+                req.get_txn_size(),
+                req.get_min_commit_ts().into(),
+                req.take_context(),
+            )
+        } else {
+            let is_pessimistic_lock = req.take_is_pessimistic_lock();
+            let mutations = req
+                .take_mutations()
+                .into_iter()
+                .map(Into::into)
+                .zip(is_pessimistic_lock.into_iter())
+                .collect();
+            PrewritePessimistic::new(
+                mutations,
+                req.take_primary_lock(),
+                req.get_start_version().into(),
+                req.get_lock_ttl(),
+                for_update_ts.into(),
+                req.get_txn_size(),
+                req.get_min_commit_ts().into(),
+                req.take_context(),
+            )
+        }
+    }
+}
+
+impl From<PessimisticLockRequest> for Command {
+    fn from(mut req: PessimisticLockRequest) -> Command {
+        let keys = req
+            .take_mutations()
+            .into_iter()
+            .map(|x| match x.get_op() {
+                Op::PessimisticLock => (
+                    Key::from_raw(x.get_key()),
+                    x.get_assertion() == Assertion::NotExist,
+                ),
+                _ => panic!("mismatch Op in pessimistic lock mutations"),
+            })
+            .collect();
+
+        AcquirePessimisticLock::new(
+            keys,
+            req.take_primary_lock(),
+            req.get_start_version().into(),
+            req.get_lock_ttl(),
+            req.get_is_first_lock(),
+            req.get_for_update_ts().into(),
+            req.get_wait_timeout().into(),
+            req.take_context(),
+        )
+    }
+}
+
+impl From<CommitRequest> for Command {
+    fn from(mut req: CommitRequest) -> Command {
+        let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
+
+        Commit::new(
+            keys,
+            req.get_start_version().into(),
+            req.get_commit_version().into(),
+            req.take_context(),
+        )
+    }
+}
+
+impl From<CleanupRequest> for Command {
+    fn from(mut req: CleanupRequest) -> Command {
+        Cleanup::new(
+            Key::from_raw(req.get_key()),
+            req.get_start_version().into(),
+            req.get_current_ts().into(),
+            req.take_context(),
+        )
+    }
+}
+
+impl From<BatchRollbackRequest> for Command {
+    fn from(mut req: BatchRollbackRequest) -> Command {
+        let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
+        Rollback::new(keys, req.get_start_version().into(), req.take_context())
+    }
+}
+
+impl From<PessimisticRollbackRequest> for Command {
+    fn from(mut req: PessimisticRollbackRequest) -> Command {
+        let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
+
+        PessimisticRollback::new(
+            keys,
+            req.get_start_version().into(),
+            req.get_for_update_ts().into(),
+            req.take_context(),
+        )
+    }
+}
+
+impl From<TxnHeartBeatRequest> for Command {
+    fn from(mut req: TxnHeartBeatRequest) -> Command {
+        TxnHeartBeat::new(
+            Key::from_raw(req.get_primary_lock()),
+            req.get_start_version().into(),
+            req.get_advise_lock_ttl(),
+            req.take_context(),
+        )
+    }
+}
+
+impl From<CheckTxnStatusRequest> for Command {
+    fn from(mut req: CheckTxnStatusRequest) -> Command {
+        CheckTxnStatus::new(
+            Key::from_raw(req.get_primary_key()),
+            req.get_lock_ts().into(),
+            req.get_caller_start_ts().into(),
+            req.get_current_ts().into(),
+            req.get_rollback_if_not_exist(),
+            req.take_context(),
+        )
+    }
+}
+
+impl From<ScanLockRequest> for Command {
+    fn from(mut req: ScanLockRequest) -> Command {
+        ScanLock::new(
+            req.get_max_version().into(),
+            &req.take_start_key(),
+            req.get_limit() as usize,
+            req.take_context(),
+        )
+    }
+}
+
+impl From<ResolveLockRequest> for Command {
+    fn from(mut req: ResolveLockRequest) -> Command {
+        let resolve_keys: Vec<Key> = req
+            .get_keys()
+            .iter()
+            .map(|key| Key::from_raw(key))
+            .collect();
+        let txn_status = if req.get_start_version() > 0 {
+            HashMap::from_iter(iter::once((
+                req.get_start_version().into(),
+                req.get_commit_version().into(),
+            )))
+        } else {
+            HashMap::from_iter(
+                req.take_txn_infos()
+                    .into_iter()
+                    .map(|info| (info.txn.into(), info.status.into())),
+            )
+        };
+
+        if resolve_keys.is_empty() {
+            ResolveLock::new(txn_status, None, vec![], req.take_context())
+        } else {
+            let start_ts: TimeStamp = req.get_start_version().into();
+            assert!(!start_ts.is_zero());
+            let commit_ts = req.get_commit_version().into();
+            ResolveLockLite::new(start_ts, commit_ts, resolve_keys, req.take_context())
+        }
+    }
+}
+
+impl From<MvccGetByKeyRequest> for Command {
+    fn from(mut req: MvccGetByKeyRequest) -> Command {
+        MvccByKey::new(Key::from_raw(req.get_key()), req.take_context())
+    }
+}
+
+impl From<MvccGetByStartTsRequest> for Command {
+    fn from(mut req: MvccGetByStartTsRequest) -> Command {
+        MvccByStartTs::new(req.get_start_ts().into(), req.take_context())
+    }
 }
 
 /// The prewrite phase of a transaction. The first phase of 2PC.
@@ -66,6 +253,61 @@ impl Prewrite {
             }),
         }
     }
+
+    #[cfg(test)]
+    pub fn with_defaults(
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+    ) -> Command {
+        Prewrite::new(
+            mutations,
+            primary,
+            start_ts,
+            0,
+            false,
+            0,
+            TimeStamp::default(),
+            Context::default(),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn with_lock_ttl(
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+        lock_ttl: u64,
+    ) -> Command {
+        Prewrite::new(
+            mutations,
+            primary,
+            start_ts,
+            lock_ttl,
+            false,
+            0,
+            TimeStamp::default(),
+            Context::default(),
+        )
+    }
+
+    pub fn with_context(
+        mutations: Vec<Mutation>,
+        primary: Vec<u8>,
+        start_ts: TimeStamp,
+        ctx: Context,
+    ) -> Command {
+        Prewrite::new(
+            mutations,
+            primary,
+            start_ts,
+            0,
+            false,
+            0,
+            TimeStamp::default(),
+            ctx,
+        )
+    }
 }
 
 /// The prewrite phase of a transaction using pessimistic locking. The first phase of 2PC.
@@ -87,7 +329,7 @@ pub struct PrewritePessimistic {
 }
 
 impl PrewritePessimistic {
-    pub fn new(
+    fn new(
         mutations: Vec<(Mutation, bool)>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
@@ -336,7 +578,12 @@ pub struct ScanLock {
 }
 
 impl ScanLock {
-    pub fn new(max_ts: TimeStamp, start_key: Option<Key>, limit: usize, ctx: Context) -> Command {
+    pub fn new(max_ts: TimeStamp, start_key: &[u8], limit: usize, ctx: Context) -> Command {
+        let start_key = if start_key.is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(start_key))
+        };
         Command {
             ctx,
             kind: CommandKind::ScanLock(ScanLock {
@@ -628,6 +875,46 @@ impl Command {
             _ => {}
         }
         bytes
+    }
+
+    pub fn check_key_size<T>(
+        &self,
+        max_key_size: usize,
+        callback: Callback<T>,
+    ) -> Option<Callback<T>> {
+        fn check_key_size<'a, T>(
+            keys: impl ::std::iter::Iterator<Item = &'a Vec<u8>>,
+            max_key_size: usize,
+            callback: Callback<T>,
+        ) -> Option<Callback<T>> {
+            for k in keys {
+                let key_size = k.len();
+                if key_size > max_key_size {
+                    callback(Err(Error::from(ErrorInner::KeyTooLarge(
+                        key_size,
+                        max_key_size,
+                    ))));
+                    return None;
+                }
+            }
+            Some(callback)
+        }
+
+        match &self.kind {
+            CommandKind::Prewrite(Prewrite { mutations, .. }) => check_key_size(
+                mutations.iter().map(|m| m.key().as_encoded()),
+                max_key_size,
+                callback,
+            ),
+            CommandKind::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
+                check_key_size(
+                    mutations.iter().map(|(m, _)| m.key().as_encoded()),
+                    max_key_size,
+                    callback,
+                )
+            }
+            _ => unimplemented!(),
+        }
     }
 
     pub fn gen_lock(&self, latches: &Latches) -> latch::Lock {

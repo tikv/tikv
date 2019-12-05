@@ -1109,16 +1109,7 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let cmd = Prewrite::new(
-            mutations,
-            primary,
-            TimeStamp::from(start_ts),
-            0,
-            false,
-            0,
-            TimeStamp::default(),
-            ctx,
-        );
+        let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
         let m = DummyLockManager {};
         let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
         if let ProcessResult::MultiRes { results } = ret.pr {

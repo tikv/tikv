@@ -510,21 +510,16 @@ mod tests {
         let mut temp_map = HashMap::default();
         temp_map.insert(10.into(), 20.into());
         let readonly_cmds = vec![
-            commands::ScanLock::new(5.into(), None, 0, Context::default()),
+            commands::ScanLock::new(5.into(), &[], 0, Context::default()),
             commands::ResolveLock::new(temp_map.clone(), None, vec![], Context::default()),
             commands::MvccByKey::new(Key::from_raw(b"k"), Context::default()),
             commands::MvccByStartTs::new(25.into(), Context::default()),
         ];
         let write_cmds = vec![
-            commands::Prewrite::new(
+            commands::Prewrite::with_defaults(
                 vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
                 b"k".to_vec(),
                 10.into(),
-                0,
-                false,
-                0,
-                TimeStamp::default(),
-                Context::default(),
             ),
             commands::AcquirePessimisticLock::new(
                 vec![(Key::from_raw(b"k"), false)],
