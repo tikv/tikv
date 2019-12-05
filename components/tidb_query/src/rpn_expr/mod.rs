@@ -319,6 +319,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::IfString => if_condition_fn_meta::<Bytes>(),
         ScalarFuncSig::IfTime => if_condition_fn_meta::<DateTime>(),
         ScalarFuncSig::IfDecimal => if_condition_fn_meta::<Decimal>(),
+        ScalarFuncSig::JsonDepthSig => json_depth_fn_meta(),
         ScalarFuncSig::JsonTypeSig => json_type_fn_meta(),
         ScalarFuncSig::JsonSetSig => json_set_fn_meta(),
         ScalarFuncSig::JsonReplaceSig => json_replace_fn_meta(),
