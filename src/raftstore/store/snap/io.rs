@@ -4,7 +4,6 @@ use std::io::{self, BufReader};
 use std::{fs, usize};
 
 use engine::CfName;
-use engine_rocks::{RocksSnapshot, RocksEngine};
 use engine_traits::IOLimiter;
 use engine_traits::{ImportExt, IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
@@ -60,15 +59,17 @@ where
 /// Build a snapshot file for the given column family in sst format.
 /// If there are no key-value pairs fetched, no files will be created at `path`,
 /// otherwise the file will be created and synchronized.
-pub fn build_sst_cf_file<L: IOLimiter>(
+pub fn build_sst_cf_file<E>(
     path: &str,
-    snap: &RocksSnapshot,
+    snap: &E::Snapshot,
     cf: CfName,
     start_key: &[u8],
     end_key: &[u8],
-    io_limiter: Option<&L>,
-) -> Result<BuildStatistics, Error> {
-    let mut sst_writer = create_sst_file_writer::<RocksEngine>(snap, cf, path)?;
+    io_limiter: Option<&E::IOLimiter>,
+) -> Result<BuildStatistics, Error>
+where E: KvEngine
+{
+    let mut sst_writer = create_sst_file_writer::<E>(snap, cf, path)?;
     let mut stats = BuildStatistics::default();
     let base = io_limiter
         .as_ref()
@@ -164,7 +165,7 @@ mod tests {
     use super::*;
     use crate::raftstore::store::snap::tests::*;
     use engine::CF_DEFAULT;
-    use engine_rocks::{Compat, RocksIOLimiter, RocksEngine};
+    use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use tempfile::Builder;
 
     struct TestStaleDetector;
@@ -230,7 +231,7 @@ mod tests {
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let sst_file_path = snap_cf_dir.path().join("sst");
-                let stats = build_sst_cf_file::<RocksIOLimiter>(
+                let stats = build_sst_cf_file::<RocksEngine>(
                     &sst_file_path.to_str().unwrap(),
                     &RocksSnapshot::new(Arc::clone(&db)),
                     CF_DEFAULT,
