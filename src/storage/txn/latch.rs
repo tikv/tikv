@@ -101,9 +101,9 @@ pub struct Lock {
 
 impl Lock {
     /// Creates a lock.
-    pub fn new(required_keys: Vec<u64>) -> Lock {
+    pub fn new(required_hashes: Vec<u64>) -> Lock {
         Lock {
-            required_hashes: required_keys,
+            required_hashes,
             owned_count: 0,
         }
     }
