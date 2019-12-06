@@ -135,6 +135,12 @@ impl Simulator for ServerCluster {
 
         let raft_engine = RaftKv::new(sim_router.clone());
 
+        // Create coprocessor.
+        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router.clone());
+
+        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+        region_info_accessor.start();
+
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
         let storage_read_pool = storage::build_read_pool_for_test(
@@ -144,7 +150,13 @@ impl Simulator for ServerCluster {
 
         let engine = RaftKv::new(sim_router.clone());
 
-        let mut gc_worker = GcWorker::new(engine.clone(), None, None, cfg.gc.clone());
+        let mut gc_worker = GcWorker::new(
+            engine.clone(),
+            None,
+            None,
+            Some(region_info_accessor.clone()),
+            cfg.gc.clone(),
+        );
         gc_worker.start().unwrap();
 
         let mut lock_mgr = LockManager::new();
@@ -236,12 +248,6 @@ impl Simulator for ServerCluster {
             &cfg.raft_store,
             Arc::clone(&self.pd_client),
         );
-
-        // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router.clone());
-
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
-        region_info_accessor.start();
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);

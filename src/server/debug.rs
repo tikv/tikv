@@ -1665,7 +1665,7 @@ mod tests {
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
         let test_engine = TestEngineBuilder::new().build().unwrap();
-        let mut gc_worker = GcWorker::new(test_engine, None, None, GcConfig::default());
+        let mut gc_worker = GcWorker::new(test_engine, None, None, None, GcConfig::default());
         gc_worker.start().unwrap();
         Debugger::new(engines, Some(gc_worker))
     }
