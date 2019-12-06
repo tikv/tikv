@@ -14,7 +14,7 @@ use engine::rocks::{DBOptions, Writable};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksSnapshot, RocksEngine};
 use engine_traits::Peekable as PeekableTrait;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
@@ -1345,7 +1345,7 @@ pub fn clear_meta(
 }
 
 pub fn do_snapshot(
-    mgr: SnapManager,
+    mgr: SnapManager<RocksEngine>,
     raft_snap: RocksSnapshot,
     kv_snap: RocksSnapshot,
     region_id: u64,
