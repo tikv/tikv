@@ -375,7 +375,11 @@ fn rand_with_seed(seed: &Option<Int>) -> Result<Option<Real>> {
                 Ok(Real::new(res).ok())
             }
         }
-        _ => Ok(None),
+        None => {
+            let mut rng = get_rng(Some(0));
+            let res = rng.gen::<f64>();
+            Ok(Real::new(res).ok())
+        }
     }
 }
 
@@ -1108,7 +1112,7 @@ mod tests {
             .push_param(ScalarValue::Int(None))
             .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
             .unwrap();
-        assert!(none_case_got.is_none());
+        assert_ne!(none_case_got, Some(Real::from(0.155220427694936)));
     }
 
     #[test]
