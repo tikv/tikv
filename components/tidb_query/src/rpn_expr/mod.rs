@@ -410,6 +410,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Elt => elt_fn_meta(),
         ScalarFuncSig::Space => space_fn_meta(),
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
+        ScalarFuncSig::Instr => instr_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
         ScalarFuncSig::DayOfMonth => day_of_month_fn_meta(),
         _ => return Err(other_err!(
