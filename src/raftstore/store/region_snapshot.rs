@@ -423,7 +423,7 @@ mod tests {
     use engine::Engines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
-    use engine_rocks::RocksIOLimiter;
+    use engine_rocks::RocksEngine;
     use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
     use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
     use keys::{data_key, Key};
@@ -1062,7 +1062,7 @@ mod tests {
         // Generate a snapshot
         let default_sst_file_path = path.path().join("default.sst");
         let write_sst_file_path = path.path().join("write.sst");
-        build_sst_cf_file::<RocksIOLimiter>(
+        build_sst_cf_file::<RocksEngine>(
             &default_sst_file_path.to_str().unwrap(),
             &RocksSnapshot::new(Arc::clone(&engines.kv)),
             CF_DEFAULT,
@@ -1071,7 +1071,7 @@ mod tests {
             None,
         )
         .unwrap();
-        build_sst_cf_file::<RocksIOLimiter>(
+        build_sst_cf_file::<RocksEngine>(
             &write_sst_file_path.to_str().unwrap(),
             &RocksSnapshot::new(Arc::clone(&engines.kv)),
             CF_WRITE,

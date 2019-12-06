@@ -649,7 +649,7 @@ impl Snap {
                 snap_io::build_plain_cf_file::<RocksEngine>(path, kv_snap, cf_file.cf, &begin_key, &end_key)?
             } else {
                 let limiter = self.limiter.as_ref().map(|c| c.as_ref());
-                snap_io::build_sst_cf_file(
+                snap_io::build_sst_cf_file::<RocksEngine>(
                     path, kv_snap, cf_file.cf, &begin_key, &end_key, limiter,
                 )?
             };
