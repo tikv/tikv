@@ -125,6 +125,13 @@
 //!   - https://github.com/rust-lang/rfcs/pull/1598
 //!   - https://github.com/rust-lang/rust/issues/44265
 //!
+//! - Traits can't have mutually-recursive associated types. That is, if
+//!   `KvEngine` has a `Snapshot` associated type, `Snapshot` can't then have a
+//!   `KvEngine` associated type - the compiler will not be able to resolve both
+//!   `KvEngine`s to the name type. In these cases, e.g. `Snapshot` needs to be
+//!   parameterized over its engine type and `impl Snapshot<RocksEngine> for
+//!   RocksSnapshot`.
+//!
 //!
 //! # Refactoring tips
 //!
