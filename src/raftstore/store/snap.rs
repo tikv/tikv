@@ -327,9 +327,9 @@ impl<E> Snap<E> where E: KvEngine {
         size_track: Arc<AtomicU64>,
         is_sending: bool,
         to_build: bool,
-        deleter: Box<dyn SnapshotDeleter<RocksEngine>>,
-        limiter: Option<Arc<RocksIOLimiter>>,
-    ) -> RaftStoreResult<Snap<RocksEngine>> {
+        deleter: Box<dyn SnapshotDeleter<E>>,
+        limiter: Option<Arc<E::IOLimiter>>,
+    ) -> RaftStoreResult<Snap<E>> {
         let dir_path = dir.into();
         if !dir_path.exists() {
             fs::create_dir_all(dir_path.as_path())?;
@@ -340,7 +340,7 @@ impl<E> Snap<E> where E: KvEngine {
             SNAP_REV_PREFIX
         };
         let prefix = format!("{}_{}", snap_prefix, key);
-        let display_path = Snap::<RocksEngine>::get_display_path(&dir_path, &prefix);
+        let display_path = Snap::<E>::get_display_path(&dir_path, &prefix);
 
         let mut cf_files = Vec::with_capacity(SNAPSHOT_CFS.len());
         for cf in SNAPSHOT_CFS {
@@ -407,10 +407,10 @@ impl<E> Snap<E> where E: KvEngine {
         dir: T,
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter<RocksEngine>>,
-        limiter: Option<Arc<RocksIOLimiter>>,
-    ) -> RaftStoreResult<Snap<RocksEngine>> {
-        let mut s = Snap::<RocksEngine>::new(dir, key, size_track, true, true, deleter, limiter)?;
+        deleter: Box<dyn SnapshotDeleter<E>>,
+        limiter: Option<Arc<E::IOLimiter>>,
+    ) -> RaftStoreResult<Snap<E>> {
+        let mut s = Snap::<E>::new(dir, key, size_track, true, true, deleter, limiter)?;
         s.init_for_building()?;
         Ok(s)
     }
@@ -419,9 +419,9 @@ impl<E> Snap<E> where E: KvEngine {
         dir: T,
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter<RocksEngine>>,
-    ) -> RaftStoreResult<Snap<RocksEngine>> {
-        let mut s = Snap::<RocksEngine>::new(dir, key, size_track, true, false, deleter, None)?;
+        deleter: Box<dyn SnapshotDeleter<E>>,
+    ) -> RaftStoreResult<Snap<E>> {
+        let mut s = Snap::<E>::new(dir, key, size_track, true, false, deleter, None)?;
 
         if !s.exists() {
             // Skip the initialization below if it doesn't exists.
@@ -442,10 +442,10 @@ impl<E> Snap<E> where E: KvEngine {
         key: &SnapKey,
         snapshot_meta: SnapshotMeta,
         size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter<RocksEngine>>,
-        limiter: Option<Arc<RocksIOLimiter>>,
-    ) -> RaftStoreResult<Snap<RocksEngine>> {
-        let mut s = Snap::<RocksEngine>::new(dir, key, size_track, false, false, deleter, limiter)?;
+        deleter: Box<dyn SnapshotDeleter<E>>,
+        limiter: Option<Arc<E::IOLimiter>>,
+    ) -> RaftStoreResult<Snap<E>> {
+        let mut s = Snap::<E>::new(dir, key, size_track, false, false, deleter, limiter)?;
         s.set_snapshot_meta(snapshot_meta)?;
         if s.exists() {
             return Ok(s);
@@ -476,9 +476,9 @@ impl<E> Snap<E> where E: KvEngine {
         dir: T,
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter<RocksEngine>>,
-    ) -> RaftStoreResult<Snap<RocksEngine>> {
-        let s = Snap::<RocksEngine>::new(dir, key, size_track, false, false, deleter, None)?;
+        deleter: Box<dyn SnapshotDeleter<E>>,
+    ) -> RaftStoreResult<Snap<E>> {
+        let s = Snap::<E>::new(dir, key, size_track, false, false, deleter, None)?;
         Ok(s)
     }
 
