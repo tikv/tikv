@@ -25,7 +25,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot<E: KvEngine> {
-    snap: <E::Snapshot as Snapshot>::SyncSnapshot,
+    snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
 }
@@ -44,7 +44,7 @@ where
     }
 
     pub fn from_snapshot(
-        snap: <E::Snapshot as Snapshot>::SyncSnapshot,
+        snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
         region: Region,
     ) -> RegionSnapshot<E> {
         RegionSnapshot {
@@ -292,7 +292,7 @@ where
     E: KvEngine,
 {
     pub fn new(
-        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOption,
     ) -> RegionIterator<E> {
@@ -305,7 +305,7 @@ where
     }
 
     pub fn new_cf(
-        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOption,
         cf: &str,

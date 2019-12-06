@@ -6,15 +6,19 @@ use crate::peekable::Peekable;
 use std::fmt::Debug;
 use std::ops::Deref;
 
-pub trait Snapshot: 'static + Peekable + Iterable + Send + Sync + Sized + Debug {
+pub trait Snapshot<E>
+where Self: 'static + Peekable + Iterable + Send + Sync + Sized + Debug,
+      E: KvEngine,
+{
     type SyncSnapshot: SyncSnapshot<Self>;
-    type KvEngine: KvEngine;
 
     fn cf_names(&self) -> Vec<&str>;
 
     fn into_sync(self) -> Self::SyncSnapshot;
 
-    fn get_db(&self) -> &Self::KvEngine;
+    fn get_db(&self) -> &E;
 }
 
-pub trait SyncSnapshot<T>: Clone + Send + Sync + Sized + Debug + Deref<Target = T> {}
+pub trait SyncSnapshot<T>
+where Self: Clone + Send + Sync + Sized + Debug + Deref<Target = T>
+{}
