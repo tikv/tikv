@@ -13,6 +13,8 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
+use configuration::ConfigValue;
+
 quick_error! {
     #[derive(Debug)]
     pub enum ConfigError {
@@ -60,6 +62,22 @@ const DAY: u64 = HOUR * TIME_MAGNITUDE_3;
 
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub struct ReadableSize(pub u64);
+
+impl From<ReadableSize> for ConfigValue {
+    fn from(size: ReadableSize) -> ConfigValue {
+        ConfigValue::Size(size.0)
+    }
+}
+
+impl Into<ReadableSize> for ConfigValue {
+    fn into(self) -> ReadableSize {
+        if let ConfigValue::Size(s) = self {
+            ReadableSize(s)
+        } else {
+            panic!("expect: ConfigValue::Size, got: {:?}", self);
+        }
+    }
+}
 
 impl ReadableSize {
     pub const fn kb(count: u64) -> ReadableSize {
@@ -224,6 +242,22 @@ pub struct ReadableDuration(pub Duration);
 impl From<ReadableDuration> for Duration {
     fn from(readable: ReadableDuration) -> Duration {
         readable.0
+    }
+}
+
+impl From<ReadableDuration> for ConfigValue {
+    fn from(duration: ReadableDuration) -> ConfigValue {
+        ConfigValue::Duration(duration.0.as_millis() as u64)
+    }
+}
+
+impl Into<ReadableDuration> for ConfigValue {
+    fn into(self) -> ReadableDuration {
+        if let ConfigValue::Duration(d) = self {
+            ReadableDuration(Duration::from_millis(d))
+        } else {
+            panic!("expect: ConfigValue::Duration, got: {:?}", self);
+        }
     }
 }
 
