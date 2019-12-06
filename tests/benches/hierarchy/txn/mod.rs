@@ -23,7 +23,7 @@ where
     let option = Options::default();
 
     let snapshot = engine.snapshot(&ctx).unwrap();
-    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
     let kvs = KvGenerator::new(config.key_length, config.value_length).generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
         txn.prewrite(
