@@ -317,6 +317,22 @@ pub fn strcmp(left: &Option<Bytes>, right: &Option<Bytes>) -> Result<Option<i64>
     })
 }
 
+#[rpn_fn]
+#[inline]
+pub fn instr(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<Int>> {
+    if let (Some(s), Some(substr)) = (s, substr) {
+        let s = String::from_utf8_lossy(s);
+        let substr = String::from_utf8_lossy(substr);
+        let index = twoway::find_str(&s.to_lowercase(), &substr.to_lowercase())
+            .map(|i| s[..i].chars().count())
+            .map(|i| 1 + i as i64)
+            .or(Some(0));
+        Ok(index)
+    } else {
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1269,6 +1285,56 @@ mod tests {
                 .evaluate(ScalarFuncSig::Strcmp)
                 .unwrap();
             assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_instr() {
+        let cases: Vec<(&str, &str, i64)> = vec![
+            ("a", "abcdefg", 1),
+            ("0", "abcdefg", 0),
+            ("c", "abcdefg", 3),
+            ("F", "abcdefg", 6),
+            ("cd", "abcdefg", 3),
+            (" ", "abcdefg", 0),
+            ("", "", 1),
+            (" ", " ", 1),
+            (" ", "", 0),
+            ("", " ", 1),
+            ("eFg", "abcdefg", 5),
+            ("def", "abcdefg", 4),
+            ("字节", "a多字节", 3),
+            ("a", "a多字节", 1),
+            ("bar", "foobarbar", 4),
+            ("xbar", "foobarbar", 0),
+            ("好世", "你好世界", 2),
+        ];
+
+        for (substr, s, exp) in cases {
+            let substr = Some(substr.as_bytes().to_vec());
+            let s = Some(s.as_bytes().to_vec());
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(substr)
+                .evaluate::<Int>(ScalarFuncSig::Instr)
+                .unwrap();
+            assert_eq!(got, Some(exp))
+        }
+
+        let null_cases = vec![
+            (None, Some(b"".to_vec()), None),
+            (None, Some(b"foobar".to_vec()), None),
+            (Some(b"".to_vec()), None, None),
+            (Some(b"bar".to_vec()), None, None),
+            (None, None, None),
+        ];
+        for (substr, s, exp) in null_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(substr)
+                .evaluate::<Int>(ScalarFuncSig::Instr)
+                .unwrap();
+            assert_eq!(got, exp);
         }
     }
 }
