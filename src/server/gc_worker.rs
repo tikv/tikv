@@ -268,8 +268,7 @@ impl<E: Engine> GcRunner<E> {
             Some(ScanMode::Forward),
             TimeStamp::zero(),
             !ctx.get_not_fill_cache(),
-        )
-        .unwrap();
+        );
         for k in keys {
             let gc_info = txn.gc(k.clone(), safe_point)?;
 
