@@ -61,6 +61,9 @@ pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
 pub fn check_table_ranges(ranges: &[KeyRange]) -> Result<()> {
     for range in ranges {
         extract_table_prefix(range.get_start())?;
+        if range.get_is_point() {
+            continue;
+        }
         extract_table_prefix(range.get_end())?;
         if range.get_start() >= range.get_end() {
             return Err(invalid_type!(
