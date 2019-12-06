@@ -1,4 +1,5 @@
 use num::traits::Pow;
+use std::f64;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
@@ -393,6 +394,15 @@ pub fn conv(
         Ok(conv_impl(s.as_ref(), *from_base, *to_base))
     } else {
         Ok(None)
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_real(arg: &Option<Real>) -> Result<Option<Real>> {
+    match arg {
+        Some(arg) => Ok(Some(Real::from(arg.round()))),
+        None => Ok(None),
     }
 }
 
@@ -1218,6 +1228,23 @@ mod tests {
                 .evaluate::<Bytes>(ScalarFuncSig::Conv)
                 .unwrap();
             assert_eq!(got, e);
+        }
+    }
+
+    #[test]
+    fn test_round() {
+        let test_real_cases = vec![
+            (Some(Real::from(-3.12_f64)), Some(Real::from(-3f64))),
+            (Some(Real::from(f64::MAX)), Some(Real::from(f64::MAX))),
+            (Some(Real::from(f64::MIN)), Some(Real::from(f64::MIN))),
+        ];
+
+        for (arg, exp) in test_real_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Real>(ScalarFuncSig::RoundReal)
+                .unwrap();
+            assert_eq!(got, exp);
         }
     }
 }

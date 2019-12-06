@@ -411,6 +411,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
         ScalarFuncSig::DayOfMonth => day_of_month_fn_meta(),
+        ScalarFuncSig::RoundReal => round_real_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
