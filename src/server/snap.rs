@@ -20,6 +20,7 @@ use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
+use engine_rocks::RocksEngine;
 
 use super::metrics::*;
 use super::{Config, Error, Result};
@@ -54,7 +55,7 @@ impl Display for Task {
 
 struct SnapChunk {
     first: Option<SnapshotChunk>,
-    snap: Box<dyn Snapshot>,
+    snap: Box<dyn Snapshot<RocksEngine>>,
     remain_bytes: usize,
 }
 
@@ -176,7 +177,7 @@ fn send_snap(
 
 struct RecvSnapContext {
     key: SnapKey,
-    file: Option<Box<dyn Snapshot>>,
+    file: Option<Box<dyn Snapshot<RocksEngine>>>,
     raft_msg: RaftMessage,
 }
 
