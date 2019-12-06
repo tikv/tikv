@@ -17,6 +17,12 @@ pub fn bin(num: &Option<Int>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
+pub fn oct_int(num: &Option<Int>) -> Result<Option<Bytes>> {
+    Ok(num.as_ref().map(|i| Bytes::from(format!("{:o}", i))))
+}
+
+#[rpn_fn]
+#[inline]
 pub fn length(arg: &Option<Bytes>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|bytes| bytes.len() as i64))
 }
@@ -366,6 +372,30 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .evaluate(ScalarFuncSig::Bin)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+    #[test]
+    fn test_oct_int() {
+        let cases = vec![
+            (Some(-1), Some(b"1777777777777777777777".to_vec())),
+            (Some(0), Some(b"0".to_vec())),
+            (Some(1), Some(b"1".to_vec())),
+            (Some(8), Some(b"10".to_vec())),
+            (Some(12), Some(b"14".to_vec())),
+            (Some(20), Some(b"24".to_vec())),
+            (Some(100), Some(b"144".to_vec())),
+            (Some(1024), Some(b"2000".to_vec())),
+            (Some(2048), Some(b"4000".to_vec())),
+            (Some(i64::MAX), Some(b"777777777777777777777".to_vec())),
+            (Some(i64::MIN), Some(b"1000000000000000000000".to_vec())),
+            (None, None),
+        ];
+        for (arg0, expect_output) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .evaluate(ScalarFuncSig::OctInt)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
