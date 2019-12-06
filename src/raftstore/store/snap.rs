@@ -14,7 +14,7 @@ use std::{error, result, str, thread, time, u64};
 
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{CFHandleExt, ImportExt, KvEngine, Snapshot as EngineSnapshot};
+use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
@@ -549,7 +549,7 @@ impl Snap {
         )
     }
 
-    fn validate(&self, engine: &RocksEngine) -> RaftStoreResult<()> {
+    fn validate(&self, engine: &impl KvEngine) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
