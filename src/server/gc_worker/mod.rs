@@ -2108,16 +2108,16 @@ mod tests {
         let start_ts = start_ts.into();
 
         // Write these data to the storage.
-        wait_op!(|cb| storage.prewrite(
+        wait_op!(|cb| storage.sched_txn_command(
             commands::Prewrite::with_defaults(mutations, primary, start_ts),
-            cb
+            cb,
         ))
         .unwrap()
         .unwrap();
 
         // Commit.
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
-        wait_op!(|cb| storage.commit(
+        wait_op!(|cb| storage.sched_txn_command(
             commands::Commit::new(keys, start_ts, commit_ts.into(), Context::default()),
             cb
         ))
@@ -2413,7 +2413,7 @@ mod tests {
 
             let (tx, rx) = channel();
             storage
-                .prewrite(
+                .sched_txn_command(
                     commands::Prewrite::with_defaults(vec![mutation], k, lock_ts.into()),
                     Box::new(move |res| tx.send(res).unwrap()),
                 )

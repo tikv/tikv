@@ -430,6 +430,52 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         ctx.spawn(future);
     }
 
+    fn mvcc_get_by_key(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: MvccGetByKeyRequest,
+        sink: UnarySink<MvccGetByKeyResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC.mvcc_get_by_key.start_coarse_timer();
+
+        let future = future_mvcc_get_by_key(&self.storage, req)
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "mvcc_get_by_key",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.mvcc_get_by_key.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
+    fn mvcc_get_by_start_ts(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: MvccGetByStartTsRequest,
+        sink: UnarySink<MvccGetByStartTsResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .mvcc_get_by_start_ts
+            .start_coarse_timer();
+
+        let future = future_mvcc_get_by_start_ts(&self.storage, req)
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "mvcc_get_by_start_ts",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.mvcc_get_by_start_ts.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
     fn raw_get(
         &mut self,
         ctx: RpcContext<'_>,
@@ -945,87 +991,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             let status = RpcStatus::new(RpcStatusCode::RESOURCE_EXHAUSTED, Some(err_msg));
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
-    }
-
-    fn mvcc_get_by_key(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: MvccGetByKeyRequest,
-        sink: UnarySink<MvccGetByKeyResponse>,
-    ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.mvcc_get_by_key.start_coarse_timer();
-
-        let (cb, f) = paired_future_callback();
-        let res = self.storage.mvcc_by_key(req.into(), cb);
-
-        let future = AndThenWith::new(res, f.map_err(Error::from))
-            .and_then(|v| {
-                let mut resp = MvccGetByKeyResponse::default();
-                if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
-                } else {
-                    match v {
-                        Ok(mvcc) => {
-                            resp.set_info(mvcc.into_proto());
-                        }
-                        Err(e) => resp.set_error(format!("{}", e)),
-                    };
-                }
-                sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "mvcc_get_by_key",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.mvcc_get_by_key.inc();
-            });
-
-        ctx.spawn(future);
-    }
-
-    fn mvcc_get_by_start_ts(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: MvccGetByStartTsRequest,
-        sink: UnarySink<MvccGetByStartTsResponse>,
-    ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .mvcc_get_by_start_ts
-            .start_coarse_timer();
-
-        let (cb, f) = paired_future_callback();
-        let res = self.storage.mvcc_by_start_ts(req.into(), cb);
-
-        let future = AndThenWith::new(res, f.map_err(Error::from))
-            .and_then(|v| {
-                let mut resp = MvccGetByStartTsResponse::default();
-                if let Some(err) = extract_region_error(&v) {
-                    resp.set_region_error(err);
-                } else {
-                    match v {
-                        Ok(Some((k, vv))) => {
-                            resp.set_key(k.into_raw().unwrap());
-                            resp.set_info(vv.into_proto());
-                        }
-                        Ok(None) => {
-                            resp.set_info(Default::default());
-                        }
-                        Err(e) => resp.set_error(format!("{}", e)),
-                    }
-                }
-                sink.success(resp).map_err(Error::from)
-            })
-            .map(|_| timer.observe_duration())
-            .map_err(move |e| {
-                debug!("kv rpc failed";
-                    "request" => "mvcc_get_by_start_ts",
-                    "err" => ?e
-                );
-                GRPC_MSG_FAIL_COUNTER.mvcc_get_by_start_ts.inc();
-            });
-        ctx.spawn(future);
     }
 
     fn split_region(
@@ -1704,7 +1669,7 @@ fn future_prewrite<E: Engine, L: LockManager>(
     req: PrewriteRequest,
 ) -> impl Future<Item = PrewriteResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.prewrite(req.into(), cb);
+    let res = storage.sched_txn_command(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PrewriteResponse::default();
@@ -1722,7 +1687,7 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockManager>(
     req: PessimisticLockRequest,
 ) -> impl Future<Item = PessimisticLockResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.acquire_pessimistic_lock(req.into(), cb);
+    let res = storage.sched_txn_command(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PessimisticLockResponse::default();
@@ -1740,7 +1705,7 @@ fn future_pessimistic_rollback<E: Engine, L: LockManager>(
     req: PessimisticRollbackRequest,
 ) -> impl Future<Item = PessimisticRollbackResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.pessimistic_rollback(req.into(), cb);
+    let res = storage.sched_txn_command(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PessimisticRollbackResponse::default();
@@ -1758,7 +1723,7 @@ fn future_commit<E: Engine, L: LockManager>(
     req: CommitRequest,
 ) -> impl Future<Item = CommitResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.commit(req.into(), cb);
+    let res = storage.sched_txn_command(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = CommitResponse::default();
@@ -1782,7 +1747,7 @@ fn future_cleanup<E: Engine, L: LockManager>(
     req: CleanupRequest,
 ) -> impl Future<Item = CleanupResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.cleanup(req.into(), cb);
+    let res = storage.sched_txn_command(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = CleanupResponse::default();
@@ -1822,7 +1787,7 @@ fn future_batch_rollback<E: Engine, L: LockManager>(
     req: BatchRollbackRequest,
 ) -> impl Future<Item = BatchRollbackResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.rollback(req.into(), cb);
+    let res = storage.sched_txn_command(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = BatchRollbackResponse::default();
@@ -1840,7 +1805,7 @@ fn future_txn_heart_beat<E: Engine, L: LockManager>(
     req: TxnHeartBeatRequest,
 ) -> impl Future<Item = TxnHeartBeatResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.txn_heart_beat(req.into(), cb);
+    let res = storage.sched_txn_command(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = TxnHeartBeatResponse::default();
@@ -1869,7 +1834,7 @@ fn future_check_txn_status<E: Engine, L: LockManager>(
     let caller_start_ts = req.get_caller_start_ts().into();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.check_txn_status(req.into(), cb);
+    let res = storage.sched_txn_command(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(move |v| {
         let mut resp = CheckTxnStatusResponse::default();
@@ -1906,7 +1871,7 @@ fn future_scan_lock<E: Engine, L: LockManager>(
     req: ScanLockRequest,
 ) -> impl Future<Item = ScanLockResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.scan_locks(req.into(), cb);
+    let res = storage.sched_txn_command(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = ScanLockResponse::default();
@@ -1927,7 +1892,7 @@ fn future_resolve_lock<E: Engine, L: LockManager>(
     req: ResolveLockRequest,
 ) -> impl Future<Item = ResolveLockResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.resolve_lock(req.into(), cb);
+    let res = storage.sched_txn_command(req.into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = ResolveLockResponse::default();
@@ -1935,6 +1900,56 @@ fn future_resolve_lock<E: Engine, L: LockManager>(
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(extract_key_error(&e));
+        }
+        resp
+    })
+}
+
+fn future_mvcc_get_by_key<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: MvccGetByKeyRequest,
+) -> impl Future<Item = MvccGetByKeyResponse, Error = Error> {
+    let (cb, f) = paired_future_callback();
+    let res = storage.sched_txn_command(req.into(), cb);
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = MvccGetByKeyResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(mvcc) => {
+                    resp.set_info(mvcc.into_proto());
+                }
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
+        }
+        resp
+    })
+}
+
+fn future_mvcc_get_by_start_ts<E: Engine, L: LockManager>(
+    storage: &Storage<E, L>,
+    req: MvccGetByStartTsRequest,
+) -> impl Future<Item = MvccGetByStartTsResponse, Error = Error> {
+    let (cb, f) = paired_future_callback();
+    let res = storage.sched_txn_command(req.into(), cb);
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = MvccGetByStartTsResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok(Some((k, vv))) => {
+                    resp.set_key(k.into_raw().unwrap());
+                    resp.set_info(vv.into_proto());
+                }
+                Ok(None) => {
+                    resp.set_info(Default::default());
+                }
+                Err(e) => resp.set_error(format!("{}", e)),
+            }
         }
         resp
     })

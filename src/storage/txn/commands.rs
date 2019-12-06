@@ -2,14 +2,17 @@
 
 use std::fmt::{self, Debug, Display, Formatter};
 use std::iter::{self, FromIterator};
+use std::marker::PhantomData;
 
 use kvproto::kvrpcpb::*;
 use tikv_util::collections::HashMap;
 use txn_types::{Key, Lock, Mutation, TimeStamp};
 
 use crate::storage::lock_manager::WaitTimeout;
-use crate::storage::metrics;
+use crate::storage::metrics::{self, KV_COMMAND_COUNTER_VEC_STATIC};
 use crate::storage::txn::latch::{self, Latches};
+use crate::storage::types::{MvccInfo, StorageCallbackType, TxnStatus};
+use crate::storage::Result;
 
 /// Store Transaction scheduler commands.
 ///
@@ -24,8 +27,28 @@ pub struct Command {
     pub kind: CommandKind,
 }
 
-impl From<PrewriteRequest> for Command {
-    fn from(mut req: PrewriteRequest) -> Command {
+pub struct TypedCommand<T> {
+    pub cmd: Command,
+    _pd: PhantomData<T>,
+}
+
+impl<T: StorageCallbackType> From<Command> for TypedCommand<T> {
+    fn from(cmd: Command) -> TypedCommand<T> {
+        TypedCommand {
+            cmd,
+            _pd: PhantomData,
+        }
+    }
+}
+
+impl<T> From<TypedCommand<T>> for Command {
+    fn from(t: TypedCommand<T>) -> Command {
+        t.cmd
+    }
+}
+
+impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
+    fn from(mut req: PrewriteRequest) -> Self {
         let for_update_ts = req.get_for_update_ts();
         if for_update_ts == 0 {
             Prewrite::new(
@@ -38,6 +61,7 @@ impl From<PrewriteRequest> for Command {
                 req.get_min_commit_ts().into(),
                 req.take_context(),
             )
+            .into()
         } else {
             let is_pessimistic_lock = req.take_is_pessimistic_lock();
             let mutations = req
@@ -56,12 +80,13 @@ impl From<PrewriteRequest> for Command {
                 req.get_min_commit_ts().into(),
                 req.take_context(),
             )
+            .into()
         }
     }
 }
 
-impl From<PessimisticLockRequest> for Command {
-    fn from(mut req: PessimisticLockRequest) -> Command {
+impl From<PessimisticLockRequest> for TypedCommand<Vec<Result<()>>> {
+    fn from(mut req: PessimisticLockRequest) -> Self {
         let keys = req
             .take_mutations()
             .into_iter()
@@ -87,8 +112,8 @@ impl From<PessimisticLockRequest> for Command {
     }
 }
 
-impl From<CommitRequest> for Command {
-    fn from(mut req: CommitRequest) -> Command {
+impl From<CommitRequest> for TypedCommand<TxnStatus> {
+    fn from(mut req: CommitRequest) -> Self {
         let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
         Commit::new(
@@ -100,8 +125,8 @@ impl From<CommitRequest> for Command {
     }
 }
 
-impl From<CleanupRequest> for Command {
-    fn from(mut req: CleanupRequest) -> Command {
+impl From<CleanupRequest> for TypedCommand<()> {
+    fn from(mut req: CleanupRequest) -> Self {
         Cleanup::new(
             Key::from_raw(req.get_key()),
             req.get_start_version().into(),
@@ -111,15 +136,15 @@ impl From<CleanupRequest> for Command {
     }
 }
 
-impl From<BatchRollbackRequest> for Command {
-    fn from(mut req: BatchRollbackRequest) -> Command {
+impl From<BatchRollbackRequest> for TypedCommand<()> {
+    fn from(mut req: BatchRollbackRequest) -> Self {
         let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
         Rollback::new(keys, req.get_start_version().into(), req.take_context())
     }
 }
 
-impl From<PessimisticRollbackRequest> for Command {
-    fn from(mut req: PessimisticRollbackRequest) -> Command {
+impl From<PessimisticRollbackRequest> for TypedCommand<Vec<Result<()>>> {
+    fn from(mut req: PessimisticRollbackRequest) -> Self {
         let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
         PessimisticRollback::new(
@@ -131,8 +156,8 @@ impl From<PessimisticRollbackRequest> for Command {
     }
 }
 
-impl From<TxnHeartBeatRequest> for Command {
-    fn from(mut req: TxnHeartBeatRequest) -> Command {
+impl From<TxnHeartBeatRequest> for TypedCommand<TxnStatus> {
+    fn from(mut req: TxnHeartBeatRequest) -> Self {
         TxnHeartBeat::new(
             Key::from_raw(req.get_primary_lock()),
             req.get_start_version().into(),
@@ -142,8 +167,8 @@ impl From<TxnHeartBeatRequest> for Command {
     }
 }
 
-impl From<CheckTxnStatusRequest> for Command {
-    fn from(mut req: CheckTxnStatusRequest) -> Command {
+impl From<CheckTxnStatusRequest> for TypedCommand<TxnStatus> {
+    fn from(mut req: CheckTxnStatusRequest) -> Self {
         CheckTxnStatus::new(
             Key::from_raw(req.get_primary_key()),
             req.get_lock_ts().into(),
@@ -155,8 +180,8 @@ impl From<CheckTxnStatusRequest> for Command {
     }
 }
 
-impl From<ScanLockRequest> for Command {
-    fn from(mut req: ScanLockRequest) -> Command {
+impl From<ScanLockRequest> for TypedCommand<Vec<LockInfo>> {
+    fn from(mut req: ScanLockRequest) -> Self {
         ScanLock::new(
             req.get_max_version().into(),
             &req.take_start_key(),
@@ -166,8 +191,8 @@ impl From<ScanLockRequest> for Command {
     }
 }
 
-impl From<ResolveLockRequest> for Command {
-    fn from(mut req: ResolveLockRequest) -> Command {
+impl From<ResolveLockRequest> for TypedCommand<()> {
+    fn from(mut req: ResolveLockRequest) -> Self {
         let resolve_keys: Vec<Key> = req
             .get_keys()
             .iter()
@@ -187,7 +212,7 @@ impl From<ResolveLockRequest> for Command {
         };
 
         if resolve_keys.is_empty() {
-            ResolveLock::new(txn_status, None, vec![], req.take_context())
+            ResolveLock::new(txn_status, None, vec![], req.take_context()).into()
         } else {
             let start_ts: TimeStamp = req.get_start_version().into();
             assert!(!start_ts.is_zero());
@@ -197,14 +222,14 @@ impl From<ResolveLockRequest> for Command {
     }
 }
 
-impl From<MvccGetByKeyRequest> for Command {
-    fn from(mut req: MvccGetByKeyRequest) -> Command {
+impl From<MvccGetByKeyRequest> for TypedCommand<MvccInfo> {
+    fn from(mut req: MvccGetByKeyRequest) -> Self {
         MvccByKey::new(Key::from_raw(req.get_key()), req.take_context())
     }
 }
 
-impl From<MvccGetByStartTsRequest> for Command {
-    fn from(mut req: MvccGetByStartTsRequest) -> Command {
+impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
+    fn from(mut req: MvccGetByStartTsRequest) -> Self {
         MvccByStartTs::new(req.get_start_ts().into(), req.take_context())
     }
 }
@@ -237,7 +262,7 @@ impl Prewrite {
         txn_size: u64,
         min_commit_ts: TimeStamp,
         ctx: Context,
-    ) -> Command {
+    ) -> TypedCommand<Vec<Result<()>>> {
         Command {
             ctx,
             kind: CommandKind::Prewrite(Prewrite {
@@ -250,6 +275,7 @@ impl Prewrite {
                 min_commit_ts,
             }),
         }
+        .into()
     }
 
     #[cfg(test)]
@@ -257,7 +283,7 @@ impl Prewrite {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
-    ) -> Command {
+    ) -> TypedCommand<Vec<Result<()>>> {
         Prewrite::new(
             mutations,
             primary,
@@ -276,7 +302,7 @@ impl Prewrite {
         primary: Vec<u8>,
         start_ts: TimeStamp,
         lock_ttl: u64,
-    ) -> Command {
+    ) -> TypedCommand<Vec<Result<()>>> {
         Prewrite::new(
             mutations,
             primary,
@@ -294,7 +320,7 @@ impl Prewrite {
         primary: Vec<u8>,
         start_ts: TimeStamp,
         ctx: Context,
-    ) -> Command {
+    ) -> TypedCommand<Vec<Result<()>>> {
         Prewrite::new(
             mutations,
             primary,
@@ -336,7 +362,7 @@ impl PrewritePessimistic {
         txn_size: u64,
         min_commit_ts: TimeStamp,
         ctx: Context,
-    ) -> Command {
+    ) -> TypedCommand<Vec<Result<()>>> {
         debug_assert!(for_update_ts > TimeStamp::zero());
         Command {
             ctx,
@@ -350,6 +376,7 @@ impl PrewritePessimistic {
                 min_commit_ts,
             }),
         }
+        .into()
     }
 }
 
@@ -380,7 +407,7 @@ impl AcquirePessimisticLock {
         for_update_ts: TimeStamp,
         wait_timeout: Option<WaitTimeout>,
         ctx: Context,
-    ) -> Command {
+    ) -> TypedCommand<Vec<Result<()>>> {
         Command {
             ctx,
             kind: CommandKind::AcquirePessimisticLock(AcquirePessimisticLock {
@@ -393,6 +420,7 @@ impl AcquirePessimisticLock {
                 wait_timeout,
             }),
         }
+        .into()
     }
 }
 
@@ -409,7 +437,12 @@ pub struct Commit {
 }
 
 impl Commit {
-    pub fn new(keys: Vec<Key>, lock_ts: TimeStamp, commit_ts: TimeStamp, ctx: Context) -> Command {
+    pub fn new(
+        keys: Vec<Key>,
+        lock_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        ctx: Context,
+    ) -> TypedCommand<TxnStatus> {
         Command {
             ctx,
             kind: CommandKind::Commit(Commit {
@@ -418,6 +451,7 @@ impl Commit {
                 commit_ts,
             }),
         }
+        .into()
     }
 }
 
@@ -434,7 +468,12 @@ pub struct Cleanup {
 }
 
 impl Cleanup {
-    pub fn new(key: Key, start_ts: TimeStamp, current_ts: TimeStamp, ctx: Context) -> Command {
+    pub fn new(
+        key: Key,
+        start_ts: TimeStamp,
+        current_ts: TimeStamp,
+        ctx: Context,
+    ) -> TypedCommand<()> {
         Command {
             ctx,
             kind: CommandKind::Cleanup(Cleanup {
@@ -443,6 +482,7 @@ impl Cleanup {
                 current_ts,
             }),
         }
+        .into()
     }
 }
 
@@ -456,11 +496,12 @@ pub struct Rollback {
 }
 
 impl Rollback {
-    pub fn new(keys: Vec<Key>, start_ts: TimeStamp, ctx: Context) -> Command {
+    pub fn new(keys: Vec<Key>, start_ts: TimeStamp, ctx: Context) -> TypedCommand<()> {
         Command {
             ctx,
             kind: CommandKind::Rollback(Rollback { keys, start_ts }),
         }
+        .into()
     }
 }
 
@@ -481,7 +522,7 @@ impl PessimisticRollback {
         start_ts: TimeStamp,
         for_update_ts: TimeStamp,
         ctx: Context,
-    ) -> Command {
+    ) -> TypedCommand<Vec<Result<()>>> {
         Command {
             ctx,
             kind: CommandKind::PessimisticRollback(PessimisticRollback {
@@ -490,6 +531,7 @@ impl PessimisticRollback {
                 for_update_ts,
             }),
         }
+        .into()
     }
 }
 
@@ -509,7 +551,12 @@ pub struct TxnHeartBeat {
 }
 
 impl TxnHeartBeat {
-    pub fn new(primary_key: Key, start_ts: TimeStamp, advise_ttl: u64, ctx: Context) -> Command {
+    pub fn new(
+        primary_key: Key,
+        start_ts: TimeStamp,
+        advise_ttl: u64,
+        ctx: Context,
+    ) -> TypedCommand<TxnStatus> {
         Command {
             ctx,
             kind: CommandKind::TxnHeartBeat(TxnHeartBeat {
@@ -518,6 +565,7 @@ impl TxnHeartBeat {
                 advise_ttl,
             }),
         }
+        .into()
     }
 }
 
@@ -551,7 +599,7 @@ impl CheckTxnStatus {
         current_ts: TimeStamp,
         rollback_if_not_exist: bool,
         ctx: Context,
-    ) -> Command {
+    ) -> TypedCommand<TxnStatus> {
         Command {
             ctx,
             kind: CommandKind::CheckTxnStatus(CheckTxnStatus {
@@ -562,6 +610,7 @@ impl CheckTxnStatus {
                 rollback_if_not_exist,
             }),
         }
+        .into()
     }
 }
 
@@ -576,7 +625,12 @@ pub struct ScanLock {
 }
 
 impl ScanLock {
-    pub fn new(max_ts: TimeStamp, start_key: &[u8], limit: usize, ctx: Context) -> Command {
+    pub fn new(
+        max_ts: TimeStamp,
+        start_key: &[u8],
+        limit: usize,
+        ctx: Context,
+    ) -> TypedCommand<Vec<LockInfo>> {
         let start_key = if start_key.is_empty() {
             None
         } else {
@@ -590,6 +644,7 @@ impl ScanLock {
                 limit,
             }),
         }
+        .into()
     }
 }
 
@@ -625,7 +680,7 @@ impl ResolveLock {
         scan_key: Option<Key>,
         key_locks: Vec<(Key, Lock)>,
         ctx: Context,
-    ) -> Command {
+    ) -> TypedCommand<()> {
         Command {
             ctx,
             kind: CommandKind::ResolveLock(ResolveLock {
@@ -634,6 +689,7 @@ impl ResolveLock {
                 key_locks,
             }),
         }
+        .into()
     }
 }
 
@@ -653,7 +709,7 @@ impl ResolveLockLite {
         commit_ts: TimeStamp,
         resolve_keys: Vec<Key>,
         ctx: Context,
-    ) -> Command {
+    ) -> TypedCommand<()> {
         Command {
             ctx,
             kind: CommandKind::ResolveLockLite(ResolveLockLite {
@@ -662,6 +718,7 @@ impl ResolveLockLite {
                 resolve_keys,
             }),
         }
+        .into()
     }
 }
 
@@ -676,11 +733,12 @@ pub struct Pause {
 }
 
 impl Pause {
-    pub fn new(keys: Vec<Key>, duration: u64, ctx: Context) -> Command {
+    pub fn new(keys: Vec<Key>, duration: u64, ctx: Context) -> TypedCommand<()> {
         Command {
             ctx,
             kind: CommandKind::Pause(Pause { keys, duration }),
         }
+        .into()
     }
 }
 
@@ -690,11 +748,12 @@ pub struct MvccByKey {
 }
 
 impl MvccByKey {
-    pub fn new(key: Key, ctx: Context) -> Command {
+    pub fn new(key: Key, ctx: Context) -> TypedCommand<MvccInfo> {
         Command {
             ctx,
             kind: CommandKind::MvccByKey(MvccByKey { key }),
         }
+        .into()
     }
 }
 
@@ -704,11 +763,12 @@ pub struct MvccByStartTs {
 }
 
 impl MvccByStartTs {
-    pub fn new(start_ts: TimeStamp, ctx: Context) -> Command {
+    pub fn new(start_ts: TimeStamp, ctx: Context) -> TypedCommand<Option<(Key, MvccInfo)>> {
         Command {
             ctx,
             kind: CommandKind::MvccByStartTs(MvccByStartTs { start_ts }),
         }
+        .into()
     }
 }
 
@@ -738,6 +798,32 @@ impl Command {
             | CommandKind::MvccByStartTs(_) => true,
             CommandKind::ResolveLock(ResolveLock { ref key_locks, .. }) => key_locks.is_empty(),
             _ => false,
+        }
+    }
+
+    pub fn incr_cmd_metric(&self) {
+        match &self.kind {
+            CommandKind::Prewrite(_) => KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc(),
+            CommandKind::PrewritePessimistic(_) => KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc(),
+            CommandKind::AcquirePessimisticLock(_) => {
+                KV_COMMAND_COUNTER_VEC_STATIC.acquire_pessimistic_lock.inc()
+            }
+            CommandKind::Commit(_) => KV_COMMAND_COUNTER_VEC_STATIC.commit.inc(),
+            CommandKind::Cleanup(_) => KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc(),
+            CommandKind::Rollback(_) => KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc(),
+            CommandKind::PessimisticRollback(_) => {
+                KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc()
+            }
+            CommandKind::TxnHeartBeat(_) => KV_COMMAND_COUNTER_VEC_STATIC.txn_heart_beat.inc(),
+            CommandKind::CheckTxnStatus(_) => KV_COMMAND_COUNTER_VEC_STATIC.check_txn_status.inc(),
+            CommandKind::ScanLock(_) => KV_COMMAND_COUNTER_VEC_STATIC.scan_lock.inc(),
+            CommandKind::ResolveLock(_) => KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock.inc(),
+            CommandKind::ResolveLockLite(_) => {
+                KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc()
+            }
+            CommandKind::Pause(_) => KV_COMMAND_COUNTER_VEC_STATIC.pause.inc(),
+            CommandKind::MvccByKey(_) => KV_COMMAND_COUNTER_VEC_STATIC.key_mvcc.inc(),
+            CommandKind::MvccByStartTs(_) => KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc(),
         }
     }
 
@@ -914,6 +1000,15 @@ impl Command {
             CommandKind::ScanLock(_)
             | CommandKind::MvccByKey(_)
             | CommandKind::MvccByStartTs(_) => latch::Lock::new(vec![]),
+        }
+    }
+
+    pub fn requires_pessimistic_txn(&self) -> bool {
+        match &self.kind {
+            CommandKind::PrewritePessimistic(_)
+            | CommandKind::AcquirePessimisticLock(_)
+            | CommandKind::PessimisticRollback(_) => true,
+            _ => false,
         }
     }
 }

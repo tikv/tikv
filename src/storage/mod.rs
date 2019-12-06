@@ -38,15 +38,15 @@ use crate::storage::{
     lock_manager::{DummyLockManager, LockManager},
     metrics::*,
     txn::{
-        commands::{self, Command, CommandKind},
+        commands::{Command, TypedCommand},
         scheduler::Scheduler as TxnScheduler,
     },
-    types::MvccInfo,
+    types::StorageCallbackType,
 };
 use engine::{CfName, IterOption, ALL_CFS, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use futures::Future;
 use futures03::prelude::*;
-use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, LockInfo, RawGetRequest};
+use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, KeyRange, RawGetRequest};
 use rand::prelude::*;
 use std::sync::{atomic, Arc};
 use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
@@ -190,15 +190,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
-    }
-
-    /// Schedule a command to the transaction scheduler. `cb` will be invoked after finishing
-    /// running the command.
-    #[inline]
-    fn schedule(&self, cmd: Command, cb: StorageCallback) -> Result<()> {
-        fail_point!("storage_drop_message", |_| Ok(()));
-        self.sched.run_cmd(cmd, cb);
-        Ok(())
     }
 
     /// Get a snapshot of `engine`.
@@ -467,95 +458,51 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .flatten()
     }
 
-    /// **Testing functionality:** Latch the given keys for given duration.
-    ///
-    /// This means other write operations that involve these keys will be blocked.
-    pub fn pause(&self, cmd: Command, callback: Callback<()>) -> Result<()> {
-        self.schedule(cmd, StorageCallback::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.pause.inc();
-        Ok(())
-    }
-
-    /// The prewrite phase of a transaction. The first phase of 2PC.
-    ///
-    /// Schedules a [`CommandKind::Prewrite`].
-    pub fn prewrite(&self, cmd: Command, callback: Callback<Vec<Result<()>>>) -> Result<()> {
-        if let CommandKind::Prewrite(commands::Prewrite { mutations, .. }) = &cmd.kind {
-            check_key_size!(
-                mutations.iter().map(|m| m.key().as_encoded()),
-                self.max_key_size,
-                callback
-            );
-        }
-
-        self.schedule(cmd, StorageCallback::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
-        Ok(())
-    }
-
-    /// The prewrite phase of a transaction when using pessimistic locking. The first phase of 2PC.
-    ///
-    /// Schedules a [`CommandKind::PrewritePessimistic`].
-    pub fn prewrite_pessimistic(
+    pub fn sched_txn_command<T: StorageCallbackType>(
         &self,
-        cmd: Command,
-        callback: Callback<Vec<Result<()>>>,
+        cmd: TypedCommand<T>,
+        callback: Callback<T>,
     ) -> Result<()> {
-        if !self.pessimistic_txn_enabled {
+        use crate::storage::txn::commands::{
+            AcquirePessimisticLock, CommandKind, Prewrite, PrewritePessimistic,
+        };
+
+        let cmd: Command = cmd.into();
+
+        if cmd.requires_pessimistic_txn() && !self.pessimistic_txn_enabled {
             callback(Err(Error::from(ErrorInner::PessimisticTxnNotEnabled)));
             return Ok(());
         }
 
-        if let CommandKind::PrewritePessimistic(commands::PrewritePessimistic {
-            mutations, ..
-        }) = &cmd.kind
-        {
-            check_key_size!(
-                mutations.iter().map(|(m, _)| m.key().as_encoded()),
-                self.max_key_size,
-                callback
-            );
+        match &cmd.kind {
+            CommandKind::Prewrite(Prewrite { mutations, .. }) => {
+                check_key_size!(
+                    mutations.iter().map(|m| m.key().as_encoded()),
+                    self.max_key_size,
+                    callback
+                );
+            }
+            CommandKind::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
+                check_key_size!(
+                    mutations.iter().map(|(m, _)| m.key().as_encoded()),
+                    self.max_key_size,
+                    callback
+                );
+            }
+            CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
+                check_key_size!(
+                    keys.iter().map(|k| k.0.as_encoded()),
+                    self.max_key_size,
+                    callback
+                );
+            }
+            _ => {}
         }
 
-        self.schedule(cmd, StorageCallback::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
-        Ok(())
-    }
+        fail_point!("storage_drop_message", |_| Ok(()));
+        cmd.incr_cmd_metric();
+        self.sched.run_cmd(cmd, T::callback(callback));
 
-    /// Acquire a Pessimistic lock on the keys.
-    /// Schedules a [`CommandKind::AcquirePessimisticLock`].
-    pub fn acquire_pessimistic_lock(
-        &self,
-        cmd: Command,
-        callback: Callback<Vec<Result<()>>>,
-    ) -> Result<()> {
-        if !self.pessimistic_txn_enabled {
-            callback(Err(Error::from(ErrorInner::PessimisticTxnNotEnabled)));
-            return Ok(());
-        }
-
-        if let CommandKind::AcquirePessimisticLock(commands::AcquirePessimisticLock {
-            keys, ..
-        }) = &cmd.kind
-        {
-            check_key_size!(
-                keys.iter().map(|k| k.0.as_encoded()),
-                self.max_key_size,
-                callback
-            );
-        }
-
-        self.schedule(cmd, StorageCallback::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.acquire_pessimistic_lock.inc();
-        Ok(())
-    }
-
-    /// Commit the transaction that started at `lock_ts`.
-    ///
-    /// Schedules a [`CommandKind::Commit`].
-    pub fn commit(&self, cmd: Command, callback: Callback<TxnStatus>) -> Result<()> {
-        self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
         Ok(())
     }
 
@@ -590,90 +537,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
-        Ok(())
-    }
-
-    /// Rollback mutations on a single key.
-    ///
-    /// Schedules a [`CommandKind::Cleanup`].
-    pub fn cleanup(&self, cmd: Command, callback: Callback<()>) -> Result<()> {
-        self.schedule(cmd, StorageCallback::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
-        Ok(())
-    }
-
-    /// Rollback from the transaction that was started at `start_ts`.
-    ///
-    /// Schedules a [`CommandKind::Rollback`].
-    pub fn rollback(&self, cmd: Command, callback: Callback<()>) -> Result<()> {
-        self.schedule(cmd, StorageCallback::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc();
-        Ok(())
-    }
-
-    /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
-    ///
-    /// Schedules a [`CommandKind::PessimisticRollback`].
-    pub fn pessimistic_rollback(
-        &self,
-        cmd: Command,
-        callback: Callback<Vec<Result<()>>>,
-    ) -> Result<()> {
-        if !self.pessimistic_txn_enabled {
-            callback(Err(Error::from(ErrorInner::PessimisticTxnNotEnabled)));
-            return Ok(());
-        }
-
-        self.schedule(cmd, StorageCallback::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
-        Ok(())
-    }
-
-    /// Check the specified primary key and enlarge it's TTL if necessary. Returns the new TTL.
-    ///
-    /// Schedules a [`CommandKind::TxnHeartBeat`].
-    pub fn txn_heart_beat(&self, cmd: Command, callback: Callback<TxnStatus>) -> Result<()> {
-        self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.txn_heart_beat.inc();
-        Ok(())
-    }
-
-    /// Check the status of a transaction.
-    ///
-    /// This operation checks whether a transaction has expired it's Lock's TTL, rollback the
-    /// transaction if expired, and update the transaction's min_commit_ts according to the metadata
-    /// in the primary lock.
-    /// After checking, if the lock is still alive, it retrieves the Lock's TTL; if the transaction
-    /// is committed, get the commit_ts; otherwise, if the transaction is rolled back or there's
-    /// no information about the transaction, results will be both 0.
-    ///
-    /// Schedules a [`CommandKind::CheckTxnStatus`].
-    pub fn check_txn_status(&self, cmd: Command, callback: Callback<TxnStatus>) -> Result<()> {
-        self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.check_txn_status.inc();
-        Ok(())
-    }
-
-    /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
-    ///
-    /// Schedules a [`CommandKind::ScanLock`].
-    pub fn scan_locks(&self, cmd: Command, callback: Callback<Vec<LockInfo>>) -> Result<()> {
-        self.schedule(cmd, StorageCallback::Locks(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.scan_lock.inc();
-        Ok(())
-    }
-
-    /// Resolve locks according to `txn_status`.
-    ///
-    /// During the GC operation, this should be called to clean up stale locks whose timestamp is
-    /// before the safe point.
-    ///
-    /// Schedules a [`CommandKind::ResolveLock`] or [`CommandKind::ResolveLockLite`].
-    pub fn resolve_lock(&self, cmd: Command, callback: Callback<()>) -> Result<()> {
-        self.schedule(cmd, StorageCallback::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock.inc();
-        // TODO(nrc) only increment one or the other
-        KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc();
         Ok(())
     }
 
@@ -1204,26 +1067,6 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
             .flatten()
     }
-
-    /// Get MVCC info of a transactional key.
-    pub fn mvcc_by_key(&self, cmd: Command, callback: Callback<MvccInfo>) -> Result<()> {
-        self.schedule(cmd, StorageCallback::MvccInfoByKey(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.key_mvcc.inc();
-
-        Ok(())
-    }
-
-    /// Find the first key that has a version with its `start_ts` equal to the given `start_ts`, and
-    /// return its MVCC info.
-    pub fn mvcc_by_start_ts(
-        &self,
-        cmd: Command,
-        callback: Callback<Option<(Key, MvccInfo)>>,
-    ) -> Result<()> {
-        self.schedule(cmd, StorageCallback::MvccInfoByStartTs(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
-        Ok(())
-    }
 }
 
 /// Get a single value.
@@ -1322,7 +1165,7 @@ mod tests {
 
     use crate::storage::txn::{commands, Error as TxnError, ErrorInner as TxnErrorInner};
     use futures03::executor::block_on;
-    use kvproto::kvrpcpb::CommandPri;
+    use kvproto::kvrpcpb::{CommandPri, LockInfo};
     use std::{
         fmt::Debug,
         sync::mpsc::{channel, Sender},
@@ -1405,7 +1248,7 @@ mod tests {
                 .wait(),
         );
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                     b"x".to_vec(),
@@ -1427,7 +1270,7 @@ mod tests {
                 .wait(),
         );
         storage
-            .commit(
+            .sched_txn_command(
                 commands::Commit::new(
                     vec![Key::from_raw(b"x")],
                     100.into(),
@@ -1458,7 +1301,7 @@ mod tests {
         let storage = TestStorageBuilder::from_engine(engine).build().unwrap();
         let (tx, rx) = channel();
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
                         Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
@@ -1551,7 +1394,7 @@ mod tests {
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
                         Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
@@ -1657,7 +1500,7 @@ mod tests {
         );
 
         storage
-            .commit(
+            .sched_txn_command(
                 commands::Commit::new(
                     vec![
                         Key::from_raw(b"a"),
@@ -1790,7 +1633,7 @@ mod tests {
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
                         Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
@@ -1815,7 +1658,7 @@ mod tests {
                 .wait(),
         );
         storage
-            .commit(
+            .sched_txn_command(
                 commands::Commit::new(
                     vec![
                         Key::from_raw(b"a"),
@@ -1856,7 +1699,7 @@ mod tests {
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
                         Mutation::Put((Key::from_raw(b"a"), b"aa".to_vec())),
@@ -1888,7 +1731,7 @@ mod tests {
         );
         assert_eq!(x.remove(0).unwrap(), None);
         storage
-            .commit(
+            .sched_txn_command(
                 commands::Commit::new(
                     vec![
                         Key::from_raw(b"a"),
@@ -1931,7 +1774,7 @@ mod tests {
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                     b"x".to_vec(),
@@ -1941,7 +1784,7 @@ mod tests {
             )
             .unwrap();
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
                     b"y".to_vec(),
@@ -1953,7 +1796,7 @@ mod tests {
         rx.recv().unwrap();
         rx.recv().unwrap();
         storage
-            .commit(
+            .sched_txn_command(
                 commands::Commit::new(
                     vec![Key::from_raw(b"x")],
                     100.into(),
@@ -1964,7 +1807,7 @@ mod tests {
             )
             .unwrap();
         storage
-            .commit(
+            .sched_txn_command(
                 commands::Commit::new(
                     vec![Key::from_raw(b"y")],
                     101.into(),
@@ -1989,7 +1832,7 @@ mod tests {
                 .wait(),
         );
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![Mutation::Put((Key::from_raw(b"x"), b"105".to_vec()))],
                     b"x".to_vec(),
@@ -2018,13 +1861,13 @@ mod tests {
                 .wait(),
         );
         storage
-            .pause(
-                commands::Pause::new(vec![Key::from_raw(b"x")], 1000, Context::default()),
+            .sched_txn_command::<()>(
+                commands::Pause::new(vec![Key::from_raw(b"x")], 1000, Context::default()).into(),
                 expect_ok_callback(tx.clone(), 1),
             )
             .unwrap();
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![Mutation::Put((Key::from_raw(b"y"), b"101".to_vec()))],
                     b"y".to_vec(),
@@ -2036,7 +1879,7 @@ mod tests {
         rx.recv().unwrap();
         rx.recv().unwrap();
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![Mutation::Put((Key::from_raw(b"z"), b"102".to_vec()))],
                     b"y".to_vec(),
@@ -2053,7 +1896,7 @@ mod tests {
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                     b"x".to_vec(),
@@ -2064,7 +1907,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage
-            .cleanup(
+            .sched_txn_command(
                 commands::Cleanup::new(
                     Key::from_raw(b"x"),
                     100.into(),
@@ -2089,7 +1932,7 @@ mod tests {
 
         let ts = TimeStamp::compose;
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
                     vec![Mutation::Put((Key::from_raw(b"x"), b"110".to_vec()))],
                     b"x".to_vec(),
@@ -2102,7 +1945,7 @@ mod tests {
         rx.recv().unwrap();
 
         storage
-            .cleanup(
+            .sched_txn_command(
                 commands::Cleanup::new(
                     Key::from_raw(b"x"),
                     ts(110, 0),
@@ -2120,7 +1963,7 @@ mod tests {
         rx.recv().unwrap();
 
         storage
-            .cleanup(
+            .sched_txn_command(
                 commands::Cleanup::new(
                     Key::from_raw(b"x"),
                     ts(110, 0),
@@ -2148,7 +1991,7 @@ mod tests {
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_context(
                     vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                     b"x".to_vec(),
@@ -2162,7 +2005,7 @@ mod tests {
         let mut ctx = Context::default();
         ctx.set_priority(CommandPri::High);
         storage
-            .commit(
+            .sched_txn_command(
                 commands::Commit::new(vec![Key::from_raw(b"x")], 100.into(), 101.into(), ctx),
                 expect_ok_callback(tx, 2),
             )
@@ -2191,7 +2034,7 @@ mod tests {
                 .wait(),
         );
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![Mutation::Put((Key::from_raw(b"x"), b"100".to_vec()))],
                     b"x".to_vec(),
@@ -2202,7 +2045,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage
-            .commit(
+            .sched_txn_command(
                 commands::Commit::new(
                     vec![Key::from_raw(b"x")],
                     100.into(),
@@ -2215,7 +2058,7 @@ mod tests {
         rx.recv().unwrap();
 
         storage
-            .pause(
+            .sched_txn_command(
                 commands::Pause::new(vec![Key::from_raw(b"y")], 1000, Context::default()),
                 expect_ok_callback(tx, 3),
             )
@@ -2236,7 +2079,7 @@ mod tests {
         let (tx, rx) = channel();
         // Write x and y.
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
                         Mutation::Put((Key::from_raw(b"x"), b"100".to_vec())),
@@ -2251,7 +2094,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage
-            .commit(
+            .sched_txn_command(
                 commands::Commit::new(
                     vec![
                         Key::from_raw(b"x"),
@@ -3294,7 +3137,7 @@ mod tests {
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
                         Mutation::Put((Key::from_raw(b"x"), b"foo".to_vec())),
@@ -3310,7 +3153,7 @@ mod tests {
         rx.recv().unwrap();
 
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::new(
                     vec![
                         Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
@@ -3382,14 +3225,14 @@ mod tests {
         );
 
         storage
-            .scan_locks(
+            .sched_txn_command(
                 commands::ScanLock::new(99.into(), &[], 10, Context::default()),
                 expect_value_callback(tx.clone(), 0, vec![]),
             )
             .unwrap();
         rx.recv().unwrap();
         storage
-            .scan_locks(
+            .sched_txn_command(
                 commands::ScanLock::new(100.into(), &[], 10, Context::default()),
                 expect_value_callback(
                     tx.clone(),
@@ -3400,7 +3243,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage
-            .scan_locks(
+            .sched_txn_command(
                 commands::ScanLock::new(100.into(), b"a", 10, Context::default()),
                 expect_value_callback(
                     tx.clone(),
@@ -3411,14 +3254,14 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage
-            .scan_locks(
+            .sched_txn_command(
                 commands::ScanLock::new(100.into(), b"y", 10, Context::default()),
                 expect_value_callback(tx.clone(), 0, vec![lock_y.clone(), lock_z.clone()]),
             )
             .unwrap();
         rx.recv().unwrap();
         storage
-            .scan_locks(
+            .sched_txn_command(
                 commands::ScanLock::new(101.into(), &[], 10, Context::default()),
                 expect_value_callback(
                     tx.clone(),
@@ -3436,7 +3279,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage
-            .scan_locks(
+            .sched_txn_command(
                 commands::ScanLock::new(101.into(), &[], 4, Context::default()),
                 expect_value_callback(
                     tx.clone(),
@@ -3447,7 +3290,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage
-            .scan_locks(
+            .sched_txn_command(
                 commands::ScanLock::new(101.into(), b"b", 4, Context::default()),
                 expect_value_callback(
                     tx.clone(),
@@ -3463,7 +3306,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
         storage
-            .scan_locks(
+            .sched_txn_command(
                 commands::ScanLock::new(101.into(), b"b", 0, Context::default()),
                 expect_value_callback(tx, 0, vec![lock_b, lock_c, lock_x, lock_y, lock_z]),
             )
@@ -3480,7 +3323,7 @@ mod tests {
 
         // These locks (transaction ts=99) are not going to be resolved.
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
                         Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
@@ -3548,7 +3391,7 @@ mod tests {
                 }
 
                 storage
-                    .prewrite(
+                    .sched_txn_command(
                         commands::Prewrite::with_defaults(mutations, b"x".to_vec(), ts),
                         expect_ok_callback(tx.clone(), 0),
                     )
@@ -3565,7 +3408,7 @@ mod tests {
                     },
                 );
                 storage
-                    .resolve_lock(
+                    .sched_txn_command(
                         commands::ResolveLock::new(txn_status, None, vec![], Context::default()),
                         expect_ok_callback(tx.clone(), 0),
                     )
@@ -3574,7 +3417,7 @@ mod tests {
 
                 // All locks should be resolved except for a, b and c.
                 storage
-                    .scan_locks(
+                    .sched_txn_command(
                         commands::ScanLock::new(ts, &[], 0, Context::default()),
                         expect_value_callback(
                             tx.clone(),
@@ -3596,7 +3439,7 @@ mod tests {
         let (tx, rx) = channel();
 
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
                         Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
@@ -3614,7 +3457,7 @@ mod tests {
         // Rollback key 'b' and key 'c' and left key 'a' still locked.
         let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
         storage
-            .resolve_lock(
+            .sched_txn_command(
                 commands::ResolveLockLite::new(
                     99.into(),
                     TimeStamp::zero(),
@@ -3635,7 +3478,7 @@ mod tests {
             lock
         };
         storage
-            .scan_locks(
+            .sched_txn_command(
                 commands::ScanLock::new(99.into(), &[], 0, Context::default()),
                 expect_value_callback(tx.clone(), 0, vec![lock_a]),
             )
@@ -3644,7 +3487,7 @@ mod tests {
 
         // Resolve lock for key 'a'.
         storage
-            .resolve_lock(
+            .sched_txn_command(
                 commands::ResolveLockLite::new(
                     99.into(),
                     TimeStamp::zero(),
@@ -3657,7 +3500,7 @@ mod tests {
         rx.recv().unwrap();
 
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![
                         Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
@@ -3675,7 +3518,7 @@ mod tests {
         // Commit key 'b' and key 'c' and left key 'a' still locked.
         let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
         storage
-            .resolve_lock(
+            .sched_txn_command(
                 commands::ResolveLockLite::new(
                     101.into(),
                     102.into(),
@@ -3696,7 +3539,7 @@ mod tests {
             lock
         };
         storage
-            .scan_locks(
+            .sched_txn_command(
                 commands::ScanLock::new(101.into(), &[], 0, Context::default()),
                 expect_value_callback(tx, 0, vec![lock_a]),
             )
@@ -3716,7 +3559,7 @@ mod tests {
 
         // No lock.
         storage
-            .txn_heart_beat(
+            .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, Context::default()),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
@@ -3729,7 +3572,7 @@ mod tests {
         rx.recv().unwrap();
 
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
                     vec![Mutation::Put((k.clone(), v))],
                     k.as_encoded().to_vec(),
@@ -3743,7 +3586,7 @@ mod tests {
 
         // `advise_ttl` = 90, which is less than current ttl 100. The lock's ttl will remains 100.
         storage
-            .txn_heart_beat(
+            .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, Context::default()),
                 expect_value_callback(tx.clone(), 0, uncommitted(100, TimeStamp::zero())),
             )
@@ -3753,7 +3596,7 @@ mod tests {
         // `advise_ttl` = 110, which is greater than current ttl. The lock's ttl will be updated to
         // 110.
         storage
-            .txn_heart_beat(
+            .sched_txn_command(
                 commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, Context::default()),
                 expect_value_callback(tx.clone(), 0, uncommitted(110, TimeStamp::zero())),
             )
@@ -3762,7 +3605,7 @@ mod tests {
 
         // Lock not match. Nothing happens except throwing an error.
         storage
-            .txn_heart_beat(
+            .sched_txn_command(
                 commands::TxnHeartBeat::new(k, 11.into(), 150, Context::default()),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
@@ -3790,7 +3633,7 @@ mod tests {
 
         // No lock and no commit info. Gets an error.
         storage
-            .check_txn_status(
+            .sched_txn_command(
                 commands::CheckTxnStatus::new(
                     k.clone(),
                     ts(9, 0),
@@ -3812,7 +3655,7 @@ mod tests {
         // No lock and no commit info. If specified rollback_if_not_exist, the key will be rolled
         // back.
         storage
-            .check_txn_status(
+            .sched_txn_command(
                 commands::CheckTxnStatus::new(
                     k.clone(),
                     ts(9, 0),
@@ -3828,7 +3671,7 @@ mod tests {
 
         // A rollback will be written, so an later-arriving prewrite will fail.
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_defaults(
                     vec![Mutation::Put((k.clone(), v.clone()))],
                     k.as_encoded().to_vec(),
@@ -3845,7 +3688,7 @@ mod tests {
         rx.recv().unwrap();
 
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
                     vec![Mutation::Put((k.clone(), v.clone()))],
                     k.as_encoded().to_vec(),
@@ -3859,7 +3702,7 @@ mod tests {
 
         // If lock exists and not expired, returns the lock's TTL.
         storage
-            .check_txn_status(
+            .sched_txn_command(
                 commands::CheckTxnStatus::new(
                     k.clone(),
                     ts(10, 0),
@@ -3876,7 +3719,7 @@ mod tests {
         // TODO: Check the lock's min_commit_ts field.
 
         storage
-            .commit(
+            .sched_txn_command(
                 commands::Commit::new(vec![k.clone()], ts(10, 0), ts(20, 0), Context::default()),
                 expect_ok_callback(tx.clone(), 0),
             )
@@ -3885,7 +3728,7 @@ mod tests {
 
         // If the transaction is committed, returns the commit_ts.
         storage
-            .check_txn_status(
+            .sched_txn_command(
                 commands::CheckTxnStatus::new(
                     k.clone(),
                     ts(10, 0),
@@ -3900,7 +3743,7 @@ mod tests {
         rx.recv().unwrap();
 
         storage
-            .prewrite(
+            .sched_txn_command(
                 commands::Prewrite::with_lock_ttl(
                     vec![Mutation::Put((k.clone(), v))],
                     k.as_encoded().to_vec(),
@@ -3914,7 +3757,7 @@ mod tests {
 
         // If the lock has expired, cleanup it.
         storage
-            .check_txn_status(
+            .sched_txn_command(
                 commands::CheckTxnStatus::new(
                     k.clone(),
                     ts(25, 0),
@@ -3929,7 +3772,7 @@ mod tests {
         rx.recv().unwrap();
 
         storage
-            .commit(
+            .sched_txn_command(
                 commands::Commit::new(vec![k], ts(25, 0), ts(28, 0), Context::default()),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
