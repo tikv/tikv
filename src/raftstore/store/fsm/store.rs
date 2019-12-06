@@ -68,7 +68,8 @@ use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 type Key = Vec<u8>;
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
-const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
+const RAFT_WB_SHRINK_SIZE: usize = 16 * 1024 * 1024;
+const DEFAULT_RAFT_WB_CAPACITY: usize = 8 * 1024 * 1024;
 pub const PENDING_VOTES_CAP: usize = 20;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
@@ -527,7 +528,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 });
             let data_size = self.poll_ctx.raft_wb.data_size();
             if data_size > RAFT_WB_SHRINK_SIZE {
-                self.poll_ctx.raft_wb = WriteBatch::with_capacity(4 * 1024);
+                self.poll_ctx.raft_wb = WriteBatch::with_capacity(DEFAULT_RAFT_WB_CAPACITY);
             } else {
                 self.poll_ctx.raft_wb.clear();
             }
