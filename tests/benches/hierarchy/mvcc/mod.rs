@@ -21,7 +21,7 @@ where
 {
     let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
-    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
 
     let kvs = KvGenerator::with_seed(
         config.key_length,
