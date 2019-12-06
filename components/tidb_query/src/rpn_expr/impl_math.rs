@@ -361,6 +361,10 @@ fn rand(metadata: &RefCell<XorShiftRng>) -> Result<Option<Real>> {
     Ok(Real::new(res).ok())
 }
 
+fn init_rng_data(_expr: &mut Expr) -> Result<RefCell<XorShiftRng>> {
+    Ok(RefCell::new(get_rng(None)))
+}
+
 #[inline]
 #[rpn_fn]
 fn rand_with_seed(seed: &Option<Int>) -> Result<Option<Real>> {
@@ -381,10 +385,6 @@ fn rand_with_seed(seed: &Option<Int>) -> Result<Option<Real>> {
             Ok(Real::new(res).ok())
         }
     }
-}
-
-fn init_rng_data(_expr: &mut Expr) -> Result<RefCell<XorShiftRng>> {
-    Ok(RefCell::new(get_rng(None)))
 }
 
 #[inline]
