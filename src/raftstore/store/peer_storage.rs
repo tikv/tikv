@@ -15,7 +15,7 @@ use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
 use engine_rocks::RocksSnapshot;
-use engine_traits::{Peekable as PeekableTrait, KvEngine};
+use engine_traits::{KvEngine, Peekable as PeekableTrait};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1349,7 +1349,10 @@ pub fn do_snapshot<E>(
     raft_snap: E::Snapshot,
     kv_snap: E::Snapshot,
     region_id: u64,
-) -> raft::Result<Snapshot> where E: KvEngine {
+) -> raft::Result<Snapshot>
+where
+    E: KvEngine,
+{
     debug!(
         "begin to generate a snapshot";
         "region_id" => region_id,

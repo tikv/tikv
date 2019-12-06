@@ -17,10 +17,10 @@ use kvproto::tikvpb::TikvClient;
 
 use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use engine_rocks::RocksEngine;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
-use engine_rocks::RocksEngine;
 
 use super::metrics::*;
 use super::{Config, Error, Result};

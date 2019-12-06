@@ -20,11 +20,11 @@ use crate::raftstore::store::SnapManager;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
+use engine_rocks::RocksEngine;
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Worker;
 use tikv_util::Either;
-use engine_rocks::RocksEngine;
 
 use super::load_statistics::*;
 use super::raft_client::RaftClient;

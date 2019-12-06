@@ -7,8 +7,9 @@ use std::fmt::Debug;
 use std::ops::Deref;
 
 pub trait Snapshot<E>
-where Self: 'static + Peekable + Iterable + Send + Sync + Sized + Debug,
-      E: KvEngine,
+where
+    Self: 'static + Peekable + Iterable + Send + Sync + Sized + Debug,
+    E: KvEngine,
 {
     type SyncSnapshot: SyncSnapshot<Self>;
 
@@ -20,5 +21,7 @@ where Self: 'static + Peekable + Iterable + Send + Sync + Sized + Debug,
 }
 
 pub trait SyncSnapshot<T>
-where Self: Clone + Send + Sync + Sized + Debug + Deref<Target = T>
-{}
+where
+    Self: Clone + Send + Sync + Sized + Debug + Deref<Target = T>,
+{
+}
