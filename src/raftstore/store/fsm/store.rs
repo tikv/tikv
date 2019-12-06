@@ -193,7 +193,7 @@ pub struct PollContext<T, C: 'static> {
     pub cfg: Arc<Config>,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
-    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
+    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
@@ -681,7 +681,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub cfg: Arc<Config>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask>,
-    consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
+    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
@@ -923,7 +923,7 @@ where
 
 struct Workers {
     pd_worker: FutureWorker<PdTask>,
-    consistency_check_worker: Worker<ConsistencyCheckTask>,
+    consistency_check_worker: Worker<ConsistencyCheckTask<RocksEngine>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
