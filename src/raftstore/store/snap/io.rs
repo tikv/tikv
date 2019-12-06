@@ -4,7 +4,7 @@ use std::io::{self, BufReader};
 use std::{fs, usize};
 
 use engine::CfName;
-use engine_rocks::{RocksSnapshot, RocksSstWriter, RocksSstWriterBuilder};
+use engine_rocks::{RocksSnapshot, RocksEngine};
 use engine_traits::IOLimiter;
 use engine_traits::{ImportExt, IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
@@ -68,7 +68,7 @@ pub fn build_sst_cf_file<L: IOLimiter>(
     end_key: &[u8],
     io_limiter: Option<&L>,
 ) -> Result<BuildStatistics, Error> {
-    let mut sst_writer = create_sst_file_writer(snap, cf, path)?;
+    let mut sst_writer = create_sst_file_writer::<RocksEngine>(snap, cf, path)?;
     let mut stats = BuildStatistics::default();
     let base = io_limiter
         .as_ref()
@@ -144,13 +144,15 @@ where
     Ok(())
 }
 
-fn create_sst_file_writer(
-    snap: &RocksSnapshot,
+fn create_sst_file_writer<E>(
+    snap: &E::Snapshot,
     cf: CfName,
     path: &str,
-) -> Result<RocksSstWriter, Error> {
+) -> Result<E::SstWriter, Error>
+where E: KvEngine
+{
     let engine = snap.get_db();
-    let builder = RocksSstWriterBuilder::new().set_db(&engine).set_cf(cf);
+    let builder = E::SstWriterBuilder::new().set_db(&engine).set_cf(cf);
     let writer = box_try!(builder.build(path));
     Ok(writer)
 }
