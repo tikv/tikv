@@ -12,7 +12,7 @@ use std::thread::{self, JoinHandle};
 use tikv_util::mpsc;
 use tikv_util::sys as sys_util;
 
-pub const MAX_LOW_PRIORITY_MESSAGE_PER_TICK: usize = 64;
+pub const MAX_LOW_PRIORITY_MESSAGE_PER_TICK: usize = 128;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -412,7 +412,8 @@ where
         B: HandlerBuilder<N, C>,
         B::Handler: Send + 'static,
     {
-        for i in 0..self.pool_size {
+        let pool_size = self.pool_size + self.high_priority_thread_number;
+        for i in 0..pool_size {
             let high_priority = i < self.high_priority_thread_number;
             let handler = builder.build(high_priority);
             let (receiver, low_receiver) = if high_priority {
