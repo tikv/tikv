@@ -27,15 +27,15 @@ pub struct BuildStatistics {
 /// Build a snapshot file for the given column family in plain format.
 /// If there are no key-value pairs fetched, no files will be created at `path`,
 /// otherwise the file will be created and synchronized.
-pub fn build_plain_cf_file<S>(
+pub fn build_plain_cf_file<E>(
     path: &str,
-    snap: &S,
+    snap: &E::Snapshot,
     cf: &str,
     start_key: &[u8],
     end_key: &[u8],
 ) -> Result<BuildStatistics, Error>
 where
-    S: SnapshotTrait,
+    E: KvEngine,
 {
     let mut file = box_try!(OpenOptions::new().write(true).create_new(true).open(path));
     let mut stats = BuildStatistics::default();
@@ -162,7 +162,7 @@ mod tests {
     use super::*;
     use crate::raftstore::store::snap::tests::*;
     use engine::CF_DEFAULT;
-    use engine_rocks::{Compat, RocksIOLimiter};
+    use engine_rocks::{Compat, RocksIOLimiter, RocksEngine};
     use tempfile::Builder;
 
     struct TestStaleDetector;
@@ -183,7 +183,7 @@ mod tests {
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let plain_file_path = snap_cf_dir.path().join("plain");
                 let snap = RocksSnapshot::new(Arc::clone(&db));
-                let stats = build_plain_cf_file(
+                let stats = build_plain_cf_file::<RocksEngine>(
                     &plain_file_path.to_str().unwrap(),
                     &snap,
                     CF_DEFAULT,
