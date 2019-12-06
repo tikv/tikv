@@ -646,7 +646,7 @@ impl Snap {
             let cf_file = &mut self.cf_files[self.cf_index];
             let path = cf_file.tmp_path.to_str().unwrap();
             let cf_stat = if plain_file_used(cf_file.cf) {
-                snap_io::build_plain_cf_file(path, kv_snap, cf_file.cf, &begin_key, &end_key)?
+                snap_io::build_plain_cf_file::<RocksEngine>(path, kv_snap, cf_file.cf, &begin_key, &end_key)?
             } else {
                 let limiter = self.limiter.as_ref().map(|c| c.as_ref());
                 snap_io::build_sst_cf_file(
