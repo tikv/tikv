@@ -20,9 +20,9 @@ pub trait SstReader: Iterable + Sized {
 }
 
 /// A builder builds a SstWriter.
-pub trait SstWriterBuilder<E> {
-    type SstWriter: SstWriter;
-
+pub trait SstWriterBuilder<E>
+where E: SstExt
+{
     /// Create a new SstWriterBuilder.
     fn new() -> Self;
 
@@ -36,7 +36,7 @@ pub trait SstWriterBuilder<E> {
     fn set_in_memory(self, in_memory: bool) -> Self;
 
     /// Builder a SstWriter.
-    fn build(self, path: &str) -> Result<Self::SstWriter>;
+    fn build(self, path: &str) -> Result<E::SstWriter>;
 }
 
 /// SstWriter is used to create sst files that can be added to database later.

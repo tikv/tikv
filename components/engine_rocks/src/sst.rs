@@ -113,10 +113,8 @@ pub struct RocksSstWriterBuilder {
     in_memory: bool,
 }
 
-impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
-    type SstWriter = RocksSstWriter;
-
-    fn new() -> Self {
+impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder { 
+   fn new() -> Self {
         RocksSstWriterBuilder {
             cf: None,
             in_memory: false,
@@ -139,7 +137,7 @@ impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
         self
     }
 
-    fn build(self, path: &str) -> Result<Self::SstWriter> {
+    fn build(self, path: &str) -> Result<RocksSstWriter> {
         let mut env = None;
         let mut io_options = if let Some(db) = self.db.as_ref() {
             env = db.env();
