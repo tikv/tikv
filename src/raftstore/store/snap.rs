@@ -190,7 +190,7 @@ where Self: Read + Write + Send,
 
 // A helper function to copy snapshot.
 // Only used in tests.
-pub fn copy_snapshot(mut from: Box<dyn Snapshot<RocksEngine>>, mut to: Box<dyn Snapshot<RocksEngine>>) -> io::Result<()> {
+pub fn copy_snapshot<E>(mut from: Box<dyn Snapshot<E>>, mut to: Box<dyn Snapshot<E>>) -> io::Result<()> where E: KvEngine {
     if !to.exists() {
         io::copy(&mut from, &mut to)?;
         to.save()?;
