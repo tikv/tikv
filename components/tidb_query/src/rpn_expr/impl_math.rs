@@ -1246,5 +1246,11 @@ mod tests {
                 .unwrap();
             assert_eq!(got, exp);
         }
+
+        assert!(RpnFnScalarEvaluator::new()
+            .push_param(ScalarValue::Real(None))
+            .evaluate::<Real>(ScalarFuncSig::RoundReal)
+            .unwrap()
+            .is_none());
     }
 }
