@@ -292,7 +292,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
-            | ScalarFuncSig::FromDays => (1, 1),
+            | ScalarFuncSig::FromDays
+            | ScalarFuncSig::OctInt => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -455,7 +456,6 @@ impl ScalarFunc {
             | ScalarFuncSig::NowWithArg
             | ScalarFuncSig::NowWithoutArg
             | ScalarFuncSig::NullTimeDiff
-            | ScalarFuncSig::OctInt
             | ScalarFuncSig::OctString
             | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
@@ -1011,6 +1011,7 @@ dispatch_call! {
         Compress => compress,
         Uncompress => uncompress,
         Quote => quote,
+        OctInt => oct_int,
 
         Conv => conv,
         Trim1Arg => trim_1_arg,
@@ -1387,6 +1388,7 @@ mod tests {
                     ScalarFuncSig::Uncompress,
                     ScalarFuncSig::UncompressedLength,
                     ScalarFuncSig::Quote,
+                    ScalarFuncSig::OctInt,
                 ],
                 1,
                 1,
@@ -1600,7 +1602,6 @@ mod tests {
             ScalarFuncSig::NowWithArg,
             ScalarFuncSig::NowWithoutArg,
             ScalarFuncSig::NullTimeDiff,
-            ScalarFuncSig::OctInt,
             ScalarFuncSig::OctString,
             ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
