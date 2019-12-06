@@ -422,7 +422,8 @@ fn process_read_impl<E: Engine>(
                         next_scan_key,
                         kv_pairs,
                         cmd.ctx.clone(),
-                    ),
+                    )
+                    .into(),
                 })
             }
         }
@@ -826,7 +827,8 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 ProcessResult::Res
             } else {
                 ProcessResult::NextCommand {
-                    cmd: ResolveLock::new(txn_status, scan_key.take(), vec![], cmd.ctx.clone()),
+                    cmd: ResolveLock::new(txn_status, scan_key.take(), vec![], cmd.ctx.clone())
+                        .into(),
                 }
             };
 
@@ -1109,7 +1111,7 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts));
+        let cmd = Prewrite::with_defaults(mutations, primary, TimeStamp::from(start_ts)).into();
         let m = DummyLockManager {};
         let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
         if let ProcessResult::MultiRes { results } = ret.pr {
@@ -1141,7 +1143,7 @@ mod tests {
             ctx,
         );
         let m = DummyLockManager {};
-        let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
+        let ret = process_write_impl(cmd.into(), snap, Some(m), statistics)?;
         let ctx = Context::default();
         engine.write(&ctx, ret.to_be_write).unwrap();
         Ok(())

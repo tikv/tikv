@@ -509,18 +509,19 @@ mod tests {
     fn test_command_latches() {
         let mut temp_map = HashMap::default();
         temp_map.insert(10.into(), 20.into());
-        let readonly_cmds = vec![
-            commands::ScanLock::new(5.into(), &[], 0, Context::default()),
-            commands::ResolveLock::new(temp_map.clone(), None, vec![], Context::default()),
-            commands::MvccByKey::new(Key::from_raw(b"k"), Context::default()),
-            commands::MvccByStartTs::new(25.into(), Context::default()),
+        let readonly_cmds: Vec<Command> = vec![
+            commands::ScanLock::new(5.into(), &[], 0, Context::default()).into(),
+            commands::ResolveLock::new(temp_map.clone(), None, vec![], Context::default()).into(),
+            commands::MvccByKey::new(Key::from_raw(b"k"), Context::default()).into(),
+            commands::MvccByStartTs::new(25.into(), Context::default()).into(),
         ];
-        let write_cmds = vec![
+        let write_cmds: Vec<Command> = vec![
             commands::Prewrite::with_defaults(
                 vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
                 b"k".to_vec(),
                 10.into(),
-            ),
+            )
+            .into(),
             commands::AcquirePessimisticLock::new(
                 vec![(Key::from_raw(b"k"), false)],
                 b"k".to_vec(),
@@ -530,26 +531,31 @@ mod tests {
                 TimeStamp::default(),
                 WaitTimeout::Default,
                 Context::default(),
-            ),
+            )
+            .into(),
             commands::Commit::new(
                 vec![Key::from_raw(b"k")],
                 10.into(),
                 20.into(),
                 Context::default(),
-            ),
+            )
+            .into(),
             commands::Cleanup::new(
                 Key::from_raw(b"k"),
                 10.into(),
                 20.into(),
                 Context::default(),
-            ),
-            commands::Rollback::new(vec![Key::from_raw(b"k")], 10.into(), Context::default()),
+            )
+            .into(),
+            commands::Rollback::new(vec![Key::from_raw(b"k")], 10.into(), Context::default())
+                .into(),
             commands::PessimisticRollback::new(
                 vec![Key::from_raw(b"k")],
                 10.into(),
                 20.into(),
                 Context::default(),
-            ),
+            )
+            .into(),
             commands::ResolveLock::new(
                 temp_map.clone(),
                 None,
@@ -567,14 +573,17 @@ mod tests {
                     ),
                 )],
                 Context::default(),
-            ),
+            )
+            .into(),
             commands::ResolveLockLite::new(
                 10.into(),
                 TimeStamp::zero(),
                 vec![Key::from_raw(b"k")],
                 Context::default(),
-            ),
-            commands::TxnHeartBeat::new(Key::from_raw(b"k"), 10.into(), 100, Context::default()),
+            )
+            .into(),
+            commands::TxnHeartBeat::new(Key::from_raw(b"k"), 10.into(), 100, Context::default())
+                .into(),
         ];
 
         let latches = Latches::new(1024);
