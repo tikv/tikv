@@ -1133,12 +1133,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hashbrown"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1de41fb8dba9714efd92241565cdff73f78508c95697dd56787d3cba27e2353"
-
-[[package]]
 name = "heck"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2343,19 +2337,15 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#243278168c5488d94f2fd45cda9efd121c7ecb2a"
+source = "git+https://github.com/Fullstop000/raft-rs?branch=merge-append-response#6e8a39449cadc95c1b3dbf7064e027f982f25bb7"
 dependencies = [
+ "fxhash",
  "getset",
- "hashbrown",
- "log",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
- "raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)",
+ "raft-proto 0.6.0-alpha (git+https://github.com/Fullstop000/raft-rs?branch=merge-append-response)",
  "rand 0.6.5",
  "slog",
- "slog-envlogger",
- "slog-stdlog",
- "term",
 ]
 
 [[package]]
@@ -2363,12 +2353,12 @@ name = "raft"
 version = "0.6.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b246d7eb1d53af6915946f3c70d8503171664f8fa4c0efa092e9897275a19dc"
-replace = "raft 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)"
+replace = "raft 0.6.0-alpha (git+https://github.com/Fullstop000/raft-rs?branch=merge-append-response)"
 
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/pingcap/raft-rs#243278168c5488d94f2fd45cda9efd121c7ecb2a"
+source = "git+https://github.com/Fullstop000/raft-rs?branch=merge-append-response#6e8a39449cadc95c1b3dbf7064e027f982f25bb7"
 dependencies = [
  "bytes",
  "lazy_static",
@@ -2383,7 +2373,7 @@ name = "raft-proto"
 version = "0.6.0-alpha"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8892d0cb5e5f3b7d213ab9c7de44217d52b2751982654c69cdfbfa393940a42a"
-replace = "raft-proto 0.6.0-alpha (git+https://github.com/pingcap/raft-rs)"
+replace = "raft-proto 0.6.0-alpha (git+https://github.com/Fullstop000/raft-rs?branch=merge-append-response)"
 
 [[package]]
 name = "rand"
@@ -2894,21 +2884,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "slog-envlogger"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "906a1a0bc43fed692df4b82a5e2fbfc3733db8dad8bb514ab27a4f23ad04f5c0"
-dependencies = [
- "log",
- "regex",
- "slog",
- "slog-async",
- "slog-scope",
- "slog-stdlog",
- "slog-term",
-]
-
-[[package]]
 name = "slog-global"
 version = "0.1.0"
 source = "git+https://github.com/breeswish/slog-global.git?rev=0e23a5baff302a9d7bccd85f8f31e43339c2f2c1#0e23a5baff302a9d7bccd85f8f31e43339c2f2c1"
@@ -2917,29 +2892,6 @@ dependencies = [
  "lazy_static",
  "log",
  "slog",
-]
-
-[[package]]
-name = "slog-scope"
-version = "4.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1d3ec6214d46e57a7ec87c1972bbca66c59172a0cfffa5233c54726afb946bf"
-dependencies = [
- "arc-swap",
- "lazy_static",
- "slog",
-]
-
-[[package]]
-name = "slog-stdlog"
-version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be4d87903baf655da2d82bc3ac3f7ef43868c58bf712b3a661fda72009304c23"
-dependencies = [
- "crossbeam",
- "log",
- "slog",
- "slog-scope",
 ]
 
 [[package]]
