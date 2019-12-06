@@ -13,7 +13,7 @@ use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 
 use crate::into_other::IntoOther;
-use crate::raftstore::coprocessor::SeekRegionCallback;
+use crate::raftstore::coprocessor::{RegionInfo, RegionInfoCallback, SeekRegionCallback};
 
 mod btree_engine;
 mod compact_listener;
@@ -153,9 +153,19 @@ pub trait Iterator: Send {
 }
 
 pub trait RegionInfoProvider: Send + Clone + 'static {
-    /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
-    /// this TiKV satisfies `filter(peer)` returns true.
-    fn seek_region(&self, from: &[u8], filter: SeekRegionCallback) -> Result<()>;
+    /// Get a iterator of regions that contains `from` or have keys larger than `from`, and invoke
+    /// the callback to process the result.
+    fn seek_region(&self, _from: &[u8], _callback: SeekRegionCallback) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn find_region_by_id(
+        &self,
+        _reigon_id: u64,
+        _callback: RegionInfoCallback<Option<RegionInfo>>,
+    ) -> Result<()> {
+        unimplemented!()
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

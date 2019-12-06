@@ -178,6 +178,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let engine = RaftKv::new(raft_router.clone());
 
+    // Create CoprocessorHost.
+    let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router.clone());
+
+    // Create region collection.
+    let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+    region_info_accessor.start();
+
     let storage_read_pool =
         storage::build_read_pool(&cfg.readpool.storage, pd_sender.clone(), engine.clone());
 
@@ -191,11 +198,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         engine.clone(),
         Some(engines.kv.clone()),
         Some(raft_router.clone()),
+        Some(region_info_accessor.clone()),
         cfg.gc.clone(),
     );
     gc_worker
         .start()
         .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
+    gc_worker
+        .start_observe_lock_apply(&mut coprocessor_host)
+        .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
 
     let storage = create_raft_storage(
         engine.clone(),
@@ -214,7 +225,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .max_total_size(cfg.server.snap_max_total_size.0)
         .build(
             snap_path.as_path().to_str().unwrap().to_owned(),
-            Some(router.clone()),
+            Some(router),
         );
 
     let server_cfg = Arc::new(cfg.server.clone());
@@ -307,17 +318,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create node.
     let mut node = Node::new(system, &server_cfg, &cfg.raft_store, pd_client.clone());
-
-    // Create CoprocessorHost.
-    let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router);
-
-    gc_worker
-        .start_observe_lock_apply(&mut coprocessor_host)
-        .unwrap_or_else(|e| fatal!("gc worker failed to observe lock apply: {}", e));
-
-    // Create region collection.
-    let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
-    region_info_accessor.start();
 
     // Register the role change observer of the lock manager.
     if let Some(lm) = lock_mgr.as_ref() {
