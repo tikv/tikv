@@ -5,10 +5,10 @@ use crate::errors::Result;
 use crate::iterable::Iterable;
 use std::path::PathBuf;
 
-pub trait SstExt {
+pub trait SstExt: Sized {
     type SstReader: SstReader;
     type SstWriter: SstWriter;
-    type SstWriterBuilder: SstWriterBuilder;
+    type SstWriterBuilder: SstWriterBuilder<Self>;
 }
 
 /// SstReader is used to read an SST file.
@@ -20,15 +20,14 @@ pub trait SstReader: Iterable + Sized {
 }
 
 /// A builder builds a SstWriter.
-pub trait SstWriterBuilder {
-    type KvEngine;
+pub trait SstWriterBuilder<E> {
     type SstWriter: SstWriter;
 
     /// Create a new SstWriterBuilder.
     fn new() -> Self;
 
     /// Set DB for the builder. The builder may need some config from the DB.
-    fn set_db(self, db: &Self::KvEngine) -> Self;
+    fn set_db(self, db: &E) -> Self;
 
     /// Set CF for the builder. The builder may need some config from the CF.
     fn set_cf(self, cf: CfName) -> Self;

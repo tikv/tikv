@@ -113,8 +113,7 @@ pub struct RocksSstWriterBuilder {
     in_memory: bool,
 }
 
-impl SstWriterBuilder for RocksSstWriterBuilder {
-    type KvEngine = RocksEngine;
+impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
     type SstWriter = RocksSstWriter;
 
     fn new() -> Self {
@@ -125,7 +124,7 @@ impl SstWriterBuilder for RocksSstWriterBuilder {
         }
     }
 
-    fn set_db(mut self, db: &Self::KvEngine) -> Self {
+    fn set_db(mut self, db: &RocksEngine) -> Self {
         self.db = Some(db.as_inner().clone());
         self
     }
