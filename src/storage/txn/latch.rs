@@ -19,7 +19,7 @@ const WAITING_LIST_MAX_CAPACITY: usize = 16;
 /// overlapping latches. This is an invariant ensured by the `gen_lock`, `acquire` and `release`.
 #[derive(Clone)]
 struct Latch {
-    // store hash value of the key and command ID which required this key.
+    // store hash value of the key and command ID which requires this key.
     pub waiting: VecDeque<Option<(u64, u64)>>,
 }
 
