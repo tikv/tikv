@@ -221,26 +221,16 @@ impl<S: Snapshot> MvccTxn<S> {
     // It's possible that lock conflict occours on them, but the isolation is
     // guaranteed by pessimistic locks on row keys, so let TiDB resolves these
     // locks immediately.
-    fn handle_non_pessimistic_lock_conflict(
-        &self,
-        key: Key,
-        for_update_ts: TimeStamp,
-        lock: Lock,
-    ) -> Result<()> {
+    fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
         // The previous pessimistic transaction has been committed or aborted.
         // Resolve it immediately.
         //
         // Because the row key is locked, the optimistic transaction will
         // abort. Resolve it immediately.
-        // Optimistic lock's for_update_ts is zero.
-        if for_update_ts > lock.for_update_ts {
-            let mut info = lock.into_lock_info(key.into_raw()?);
-            // Set ttl to 0 so TiDB will resolve lock immediately.
-            info.set_lock_ttl(0);
-            Err(ErrorInner::KeyIsLocked(info).into())
-        } else {
-            Err(ErrorInner::Other("stale request".into()).into())
-        }
+        let mut info = lock.into_lock_info(key.into_raw()?);
+        // Set ttl to 0 so TiDB will resolve lock immediately.
+        info.set_lock_ttl(0);
+        Err(ErrorInner::KeyIsLocked(info).into())
     }
 
     pub fn acquire_pessimistic_lock(
@@ -370,7 +360,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     }
                     .into());
                 }
-                return self.handle_non_pessimistic_lock_conflict(key, options.for_update_ts, lock);
+                return self.handle_non_pessimistic_lock_conflict(key, lock);
             } else {
                 if lock.lock_type != LockType::Pessimistic {
                     // Duplicated command. No need to overwrite the lock and data.
@@ -1840,19 +1830,6 @@ mod tests {
     }
 
     #[test]
-    fn test_non_pessimistic_lock_conflict() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-
-        let k = b"k1";
-        let v = b"v1";
-
-        must_prewrite_put(&engine, k, v, k, 2);
-        must_locked(&engine, k, 2);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 1, 1, false);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 3, 3, false);
-    }
-
-    #[test]
     fn test_pessimistic_rollback() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -2351,5 +2328,54 @@ mod tests {
             must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60),
             &expected_lock_info,
         );
+    }
+
+    #[test]
+    fn test_non_pessimistic_lock_conflict_with_optimistic_txn() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k1";
+        let v = b"v1";
+
+        must_prewrite_put(&engine, k, v, k, 2);
+        must_locked(&engine, k, 2);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 1, 1, false);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 3, 3, false);
+    }
+
+    #[test]
+    fn test_non_pessimistic_lock_conflict_with_pessismitic_txn() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // k1 is a row key, k2 is the corresponding index key.
+        let (k1, v1) = (b"k1", b"v1");
+        let (k2, v2) = (b"k2", b"v2");
+        let (k3, v3) = (b"k3", b"v3");
+
+        // Commit k3 at 20.
+        must_prewrite_put(&engine, k3, v3, k3, 1);
+        must_commit(&engine, k3, 1, 20);
+
+        // Txn-10 acquires pessimistic locks on k1 and k3.
+        must_acquire_pessimistic_lock(&engine, k1, k1, 10, 10);
+        must_acquire_pessimistic_lock_err(&engine, k3, k1, 10, 10);
+        // Update for_update_ts to 20 due to write conflict
+        must_acquire_pessimistic_lock(&engine, k3, k1, 10, 20);
+        must_pessimistic_prewrite_put(&engine, k1, v1, k1, 10, 20, true);
+        must_pessimistic_prewrite_put(&engine, k3, v3, k1, 10, 20, true);
+        // Write a non-pessimistic lock with for_update_ts 20.
+        must_pessimistic_prewrite_put(&engine, k2, v2, k1, 10, 20, false);
+        // Roll back the primary key due to timeout, but the non-pessimistic lock is not rolled
+        // back.
+        must_rollback(&engine, k1, 10);
+
+        // Txn-15 acquires pessimistic locks on k1.
+        must_acquire_pessimistic_lock(&engine, k1, k1, 15, 15);
+        must_pessimistic_prewrite_put(&engine, k1, v1, k1, 15, 15, true);
+        // There is a non-pessimistic lock conflict here.
+        match must_pessimistic_prewrite_put_err(&engine, k2, v2, k1, 15, 15, false) {
+            Error(box ErrorInner::KeyIsLocked(info)) => assert_eq!(info.get_lock_ttl(), 0),
+            e => panic!("unexpected error: {}", e),
+        };
     }
 }
