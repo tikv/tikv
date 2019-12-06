@@ -13,7 +13,6 @@ use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_rocks::{RocksEngine};
 use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -24,7 +23,6 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use crate::raftstore::errors::Error as RaftStoreError;
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
-use engine_rocks::RocksIOLimiter;
 use engine_traits::{IOLimiter, LimitWriter};
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
@@ -1003,17 +1001,27 @@ fn notify_stats(ch: Option<&RaftRouter>) {
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
-#[derive(Clone)]
-pub struct SnapManager {
+pub struct SnapManager<E> where E: KvEngine {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
     router: Option<RaftRouter>,
-    limiter: Option<Arc<RocksIOLimiter>>,
+    limiter: Option<Arc<E::IOLimiter>>,
     max_total_size: u64,
 }
 
-impl SnapManager {
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter>) -> SnapManager {
+impl<E> Clone for SnapManager<E> where E: KvEngine {
+    fn clone(&self) -> SnapManager<E> {
+        SnapManager {
+            core: self.core.clone(),
+            router: self.router.clone(),
+            limiter: self.limiter.clone(),
+            max_total_size: self.max_total_size,
+        }
+    }
+}
+
+impl<E> SnapManager<E> where E: KvEngine {
+    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter>) -> SnapManager<E> {
         SnapManagerBuilder::default().build(path, router)
     }
 
@@ -1110,7 +1118,7 @@ impl SnapManager {
         self.core.rl().registry.contains_key(key)
     }
 
-    pub fn get_snapshot_for_building(&self, key: &SnapKey) -> RaftStoreResult<Box<dyn Snapshot<RocksEngine>>> {
+    pub fn get_snapshot_for_building(&self, key: &SnapKey) -> RaftStoreResult<Box<dyn Snapshot<E>>> {
         let mut old_snaps = None;
         while self.get_total_snap_size() > self.max_total_snap_size() {
             if old_snaps.is_none() {
@@ -1141,7 +1149,7 @@ impl SnapManager {
             let core = self.core.rl();
             (core.base.clone(), Arc::clone(&core.snap_size))
         };
-        let f = Snap::<RocksEngine>::new_for_building(
+        let f = Snap::<E>::new_for_building(
             dir,
             key,
             snap_size,
@@ -1151,9 +1159,9 @@ impl SnapManager {
         Ok(Box::new(f))
     }
 
-    pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<dyn Snapshot<RocksEngine>>> {
+    pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<dyn Snapshot<E>>> {
         let core = self.core.rl();
-        let s = Snap::<RocksEngine>::new_for_sending(
+        let s = Snap::<E>::new_for_sending(
             &core.base,
             key,
             Arc::clone(&core.snap_size),
@@ -1166,11 +1174,11 @@ impl SnapManager {
         &self,
         key: &SnapKey,
         data: &[u8],
-    ) -> RaftStoreResult<Box<dyn Snapshot<RocksEngine>>> {
+    ) -> RaftStoreResult<Box<dyn Snapshot<E>>> {
         let core = self.core.rl();
         let mut snapshot_data = RaftSnapshotData::default();
         snapshot_data.merge_from_bytes(data)?;
-        let f = Snap::<RocksEngine>::new_for_receiving(
+        let f = Snap::<E>::new_for_receiving(
             &core.base,
             key,
             snapshot_data.take_meta(),
@@ -1181,9 +1189,9 @@ impl SnapManager {
         Ok(Box::new(f))
     }
 
-    pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<dyn Snapshot<RocksEngine>>> {
+    pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<dyn Snapshot<E>>> {
         let core = self.core.rl();
-        let s = Snap::<RocksEngine>::new_for_applying(
+        let s = Snap::<E>::new_for_applying(
             &core.base,
             key,
             Arc::clone(&core.snap_size),
@@ -1291,8 +1299,8 @@ impl SnapManager {
     }
 }
 
-impl SnapshotDeleter<RocksEngine> for SnapManager {
-    fn delete_snapshot(&self, key: &SnapKey, snap: &dyn Snapshot<RocksEngine>, check_entry: bool) -> bool {
+impl<E> SnapshotDeleter<E> for SnapManager<E> where E: KvEngine {
+    fn delete_snapshot(&self, key: &SnapKey, snap: &dyn Snapshot<E>, check_entry: bool) -> bool {
         let core = self.core.rl();
         if check_entry {
             if let Some(e) = core.registry.get(key) {
@@ -1332,9 +1340,9 @@ impl SnapManagerBuilder {
         self.max_total_size = bytes;
         self
     }
-    pub fn build<T: Into<String>>(&self, path: T, router: Option<RaftRouter>) -> SnapManager {
+    pub fn build<T: Into<String>, E>(&self, path: T, router: Option<RaftRouter>) -> SnapManager<E> where E: KvEngine {
         let limiter = if self.max_write_bytes_per_sec > 0 {
-            Some(Arc::new(RocksIOLimiter::new(self.max_write_bytes_per_sec)))
+            Some(Arc::new(E::IOLimiter::new(self.max_write_bytes_per_sec)))
         } else {
             None
         };
@@ -2162,7 +2170,7 @@ pub mod tests {
         let temp_path = temp_dir.path().join("snap1");
         let path = temp_path.to_str().unwrap().to_owned();
         assert!(!temp_path.exists());
-        let mut mgr = SnapManager::new(path, None);
+        let mut mgr = SnapManager::<RocksEngine>::new(path, None);
         mgr.init().unwrap();
         assert!(temp_path.exists());
 
@@ -2170,7 +2178,7 @@ pub mod tests {
         let temp_path2 = temp_dir.path().join("snap2");
         let path2 = temp_path2.to_str().unwrap().to_owned();
         File::create(temp_path2).unwrap();
-        mgr = SnapManager::new(path2, None);
+        mgr = SnapManager::<RocksEngine>::new(path2, None);
         assert!(mgr.init().is_err());
     }
 
@@ -2178,7 +2186,7 @@ pub mod tests {
     fn test_snap_mgr_v2() {
         let temp_dir = Builder::new().prefix("test-snap-mgr-v2").tempdir().unwrap();
         let path = temp_dir.path().to_str().unwrap().to_owned();
-        let mgr = SnapManager::new(path.clone(), None);
+        let mgr = SnapManager::<RocksEngine>::new(path.clone(), None);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), 0);
 
@@ -2242,7 +2250,7 @@ pub mod tests {
         assert!(!s3.exists());
         assert!(!s4.exists());
 
-        let mgr = SnapManager::new(path, None);
+        let mgr = SnapManager::<RocksEngine>::new(path, None);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), expected_size * 2);
 
@@ -2257,7 +2265,7 @@ pub mod tests {
         assert_eq!(mgr.get_total_snap_size(), 0);
     }
 
-    fn check_registry_around_deregister(mgr: SnapManager, key: &SnapKey, entry: &SnapEntry) {
+    fn check_registry_around_deregister(mgr: SnapManager<RocksEngine>, key: &SnapKey, entry: &SnapEntry) {
         let snap_keys = mgr.list_idle_snap().unwrap();
         assert!(snap_keys.is_empty());
         assert!(mgr.has_registered(key));
@@ -2276,7 +2284,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let src_mgr = SnapManager::new(src_path.clone(), None);
+        let src_mgr = SnapManager::<RocksEngine>::new(src_path.clone(), None);
         src_mgr.init().unwrap();
 
         let src_db_dir = Builder::new()
@@ -2317,7 +2325,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
-        let dst_mgr = SnapManager::new(dst_path.clone(), None);
+        let dst_mgr = SnapManager::<RocksEngine>::new(dst_path.clone(), None);
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.
@@ -2359,7 +2367,7 @@ pub mod tests {
         let max_total_size = 10240;
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
-            .build(snapfiles_path.path().to_str().unwrap(), None);
+            .build::<_, RocksEngine>(snapfiles_path.path().to_str().unwrap(), None);
         let snapshot = RocksSnapshot::new(engine.kv);
 
         // Add an oldest snapshot for receiving.
