@@ -7,15 +7,18 @@ use kvproto::metapb::Region;
 
 use crate::raftstore::store::{CasualMessage, CasualRouter};
 use engine::CF_RAFT;
-use engine_traits::{Iterable, Peekable, Snapshot, KvEngine};
 use engine_rocks::RocksEngine;
+use engine_traits::{Iterable, KvEngine, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
 use crate::raftstore::store::metrics::*;
 
 /// Consistency checking task.
-pub enum Task<E> where E: KvEngine {
+pub enum Task<E>
+where
+    E: KvEngine,
+{
     ComputeHash {
         index: u64,
         region: Region,
@@ -23,7 +26,10 @@ pub enum Task<E> where E: KvEngine {
     },
 }
 
-impl<E> Task<E> where E: KvEngine {
+impl<E> Task<E>
+where
+    E: KvEngine,
+{
     pub fn compute_hash(region: Region, index: u64, snap: E::Snapshot) -> Task<E> {
         Task::ComputeHash {
             region,
@@ -33,7 +39,10 @@ impl<E> Task<E> where E: KvEngine {
     }
 }
 
-impl<E> Display for Task<E> where E: KvEngine {
+impl<E> Display for Task<E>
+where
+    E: KvEngine,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::ComputeHash {
@@ -53,7 +62,10 @@ impl<C: CasualRouter> Runner<C> {
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash<E>(&mut self, region: Region, index: u64, snap: E::Snapshot) where E: KvEngine {
+    fn compute_hash<E>(&mut self, region: Region, index: u64, snap: E::Snapshot)
+    where
+        E: KvEngine,
+    {
         let region_id = region.get_id();
         info!(
             "computing hash";

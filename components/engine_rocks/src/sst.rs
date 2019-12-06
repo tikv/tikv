@@ -113,8 +113,8 @@ pub struct RocksSstWriterBuilder {
     in_memory: bool,
 }
 
-impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder { 
-   fn new() -> Self {
+impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
+    fn new() -> Self {
         RocksSstWriterBuilder {
             cf: None,
             in_memory: false,

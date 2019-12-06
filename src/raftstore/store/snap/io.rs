@@ -67,7 +67,8 @@ pub fn build_sst_cf_file<E>(
     end_key: &[u8],
     io_limiter: Option<&E::IOLimiter>,
 ) -> Result<BuildStatistics, Error>
-where E: KvEngine
+where
+    E: KvEngine,
 {
     let mut sst_writer = create_sst_file_writer::<E>(snap, cf, path)?;
     let mut stats = BuildStatistics::default();
@@ -150,7 +151,8 @@ fn create_sst_file_writer<E>(
     cf: CfName,
     path: &str,
 ) -> Result<E::SstWriter, Error>
-where E: KvEngine
+where
+    E: KvEngine,
 {
     let engine = snap.get_db();
     let builder = E::SstWriterBuilder::new().set_db(&engine).set_cf(cf);

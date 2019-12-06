@@ -21,7 +21,8 @@ pub trait SstReader: Iterable + Sized {
 
 /// A builder builds a SstWriter.
 pub trait SstWriterBuilder<E>
-where E: SstExt
+where
+    E: SstExt,
 {
     /// Create a new SstWriterBuilder.
     fn new() -> Self;

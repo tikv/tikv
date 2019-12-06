@@ -14,7 +14,7 @@ use engine::rocks::Writable;
 use engine::WriteBatch;
 use engine::CF_RAFT;
 use engine::{util as engine_util, Engines, Mutable, Peekable};
-use engine_rocks::{Compat, RocksSnapshot, RocksEngine};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -675,7 +675,7 @@ mod tests {
     use engine::Engines;
     use engine::{Mutable, Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
-    use engine_rocks::{RocksSnapshot, RocksEngine};
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
     use tikv_util::time;
