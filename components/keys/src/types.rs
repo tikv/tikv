@@ -46,8 +46,8 @@ impl Key {
     #[inline]
     pub fn into_raw(self) -> Result<Vec<u8>, codec::Error> {
         let mut k = self.0;
-        MemComparableByteCodec::try_decode_first_in_place(&mut k)?;
-        k.shrink_to_fit();
+        let (_read_bytes, written_bytes) = MemComparableByteCodec::try_decode_first_in_place(&mut k)?;
+        k.truncate(written_bytes);
         Ok(k)
     }
 
@@ -60,8 +60,8 @@ impl Key {
             return Ok(k);
         }
         let mut k = Vec::with_capacity(len);
-        MemComparableByteCodec::try_decode_first(&self.0.as_slice(), &mut k)?;
-        k.shrink_to_fit();
+        let (_read_bytes, written_bytes) = MemComparableByteCodec::try_decode_first(&self.0.as_slice(), &mut k)?;
+        k.truncate(written_bytes);
         Ok(k)
     }
 
