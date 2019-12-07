@@ -13,13 +13,6 @@ pub struct MySQLRng {
 }
 
 impl MySQLRng {
-    fn from_seeds(seed1: u32, seed2: u32) -> Self {
-        MySQLRng {
-            seed1: seed1 % MAX_RAND_VALUE as u32,
-            seed2: seed2 % MAX_RAND_VALUE as u32,
-        }
-    }
-
     pub fn new() -> Self {
         let current_time = time::get_time();
         let nsec = i64::from(current_time.nsec);
@@ -28,9 +21,14 @@ impl MySQLRng {
 
     pub fn new_with_seed(seed: i64) -> Self {
         let temp = seed as u32;
-        let seed1 = (i64::from(temp)).wrapping_mul(0x10001).wrapping_add(55555555) as u32;
+        let seed1 = (i64::from(temp))
+            .wrapping_mul(0x10001)
+            .wrapping_add(55555555) as u32;
         let seed2 = (i64::from(temp)).wrapping_mul(0x10000001) as u32;
-        Self::from_seeds(seed1, seed2)
+        MySQLRng {
+            seed1: seed1 % MAX_RAND_VALUE as u32,
+            seed2: seed2 % MAX_RAND_VALUE as u32,
+        }
     }
 
     pub fn gen(&mut self) -> f64 {
@@ -232,18 +230,17 @@ mod tests {
     #[allow(clippy::float_cmp)]
     fn test_rand_new_with_seed() {
         let tests = vec![
-            (0, 0.15522042769493574,0.620881741513388),
-            (1, 0.40540353712197724,0.8716141803857071),
-            (-1, 0.9050373219931845,0.37014932126752037),
-            (9223372036854775807, 0.9050373219931845,0.37014932126752037),
+            (0, 0.15522042769493574, 0.620881741513388),
+            (1, 0.40540353712197724, 0.8716141803857071),
+            (-1, 0.9050373219931845, 0.37014932126752037),
+            (9223372036854775807, 0.9050373219931845, 0.37014932126752037),
         ];
-        for (seed, exp1,exp2) in tests {
+        for (seed, exp1, exp2) in tests {
             let mut rand = MySQLRng::new_with_seed(seed);
             let res1 = rand.gen();
             assert_eq!(res1, exp1);
             let res2 = rand.gen();
             assert_eq!(res2, exp2);
-
         }
     }
 }
