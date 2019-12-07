@@ -14,8 +14,8 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-prost-codec = ["tikv/prost-codec"]
-protobuf-codec = ["tikv/protobuf-codec"]
+prost-codec = ["tikv/prost-codec", "backup/prost-codec"]
+protobuf-codec = ["tikv/protobuf-codec", "backup/protobuf-codec"]
 
 [lib]
 name = "cmd"
