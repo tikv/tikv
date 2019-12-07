@@ -2337,7 +2337,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/Fullstop000/raft-rs?branch=merge-append-response#6e8a39449cadc95c1b3dbf7064e027f982f25bb7"
+source = "git+https://github.com/Fullstop000/raft-rs?branch=merge-append-response#297437c03fadf2edab17cd3f67e1dabe055a88fc"
 dependencies = [
  "fxhash",
  "getset",
@@ -2358,7 +2358,7 @@ replace = "raft 0.6.0-alpha (git+https://github.com/Fullstop000/raft-rs?branch=m
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/Fullstop000/raft-rs?branch=merge-append-response#6e8a39449cadc95c1b3dbf7064e027f982f25bb7"
+source = "git+https://github.com/Fullstop000/raft-rs?branch=merge-append-response#297437c03fadf2edab17cd3f67e1dabe055a88fc"
 dependencies = [
  "bytes",
  "lazy_static",
