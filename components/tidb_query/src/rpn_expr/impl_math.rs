@@ -1,5 +1,5 @@
 use num::traits::Pow;
-use std::f64;
+use std::{f64, i64};
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
@@ -402,6 +402,15 @@ pub fn conv(
 pub fn round_real(arg: &Option<Real>) -> Result<Option<Real>> {
     match arg {
         Some(arg) => Ok(Some(Real::from(arg.round()))),
+        None => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_int(arg: &Option<Int>) -> Result<Option<Int>> {
+    match arg {
+        Some(arg) => Ok(Some(Int::from(*arg as i64))),
         None => Ok(None),
     }
 }
@@ -1232,14 +1241,14 @@ mod tests {
     }
 
     #[test]
-    fn test_round() {
-        let test_real_cases = vec![
+    fn test_round_real() {
+        let test_cases = vec![
             (Some(Real::from(-3.12_f64)), Some(Real::from(-3f64))),
             (Some(Real::from(f64::MAX)), Some(Real::from(f64::MAX))),
             (Some(Real::from(f64::MIN)), Some(Real::from(f64::MIN))),
         ];
 
-        for (arg, exp) in test_real_cases {
+        for (arg, exp) in test_cases {
             let got = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate::<Real>(ScalarFuncSig::RoundReal)
@@ -1250,6 +1259,29 @@ mod tests {
         assert!(RpnFnScalarEvaluator::new()
             .push_param(ScalarValue::Real(None))
             .evaluate::<Real>(ScalarFuncSig::RoundReal)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_round_int() {
+        let test_cases = vec![
+            (Some(Int::from(1)), Some(Int::from(1))),
+            (Some(Int::from(i64::MAX)), Some(Int::from(i64::MAX))),
+            (Some(Int::from(i64::MIN)), Some(Int::from(i64::MIN))),
+        ];
+
+        for (arg, exp) in test_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Int>(ScalarFuncSig::RoundInt)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        assert!(RpnFnScalarEvaluator::new()
+            .push_param(ScalarValue::Int(None))
+            .evaluate::<Int>(ScalarFuncSig::RoundInt)
             .unwrap()
             .is_none());
     }
