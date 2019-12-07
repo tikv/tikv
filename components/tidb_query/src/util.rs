@@ -7,6 +7,46 @@ use crate::codec::datum::Datum;
 use rand::SeedableRng;
 use rand_xorshift::XorShiftRng;
 
+trait Rand {
+    fn form_seeds(seed1: u32, seed2: u32) -> Self;
+    fn form_seed(seed: i64) -> Self;
+    fn gen(&mut self) -> f64;
+}
+
+const MAX_VALUE: i32 = 0x3FFFFFFF;
+
+pub struct RandStruct {
+    seed1: u32,
+    seed2: u32,
+    max_value: u32,
+    max_value_dbl: f64,
+}
+
+impl Rand for RandStruct {
+    fn form_seeds(seed1: u32, seed2: u32) -> Self {
+        RandStruct {
+            seed1: seed1 % MAX_VALUE as u32,
+            seed2: seed2 % MAX_VALUE as u32,
+            max_value: MAX_VALUE as u32,
+            max_value_dbl: MAX_VALUE as f64,
+        }
+    }
+    fn form_seed(seed: i64) -> Self {
+        let temp = seed as u32;
+        Self::form_seeds(
+            (temp as i32 * 0x10001_i32 + 55555555_i32) as u32,
+            (temp as i32 * 0x10000001_i32) as u32,
+        )
+    }
+
+    fn gen(&mut self) -> f64 {
+        self.seed1 = (self.seed1 * 3 + self.seed2) % self.max_value;
+        self.seed2 = (self.seed1 + self.seed2 + 33) % self.max_value;
+        // todo
+        self.seed1 as f64 / self.max_value_dbl
+    }
+}
+
 /// Convert the key to the smallest key which is larger than the key given.
 pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
     if key.is_empty() {
@@ -88,17 +128,16 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
 }
 
 /// Generate rng by seed.
-pub fn get_rng(arg: Option<u64>) -> XorShiftRng {
-    let seed = match arg {
-        Some(v) => v,
+pub fn get_rng(arg: Option<i64>) -> RandStruct {
+    match arg {
+        Some(v) => RandStruct::form_seed(v),
         None => {
             let current_time = time::get_time();
-            let nsec = current_time.nsec as u64;
-            let sec = (current_time.sec * 1000000000) as u64;
-            sec + nsec
+            let nsec = current_time.nsec as i64;
+            let sec = (current_time.sec * 1000000000) as i64;
+            RandStruct::form_seeds((sec + nsec) as u32, ((sec + nsec) / 2) as u32)
         }
-    };
-    SeedableRng::seed_from_u64(seed)
+    }
 }
 
 /// `is_point` checks if the key range represents a point.
@@ -197,20 +236,31 @@ mod tests {
     #[test]
     fn test_get_rand() {
         let mut rand = get_rng(None);
-        let res = rand.gen::<f64>();
+        let res = rand.gen();
         assert!(res < 1.0);
         assert!(res >= 0.0);
 
-        let seed: u64 = 20191201;
+        let seed: i64 = 0;
         rand = get_rng(Some(seed));
-        let res = rand.gen::<f64>();
+        let res = rand.gen();
         assert!(res < 1.0);
         assert!(res >= 0.0);
+        assert_eq!(res, 0.15522042769493574);
 
-        let seed: u64 = 20191202;
+        let seed: i64 = 1;
         rand = get_rng(Some(seed));
-        let res = rand.gen::<f64>();
+        let res = rand.gen();
         assert!(res < 1.0);
         assert!(res >= 0.0);
+        assert_eq!(res, 0.40540353712197724);
+
+        let seed: i64 = -1;
+        rand = get_rng(Some(seed));
+        let res1 = rand.gen();
+        let res2 = rand.gen();
+        assert!(res1 < 1.0);
+        assert!(res1 >= 0.0);
+        assert_eq!(res1, 0.9050373219931845);
+        assert_eq!(res2, 0.37014932126752037);
     }
 }
