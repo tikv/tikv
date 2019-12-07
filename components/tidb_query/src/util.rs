@@ -5,42 +5,38 @@ use tipb::ColumnInfo;
 
 use crate::codec::datum::Datum;
 
-pub trait Rand {
-    fn form_seeds(seed1: u32, seed2: u32) -> Self;
-    fn form_seed(seed: i64) -> Self;
-    fn gen(&mut self) -> f64;
-}
+const MAX_RAND_VALUE: i32 = 0x3FFFFFFF;
 
-const MAX_VALUE: i32 = 0x3FFFFFFF;
-
-pub struct RandStruct {
+pub struct MySQLRng {
     seed1: u32,
     seed2: u32,
-    max_value: u32,
-    max_value_dbl: f64,
 }
 
-impl Rand for RandStruct {
-    fn form_seeds(seed1: u32, seed2: u32) -> Self {
-        RandStruct {
-            seed1: seed1 % MAX_VALUE as u32,
-            seed2: seed2 % MAX_VALUE as u32,
-            max_value: MAX_VALUE as u32,
-            max_value_dbl: f64::from(MAX_VALUE),
+impl MySQLRng {
+    pub fn from_seeds(seed1: u32, seed2: u32) -> Self {
+        MySQLRng {
+            seed1: seed1 % MAX_RAND_VALUE as u32,
+            seed2: seed2 % MAX_RAND_VALUE as u32,
         }
     }
-    fn form_seed(seed: i64) -> Self {
-        let temp = seed as u32;
-        Self::form_seeds(
-            (i64::from(temp) * 0x10001_i64 + 55555555_i64) as u32,
-            (i64::from(temp) * 0x10000001_i64) as u32,
-        )
+
+    pub fn new() -> Self {
+        let current_time = time::get_time();
+        let nsec = current_time.nsec as i64;
+        Self::new_with_seed(nsec)
     }
 
-    fn gen(&mut self) -> f64 {
-        self.seed1 = (self.seed1 * 3 + self.seed2) % self.max_value;
-        self.seed2 = (self.seed1 + self.seed2 + 33) % self.max_value;
-        f64::from(self.seed1) / self.max_value_dbl
+    pub fn new_with_seed(seed: i64) -> Self {
+        let temp = seed as u32;
+        let seed1 = (temp as i64).wrapping_mul(0x10001).wrapping_add(55555555) as u32;
+        let seed2 = (temp as i64).wrapping_mul(0x10000001) as u32;
+        Self::from_seeds(seed1, seed2)
+    }
+
+    pub fn gen(&mut self) -> f64 {
+        self.seed1 = (self.seed1 * 3 + self.seed2) % MAX_RAND_VALUE as u32;
+        self.seed2 = (self.seed1 + self.seed2 + 33) % MAX_RAND_VALUE as u32;
+        (self.seed1 as f64) / (MAX_RAND_VALUE as f64)
     }
 }
 
@@ -121,19 +117,6 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
     } else {
         // Length not match.
         false
-    }
-}
-
-/// Generate rng by seed.
-pub fn get_rng(arg: Option<i64>) -> RandStruct {
-    match arg {
-        Some(v) => RandStruct::form_seed(v),
-        None => {
-            let current_time = time::get_time();
-            let nsec = i64::from(current_time.nsec);
-            let sec = (current_time.sec * 1000000000) as i64;
-            RandStruct::form_seeds((sec + nsec) as u32, ((sec + nsec) / 2) as u32)
-        }
     }
 }
 
@@ -230,8 +213,20 @@ mod tests {
     }
 
     #[test]
+    fn test_rand_new() {
+        let got1 = MySQLRng::new().gen();
+        let got2 = MySQLRng::new().gen();
+
+        assert!(got1 < 1.0);
+        assert!(got1 >= 0.0);
+        assert!(got2 < 1.0);
+        assert!(got2 >= 0.0);
+        assert_ne!(got1, got2);
+    }
+
+    #[test]
     #[allow(clippy::float_cmp)]
-    fn test_get_rand() {
+    fn test_rand_new_with_seed() {
         let tests: Vec<(i64, f64)> = vec![
             (0, 0.15522042769493574),
             (1, 0.40540353712197724),
@@ -241,13 +236,8 @@ mod tests {
             (922337203685477580, 0.5550739490939993),
             (9223372036854775807, 0.9050373219931845),
         ];
-        let mut rand = get_rng(None);
-        let res = rand.gen();
-        assert!(res < 1.0);
-        assert!(res >= 0.0);
-
         for (seed, exp) in tests {
-            rand = get_rng(Some(seed));
+            let mut rand = MySQLRng::new_with_seed(seed);
             let res = rand.gen();
             assert_eq!(res, exp);
         }

@@ -7,7 +7,7 @@ use tipb::Expr;
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
-use crate::util::{get_rng, Rand, RandStruct};
+use crate::util::MySQLRng;
 use crate::Result;
 
 #[rpn_fn]
@@ -352,32 +352,23 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn(capture = [metadata],metadata_ctor = init_rng_data)]
-fn rand(metadata: &RefCell<RandStruct>) -> Result<Option<Real>> {
+#[rpn_fn(capture = [metadata], metadata_ctor = init_rng_data)]
+fn rand(metadata: &RefCell<MySQLRng>) -> Result<Option<Real>> {
     let mut rng = metadata.borrow_mut();
     let res = rng.gen();
     Ok(Real::new(res).ok())
 }
 
-fn init_rng_data(_expr: &mut Expr) -> Result<RefCell<RandStruct>> {
-    Ok(RefCell::new(get_rng(None)))
+fn init_rng_data(_expr: &mut Expr) -> Result<RefCell<MySQLRng>> {
+    Ok(RefCell::new(MySQLRng::new()))
 }
 
 #[inline]
 #[rpn_fn]
 fn rand_with_seed(seed: &Option<i64>) -> Result<Option<Real>> {
-    match seed {
-        Some(seed) => {
-            let mut rng = get_rng(Some(*seed));
-            let res = rng.gen();
-            Ok(Real::new(res).ok())
-        }
-        None => {
-            let mut rng = get_rng(Some(0));
-            let res = rng.gen();
-            Ok(Real::new(res).ok())
-        }
-    }
+    let mut rng = MySQLRng::new_with_seed(seed.clone().unwrap_or(0));
+    let res = rng.gen();
+    Ok(Real::new(res).ok())
 }
 
 #[inline]
@@ -1078,31 +1069,35 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_rand_with_seed() {
-        let got1 = RpnFnScalarEvaluator::new()
-            .push_param(Some(10000000009 as i64))
-            .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
-            .unwrap()
-            .unwrap();
-        let got2 = RpnFnScalarEvaluator::new()
-            .push_param(Some(-1845798578934 as i64))
-            .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
-            .unwrap()
-            .unwrap();
+        let tests: Vec<(i64, f64)> = vec![
+            (0, 0.15522042769493574),
+            (1, 0.40540353712197724),
+            (-1, 0.9050373219931845),
+            (622337, 0.3608469249315997),
+            (10000000009, 0.3472714008272359),
+            (-1845798578934, 0.5058874688166077),
+            (922337203685, 0.40536338501178043),
+            (922337203685477580, 0.5550739490939993),
+            (9223372036854775807, 0.9050373219931845),
+        ];
 
-        assert!(got1 < Real::from(1.0));
-        assert!(got1 >= Real::from(0.0));
-        assert_eq!(got1, Real::from(0.3472714008272359));
-        assert!(got2 < Real::from(1.0));
-        assert!(got2 >= Real::from(0.0));
-        assert_eq!(got2, Real::from(0.5058874688166077));
-        assert_ne!(got1, got2);
+        for (seed, exp) in tests {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(Some(seed))
+                .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
+                .unwrap()
+                .unwrap();
+            assert_eq!(got, Real::from(exp));
+        }
 
         let none_case_got = RpnFnScalarEvaluator::new()
             .push_param(ScalarValue::Int(None))
             .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
+            .unwrap()
             .unwrap();
-        assert_eq!(none_case_got, Some(Real::from(0.15522042769493574)));
+        assert_eq!(none_case_got, Real::from(0.15522042769493574));
     }
 
     #[test]
