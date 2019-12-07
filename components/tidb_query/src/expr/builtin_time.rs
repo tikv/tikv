@@ -9,7 +9,6 @@ use crate::codec::mysql::time::weekmode::WeekMode;
 use crate::codec::mysql::{Duration as MyDuration, Time, TimeType};
 use crate::codec::Datum;
 use crate::expr::SqlMode;
-use crate::expr_util::time::{month_to_period, period_to_month};
 
 impl ScalarFunc {
     #[inline]
@@ -293,15 +292,15 @@ impl ScalarFunc {
             return Ok(Some(0));
         }
         let n = try_opt!(self.children[1].eval_int(ctx, row));
-        let (month, _) = (i64::from(period_to_month(p as u64) as i32)).overflowing_add(n);
-        Ok(Some(month_to_period(u64::from(month as u32)) as i64))
+        let (month, _) = (i64::from(Time::period_to_month(p as u64) as i32)).overflowing_add(n);
+        Ok(Some(Time::month_to_period(u64::from(month as u32)) as i64))
     }
 
     pub fn period_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let p1 = try_opt!(self.children[0].eval_int(ctx, row));
         let p2 = try_opt!(self.children[1].eval_int(ctx, row));
         Ok(Some(
-            period_to_month(p1 as u64) as i64 - period_to_month(p2 as u64) as i64,
+            Time::period_to_month(p1 as u64) as i64 - Time::period_to_month(p2 as u64) as i64,
         ))
     }
 

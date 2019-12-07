@@ -10,7 +10,6 @@ use crate::codec::mysql::time::WeekdayExtension;
 use crate::codec::mysql::Time;
 use crate::codec::Error;
 use crate::expr::SqlMode;
-use crate::expr_util::time::{month_to_period, period_to_month};
 use crate::Result;
 
 #[rpn_fn(capture = [ctx])]
@@ -173,8 +172,9 @@ pub fn period_add(p: &Option<Int>, n: &Option<Int>) -> Result<Option<Int>> {
             if *p == 0 {
                 Some(0)
             } else {
-                let (month, _) = (i64::from(period_to_month(*p as u64) as i32)).overflowing_add(*n);
-                Some(month_to_period(u64::from(month as u32)) as i64)
+                let (month, _) =
+                    (i64::from(DateTime::period_to_month(*p as u64) as i32)).overflowing_add(*n);
+                Some(DateTime::month_to_period(u64::from(month as u32)) as i64)
             }
         }
         _ => None,
@@ -186,7 +186,8 @@ pub fn period_add(p: &Option<Int>, n: &Option<Int>) -> Result<Option<Int>> {
 pub fn period_diff(p1: &Option<Int>, p2: &Option<Int>) -> Result<Option<Int>> {
     match (p1, p2) {
         (Some(p1), Some(p2)) => Ok(Some(
-            period_to_month(*p1 as u64) as i64 - period_to_month(*p2 as u64) as i64,
+            DateTime::period_to_month(*p1 as u64) as i64
+                - DateTime::period_to_month(*p2 as u64) as i64,
         )),
         _ => Ok(None),
     }
