@@ -3,6 +3,7 @@ use std::{f64, i64};
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::codec::mysql::{RoundMode, DEFAULT_FSP};
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::Result;
@@ -411,6 +412,21 @@ pub fn round_real(arg: &Option<Real>) -> Result<Option<Real>> {
 pub fn round_int(arg: &Option<Int>) -> Result<Option<Int>> {
     match arg {
         Some(arg) => Ok(Some(Int::from(*arg as i64))),
+        None => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_dec(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
+    match arg {
+        Some(arg) => {
+            let res: codec::Result<Decimal> = arg
+                .to_owned()
+                .round(DEFAULT_FSP, RoundMode::HalfEven)
+                .into();
+            Ok(Some(res?))
+        }
         None => Ok(None),
     }
 }
@@ -1284,5 +1300,26 @@ mod tests {
             .evaluate::<Int>(ScalarFuncSig::RoundInt)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn test_round_dec() {
+        let test_cases = vec![("123.1", "123.0"), ("-1111.1", "-1111.0")];
+
+        for (arg, expect_output) in test_cases {
+            let arg = arg.parse::<Decimal>().ok();
+            let expect_output = expect_output.parse::<Decimal>().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate::<Decimal>(ScalarFuncSig::RoundDec)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+
+            assert!(RpnFnScalarEvaluator::new()
+                .push_param(ScalarValue::Decimal(None))
+                .evaluate::<Decimal>(ScalarFuncSig::RoundDec)
+                .unwrap()
+                .is_none());
+        }
     }
 }
