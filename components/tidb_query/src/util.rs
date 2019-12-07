@@ -26,21 +26,21 @@ impl Rand for RandStruct {
             seed1: seed1 % MAX_VALUE as u32,
             seed2: seed2 % MAX_VALUE as u32,
             max_value: MAX_VALUE as u32,
-            max_value_dbl: MAX_VALUE as f64,
+            max_value_dbl: f64::from(MAX_VALUE),
         }
     }
     fn form_seed(seed: i64) -> Self {
         let temp = seed as u32;
         Self::form_seeds(
-            (temp as i64 * 0x10001_i64 + 55555555_i64) as u32,
-            (temp as i64 * 0x10000001_i64) as u32,
+            (i64::from(temp) * 0x10001_i64 + 55555555_i64) as u32,
+            (i64::from(temp) * 0x10000001_i64) as u32,
         )
     }
 
     fn gen(&mut self) -> f64 {
         self.seed1 = (self.seed1 * 3 + self.seed2) % self.max_value;
         self.seed2 = (self.seed1 + self.seed2 + 33) % self.max_value;
-        self.seed1 as f64 / self.max_value_dbl
+        f64::from(self.seed1) / self.max_value_dbl
     }
 }
 
@@ -130,7 +130,7 @@ pub fn get_rng(arg: Option<i64>) -> RandStruct {
         Some(v) => RandStruct::form_seed(v),
         None => {
             let current_time = time::get_time();
-            let nsec = current_time.nsec as i64;
+            let nsec = i64::from(current_time.nsec);
             let sec = (current_time.sec * 1000000000) as i64;
             RandStruct::form_seeds((sec + nsec) as u32, ((sec + nsec) / 2) as u32)
         }
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_get_rand() {
-        let tests = vec![
+        let tests: Vec<(i64, f64)> = vec![
             (0, 0.15522042769493574),
             (1, 0.40540353712197724),
             (-1, 0.9050373219931845),
