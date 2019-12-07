@@ -5,7 +5,7 @@ use tipb::ColumnInfo;
 
 use crate::codec::datum::Datum;
 
-const MAX_RAND_VALUE: i32 = 0x3FFFFFFF;
+const MAX_RAND_VALUE: u64 = 0x3FFFFFFF;
 
 pub struct MySQLRng {
     seed1: u32,
@@ -36,7 +36,7 @@ impl MySQLRng {
     pub fn gen(&mut self) -> f64 {
         self.seed1 = (self.seed1 * 3 + self.seed2) % MAX_RAND_VALUE as u32;
         self.seed2 = (self.seed1 + self.seed2 + 33) % MAX_RAND_VALUE as u32;
-        f64::from(self.seed1) / f64::from(MAX_RAND_VALUE)
+        f64::from(self.seed1) / MAX_RAND_VALUE as f64
     }
 }
 
