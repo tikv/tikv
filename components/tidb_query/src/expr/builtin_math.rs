@@ -5,12 +5,12 @@ use std::{f64, i64};
 
 use num::traits::Pow;
 use rand::{Rng, SeedableRng};
+use rand_xorshift::XorShiftRng;
 use tikv_util::file::calc_crc32_bytes;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use crate::codec::Datum;
-use rand_xorshift::XorShiftRng;
 
 impl ScalarFunc {
     #[inline]
