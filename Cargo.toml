@@ -131,7 +131,7 @@ test_sst_importer = { path = "components/test_sst_importer" }
 
 [replace]
 # TODO: remove this when new raft-rs is published.
-"raft:0.6.0-alpha" = { git = "https://github.com/Fullstop000/raft-rs", branch = "merge-append-response", default-features = false, features = ["default-logger"] }
+"raft:0.6.0-alpha" = { git = "https://github.com/Fullstop000/raft-rs", branch = "merge-append-response", default-features = false }
 "raft-proto:0.6.0-alpha" = { git = "https://github.com/Fullstop000/raft-rs", branch = "merge-append-response", default-features = false }
 "protobuf:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
