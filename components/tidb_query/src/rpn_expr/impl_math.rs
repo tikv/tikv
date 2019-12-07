@@ -365,7 +365,7 @@ fn init_rng_data(_expr: &mut Expr) -> Result<RefCell<RandStruct>> {
 
 #[inline]
 #[rpn_fn]
-fn rand_with_seed(seed: &Option<Int>) -> Result<Option<Real>> {
+fn rand_with_seed(seed: &Option<i64>) -> Result<Option<Real>> {
     match seed {
         Some(seed) => {
             let mut rng = get_rng(Some(*seed));
@@ -1080,22 +1080,22 @@ mod tests {
     #[test]
     fn test_rand_with_seed() {
         let got1 = RpnFnScalarEvaluator::new()
-            .push_param(Some(Int::from(1)))
+            .push_param(Some(10000000009 as i64))
             .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
             .unwrap()
             .unwrap();
         let got2 = RpnFnScalarEvaluator::new()
-            .push_param(Some(Int::from(-1)))
+            .push_param(Some(-1845798578934 as i64))
             .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
             .unwrap()
             .unwrap();
 
         assert!(got1 < Real::from(1.0));
         assert!(got1 >= Real::from(0.0));
-        assert_eq!(got1, Real::from(0.40540353712197724));
+        assert_eq!(got1, Real::from(0.3472714008272359));
         assert!(got2 < Real::from(1.0));
         assert!(got2 >= Real::from(0.0));
-        assert_eq!(got2, Real::from(0.9050373219931845));
+        assert_eq!(got2, Real::from(0.5058874688166077));
         assert_ne!(got1, got2);
 
         let none_case_got = RpnFnScalarEvaluator::new()
