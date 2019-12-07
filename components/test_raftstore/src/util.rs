@@ -24,8 +24,8 @@ use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
+use tikv::storage::config::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::storage::kv::CompactionListener;
-use tikv::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::config::*;
 use tikv_util::escape;
 

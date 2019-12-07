@@ -1,11 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use criterion::{black_box, BatchSize, Bencher, Criterion};
+use keys::Key;
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
 use tikv::storage::mvcc::{self, MvccReader, MvccTxn, TimeStamp};
-use tikv::storage::{Key, Mutation, Options};
+use tikv::storage::{Mutation, Options};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
 
@@ -20,7 +21,7 @@ where
 {
     let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
-    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
 
     let kvs = KvGenerator::with_seed(
         config.key_length,

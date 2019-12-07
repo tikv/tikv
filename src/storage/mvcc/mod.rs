@@ -123,7 +123,7 @@ quick_error! {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
         }
-        PessimisticLockRollbacked { start_ts: TimeStamp, key: Vec<u8> } {
+        PessimisticLockRolledBack { start_ts: TimeStamp, key: Vec<u8> } {
             description("pessimistic lock already rollbacked")
             display("pessimistic lock already rollbacked, start_ts:{}, key:{}", start_ts, hex::encode_upper(key))
         }
@@ -248,8 +248,8 @@ impl ErrorInner {
             ErrorInner::Committed { commit_ts } => Some(ErrorInner::Committed {
                 commit_ts: *commit_ts,
             }),
-            ErrorInner::PessimisticLockRollbacked { start_ts, key } => {
-                Some(ErrorInner::PessimisticLockRollbacked {
+            ErrorInner::PessimisticLockRolledBack { start_ts, key } => {
+                Some(ErrorInner::PessimisticLockRolledBack {
                     start_ts: *start_ts,
                     key: key.to_owned(),
                 })
@@ -342,12 +342,11 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 }
 
 pub mod tests {
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
-
-    use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
-    use engine::CF_WRITE;
-
     use super::*;
+    use crate::storage::{Engine, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
+    use engine::CF_WRITE;
+    use keys::Key;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
         if !modifies.is_empty() {
@@ -402,7 +401,7 @@ pub mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
         txn.prewrite(
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
             pk,
@@ -423,7 +422,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         if options.for_update_ts.is_zero() {
             txn.prewrite(mutation, pk, &options).unwrap();
@@ -512,7 +511,7 @@ pub mod tests {
     ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
         let mut options = Options::default();
         let for_update_ts = for_update_ts.into();
         options.for_update_ts = for_update_ts;
@@ -565,7 +564,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
         let mut options = Options::default();
         let for_update_ts = for_update_ts.into();
         options.for_update_ts = for_update_ts;
@@ -609,7 +608,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
         let mut options = Options::default();
         let for_update_ts = for_update_ts.into();
         options.for_update_ts = for_update_ts;
@@ -640,7 +639,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts.into(), true);
         assert!(txn
             .prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
             .is_err());
@@ -666,7 +665,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
             .unwrap();
         let modifies = txn.into_modifies();
@@ -719,7 +718,7 @@ pub mod tests {
     ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         let mut options = Options::default();
         options.for_update_ts = for_update_ts.into();
         txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
@@ -734,7 +733,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         txn.pessimistic_rollback(Key::from_raw(key), for_update_ts.into())
             .unwrap();
         write(engine, &ctx, txn.into_modifies());
@@ -748,7 +747,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         txn.commit(Key::from_raw(key), commit_ts.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -761,14 +760,14 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         assert!(txn.commit(Key::from_raw(key), commit_ts.into()).is_err());
     }
 
     pub fn must_rollback<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         txn.collapse_rollback(false);
         txn.rollback(Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
@@ -781,7 +780,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         txn.rollback(Key::from_raw(key)).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -789,7 +788,7 @@ pub mod tests {
     pub fn must_rollback_err<E: Engine>(engine: &E, key: &[u8], start_ts: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         assert!(txn.rollback(Key::from_raw(key)).is_err());
     }
 
@@ -801,7 +800,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         txn.cleanup(Key::from_raw(key), current_ts.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -814,7 +813,7 @@ pub mod tests {
     ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         txn.cleanup(Key::from_raw(key), current_ts.into())
             .unwrap_err()
     }
@@ -828,7 +827,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         let ttl = txn
             .txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
             .unwrap();
@@ -844,7 +843,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
         txn.txn_heart_beat(Key::from_raw(primary_key), advise_ttl)
             .unwrap_err();
     }
@@ -860,7 +859,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true);
         let (txn_status, _) = txn
             .check_txn_status(
                 Key::from_raw(primary_key),
@@ -883,7 +882,7 @@ pub mod tests {
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, lock_ts.into(), true);
         txn.check_txn_status(
             Key::from_raw(primary_key),
             caller_start_ts.into(),
@@ -896,8 +895,7 @@ pub mod tests {
     pub fn must_gc<E: Engine>(engine: &E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn =
-            MvccTxn::for_scan(snapshot, Some(ScanMode::Forward), TimeStamp::zero(), true).unwrap();
+        let mut txn = MvccTxn::for_scan(snapshot, Some(ScanMode::Forward), TimeStamp::zero(), true);
         txn.gc(Key::from_raw(key), safe_point.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
     }

@@ -6,9 +6,9 @@ use crate::storage::mvcc::lock::Lock;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{default_not_found_error, WriteRef};
 use crate::storage::mvcc::{Result, TimeStamp};
-use crate::storage::{Key, Value};
 use engine::IterOption;
 use engine::{CF_LOCK, CF_WRITE};
+use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -428,25 +428,21 @@ impl<S: Snapshot> MvccReader<S> {
 
 #[cfg(test)]
 mod tests {
-    use crate::raftstore::coprocessor::properties::{
-        MvccProperties, MvccPropertiesCollectorFactory,
-    };
-    use crate::raftstore::store::keys;
+    use super::*;
+
+    use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
-    use crate::storage::mvcc::lock::{Lock, LockType};
-    use crate::storage::mvcc::write::{Write, WriteType};
-    use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
-    use crate::storage::{Key, Mutation, Options};
+    use crate::storage::mvcc::lock::LockType;
+    use crate::storage::mvcc::{MvccReader, MvccTxn};
+    use crate::storage::{Mutation, Options};
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
-    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use kvproto::kvrpcpb::IsolationLevel;
+    use engine::{ALL_CFS, CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::{Peer, Region};
     use std::sync::Arc;
     use std::u64;
-    use tempfile::Builder;
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -454,14 +450,14 @@ mod tests {
     }
 
     impl RegionEngine {
-        pub fn new(db: Arc<DB>, region: Region) -> RegionEngine {
+        fn new(db: &Arc<DB>, region: &Region) -> RegionEngine {
             RegionEngine {
                 db: Arc::clone(&db),
-                region,
+                region: region.clone(),
             }
         }
 
-        pub fn put(
+        fn put(
             &mut self,
             pk: &[u8],
             start_ts: impl Into<TimeStamp>,
@@ -473,7 +469,7 @@ mod tests {
             self.commit(pk, start_ts, commit_ts);
         }
 
-        pub fn lock(
+        fn lock(
             &mut self,
             pk: &[u8],
             start_ts: impl Into<TimeStamp>,
@@ -485,7 +481,7 @@ mod tests {
             self.commit(pk, start_ts, commit_ts);
         }
 
-        pub fn delete(
+        fn delete(
             &mut self,
             pk: &[u8],
             start_ts: impl Into<TimeStamp>,
@@ -499,7 +495,7 @@ mod tests {
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true).unwrap();
+            let mut txn = MvccTxn::new(snap, start_ts.into(), true);
             txn.prewrite(m, pk, &Options::default()).unwrap();
             self.write(txn.into_modifies());
         }
@@ -511,7 +507,7 @@ mod tests {
             start_ts: impl Into<TimeStamp>,
         ) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true).unwrap();
+            let mut txn = MvccTxn::new(snap, start_ts.into(), true);
             let options = Options::default();
             txn.pessimistic_prewrite(m, pk, true, &options).unwrap();
             self.write(txn.into_modifies());
@@ -525,7 +521,7 @@ mod tests {
             for_update_ts: impl Into<TimeStamp>,
         ) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true).unwrap();
+            let mut txn = MvccTxn::new(snap, start_ts.into(), true);
             let mut options = Options::default();
             options.for_update_ts = for_update_ts.into();
             txn.acquire_pessimistic_lock(k, pk, false, &options)
@@ -540,14 +536,14 @@ mod tests {
             commit_ts: impl Into<TimeStamp>,
         ) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true).unwrap();
+            let mut txn = MvccTxn::new(snap, start_ts.into(), true);
             txn.commit(Key::from_raw(pk), commit_ts.into()).unwrap();
             self.write(txn.into_modifies());
         }
 
         fn rollback(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-            let mut txn = MvccTxn::new(snap, start_ts.into(), true).unwrap();
+            let mut txn = MvccTxn::new(snap, start_ts.into(), true);
             txn.collapse_rollback(false);
             txn.rollback(Key::from_raw(pk)).unwrap();
             self.write(txn.into_modifies());
@@ -556,7 +552,7 @@ mod tests {
         fn gc(&mut self, pk: &[u8], safe_point: impl Into<TimeStamp> + Copy) {
             loop {
                 let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
-                let mut txn = MvccTxn::new(snap, safe_point.into(), true).unwrap();
+                let mut txn = MvccTxn::new(snap, safe_point.into(), true);
                 txn.gc(Key::from_raw(pk), safe_point.into()).unwrap();
                 let modifies = txn.into_modifies();
                 if modifies.is_empty() {
@@ -653,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_need_gc() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("test_storage_mvcc_reader")
             .tempdir()
             .unwrap();
@@ -665,7 +661,7 @@ mod tests {
 
     fn test_without_properties(path: &str, region: &Region) {
         let db = open_db(path, false);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         // Put 2 keys.
         engine.put(&[1], 1, 1);
@@ -679,7 +675,7 @@ mod tests {
 
     fn test_with_properties(path: &str, region: &Region) {
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         // Put 2 keys.
         engine.put(&[2], 3, 3);
@@ -753,14 +749,14 @@ mod tests {
 
     #[test]
     fn test_get_txn_commit_info() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_get_txn_commit_info")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
@@ -839,14 +835,14 @@ mod tests {
 
     #[test]
     fn test_get_txn_commit_info_of_pessimistic_txn() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_get_txn_commit_info_of_pessimistic_txn")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
         let key = Key::from_raw(k);
@@ -874,14 +870,14 @@ mod tests {
 
     #[test]
     fn test_seek_write() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_seek_write")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
@@ -982,14 +978,14 @@ mod tests {
 
     #[test]
     fn test_get_write() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_get_write")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         let (k, v) = (b"k", b"v");
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
@@ -1073,14 +1069,14 @@ mod tests {
 
     #[test]
     fn test_check_lock() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_check_lock")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         let (k1, k2, k3, k4, v) = (b"k1", b"k2", b"k3", b"k4", b"v");
         engine.prewrite(Mutation::Put((Key::from_raw(k1), v.to_vec())), k1, 5);
@@ -1128,14 +1124,14 @@ mod tests {
 
     #[test]
     fn test_scan_locks() {
-        let path = Builder::new()
+        let path = tempfile::Builder::new()
             .prefix("_test_storage_mvcc_reader_scan_locks")
             .tempdir()
             .unwrap();
         let path = path.path().to_str().unwrap();
         let region = make_region(1, vec![], vec![]);
         let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+        let mut engine = RegionEngine::new(&db, &region);
 
         // Put some locks to the db.
         engine.prewrite(

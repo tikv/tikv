@@ -6,6 +6,7 @@ use std::time::Duration;
 use std::{mem, thread, u64};
 
 use futures::future;
+use keys::{Key, Value};
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
 use crate::storage::kv::with_tls_engine;
@@ -19,8 +20,8 @@ use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, ErrorInner, Resu
 use crate::storage::types::ProcessResult;
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, Key,
-    MvccInfo, Result as StorageResult, ScanMode, Snapshot, Statistics, TxnStatus, Value,
+    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, MvccInfo,
+    Result as StorageResult, ScanMode, Snapshot, Statistics, TxnStatus,
 };
 use engine::CF_WRITE;
 use tikv_util::collections::HashMap;
@@ -511,9 +512,9 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             }
             let mut locks = vec![];
             let mut txn = if scan_mode.is_some() {
-                MvccTxn::for_scan(snapshot, scan_mode, start_ts, !cmd.ctx.get_not_fill_cache())?
+                MvccTxn::for_scan(snapshot, scan_mode, start_ts, !cmd.ctx.get_not_fill_cache())
             } else {
-                MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())?
+                MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())
             };
 
             // If `options.for_update_ts` is 0, the transaction is optimistic
@@ -563,7 +564,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             options,
             ..
         } => {
-            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let mut locks = vec![];
             let rows = keys.len();
             for (k, should_not_exist) in keys {
@@ -606,7 +607,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             // Pessimistic txn needs key_hashes to wake up waiters
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
-            let mut txn = MvccTxn::new(snapshot, lock_ts, !cmd.ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot, lock_ts, !cmd.ctx.get_not_fill_cache());
             let mut is_pessimistic_txn = false;
             let rows = keys.len();
             for k in keys {
@@ -635,7 +636,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let mut keys = vec![key];
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
-            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let is_pessimistic_txn = txn.cleanup(keys.pop().unwrap(), current_ts)?;
 
             wake_up_waiters_if_needed(
@@ -651,7 +652,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         CommandKind::Rollback { keys, start_ts, .. } => {
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
-            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let mut is_pessimistic_txn = false;
             let rows = keys.len();
             for k in keys {
@@ -676,7 +677,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             assert!(lock_mgr.is_some());
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
-            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let rows = keys.len();
             for k in keys {
                 txn.pessimistic_rollback(k, for_update_ts)?;
@@ -730,7 +731,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     snapshot.clone(),
                     current_lock.ts,
                     !cmd.ctx.get_not_fill_cache(),
-                )?;
+                );
                 let status = txn_status.get(&current_lock.ts);
                 let commit_ts = match status {
                     Some(ts) => *ts,
@@ -795,7 +796,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
         } => {
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &resolve_keys);
 
-            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !cmd.ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !cmd.ctx.get_not_fill_cache());
             let rows = resolve_keys.len();
             let mut is_pessimistic_txn = false;
             // ti-client guarantees the size of resolve_keys will not too large, so no necessary
@@ -824,7 +825,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             advise_ttl,
         } => {
             // TxnHeartBeat never remove locks. No need to wake up waiters.
-            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !cmd.ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !cmd.ctx.get_not_fill_cache());
             let lock_ttl = txn.txn_heart_beat(primary_key, advise_ttl)?;
 
             statistics.add(&txn.take_statistics());
@@ -840,7 +841,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             current_ts,
             rollback_if_not_exist,
         } => {
-            let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !cmd.ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !cmd.ctx.get_not_fill_cache());
             let (txn_status, is_pessimistic_txn) = txn.check_txn_status(
                 primary_key.clone(),
                 caller_start_ts,
@@ -861,7 +862,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                         is_pessimistic_txn,
                     );
                 }
-                TxnStatus::Rollbacked
+                TxnStatus::RolledBack
                 | TxnStatus::Committed { .. }
                 | TxnStatus::Uncommitted { .. } => {}
             };
