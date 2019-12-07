@@ -20,15 +20,10 @@ impl MySQLRng {
     }
 
     pub fn new_with_seed(seed: i64) -> Self {
-        let temp = seed as u32;
-        let seed1 = (i64::from(temp))
-            .wrapping_mul(0x10001)
-            .wrapping_add(55555555) as u32;
-        let seed2 = (i64::from(temp)).wrapping_mul(0x10000001) as u32;
-        MySQLRng {
-            seed1: seed1 % MAX_RAND_VALUE as u32,
-            seed2: seed2 % MAX_RAND_VALUE as u32,
-        }
+        let seed1 =
+            (seed.wrapping_mul(0x10001).wrapping_add(55555555)) as u32 % MAX_RAND_VALUE as u32;
+        let seed2 = (seed.wrapping_mul(0x10000001)) as u32 % MAX_RAND_VALUE as u32;
+        MySQLRng { seed1, seed2 }
     }
 
     pub fn gen(&mut self) -> f64 {
