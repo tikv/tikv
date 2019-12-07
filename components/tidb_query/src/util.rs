@@ -4,10 +4,8 @@ use kvproto::coprocessor as coppb;
 use tipb::ColumnInfo;
 
 use crate::codec::datum::Datum;
-use rand::SeedableRng;
-use rand_xorshift::XorShiftRng;
 
-trait Rand {
+pub trait Rand {
     fn form_seeds(seed1: u32, seed2: u32) -> Self;
     fn form_seed(seed: i64) -> Self;
     fn gen(&mut self) -> f64;
@@ -34,15 +32,14 @@ impl Rand for RandStruct {
     fn form_seed(seed: i64) -> Self {
         let temp = seed as u32;
         Self::form_seeds(
-            (temp as i32 * 0x10001_i32 + 55555555_i32) as u32,
-            (temp as i32 * 0x10000001_i32) as u32,
+            (temp as i64 * 0x10001_i64 + 55555555_i64) as u32,
+            (temp as i64 * 0x10000001_i64) as u32,
         )
     }
 
     fn gen(&mut self) -> f64 {
         self.seed1 = (self.seed1 * 3 + self.seed2) % self.max_value;
         self.seed2 = (self.seed1 + self.seed2 + 33) % self.max_value;
-        // todo
         self.seed1 as f64 / self.max_value_dbl
     }
 }
@@ -161,7 +158,6 @@ pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::Rng;
 
     fn test_prefix_next_once(key: &[u8], expected: &[u8]) {
         let mut key = key.to_vec();
@@ -235,32 +231,24 @@ mod tests {
 
     #[test]
     fn test_get_rand() {
+        let tests = vec![
+            (0, 0.15522042769493574),
+            (1, 0.40540353712197724),
+            (-1, 0.9050373219931845),
+            (622337, 0.3608469249315997),
+            (922337203685, 0.40536338501178043),
+            (922337203685477580, 0.5550739490939993),
+            (9223372036854775807, 0.9050373219931845),
+        ];
         let mut rand = get_rng(None);
         let res = rand.gen();
         assert!(res < 1.0);
         assert!(res >= 0.0);
 
-        let seed: i64 = 0;
-        rand = get_rng(Some(seed));
-        let res = rand.gen();
-        assert!(res < 1.0);
-        assert!(res >= 0.0);
-        assert_eq!(res, 0.15522042769493574);
-
-        let seed: i64 = 1;
-        rand = get_rng(Some(seed));
-        let res = rand.gen();
-        assert!(res < 1.0);
-        assert!(res >= 0.0);
-        assert_eq!(res, 0.40540353712197724);
-
-        let seed: i64 = -1;
-        rand = get_rng(Some(seed));
-        let res1 = rand.gen();
-        let res2 = rand.gen();
-        assert!(res1 < 1.0);
-        assert!(res1 >= 0.0);
-        assert_eq!(res1, 0.9050373219931845);
-        assert_eq!(res2, 0.37014932126752037);
+        for (seed, exp) in tests {
+            rand = get_rng(Some(seed));
+            let res = rand.gen();
+            assert_eq!(res, exp);
+        }
     }
 }
