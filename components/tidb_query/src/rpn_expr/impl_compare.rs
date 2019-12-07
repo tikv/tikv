@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::Ordering;
+use std::cmp::{max, min, Ordering};
 
 use tidb_query_codegen::rpn_fn;
 
@@ -207,10 +207,46 @@ pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
     Ok(None)
 }
 
+#[inline]
+fn do_get_extremum<F, T>(list: &[&Option<T>], chooser: F) -> Result<Option<T>>
+where
+    T: Copy,
+    F: Fn(T, T) -> T,
+{
+    let (first, others) = list.split_first().unwrap();
+    let mut res = match first {
+        Some(v) => *v,
+        None => return Ok(None),
+    };
+    for exp in others {
+        let val = match exp {
+            Some(v) => *v,
+            None => return Ok(None),
+        };
+        res = chooser(res, val);
+    }
+    Ok(Some(res))
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn greatest_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
+    do_get_extremum(args, max)
+}
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn least_int(args: &[&Option<Int>]) -> Result<Option<Int>> {
+    do_get_extremum(args, min)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::cmp::PartialEq;
+    use std::fmt::Debug;
+    use std::i64;
     use tidb_query_datatype::builder::FieldTypeBuilder;
     use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
     use tipb::ScalarFuncSig;
@@ -639,5 +675,52 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expected);
         }
+    }
+
+    #[test]
+    fn test_greatest_and_least() {
+        let int_cases = vec![
+            (vec![None, None], None, None),
+            (vec![Some(1), Some(-1), None], None, None),
+            (
+                vec![Some(-2), Some(-1), Some(1), Some(2)],
+                Some(2),
+                Some(-2),
+            ),
+            (
+                vec![Some(i64::MIN), Some(0), Some(-1), Some(i64::MAX)],
+                Some(i64::MAX),
+                Some(i64::MIN),
+            ),
+            (vec![Some(0), Some(4), Some(8)], Some(8), Some(0)),
+        ];
+
+        type Cases<T> = Vec<(Vec<Option<T>>, Option<T>, Option<T>)>;
+
+        fn do_test<T>(greatest_sig: ScalarFuncSig, least_sig: ScalarFuncSig, cases: Cases<T>)
+        where
+            T: Debug + PartialEq + Evaluable,
+            Option<T>: From<ScalarValue> + Into<ScalarValue>,
+        {
+            for (args, greatest_exp, least_exp) in cases {
+                let greatest = RpnFnScalarEvaluator::new()
+                    .push_params(args.clone())
+                    .evaluate(greatest_sig)
+                    .unwrap();
+                assert_eq!(greatest, greatest_exp);
+
+                let least = RpnFnScalarEvaluator::new()
+                    .push_params(args)
+                    .evaluate(least_sig)
+                    .unwrap();
+                assert_eq!(least, least_exp);
+            }
+        }
+
+        do_test(
+            ScalarFuncSig::GreatestInt,
+            ScalarFuncSig::LeastInt,
+            int_cases,
+        );
     }
 }
