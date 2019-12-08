@@ -293,6 +293,7 @@ impl ScalarFunc {
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::FromDays
+            | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt => (1, 1),
 
             ScalarFuncSig::IfInt
@@ -457,7 +458,6 @@ impl ScalarFunc {
             | ScalarFuncSig::NowWithoutArg
             | ScalarFuncSig::NullTimeDiff
             | ScalarFuncSig::OctString
-            | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::RandomBytes
@@ -868,6 +868,7 @@ dispatch_call! {
         Strcmp => strcmp,
         InstrBinary => instr_binary,
         Instr => instr,
+        Ord => ord,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1389,6 +1390,7 @@ mod tests {
                     ScalarFuncSig::UncompressedLength,
                     ScalarFuncSig::Quote,
                     ScalarFuncSig::OctInt,
+                    ScalarFuncSig::Ord,
                 ],
                 1,
                 1,
@@ -1603,7 +1605,6 @@ mod tests {
             ScalarFuncSig::NowWithoutArg,
             ScalarFuncSig::NullTimeDiff,
             ScalarFuncSig::OctString,
-            ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::RandomBytes,
