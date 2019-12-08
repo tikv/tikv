@@ -14,7 +14,7 @@ use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::codec::mysql::charset;
 use crate::codec::mysql::{Decimal, DecimalDecoder, Duration, Json, JsonDecoder, Time, MAX_FSP};
-use crate::codec::{datum, Datum};
+use crate::codec::Datum;
 
 mod builtin_arithmetic;
 mod builtin_cast;
@@ -62,7 +62,6 @@ pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
     field_type: FieldType,
-    implicit_args: Vec<Datum>,
     cus_rng: CusRng,
 }
 
@@ -287,7 +286,6 @@ impl Expression {
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
                 ScalarFunc::check_args(expr.get_sig(), expr.get_children().len())?;
-                let implicit_args = datum::decode(&mut expr.get_val())?;
                 expr.take_children()
                     .into_iter()
                     .map(|child| Expression::build(ctx, child))
@@ -297,7 +295,6 @@ impl Expression {
                             sig: expr.get_sig(),
                             children,
                             field_type,
-                            implicit_args,
                             cus_rng: CusRng {
                                 rng: RefCell::new(None),
                             },

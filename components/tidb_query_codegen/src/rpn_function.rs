@@ -229,8 +229,11 @@ struct RpnFnAttr {
     /// Extra validator.
     extra_validator: Option<TokenStream>,
 
-    /// Metadata constructor.
-    metadata_ctor: Option<TokenStream>,
+    /// Metadata type.
+    metadata_type: Option<TokenStream>,
+
+    /// Metadata mapper.
+    metadata_mapper: Option<TokenStream>,
 
     /// Special variables captured when calling the function.
     captures: Vec<Expr>,
@@ -243,7 +246,8 @@ impl parse::Parse for RpnFnAttr {
         let mut max_args = None;
         let mut min_args = None;
         let mut extra_validator = None;
-        let mut metadata_ctor = None;
+        let mut metadata_type = None;
+        let mut metadata_mapper = None;
         let mut captures = Vec::new();
 
         let config_items = Punctuated::<Expr, Token![,]>::parse_terminated(input).unwrap();
@@ -277,8 +281,11 @@ impl parse::Parse for RpnFnAttr {
                         "extra_validator" => {
                             extra_validator = Some((&**right).into_token_stream());
                         }
-                        "metadata_ctor" => {
-                            metadata_ctor = Some((&**right).into_token_stream());
+                        "metadata_type" => {
+                            metadata_type = Some((&**right).into_token_stream());
+                        }
+                        "metadata_mapper" => {
+                            metadata_mapper = Some((&**right).into_token_stream());
                         }
                         _ => {
                             return Err(Error::new_spanned(
@@ -332,7 +339,8 @@ impl parse::Parse for RpnFnAttr {
             max_args,
             min_args,
             extra_validator,
-            metadata_ctor,
+            metadata_type,
+            metadata_mapper,
             captures,
         })
     }
@@ -519,14 +527,28 @@ impl ValidatorFnGenerator {
 }
 
 fn generate_init_metadata_fn(
-    metadata_ctor: &Option<TokenStream>,
+    metadata_type: &Option<TokenStream>,
+    metadata_mapper: &Option<TokenStream>,
     impl_generics: &ImplGenerics<'_>,
     where_clause: Option<&WhereClause>,
 ) -> TokenStream {
-    let fn_body = if let Some(metadata_ctor) = metadata_ctor {
-        quote! { #metadata_ctor(expr).map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>) }
-    } else {
-        quote! { Ok(Box::new(())) }
+    let fn_body = match (metadata_type, metadata_mapper) {
+        (Some(metadata_type), Some(metadata_mapper)) => quote! {
+            protobuf::parse_from_bytes::<#metadata_type>(expr.get_val())
+                .map_err(|e| other_err!("Decode metadata failed: {}", e))
+                .and_then(|metadata| #metadata_mapper(expr, metadata))
+                .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
+        },
+        (Some(metadata_type), None) => quote! {
+            protobuf::parse_from_bytes::<#metadata_type>(expr.get_val())
+                .map_err(|e| other_err!("Decode metadata failed: {}", e))
+                .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
+        },
+        (None, Some(metadata_mapper)) => quote! {
+            #metadata_mapper(expr)
+                .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
+        },
+        (None, None) => quote! { Ok(Box::new(())) },
     };
     quote! {
         fn init_metadata #impl_generics (expr: &mut ::tipb::Expr)
@@ -547,13 +569,21 @@ fn generate_downcast_metadata(has_metadata: bool) -> TokenStream {
 }
 
 fn generate_metadata_type_checker(
-    metadata_ctor: &Option<TokenStream>,
+    metadata_type: &Option<TokenStream>,
+    metadata_mapper: &Option<TokenStream>,
     impl_generics: &ImplGenerics<'_>,
     where_clause: Option<&WhereClause>,
-    fn_body: impl FnOnce(&TokenStream) -> TokenStream,
+    fn_body: TokenStream,
 ) -> TokenStream {
-    if let Some(metadata_ctor) = metadata_ctor {
-        let body = fn_body(metadata_ctor);
+    if metadata_type.is_some() || metadata_mapper.is_some() {
+        let metadata_ctor = match (metadata_type, metadata_mapper) {
+            (Some(metadata_type), Some(metadata_mapper)) => quote! {
+                &#metadata_mapper(#metadata_type::new(), expr).unwrap()
+            },
+            (Some(metadata_type), None) => quote! { &#metadata_type::new() },
+            (None, Some(metadata_mapper)) => quote! { &#metadata_mapper(expr).unwrap() },
+            (None, None) => quote! { &#metadata_type::new() },
+        };
         quote! {
             const _: () = {
                 fn _type_checker #impl_generics (
@@ -563,7 +593,8 @@ fn generate_metadata_type_checker(
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                     expr: &mut ::tipb::Expr,
                 ) #where_clause {
-                    #body
+                    let metadata = #metadata_ctor;
+                    #fn_body
                 }
             };
         }
@@ -579,7 +610,8 @@ struct VargsRpnFn {
     max_args: Option<usize>,
     min_args: Option<usize>,
     extra_validator: Option<TokenStream>,
-    metadata_ctor: Option<TokenStream>,
+    metadata_type: Option<TokenStream>,
+    metadata_mapper: Option<TokenStream>,
     item_fn: ItemFn,
     arg_type: TypePath,
     ret_type: TypePath,
@@ -614,7 +646,8 @@ impl VargsRpnFn {
             max_args: attr.max_args,
             min_args: attr.min_args,
             extra_validator: attr.extra_validator,
-            metadata_ctor: attr.metadata_ctor,
+            metadata_type: attr.metadata_type,
+            metadata_mapper: attr.metadata_mapper,
             item_fn,
             arg_type: arg_type.eval_type,
             ret_type: ret_type.eval_type,
@@ -642,17 +675,15 @@ impl VargsRpnFn {
         let arg_type = &self.arg_type;
         let captures = &self.captures;
         let init_metadata_fn =
-            generate_init_metadata_fn(&self.metadata_ctor, &impl_generics, where_clause);
-        let downcast_metadata = generate_downcast_metadata(self.metadata_ctor.is_some());
+            generate_init_metadata_fn(&self.metadata_type, &self.metadata_mapper, &impl_generics, where_clause);
+        let downcast_metadata = generate_downcast_metadata(self.metadata_type.is_some() || self.metadata_mapper.is_some());
         let metadata_type_checker = generate_metadata_type_checker(
-            &self.metadata_ctor,
+            &self.metadata_type,
+            &self.metadata_mapper,
             &impl_generics,
             where_clause,
-            |metadata_ctor| {
-                quote! {
-                    let metadata = &#metadata_ctor(expr).unwrap();
-                    #fn_ident #ty_generics_turbofish ( #(#captures,)* &[]).ok();
-                }
+            quote! {
+                #fn_ident #ty_generics_turbofish ( #(#captures,)* &[]).ok();
             },
         );
 
@@ -722,7 +753,8 @@ struct RawVargsRpnFn {
     max_args: Option<usize>,
     min_args: Option<usize>,
     extra_validator: Option<TokenStream>,
-    metadata_ctor: Option<TokenStream>,
+    metadata_type: Option<TokenStream>,
+    metadata_mapper: Option<TokenStream>,
     item_fn: ItemFn,
     ret_type: TypePath,
 }
@@ -750,7 +782,8 @@ impl RawVargsRpnFn {
             max_args: attr.max_args,
             min_args: attr.min_args,
             extra_validator: attr.extra_validator,
-            metadata_ctor: attr.metadata_ctor,
+            metadata_type: attr.metadata_type,
+            metadata_mapper: attr.metadata_mapper,
             item_fn,
             ret_type: ret_type.eval_type,
         })
@@ -776,17 +809,15 @@ impl RawVargsRpnFn {
         let fn_name = self.item_fn.sig.ident.to_string();
         let captures = &self.captures;
         let init_metadata_fn =
-            generate_init_metadata_fn(&self.metadata_ctor, &impl_generics, where_clause);
-        let downcast_metadata = generate_downcast_metadata(self.metadata_ctor.is_some());
+            generate_init_metadata_fn(&self.metadata_type, &self.metadata_mapper, &impl_generics, where_clause);
+        let downcast_metadata = generate_downcast_metadata(self.metadata_type.is_some() || self.metadata_mapper.is_some());
         let metadata_type_checker = generate_metadata_type_checker(
-            &self.metadata_ctor,
+            &self.metadata_type,
+            &self.metadata_mapper,
             &impl_generics,
             where_clause,
-            |metadata_ctor| {
-                quote! {
-                    let metadata = &#metadata_ctor(expr).unwrap();
-                    #fn_ident #ty_generics_turbofish ( #(#captures,)* &[]).ok();
-                }
+            quote! {
+                #fn_ident #ty_generics_turbofish ( #(#captures,)* &[]).ok();
             },
         );
 
@@ -854,7 +885,8 @@ impl RawVargsRpnFn {
 struct NormalRpnFn {
     captures: Vec<Expr>,
     extra_validator: Option<TokenStream>,
-    metadata_ctor: Option<TokenStream>,
+    metadata_type: Option<TokenStream>,
+    metadata_mapper: Option<TokenStream>,
     item_fn: ItemFn,
     fn_trait_ident: Ident,
     evaluator_ident: Ident,
@@ -887,7 +919,8 @@ impl NormalRpnFn {
         Ok(Self {
             captures: attr.captures,
             extra_validator: attr.extra_validator,
-            metadata_ctor: attr.metadata_ctor,
+            metadata_type: attr.metadata_type,
+            metadata_mapper: attr.metadata_mapper,
             item_fn,
             fn_trait_ident,
             evaluator_ident,
@@ -976,20 +1009,20 @@ impl NormalRpnFn {
             (0..self.arg_types.len()).map(|i| Ident::new(&format!("arg{}", i), Span::call_site()));
         let call_arg = extract.clone();
         let ty_generics_turbofish = ty_generics.as_turbofish();
-        let downcast_metadata = generate_downcast_metadata(self.metadata_ctor.is_some());
+        let downcast_metadata = generate_downcast_metadata(
+            self.metadata_type.is_some() || self.metadata_mapper.is_some(),
+        );
         let extract2 = extract.clone();
         let call_arg2 = extract.clone();
         let metadata_type_checker = generate_metadata_type_checker(
-            &self.metadata_ctor,
+            &self.metadata_type,
+            &self.metadata_mapper,
             &impl_generics,
             where_clause,
-            |metadata_ctor| {
-                quote! {
-                    let arg: &#tp = unsafe { &*std::ptr::null() };
-                    #(let (#extract2, arg) = arg.extract(0));*;
-                    let metadata = &#metadata_ctor(expr).unwrap();
-                    #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
-                }
+            quote! {
+                let arg: &#tp = unsafe { &*std::ptr::null() };
+                #(let (#extract2, arg) = arg.extract(0));*;
+                #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
             },
         );
 
@@ -1063,8 +1096,12 @@ impl NormalRpnFn {
             evaluator = quote! { <ArgConstructor<#arg_type, _>>::new(#arg_index, #evaluator) };
         }
         let fn_name = self.item_fn.sig.ident.to_string();
-        let init_metadata_fn =
-            generate_init_metadata_fn(&self.metadata_ctor, &impl_generics, where_clause);
+        let init_metadata_fn = generate_init_metadata_fn(
+            &self.metadata_type,
+            &self.metadata_mapper,
+            &impl_generics,
+            where_clause,
+        );
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
@@ -1467,7 +1504,8 @@ mod tests_normal {
                 max_args: None,
                 min_args: None,
                 extra_validator: None,
-                metadata_ctor: None,
+                metadata_mapper: None,
+                metadata_type: None,
                 captures: vec![parse_str("ctx").unwrap()],
             },
             item_fn,

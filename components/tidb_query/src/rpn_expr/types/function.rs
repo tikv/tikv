@@ -28,7 +28,7 @@ use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, FieldType};
 
 use super::RpnStackNode;
-use crate::codec::data_type::{Evaluable, ScalarValue, ScalarValueRef, VectorValue};
+use crate::codec::data_type::{Evaluable, ScalarValueRef, VectorValue};
 use crate::expr::EvalContext;
 use crate::Result;
 
@@ -67,9 +67,6 @@ impl std::fmt::Debug for RpnFnMeta {
 pub struct RpnFnCallExtra<'a> {
     /// The field type of the return value.
     pub ret_field_type: &'a FieldType,
-
-    /// Implicit constant arguments.
-    pub implicit_args: &'a [ScalarValue],
 }
 
 /// A single argument of an RPN function.
