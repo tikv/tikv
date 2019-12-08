@@ -2,7 +2,6 @@ use std::cell::RefCell;
 
 use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
-use tipb::Expr;
 
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
@@ -352,15 +351,9 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
 }
 
 #[inline]
-#[rpn_fn(capture = [metadata], metadata_ctor = init_rng_data)]
-fn rand(metadata: &RefCell<MySQLRng>) -> Result<Option<Real>> {
-    let mut rng = metadata.borrow_mut();
-    let res = rng.gen();
-    Ok(Real::new(res).ok())
-}
-
-fn init_rng_data(_expr: &mut Expr) -> Result<RefCell<MySQLRng>> {
-    Ok(RefCell::new(MySQLRng::new()))
+#[rpn_fn]
+fn rand() -> Result<Option<Real>> {
+    MYSQL_RNG.with(|mysql_rng| Ok(Real::new(mysql_rng.borrow_mut().gen()).ok()))
 }
 
 #[inline]
@@ -418,6 +411,10 @@ pub fn conv(
     } else {
         Ok(None)
     }
+}
+
+thread_local! {
+    pub static MYSQL_RNG:RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
 
 #[cfg(test)]
