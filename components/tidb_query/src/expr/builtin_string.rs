@@ -3588,7 +3588,7 @@ mod tests {
             assert_eq!(got, expect);
         }
 
-        let got = eval_func(ScalarFuncSig::Ord, &[Datum::Null]);
-        assert!(got.is_err());
+        let got = eval_func(ScalarFuncSig::Ord, &[Datum::Null]).unwrap();
+        assert_eq!(got, Datum::Null);
     }
 }
