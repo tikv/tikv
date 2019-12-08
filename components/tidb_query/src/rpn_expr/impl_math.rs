@@ -366,7 +366,7 @@ fn init_rng_data(_expr: &mut Expr) -> Result<RefCell<MySQLRng>> {
 #[inline]
 #[rpn_fn]
 fn rand_with_seed(seed: &Option<i64>) -> Result<Option<Real>> {
-    let mut rng = MySQLRng::new_with_seed(seed.clone().unwrap_or(0));
+    let mut rng = MySQLRng::new_with_seed(seed.unwrap_or(0));
     let res = rng.gen();
     Ok(Real::new(res).ok())
 }
