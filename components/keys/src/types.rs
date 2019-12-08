@@ -36,7 +36,7 @@ impl Key {
     /// Creates a key from raw bytes.
     #[inline]
     pub fn from_raw(key: &[u8]) -> Key {
-        let len = MemComparableByteCodec::encoded_len(key.len());
+        let len = MemComparableByteCodec::encoded_len(key.len() + number::U64_SIZE);
         let mut encoded = Vec::with_capacity(len);
         encoded.write_comparable_bytes(key).unwrap();
         Key(encoded)
@@ -60,7 +60,7 @@ impl Key {
             let k = Vec::with_capacity(len);
             return Ok(k);
         }
-        let mut k = Vec::with_capacity(len);
+        let mut k = vec![0; len];
         let (_read_bytes, written_bytes) =
             MemComparableByteCodec::try_decode_first(&self.0.as_slice(), &mut k)?;
         k.truncate(written_bytes);
