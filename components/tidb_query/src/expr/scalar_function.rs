@@ -292,7 +292,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
-            | ScalarFuncSig::FromDays => (1, 1),
+            | ScalarFuncSig::FromDays
+            | ScalarFuncSig::OctInt
+            | ScalarFuncSig::JsonDepthSig => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -455,7 +457,6 @@ impl ScalarFunc {
             | ScalarFuncSig::NowWithArg
             | ScalarFuncSig::NowWithoutArg
             | ScalarFuncSig::NullTimeDiff
-            | ScalarFuncSig::OctInt
             | ScalarFuncSig::OctString
             | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
@@ -528,7 +529,6 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonQuoteSig
             | ScalarFuncSig::JsonSearchSig
             | ScalarFuncSig::JsonStorageSizeSig
-            | ScalarFuncSig::JsonDepthSig
             | ScalarFuncSig::JsonKeysSig
             | ScalarFuncSig::JsonLengthSig
             | ScalarFuncSig::JsonValidJsonSig
@@ -868,6 +868,7 @@ dispatch_call! {
         Strcmp => strcmp,
         InstrBinary => instr_binary,
         Instr => instr,
+        JsonDepthSig => json_depth,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1011,6 +1012,7 @@ dispatch_call! {
         Compress => compress,
         Uncompress => uncompress,
         Quote => quote,
+        OctInt => oct_int,
 
         Conv => conv,
         Trim1Arg => trim_1_arg,
@@ -1387,6 +1389,8 @@ mod tests {
                     ScalarFuncSig::Uncompress,
                     ScalarFuncSig::UncompressedLength,
                     ScalarFuncSig::Quote,
+                    ScalarFuncSig::OctInt,
+                    ScalarFuncSig::JsonDepthSig,
                 ],
                 1,
                 1,
@@ -1600,7 +1604,6 @@ mod tests {
             ScalarFuncSig::NowWithArg,
             ScalarFuncSig::NowWithoutArg,
             ScalarFuncSig::NullTimeDiff,
-            ScalarFuncSig::OctInt,
             ScalarFuncSig::OctString,
             ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
