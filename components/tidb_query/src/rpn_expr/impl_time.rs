@@ -73,6 +73,22 @@ pub fn day_of_year(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
+pub fn to_days(ctx: &mut EvalContext, t: &Option<DateTime>) -> Result<Option<Int>> {
+    let t = match t {
+        Some(v) => v,
+        _ => return Ok(None),
+    };
+
+    if t.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(t))
+            .map(|_| Ok(None))?;
+    }
+    Ok(Some(Int::from(t.day_number())))
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
 pub fn from_days(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Time>> {
     arg.map_or(Ok(None), |daynr: Int| {
         let time = Time::from_days(ctx, daynr as u32)?;
@@ -200,6 +216,7 @@ mod tests {
     use tipb::ScalarFuncSig;
 
     use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
+    use crate::codec::mysql::Time;
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
     use tidb_query_datatype::FieldTypeTp;
 
@@ -380,6 +397,33 @@ mod tests {
             .evaluate::<Int>(ScalarFuncSig::DayOfYear)
             .unwrap();
         assert_eq!(output, None);
+    }
+
+    #[test]
+    fn test_to_days() {
+        let cases = vec![
+            (Some("950501"), Some(728779)),
+            (Some("2007-10-07"), Some(733321)),
+            (Some("2008-10-07"), Some(733687)),
+            (Some("08-10-07"), Some(733687)),
+            (Some("0000-01-01"), Some(1)),
+            (Some("2007-10-07 00:00:59"), Some(733321)),
+            (Some("0000-00-00 00:00:00"), None),
+            (None, None),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let time = match arg {
+                Some(arg) => Some(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap()),
+                None => None,
+            };
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(time.clone())
+                .evaluate(ScalarFuncSig::ToDays)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
     }
 
     #[test]
