@@ -353,7 +353,8 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn rand() -> Result<Option<Real>> {
-    MYSQL_RNG.with(|mysql_rng| Ok(Real::new(mysql_rng.borrow_mut().gen()).ok()))
+    let res = MYSQL_RNG.with(|mysql_rng| mysql_rng.borrow_mut().gen());
+    Ok(Real::new(res).ok())
 }
 
 #[inline]
@@ -414,7 +415,7 @@ pub fn conv(
 }
 
 thread_local! {
-   static MYSQL_RNG:RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
+   static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
 
 #[cfg(test)]
