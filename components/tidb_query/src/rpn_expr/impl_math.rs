@@ -414,7 +414,7 @@ pub fn conv(
 }
 
 thread_local! {
-    pub static MYSQL_RNG:RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
+   static MYSQL_RNG:RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
 
 #[cfg(test)]
