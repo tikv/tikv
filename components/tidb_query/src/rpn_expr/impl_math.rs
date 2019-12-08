@@ -402,7 +402,7 @@ pub fn conv(
 #[rpn_fn]
 pub fn round_real(arg: &Option<Real>) -> Result<Option<Real>> {
     match arg {
-        Some(arg) => Ok(Some(Real::from(arg.round()))),
+        Some(arg) => Ok(Real::new(arg.round()).ok()),
         None => Ok(None),
     }
 }
@@ -410,10 +410,7 @@ pub fn round_real(arg: &Option<Real>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 pub fn round_int(arg: &Option<Int>) -> Result<Option<Int>> {
-    match arg {
-        Some(arg) => Ok(Some(Int::from(*arg as i64))),
-        None => Ok(None),
-    }
+    Ok(*arg)
 }
 
 #[inline]
