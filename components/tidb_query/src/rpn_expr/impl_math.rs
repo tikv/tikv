@@ -1,6 +1,4 @@
 use num::traits::Pow;
-use std::str::FromStr;
-use std::{f64, i64};
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
@@ -431,6 +429,8 @@ pub fn round_dec(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+    use std::{f64, i64};
     use tipb::ScalarFuncSig;
 
     use super::*;
