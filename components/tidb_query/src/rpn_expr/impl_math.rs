@@ -1,4 +1,5 @@
 use num::traits::Pow;
+use std::str::FromStr;
 use std::{f64, i64};
 use tidb_query_codegen::rpn_fn;
 
@@ -1259,6 +1260,7 @@ mod tests {
             (Some(Real::from(-3.12_f64)), Some(Real::from(-3f64))),
             (Some(Real::from(f64::MAX)), Some(Real::from(f64::MAX))),
             (Some(Real::from(f64::MIN)), Some(Real::from(f64::MIN))),
+            (None, None),
         ];
 
         for (arg, exp) in test_cases {
@@ -1268,12 +1270,6 @@ mod tests {
                 .unwrap();
             assert_eq!(got, exp);
         }
-
-        assert!(RpnFnScalarEvaluator::new()
-            .push_param(ScalarValue::Real(None))
-            .evaluate::<Real>(ScalarFuncSig::RoundReal)
-            .unwrap()
-            .is_none());
     }
 
     #[test]
@@ -1282,6 +1278,7 @@ mod tests {
             (Some(Int::from(1)), Some(Int::from(1))),
             (Some(Int::from(i64::MAX)), Some(Int::from(i64::MAX))),
             (Some(Int::from(i64::MIN)), Some(Int::from(i64::MIN))),
+            (None, None),
         ];
 
         for (arg, exp) in test_cases {
@@ -1291,32 +1288,28 @@ mod tests {
                 .unwrap();
             assert_eq!(got, exp);
         }
-
-        assert!(RpnFnScalarEvaluator::new()
-            .push_param(ScalarValue::Int(None))
-            .evaluate::<Int>(ScalarFuncSig::RoundInt)
-            .unwrap()
-            .is_none());
     }
 
     #[test]
     fn test_round_dec() {
-        let test_cases = vec![("123.1", "123.0"), ("-1111.1", "-1111.0")];
+        let test_cases = vec![
+            (
+                Some(Decimal::from_str("123.1").unwrap()),
+                Some(Decimal::from_str("123.0").unwrap()),
+            ),
+            (
+                Some(Decimal::from_str("-1111.1").unwrap()),
+                Some(Decimal::from_str("-1111.0").unwrap()),
+            ),
+            (None, None),
+        ];
 
         for (arg, expect_output) in test_cases {
-            let arg = arg.parse::<Decimal>().ok();
-            let expect_output = expect_output.parse::<Decimal>().ok();
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg.clone())
+                .push_param(arg)
                 .evaluate::<Decimal>(ScalarFuncSig::RoundDec)
                 .unwrap();
-            assert_eq!(output, expect_output, "{:?}", arg);
-
-            assert!(RpnFnScalarEvaluator::new()
-                .push_param(ScalarValue::Decimal(None))
-                .evaluate::<Decimal>(ScalarFuncSig::RoundDec)
-                .unwrap()
-                .is_none());
+            assert_eq!(output, expect_output);
         }
     }
 }
