@@ -12,7 +12,8 @@ pub const DEFAULT_DATA_DIR: &str = "./";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 const DEFAULT_MAX_KEY_SIZE: usize = 4 * 1024;
-const DEFAULT_SCHED_CONCURRENCY: usize = 2048000;
+const DEFAULT_SCHED_CONCURRENCY: usize = 1024 * 512;
+const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 
 // According to "Little's law", assuming you can write 100MB per
 // second, and it takes about 100ms to process the write requests
@@ -53,6 +54,12 @@ impl Config {
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.data_dir != DEFAULT_DATA_DIR {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
+        }
+        if self.scheduler_concurrency > MAX_SCHED_CONCURRENCY {
+            warn!("TiKV has optimized latch since v4.0, so it is not necessary to set large schedule \
+                concurrency. To save memory, change it from {:?} to {:?}",
+                  self.scheduler_concurrency, MAX_SCHED_CONCURRENCY);
+            self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
         Ok(())
     }
