@@ -294,7 +294,8 @@ impl ScalarFunc {
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::FromDays
             | ScalarFuncSig::Ord
-            | ScalarFuncSig::OctInt => (1, 1),
+            | ScalarFuncSig::OctInt
+            | ScalarFuncSig::JsonDepthSig => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -528,7 +529,6 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonQuoteSig
             | ScalarFuncSig::JsonSearchSig
             | ScalarFuncSig::JsonStorageSizeSig
-            | ScalarFuncSig::JsonDepthSig
             | ScalarFuncSig::JsonKeysSig
             | ScalarFuncSig::JsonLengthSig
             | ScalarFuncSig::JsonValidJsonSig
@@ -869,6 +869,7 @@ dispatch_call! {
         InstrBinary => instr_binary,
         Instr => instr,
         Ord => ord,
+        JsonDepthSig => json_depth,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1391,6 +1392,7 @@ mod tests {
                     ScalarFuncSig::Quote,
                     ScalarFuncSig::OctInt,
                     ScalarFuncSig::Ord,
+                    ScalarFuncSig::JsonDepthSig,
                 ],
                 1,
                 1,
