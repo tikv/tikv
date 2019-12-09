@@ -773,6 +773,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_rand_with_seed() {
         let tests: Vec<(i64, f64)> = vec![
             (0, 0.15522042769493574),
