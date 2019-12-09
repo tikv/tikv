@@ -140,12 +140,6 @@ impl Ceil for CeilIntToInt {
     }
 }
 
-pub trait Floor {
-    type Input: Evaluable;
-    type Output: Evaluable;
-    fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
-}
-
 #[rpn_fn(capture = [ctx])]
 pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: &Option<T::Input>) -> Result<Option<T::Output>> {
     if let Some(arg) = arg {
@@ -153,6 +147,12 @@ pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: &Option<T::Input>) -> Result<
     } else {
         Ok(None)
     }
+}
+
+pub trait Floor {
+    type Input: Evaluable;
+    type Output: Evaluable;
+    fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
 }
 
 pub struct FloorReal;
@@ -164,6 +164,17 @@ impl Floor for FloorReal {
     #[inline]
     fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
         Ok(Some(Real::from(arg.floor())))
+    }
+}
+
+pub struct FloorIntToDec;
+
+impl Floor for FloorIntToDec {
+    type Input = Int;
+    type Output = Decimal;
+
+    fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
+        Ok(Some(Decimal::from(*arg)))
     }
 }
 
@@ -731,6 +742,27 @@ mod tests {
         }
 
         test_unary_func_ok_none::<Real, Real>(ScalarFuncSig::FloorReal);
+    }
+
+    #[test]
+    fn test_floor_int_to_dec() {
+        let tests_cases = vec![
+            (std::i64::MIN, "-9223372036854775808"),
+            (std::i64::MAX, "9223372036854775807"),
+            (123, "123"),
+            (-123, "-123"),
+        ];
+
+        for (input, expected) in tests_cases {
+            let expected = expected.parse::<Decimal>().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate::<Decimal>(ScalarFuncSig::FloorIntToDec)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+
+        test_unary_func_ok_none::<Int, Decimal>(ScalarFuncSig::FloorIntToDec);
     }
 
     #[test]
