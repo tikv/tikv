@@ -11,6 +11,8 @@ use kvproto::kvrpcpb::IsolationLevel;
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
+#[cfg(test)]
+use self::txn_entry::tests::EntryBuilder;
 use crate::storage::mvcc::{default_not_found_error, Result, TimeStamp, TsSet};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{

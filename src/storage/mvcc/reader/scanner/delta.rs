@@ -89,12 +89,19 @@ impl<S: Snapshot> DeltaScanner<S> {
         self.read_next_item()
     }
 
+    fn end_ts(&self) -> TimeStamp {
+        self.cfg.ts
+    }
+
     fn read_and_check_lock(&mut self) -> Result<Option<TxnEntry>> {
         let lock_item = self.read_next_lock_item()?;
         if let Some(lock) = lock_item {
             let current_user_key = Key::from_encoded_slice(&lock.key);
-            lock.lock
-                .check_ts_conflict(&current_user_key, self.cfg.ts, &self.cfg.bypass_locks)?;
+            lock.lock.check_ts_conflict(
+                &current_user_key,
+                self.end_ts(),
+                &self.cfg.bypass_locks,
+            )?;
         }
         let data = self.read_next_commit_item()?;
         Ok(data.map(|e| e.entry))
@@ -175,11 +182,12 @@ impl<S: Snapshot> DeltaScanner<S> {
         if self.lock_cursor.is_none() {
             return Ok(None);
         }
+        let end_ts = self.end_ts();
         let lock_cursor = self.lock_cursor.as_mut().unwrap();
         while lock_cursor.valid()? {
             let lock_value = lock_cursor.value(&mut self.statistics.lock);
             let lock = Lock::parse(lock_value)?;
-            if lock.ts > self.cfg.ts {
+            if lock.ts > end_ts {
                 lock_cursor.next(&mut self.statistics.lock);
                 continue;
             }
@@ -211,7 +219,7 @@ impl<S: Snapshot> DeltaScanner<S> {
                 self.move_write_cursor_to_next_user_key(&current_user_key)?;
                 continue;
             }
-            if commit_ts <= self.cfg.ts {
+            if commit_ts <= self.end_ts() {
                 let v = self.load_data_and_write(&current_user_key)?;
                 self.write_cursor.next(&mut self.statistics.write);
                 let entry = WriteEntry {
@@ -226,8 +234,6 @@ impl<S: Snapshot> DeltaScanner<S> {
 
     /// Load the value by the given `write`. If value is carried in `write`, it will be returned
     /// directly. Otherwise there will be a default CF look up.
-    ///
-    /// The implementation is the same as `PointGetter::load_data_and_write`.
     #[inline]
     fn load_data_and_write(&mut self, user_key: &Key) -> Result<(TxnEntry)> {
         let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
@@ -332,8 +338,7 @@ impl<S: Snapshot> DeltaScanner<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::txn_entry::tests::EntryBuilder;
-    use super::super::ScannerBuilder;
+    use super::super::{EntryBuilder, ScannerBuilder};
     use super::*;
     use crate::storage::mvcc::tests::*;
     use crate::storage::{Engine, TestEngineBuilder, SHORT_VALUE_MAX_LEN};
