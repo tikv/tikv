@@ -1,0 +1,11 @@
+[package]
+name = "configuration"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[lib]
+name = "configuration"
+
+[dependencies]
+configuration_derive = { path = "./configuration_derive" }
