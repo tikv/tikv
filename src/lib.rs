@@ -26,6 +26,7 @@
 #![feature(box_patterns)]
 #![feature(shrink_to)]
 #![feature(drain_filter)]
+#![feature(associated_type_bounds)]
 
 #[macro_use]
 extern crate bitflags;

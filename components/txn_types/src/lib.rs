@@ -16,8 +16,8 @@ mod write;
 use std::fmt;
 use std::io;
 
-pub use lock::{Lock, LockType};
-pub use timestamp::{TimeStamp, TsSet};
+pub use lock::{Lock, LockType, TransactionKind};
+pub use timestamp::{NonZeroTimeStamp, TimeStamp, TsSet};
 pub use types::{is_short_value, Key, KvPair, Mutation, Value, SHORT_VALUE_MAX_LEN};
 pub use write::{Write, WriteRef, WriteType};
 

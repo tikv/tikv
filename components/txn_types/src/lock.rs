@@ -1,11 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::timestamp::{TimeStamp, TsSet};
+use crate::timestamp::{NonZeroTimeStamp, TimeStamp, TsSet};
 use crate::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use crate::{Error, ErrorInner, Result};
 use byteorder::ReadBytesExt;
 use derive_new::new;
 use kvproto::kvrpcpb::{LockInfo, Op};
+use std::convert::TryInto;
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
@@ -55,15 +56,57 @@ impl LockType {
     }
 }
 
+/// Used in `Lock` to indicate the kind of transaction which the lock is part of.
+/// Note that this is not the kind of lock - a pessimistic lock may only be used
+/// in a pessimistic transaction, but a pessimistic transaction may include other
+/// kinds of locks.
+#[derive(new, PartialEq, Copy, Clone, Debug)]
+pub enum TransactionKind {
+    Optimistic,
+    /// The field is the commit timestamp of data being read in this transaction.
+    Pessimistic(NonZeroTimeStamp),
+}
+
+impl TransactionKind {
+    fn write_bytes(self, b: &mut Vec<u8>) {
+        if let TransactionKind::Pessimistic(ts) = self {
+            b.push(FOR_UPDATE_TS_PREFIX);
+            b.encode_u64(ts.into_inner()).unwrap();
+        }
+    }
+
+    pub fn is_pessimistic(self) -> bool {
+        match self {
+            TransactionKind::Optimistic => false,
+            TransactionKind::Pessimistic(_) => true,
+        }
+    }
+
+    pub fn will_expire_before(self, ts: NonZeroTimeStamp) -> bool {
+        match self {
+            TransactionKind::Pessimistic(self_ts) if self_ts <= ts => true,
+            _ => false,
+        }
+    }
+}
+
+impl From<TimeStamp> for TransactionKind {
+    fn from(ts: TimeStamp) -> TransactionKind {
+        match ts.try_into() {
+            Ok(ts) => TransactionKind::Pessimistic(ts),
+            Err(_) => TransactionKind::Optimistic,
+        }
+    }
+}
+
 #[derive(new, PartialEq, Clone, Debug)]
 pub struct Lock {
     pub lock_type: LockType,
+    pub txn_kind: TransactionKind,
     pub primary: Vec<u8>,
     pub ts: TimeStamp,
     pub ttl: u64,
     pub short_value: Option<Value>,
-    // If for_update_ts != 0, this lock belongs to a pessimistic transaction
-    pub for_update_ts: TimeStamp,
     pub txn_size: u64,
     pub min_commit_ts: TimeStamp,
 }
@@ -82,10 +125,7 @@ impl Lock {
             b.push(v.len() as u8);
             b.extend_from_slice(v);
         }
-        if !self.for_update_ts.is_zero() {
-            b.push(FOR_UPDATE_TS_PREFIX);
-            b.encode_u64(self.for_update_ts.into_inner()).unwrap();
-        }
+        self.txn_kind.write_bytes(&mut b);
         if self.txn_size > 0 {
             b.push(TXN_SIZE_PREFIX);
             b.encode_u64(self.txn_size).unwrap();
@@ -113,11 +153,11 @@ impl Lock {
         if b.is_empty() {
             return Ok(Lock::new(
                 lock_type,
+                TransactionKind::Optimistic,
                 primary,
                 ts,
                 ttl,
                 None,
-                TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
             ));
@@ -149,11 +189,11 @@ impl Lock {
         }
         Ok(Lock::new(
             lock_type,
+            for_update_ts.into(),
             primary,
             ts,
             ttl,
             short_value,
-            for_update_ts,
             txn_size,
             min_commit_ts,
         ))
@@ -257,91 +297,91 @@ mod tests {
         let mut locks = vec![
             Lock::new(
                 LockType::Put,
+                TransactionKind::Optimistic,
                 b"pk".to_vec(),
                 1.into(),
                 10,
                 None,
-                TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Delete,
+                TransactionKind::Optimistic,
                 b"pk".to_vec(),
                 1.into(),
                 10,
                 Some(b"short_value".to_vec()),
-                TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Put,
+                TransactionKind::Pessimistic(10.try_into().unwrap()),
                 b"pk".to_vec(),
                 1.into(),
                 10,
                 None,
-                10.into(),
                 0,
                 TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Delete,
+                TransactionKind::Pessimistic(10.try_into().unwrap()),
                 b"pk".to_vec(),
                 1.into(),
                 10,
                 Some(b"short_value".to_vec()),
-                10.into(),
                 0,
                 TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Put,
+                TransactionKind::Optimistic,
                 b"pk".to_vec(),
                 1.into(),
                 10,
                 None,
-                TimeStamp::zero(),
                 16,
                 TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Delete,
+                TransactionKind::Optimistic,
                 b"pk".to_vec(),
                 1.into(),
                 10,
                 Some(b"short_value".to_vec()),
-                TimeStamp::zero(),
                 16,
                 TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Put,
+                TransactionKind::Pessimistic(10.try_into().unwrap()),
                 b"pk".to_vec(),
                 1.into(),
                 10,
                 None,
-                10.into(),
                 16,
                 TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Delete,
+                TransactionKind::Pessimistic(10.try_into().unwrap()),
                 b"pk".to_vec(),
                 1.into(),
                 10,
                 Some(b"short_value".to_vec()),
-                10.into(),
                 0,
                 TimeStamp::zero(),
             ),
             Lock::new(
                 LockType::Put,
+                TransactionKind::Pessimistic(333.try_into().unwrap()),
                 b"pkpkpk".to_vec(),
                 111.into(),
                 222,
                 None,
-                333.into(),
                 444,
                 555.into(),
             ),
@@ -357,11 +397,11 @@ mod tests {
 
         let lock = Lock::new(
             LockType::Lock,
+            TransactionKind::Optimistic,
             b"pk".to_vec(),
             1.into(),
             10,
             Some(b"short_value".to_vec()),
-            TimeStamp::zero(),
             0,
             TimeStamp::zero(),
         );
@@ -374,11 +414,11 @@ mod tests {
         let key = Key::from_raw(b"foo");
         let mut lock = Lock::new(
             LockType::Put,
+            TransactionKind::Optimistic,
             vec![],
             100.into(),
             3,
             None,
-            TimeStamp::zero(),
             1,
             TimeStamp::zero(),
         );

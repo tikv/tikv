@@ -1,12 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryInto;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::iter::{self, FromIterator};
 use std::marker::PhantomData;
 
 use kvproto::kvrpcpb::*;
 use tikv_util::collections::HashMap;
-use txn_types::{Key, Lock, Mutation, TimeStamp};
+use txn_types::{Key, Lock, Mutation, NonZeroTimeStamp, TimeStamp};
 
 use crate::storage::lock_manager::WaitTimeout;
 use crate::storage::metrics::{self, KV_COMMAND_COUNTER_VEC_STATIC};
@@ -19,8 +20,8 @@ use crate::storage::Result;
 /// Learn more about our transaction system at
 /// [Deep Dive TiKV: Distributed Transactions](https://tikv.org/docs/deep-dive/distributed-transaction/introduction/)
 ///
-/// These are typically scheduled and used through the [`Storage`](Storage) with functions like
-/// [`Storage::prewrite`](Storage::prewrite) trait and are executed asynchronously.
+/// These are typically scheduled and used through the [`Storage`](Storage) using the `sched_txn_command`
+/// function and are executed asyncronously.
 // Logic related to these can be found in the `src/storage/txn/proccess.rs::process_write_impl` function.
 pub struct Command {
     pub ctx: Context,
@@ -50,8 +51,28 @@ impl<T> From<TypedCommand<T>> for Command {
 impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
     fn from(mut req: PrewriteRequest) -> Self {
         let for_update_ts = req.get_for_update_ts();
-        if for_update_ts == 0 {
-            Prewrite::new(
+        match for_update_ts.try_into() {
+            Ok(for_update_ts) => {
+                let is_pessimistic_lock = req.take_is_pessimistic_lock();
+                let mutations = req
+                    .take_mutations()
+                    .into_iter()
+                    .map(Into::into)
+                    .zip(is_pessimistic_lock.into_iter())
+                    .collect();
+                PrewritePessimistic::new(
+                    mutations,
+                    req.take_primary_lock(),
+                    req.get_start_version().into(),
+                    req.get_lock_ttl(),
+                    for_update_ts,
+                    req.get_txn_size(),
+                    req.get_min_commit_ts().into(),
+                    req.take_context(),
+                )
+                .into()
+            }
+            Err(_) => Prewrite::new(
                 req.take_mutations().into_iter().map(Into::into).collect(),
                 req.take_primary_lock(),
                 req.get_start_version().into(),
@@ -61,26 +82,7 @@ impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
                 req.get_min_commit_ts().into(),
                 req.take_context(),
             )
-            .into()
-        } else {
-            let is_pessimistic_lock = req.take_is_pessimistic_lock();
-            let mutations = req
-                .take_mutations()
-                .into_iter()
-                .map(Into::into)
-                .zip(is_pessimistic_lock.into_iter())
-                .collect();
-            PrewritePessimistic::new(
-                mutations,
-                req.take_primary_lock(),
-                req.get_start_version().into(),
-                req.get_lock_ttl(),
-                for_update_ts.into(),
-                req.get_txn_size(),
-                req.get_min_commit_ts().into(),
-                req.take_context(),
-            )
-            .into()
+            .into(),
         }
     }
 }
@@ -105,7 +107,9 @@ impl From<PessimisticLockRequest> for TypedCommand<Vec<Result<()>>> {
             req.get_start_version().into(),
             req.get_lock_ttl(),
             req.get_is_first_lock(),
-            req.get_for_update_ts().into(),
+            req.get_for_update_ts()
+                .try_into()
+                .expect("Zero for_update_ts in pessimistic transaction"),
             WaitTimeout::from_encoded(req.get_wait_timeout()),
             req.take_context(),
         )
@@ -150,7 +154,9 @@ impl From<PessimisticRollbackRequest> for TypedCommand<Vec<Result<()>>> {
         PessimisticRollback::new(
             keys,
             req.get_start_version().into(),
-            req.get_for_update_ts().into(),
+            req.get_for_update_ts()
+                .try_into()
+                .expect("Zero for_update_ts in pessimistic transaction"),
             req.take_context(),
         )
     }
@@ -359,7 +365,7 @@ command! {
         /// The transaction timestamp.
         start_ts: TimeStamp,
         lock_ttl: u64,
-        for_update_ts: TimeStamp,
+        for_update_ts: NonZeroTimeStamp,
         /// How many keys this transaction involved.
         txn_size: u64,
         min_commit_ts: TimeStamp,
@@ -379,7 +385,7 @@ command! {
         start_ts: TimeStamp,
         lock_ttl: u64,
         is_first_lock: bool,
-        for_update_ts: TimeStamp,
+        for_update_ts: NonZeroTimeStamp,
         /// Time to wait for lock released in milliseconds when encountering locks.
         wait_timeout: Option<WaitTimeout>,
     }
@@ -433,7 +439,7 @@ command! {
         keys: Vec<Key>,
         /// The transaction timestamp.
         start_ts: TimeStamp,
-        for_update_ts: TimeStamp,
+        for_update_ts: NonZeroTimeStamp,
     }
 }
 

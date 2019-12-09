@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt;
-use std::sync::Arc;
+use std::{convert::TryFrom, fmt, num::NonZeroU64, sync::Arc};
 use tikv_util::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -85,6 +84,48 @@ impl slog::Value for TimeStamp {
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         slog::Value::serialize(&self.0, record, key, serializer)
+    }
+}
+
+/// A timestamp that is guaranteed to be > 0. Useful for optimisations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct NonZeroTimeStamp(NonZeroU64);
+
+impl NonZeroTimeStamp {
+    pub fn into_inner(self) -> u64 {
+        self.0.get()
+    }
+}
+
+impl From<NonZeroTimeStamp> for TimeStamp {
+    fn from(nzts: NonZeroTimeStamp) -> TimeStamp {
+        TimeStamp(nzts.0.get())
+    }
+}
+
+impl TryFrom<u64> for NonZeroTimeStamp {
+    type Error = &'static str;
+
+    fn try_from(u: u64) -> Result<NonZeroTimeStamp, Self::Error> {
+        NonZeroU64::new(u)
+            .map(|u| NonZeroTimeStamp(u))
+            .ok_or("Conversion from 0 Timestamp to NonZeroTimeStamp")
+    }
+}
+
+impl TryFrom<TimeStamp> for NonZeroTimeStamp {
+    type Error = &'static str;
+
+    fn try_from(ts: TimeStamp) -> Result<NonZeroTimeStamp, Self::Error> {
+        NonZeroU64::new(ts.0)
+            .map(|u| NonZeroTimeStamp(u))
+            .ok_or("Conversion from 0 Timestamp to NonZeroTimeStamp")
+    }
+}
+
+impl fmt::Display for NonZeroTimeStamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
     }
 }
 

@@ -774,11 +774,11 @@ mod test_util {
             };
             let lock_value = Lock::new(
                 lt,
+                self.for_update_ts.into(),
                 self.primary.clone(),
                 self.start_ts,
                 0,
                 short,
-                self.for_update_ts,
                 0,
                 0.into(),
             );

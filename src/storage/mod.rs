@@ -781,9 +781,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
-        let cf = Self::rawkv_cf(&cf)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
 
+        let cf = Self::rawkv_cf(&cf)?;
         let requests = keys
             .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))

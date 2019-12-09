@@ -500,9 +500,10 @@ impl<E: Engine, L: LockManager> MsgScheduler for Scheduler<E, L> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::mvcc::{self, Mutation};
+    use crate::storage::mvcc::{self, Mutation, TransactionKind};
     use crate::storage::txn::{commands, latch::*};
     use kvproto::kvrpcpb::Context;
+    use std::convert::TryInto;
     use txn_types::Key;
 
     #[test]
@@ -528,7 +529,7 @@ mod tests {
                 10.into(),
                 0,
                 false,
-                TimeStamp::default(),
+                20.try_into().unwrap(),
                 Some(WaitTimeout::Default),
                 Context::default(),
             )
@@ -552,7 +553,7 @@ mod tests {
             commands::PessimisticRollback::new(
                 vec![Key::from_raw(b"k")],
                 10.into(),
-                20.into(),
+                20.try_into().unwrap(),
                 Context::default(),
             )
             .into(),
@@ -563,11 +564,11 @@ mod tests {
                     Key::from_raw(b"k"),
                     mvcc::Lock::new(
                         mvcc::LockType::Put,
+                        TransactionKind::Optimistic,
                         b"k".to_vec(),
                         10.into(),
                         20,
                         None,
-                        TimeStamp::zero(),
                         0,
                         TimeStamp::zero(),
                     ),

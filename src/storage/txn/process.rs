@@ -762,7 +762,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for (current_key, current_lock) in key_locks {
                 if let Some(txn_to_keys) = txn_to_keys.as_mut() {
                     txn_to_keys
-                        .entry((current_lock.ts, !current_lock.for_update_ts.is_zero()))
+                        .entry((current_lock.ts, current_lock.txn_kind.is_pessimistic()))
                         .and_modify(|key_hashes: &mut Option<Vec<u64>>| {
                             if let Some(key_hashes) = key_hashes {
                                 key_hashes.push(current_key.gen_hash());

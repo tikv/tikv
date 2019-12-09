@@ -23,10 +23,10 @@ use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::store::StoreMeta;
 use tikv::raftstore::store::SnapManager;
-use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
+use tikv::storage::mvcc::{Lock, LockType, TransactionKind};
 use tikv_util::worker::FutureWorker;
 use tikv_util::HandyRwLock;
-use txn_types::Key;
+use txn_types::{Key, TimeStamp};
 
 fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let count = 1;
@@ -859,11 +859,11 @@ fn test_debug_scan_mvcc() {
     for k in &keys {
         let v = Lock::new(
             LockType::Put,
+            TransactionKind::Optimistic,
             b"pk".to_vec(),
             1.into(),
             10,
             None,
-            TimeStamp::zero(),
             0,
             TimeStamp::zero(),
         )

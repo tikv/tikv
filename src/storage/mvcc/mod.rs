@@ -10,7 +10,7 @@ pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use crate::new_txn;
 pub use txn_types::{
-    Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
+    Key, Lock, LockType, Mutation, TimeStamp, TransactionKind, Value, Write, WriteRef, WriteType,
     SHORT_VALUE_MAX_LEN,
 };
 
@@ -289,7 +289,8 @@ pub mod tests {
     use crate::storage::types::TxnStatus;
     use engine::CF_WRITE;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use txn_types::Key;
+    use std::convert::TryInto;
+    use txn_types::{Key, NonZeroTimeStamp};
 
     fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
         if !modifies.is_empty() {
@@ -382,7 +383,7 @@ pub mod tests {
                 pk,
                 is_pessimistic_lock,
                 lock_ttl,
-                for_update_ts,
+                for_update_ts.try_into().unwrap(),
                 txn_size,
                 min_commit_ts,
             )
@@ -509,7 +510,7 @@ pub mod tests {
                 pk,
                 is_pessimistic_lock,
                 0,
-                for_update_ts,
+                for_update_ts.try_into().unwrap(),
                 0,
                 TimeStamp::default(),
             )
@@ -569,7 +570,7 @@ pub mod tests {
                 pk,
                 is_pessimistic_lock,
                 0,
-                for_update_ts,
+                for_update_ts.try_into().unwrap(),
                 0,
                 TimeStamp::default(),
             )
@@ -609,8 +610,8 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        let for_update_ts = for_update_ts.into();
         let mutation = Mutation::Lock(Key::from_raw(key));
+        let for_update_ts = for_update_ts.into();
         if for_update_ts.is_zero() {
             txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
                 .unwrap();
@@ -620,7 +621,7 @@ pub mod tests {
                 pk,
                 is_pessimistic_lock,
                 0,
-                for_update_ts,
+                for_update_ts.try_into().unwrap(),
                 0,
                 TimeStamp::default(),
             )
@@ -664,10 +665,17 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
+        for_update_ts: impl TryInto<NonZeroTimeStamp, Error: ::std::fmt::Debug>,
         is_pessimistic_lock: bool,
     ) {
-        must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, is_pessimistic_lock);
+        must_prewrite_lock_impl(
+            engine,
+            key,
+            pk,
+            ts,
+            for_update_ts.try_into().unwrap(),
+            is_pessimistic_lock,
+        );
     }
 
     pub fn must_acquire_pessimistic_lock_impl<E: Engine>(
@@ -675,8 +683,8 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
+        for_update_ts: NonZeroTimeStamp,
         lock_ttl: u64,
-        for_update_ts: TimeStamp,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -694,7 +702,7 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
+        for_update_ts: impl TryInto<NonZeroTimeStamp, Error: ::std::fmt::Debug>,
     ) {
         must_acquire_pessimistic_lock_with_ttl(engine, key, pk, start_ts, for_update_ts, 0);
     }
@@ -704,10 +712,17 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
+        for_update_ts: impl TryInto<NonZeroTimeStamp, Error: ::std::fmt::Debug>,
         ttl: u64,
     ) {
-        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, ttl, for_update_ts.into());
+        must_acquire_pessimistic_lock_impl(
+            engine,
+            key,
+            pk,
+            start_ts,
+            for_update_ts.try_into().unwrap(),
+            ttl,
+        );
     }
 
     pub fn must_acquire_pessimistic_lock_for_large_txn<E: Engine>(
@@ -715,7 +730,7 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
+        for_update_ts: impl TryInto<NonZeroTimeStamp, Error: ::std::fmt::Debug>,
         lock_ttl: u64,
     ) {
         must_acquire_pessimistic_lock_with_ttl(engine, key, pk, start_ts, for_update_ts, lock_ttl);
@@ -726,25 +741,31 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
+        for_update_ts: impl TryInto<NonZeroTimeStamp, Error: ::std::fmt::Debug>,
     ) -> Error {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, 0, for_update_ts.into())
-            .unwrap_err()
+        txn.acquire_pessimistic_lock(
+            Key::from_raw(key),
+            pk,
+            false,
+            0,
+            for_update_ts.try_into().unwrap(),
+        )
+        .unwrap_err()
     }
 
     pub fn must_pessimistic_rollback<E: Engine>(
         engine: &E,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
-        for_update_ts: impl Into<TimeStamp>,
+        for_update_ts: impl TryInto<NonZeroTimeStamp, Error: ::std::fmt::Debug>,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.pessimistic_rollback(Key::from_raw(key), for_update_ts.into())
+        txn.pessimistic_rollback(Key::from_raw(key), for_update_ts.try_into().unwrap())
             .unwrap();
         write(engine, &ctx, txn.into_modifies());
     }
@@ -963,7 +984,8 @@ pub mod tests {
         let mut reader = MvccReader::new(snapshot, None, true, IsolationLevel::Si);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
-        assert_eq!(lock.for_update_ts, for_update_ts.into());
+        let for_update_ts: TransactionKind = for_update_ts.into().into();
+        assert_eq!(for_update_ts, lock.txn_kind);
         assert_eq!(lock.lock_type, LockType::Pessimistic);
     }
 

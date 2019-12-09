@@ -432,7 +432,7 @@ mod tests {
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{PutRequest, RaftCmdRequest};
     use std::sync::mpsc::channel;
-    use txn_types::LockType;
+    use txn_types::{LockType, TransactionKind};
 
     fn lock_info_to_kv(mut lock_info: LockInfo) -> (Vec<u8>, Vec<u8>) {
         let key = Key::from_raw(lock_info.get_key()).into_encoded();
@@ -444,11 +444,11 @@ mod tests {
                 Op::PessimisticLock => LockType::Pessimistic,
                 _ => unreachable!(),
             },
+            TransactionKind::Optimistic,
             lock_info.take_primary_lock(),
             lock_info.get_lock_version().into(),
             lock_info.get_lock_ttl(),
             None,
-            0.into(),
             lock_info.get_txn_size(),
             0.into(),
         );
