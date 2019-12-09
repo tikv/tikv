@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use base64;
+use bstr;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -968,12 +969,10 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
-        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        let bytes = if let Some((n, _)) = s.char_indices().nth(1) {
-            &s.as_bytes()[..n]
-        } else {
-            s.as_bytes()
-        };
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let size = bstr::decode_utf8(&s).1;
+        let bytes = &s[..size];
+
         let mut result = 0;
         let mut factor = 1;
         for b in bytes.iter().rev() {
