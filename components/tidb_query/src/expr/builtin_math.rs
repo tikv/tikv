@@ -169,7 +169,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn rand_with_seed(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn rand_with_seed_first_gen(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let seed = match self.children[0].eval_int(ctx, row)? {
             Some(v) => Some(v as u64),
             _ => None,
@@ -792,16 +792,16 @@ mod tests {
     }
 
     #[test]
-    fn test_rand_with_seed() {
+    fn test_rand_with_seed_first_gen() {
         let seed: i64 = 20160101;
-        let expect = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(seed)])
+        let expect = eval_func(ScalarFuncSig::RandWithSeedFirstGen, &[Datum::I64(seed)])
             .unwrap()
             .as_real()
             .unwrap()
             .unwrap()
             .to_bits();
         for _ in 1..3 {
-            let got = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(seed)])
+            let got = eval_func(ScalarFuncSig::RandWithSeedFirstGen, &[Datum::I64(seed)])
                 .unwrap()
                 .as_real()
                 .unwrap();
@@ -812,7 +812,7 @@ mod tests {
         let mut set: HashSet<u64> = HashSet::new();
         let test_cnt = 1024;
         for i in seed + 1..=seed + test_cnt {
-            let got = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(i)])
+            let got = eval_func(ScalarFuncSig::RandWithSeedFirstGen, &[Datum::I64(i)])
                 .unwrap()
                 .as_real()
                 .unwrap()

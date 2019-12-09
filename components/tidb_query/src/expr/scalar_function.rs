@@ -82,9 +82,9 @@ impl ScalarFunc {
             | ScalarFuncSig::IfNullDuration
             | ScalarFuncSig::IfNullJson
             | ScalarFuncSig::LeftUtf8
-            | ScalarFuncSig::LeftBinary
+            | ScalarFuncSig::Left
             | ScalarFuncSig::RightUtf8
-            | ScalarFuncSig::RightBinary
+            | ScalarFuncSig::Right
             | ScalarFuncSig::LogicalAnd
             | ScalarFuncSig::LogicalOr
             | ScalarFuncSig::LogicalXor
@@ -104,7 +104,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Atan2Args
             | ScalarFuncSig::Log2Args
             | ScalarFuncSig::RegexpUtf8Sig
-            | ScalarFuncSig::RegexpBinarySig
+            | ScalarFuncSig::RegexpSig
             | ScalarFuncSig::RoundWithFracDec
             | ScalarFuncSig::RoundWithFracInt
             | ScalarFuncSig::RoundWithFracReal
@@ -117,7 +117,7 @@ impl ScalarFunc {
             | ScalarFuncSig::TruncateDecimal
             | ScalarFuncSig::Trim2Args
             | ScalarFuncSig::Substring2ArgsUtf8
-            | ScalarFuncSig::SubstringBinary2Args
+            | ScalarFuncSig::Substring2Args
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::AddDatetimeAndDuration
             | ScalarFuncSig::AddDatetimeAndString
@@ -130,10 +130,10 @@ impl ScalarFunc {
             | ScalarFuncSig::PeriodAdd
             | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Strcmp
-            | ScalarFuncSig::InstrBinary
+            | ScalarFuncSig::Instr
             | ScalarFuncSig::Locate2ArgsUtf8
             | ScalarFuncSig::InstrUtf8
-            | ScalarFuncSig::LocateBinary2Args => (2, 2),
+            | ScalarFuncSig::Locate2Args => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -250,9 +250,9 @@ impl ScalarFunc {
             | ScalarFuncSig::Log2
             | ScalarFuncSig::Ascii
             | ScalarFuncSig::CharLengthUtf8
-            | ScalarFuncSig::CharLengthBinary,
+            | ScalarFuncSig::CharLength
             | ScalarFuncSig::ReverseUtf8
-            | ScalarFuncSig::ReverseBinary
+            | ScalarFuncSig::Reverse
             | ScalarFuncSig::Quote
             | ScalarFuncSig::Upper
             | ScalarFuncSig::Lower
@@ -309,13 +309,13 @@ impl ScalarFunc {
             | ScalarFuncSig::Trim3Args
             | ScalarFuncSig::SubstringIndex
             | ScalarFuncSig::Substring3ArgsUtf8
-            | ScalarFuncSig::SubstringBinary3Args
+            | ScalarFuncSig::Substring3Args
             | ScalarFuncSig::LpadUtf8
-            | ScalarFuncSig::LpadBinary
+            | ScalarFuncSig::Lpad
             | ScalarFuncSig::RpadUtf8
-            | ScalarFuncSig::RpadBinary
+            | ScalarFuncSig::Rpad
             | ScalarFuncSig::Locate3ArgsUtf8
-            | ScalarFuncSig::LocateBinary3Args
+            | ScalarFuncSig::Locate3Args
             | ScalarFuncSig::Replace => (3, 3),
 
             ScalarFuncSig::JsonArraySig
@@ -447,7 +447,7 @@ impl ScalarFunc {
             | ScalarFuncSig::GetParamString
             | ScalarFuncSig::GetVar
             | ScalarFuncSig::InsertUtf8
-            | ScalarFuncSig::InsertBinary
+            | ScalarFuncSig::Insert
             | ScalarFuncSig::LastInsertId
             | ScalarFuncSig::LastInsertIdWithId
             | ScalarFuncSig::Lock
@@ -837,7 +837,7 @@ dispatch_call! {
 
         LikeSig => like,
         RegexpUtf8Sig => regexp_utf8,
-        RegexpBinarySig => regexp_binary,
+        RegexpSig => regexp,
 
         BitAndSig => bit_and,
         BitNegSig => bit_neg,
@@ -847,14 +847,14 @@ dispatch_call! {
         Length => length,
         Locate2ArgsUtf8 => locate_2_args_utf8,
         Locate3ArgsUtf8 => locate_3_args_utf8,
-        LocateBinary2Args => locate_binary_2_args,
-        LocateBinary3Args => locate_binary_3_args,
+        Locate2Args => locate_2_args,
+        Locate3Args => locate_3_args,
         BitCount => bit_count,
         FieldInt => field_int,
         FieldReal => field_real,
         FieldString => field_string,
         CharLengthUtf8 => char_length_utf8,
-        CharLengthBinary => char_length_binary,
+        CharLength => char_length,
         BitLength => bit_length,
         LeftShift => left_shift,
         RightShift => right_shift,
@@ -867,7 +867,7 @@ dispatch_call! {
 
         UncompressedLength => uncompressed_length,
         Strcmp => strcmp,
-        InstrBinary => instr_binary,
+        Instr => instr,
         InstrUtf8 => instr_utf8,
         JsonDepthSig => json_depth,
     }
@@ -983,8 +983,8 @@ dispatch_call! {
 
         LeftUtf8 => left_utf8,
         RightUtf8 => right_utf8,
-        LeftBinary => left_binary,
-        RightBinary => right_binary,
+        Left => left,
+        Right => right,
         Upper => upper,
         Lower => lower,
         DateFormatSig => date_format,
@@ -997,7 +997,7 @@ dispatch_call! {
         LTrim => ltrim,
         RTrim => rtrim,
         ReverseUtf8 => reverse_utf8,
-        ReverseBinary => reverse_binary,
+        Reverse => reverse,
         HexIntArg => hex_int_arg,
         HexStrArg => hex_str_arg,
         UnHex => un_hex,
@@ -1022,13 +1022,13 @@ dispatch_call! {
         SubstringIndex => substring_index,
         Substring2ArgsUtf8 => substring_2_args_utf8,
         Substring3ArgsUtf8 => substring_3_args_utf8,
-        SubstringBinary2Args => substring_binary_2_args,
-        SubstringBinary3Args => substring_binary_3_args,
+        Substring2Args => substring_2_args,
+        Substring3Args => substring_3_args,
         Space => space,
         LpadUtf8 => lpad_utf8,
-        LpadBinary => lpad_binary,
+        Lpad => lpad,
         RpadUtf8 => rpad_utf8,
-        RpadBinary => rpad_binary,
+        Rpad => rpad,
 
         StringAnyValue => string_any_value,
         AddTimeStringNull => add_time_string_null,
@@ -1190,9 +1190,9 @@ mod tests {
                     ScalarFuncSig::IfNullDuration,
                     ScalarFuncSig::IfNullJson,
                     ScalarFuncSig::LeftUtf8,
-                    ScalarFuncSig::LeftBinary,
+                    ScalarFuncSig::Left,
                     ScalarFuncSig::RightUtf8,
-                    ScalarFuncSig::RightBinary,
+                    ScalarFuncSig::Right,
                     ScalarFuncSig::LogicalAnd,
                     ScalarFuncSig::LogicalOr,
                     ScalarFuncSig::LogicalXor,
@@ -1220,9 +1220,9 @@ mod tests {
                     ScalarFuncSig::RoundWithFracReal,
                     ScalarFuncSig::Trim2Args,
                     ScalarFuncSig::Substring2ArgsUtf8,
-                    ScalarFuncSig::SubstringBinary2Args,
+                    ScalarFuncSig::Substring2Args,
                     ScalarFuncSig::Strcmp,
-                    ScalarFuncSig::InstrBinary,
+                    ScalarFuncSig::Instr,
                     ScalarFuncSig::InstrUtf8,
                     ScalarFuncSig::AddDatetimeAndDuration,
                     ScalarFuncSig::AddDatetimeAndString,
@@ -1235,7 +1235,7 @@ mod tests {
                     ScalarFuncSig::PeriodAdd,
                     ScalarFuncSig::PeriodDiff,
                     ScalarFuncSig::Locate2ArgsUtf8,
-                    ScalarFuncSig::LocateBinary2Args,
+                    ScalarFuncSig::Locate2Args,
                 ],
                 2,
                 2,
@@ -1344,7 +1344,7 @@ mod tests {
                     ScalarFuncSig::RoundDec,
                     ScalarFuncSig::RoundInt,
                     ScalarFuncSig::Rand,
-                    ScalarFuncSig::RandWithSeed,
+                    ScalarFuncSig::RandWithSeedFirstGen,
                     ScalarFuncSig::Crc32,
                     ScalarFuncSig::Sign,
                     ScalarFuncSig::Sqrt,
@@ -1365,12 +1365,12 @@ mod tests {
                     ScalarFuncSig::BitLength,
                     ScalarFuncSig::BitNegSig,
                     ScalarFuncSig::CharLengthUtf8,
-                    ScalarFuncSig::CharLengthBinary,
+                    ScalarFuncSig::CharLength,
                     ScalarFuncSig::Length,
                     ScalarFuncSig::LTrim,
                     ScalarFuncSig::RTrim,
                     ScalarFuncSig::ReverseUtf8,
-                    ScalarFuncSig::ReverseBinary,
+                    ScalarFuncSig::Reverse,
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
@@ -1411,13 +1411,13 @@ mod tests {
                     ScalarFuncSig::Trim3Args,
                     ScalarFuncSig::SubstringIndex,
                     ScalarFuncSig::Substring3ArgsUtf8,
-                    ScalarFuncSig::SubstringBinary3Args,
+                    ScalarFuncSig::Substring3Args,
                     ScalarFuncSig::LpadUtf8,
-                    ScalarFuncSig::LpadBinary,
+                    ScalarFuncSig::Lpad,
                     ScalarFuncSig::RpadUtf8,
-                    ScalarFuncSig::RpadBinary,
+                    ScalarFuncSig::Rpad,
                     ScalarFuncSig::Locate3ArgsUtf8,
-                    ScalarFuncSig::LocateBinary3Args,
+                    ScalarFuncSig::Locate3Args,
                 ],
                 3,
                 3,
@@ -1595,7 +1595,7 @@ mod tests {
             ScalarFuncSig::GetParamString,
             ScalarFuncSig::GetVar,
             ScalarFuncSig::InsertUtf8,
-            ScalarFuncSig::InsertBinary,
+            ScalarFuncSig::Insert,
             ScalarFuncSig::LastInsertId,
             ScalarFuncSig::LastInsertIdWithId,
             ScalarFuncSig::Lock,

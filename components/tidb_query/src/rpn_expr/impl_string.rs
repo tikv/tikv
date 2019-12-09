@@ -205,7 +205,7 @@ pub fn hex_str_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn locate_binary_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result<Option<i64>> {
+pub fn locate_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result<Option<i64>> {
     let (substr, s) = match (substr, s) {
         (Some(v1), Some(v2)) => (v1, v2),
         _ => return Ok(None),
@@ -218,7 +218,7 @@ pub fn locate_binary_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result
 
 #[rpn_fn]
 #[inline]
-pub fn reverse_binary(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+pub fn reverse(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|bytes| {
         let mut s = bytes.to_vec();
         s.reverse();
@@ -228,7 +228,7 @@ pub fn reverse_binary(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn locate_binary_3_args(
+pub fn locate_3_args(
     substr: &Option<Bytes>,
     s: &Option<Bytes>,
     pos: &Option<Int>,
@@ -952,7 +952,7 @@ mod tests {
     }
 
     #[test]
-    fn test_locate_binary_2_args() {
+    fn test_locate_2_args() {
         let test_cases = vec![
             (None, None, None),
             (None, Some("abc"), None),
@@ -973,14 +973,14 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(substr.map(|v| v.as_bytes().to_vec()))
                 .push_param(s.map(|v| v.as_bytes().to_vec()))
-                .evaluate(ScalarFuncSig::LocateBinary2Args)
+                .evaluate(ScalarFuncSig::Locate2Args)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
     }
 
     #[test]
-    fn test_reverse_binary() {
+    fn test_reverse() {
         let cases = vec![
             (Some(b"hello".to_vec()), Some(b"olleh".to_vec())),
             (Some(b"".to_vec()), Some(b"".to_vec())),
@@ -994,14 +994,14 @@ mod tests {
         for (arg, expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(ScalarFuncSig::ReverseBinary)
+                .evaluate(ScalarFuncSig::Reverse)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
     }
 
     #[test]
-    fn test_locate_binary_3_args() {
+    fn test_locate_3_args() {
         let cases = vec![
             (None, None, None, None),
             (None, Some(""), Some(1), None),
@@ -1028,7 +1028,7 @@ mod tests {
                 .push_param(substr.map(|v| v.as_bytes().to_vec()))
                 .push_param(s.map(|v| v.as_bytes().to_vec()))
                 .push_param(pos)
-                .evaluate(ScalarFuncSig::LocateBinary3Args)
+                .evaluate(ScalarFuncSig::Locate3Args)
                 .unwrap();
             assert_eq!(output, exp)
         }
