@@ -27,18 +27,6 @@ impl ImportExt for RocksEngine {
         cf: &Self::CFHandle,
         opts: &Self::IngestExternalFileOptions,
         files: &[&str],
-    ) -> Result<()> {
-        let cf = cf.as_inner();
-        self.as_inner()
-            .ingest_external_file_cf(&cf, &opts.0, files)?;
-        Ok(())
-    }
-
-    fn ingest_external_file_optimized(
-        &self,
-        cf: &Self::CFHandle,
-        opts: &Self::IngestExternalFileOptions,
-        files: &[&str],
     ) -> Result<bool> {
         let cf = cf.as_inner();
         let r = self
