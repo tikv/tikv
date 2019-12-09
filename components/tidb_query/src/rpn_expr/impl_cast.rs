@@ -1301,7 +1301,7 @@ mod tests {
         }
     }
 
-    fn make_extra<'a>(ret_field_type: &'a FieldType) -> RpnFnCallExtra<'a> {
+    fn make_extra(ret_field_type: &FieldType) -> RpnFnCallExtra {
         RpnFnCallExtra { ret_field_type }
     }
 
