@@ -37,6 +37,10 @@ quick_error! {
             description(err.description())
             display("{:?}", err)
         }
+        CFName(name: String) {
+            description("CF name not found")
+            display("CF {} not found", name)
+        }
     }
 }
 

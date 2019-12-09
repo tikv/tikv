@@ -20,6 +20,13 @@ pub trait ImportExt: CFHandleExt {
         files: &[&str],
     ) -> Result<()>;
 
+    fn ingest_external_file_optimized(
+        &self,
+        cf: &Self::CFHandle,
+        opt: &Self::IngestExternalFileOptions,
+        files: &[&str],
+    ) -> Result<bool>;
+
     fn validate_sst_for_ingestion<P: AsRef<Path>>(
         &self,
         cf: &Self::CFHandle,
