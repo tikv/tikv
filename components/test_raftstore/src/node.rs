@@ -12,6 +12,7 @@ use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
 use engine::*;
+use engine_rocks::RocksEngine;
 use tikv::config::TiKvConfig;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -285,7 +286,7 @@ impl Simulator for NodeCluster {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
     ) -> Result<()> {
         if !self
             .trans
