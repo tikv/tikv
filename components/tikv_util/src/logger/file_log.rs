@@ -1,11 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use chrono::Duration;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-use crate::config::ReadableSize;
+use crate::config::{ReadableDuration, ReadableSize};
 
 /// Opens log file with append mode. Creates a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
@@ -43,29 +42,35 @@ pub trait Rotator: Send {
 ///
 /// After rotating, the original log file would be renamed to "{original name}.{%Y-%m-%d-%H:%M:%S}".
 /// Note: log file will *not* be compressed or otherwise modified.
-pub struct RotatingFileLogger {
+pub struct RotatingFileLogger<N>
+where
+    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
+{
     path: PathBuf,
     file: File,
-    rename: Box<dyn Fn(&Path) -> io::Result<PathBuf>>,
+    rename: N,
     rotators: Vec<Box<dyn Rotator>>,
 }
 
 /// Builder for `RotatingFileLogger`.
-pub struct RotatingFileLoggerBuilder {
+pub struct RotatingFileLoggerBuilder<N>
+where
+    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
+{
     rotators: Vec<Box<dyn Rotator>>,
     path: PathBuf,
-    rename: Box<dyn Fn(&Path) -> io::Result<PathBuf>>,
+    rename: N,
 }
 
-impl RotatingFileLoggerBuilder {
-    pub fn new<N: Fn(&Path) -> io::Result<PathBuf> + 'static>(
-        path: impl AsRef<Path>,
-        rename: N,
-    ) -> Self {
+impl<N> RotatingFileLoggerBuilder<N>
+where
+    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
+{
+    pub fn new(path: impl AsRef<Path>, rename: N) -> Self {
         RotatingFileLoggerBuilder {
             path: path.as_ref().to_path_buf(),
-            rename: Box::new(rename),
             rotators: vec![],
+            rename,
         }
     }
 
@@ -76,7 +81,7 @@ impl RotatingFileLoggerBuilder {
         self
     }
 
-    pub fn build(self) -> io::Result<RotatingFileLogger> {
+    pub fn build(self) -> io::Result<RotatingFileLogger<N>> {
         Ok(RotatingFileLogger {
             rotators: self.rotators,
             file: open_log_file(&self.path)?,
@@ -86,7 +91,10 @@ impl RotatingFileLoggerBuilder {
     }
 }
 
-impl Write for RotatingFileLogger {
+impl<N> Write for RotatingFileLogger<N>
+where
+    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
+{
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.file.write(bytes)
     }
@@ -103,18 +111,21 @@ impl Write for RotatingFileLogger {
     }
 }
 
-impl Drop for RotatingFileLogger {
+impl<N> Drop for RotatingFileLogger<N>
+where
+    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
+{
     fn drop(&mut self) {
         let _ = self.file.flush();
     }
 }
 
 pub struct RotateByTime {
-    rotation_timespan: Duration,
+    rotation_timespan: ReadableDuration,
 }
 
 impl RotateByTime {
-    pub fn new(rotation_timespan: Duration) -> Self {
+    pub fn new(rotation_timespan: ReadableDuration) -> Self {
         Self { rotation_timespan }
     }
 }
@@ -127,11 +138,13 @@ impl Rotator for RotateByTime {
             .modified()?
             // TODO: change it to `created()`, however, in some Linux distros it isn't supported.
             .duration_since(metadata.accessed()?)
-            .map_err(|_| ErrorKind::InvalidInput)?;
-        Ok(
-            Duration::from_std(file_life).map_err(|_| ErrorKind::InvalidInput)?
-                > self.rotation_timespan,
-        )
+            .map_err(|_| {
+                io::Error::new(
+                    ErrorKind::Other,
+                    "File accessed time is later than last-modified time",
+                )
+            })?;
+        Ok(file_life > self.rotation_timespan.0)
     }
 
     fn is_enable(&self) -> bool {
@@ -165,7 +178,6 @@ mod tests {
 
     use fail::FailScenario;
     use std::ffi::OsStr;
-    use std::io::ErrorKind;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
 
@@ -232,7 +244,7 @@ mod tests {
         let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
             rename_with_subffix(path, suffix)
         })
-        .add_rotator(RotateByTime::new(chrono::Duration::seconds(5)))
+        .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(5))))
         .build()
         .unwrap();
 
@@ -274,7 +286,9 @@ mod tests {
         let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
             rename_with_subffix(path, suffix)
         })
-        .add_rotator(RotateByTime::new(chrono::Duration::seconds(120)))
+        .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(
+            120,
+        ))))
         .build()
         .unwrap();
 

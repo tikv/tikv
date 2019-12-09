@@ -10,6 +10,10 @@ use tikv::config::{check_critical_config, persist_critical_config, MetricConfig,
 use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
 
+use chrono::Utc;
+use std::path::{Path, PathBuf};
+use std::io;
+
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -26,11 +30,17 @@ macro_rules! fatal {
     })
 }
 
+// TODO: There is a very small chance that duplicate files will be generated if there are
+// a lot of logs written in a very short time. Consider rename the rotated file with a version
+// number while rotate by size.
+fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
+    let mut new_path = path.to_path_buf().into_os_string();
+    new_path.push(format!("{}", Utc::now().format("%Y-%m-%d-%H:%M:%S%.f")));
+    Ok(PathBuf::from(new_path))
+}
+
 #[allow(dead_code)]
 pub fn initial_logger(config: &TiKvConfig) {
-    let log_rotation_timespan = chrono::Duration::from_std(config.log_rotation_timespan.into())
-        .expect("config.log_rotation_timespan is an invalid duration.");
-
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
@@ -40,8 +50,9 @@ pub fn initial_logger(config: &TiKvConfig) {
     } else {
         let drainer = logger::file_drainer(
             &config.log_file,
-            log_rotation_timespan,
+            config.log_rotation_timespan,
             config.log_rotation_size,
+            rename_by_timestamp,
         )
         .unwrap_or_else(|e| {
             fatal!(

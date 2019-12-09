@@ -9,16 +9,14 @@ use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use chrono::{self, Duration};
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_async::{Async, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 
 use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
-use crate::config::ReadableSize;
+use crate::config::{ReadableDuration, ReadableSize};
 
-use chrono::Utc;
 pub use slog::Level;
 
 // Default is 128.
@@ -87,28 +85,23 @@ where
     Ok(())
 }
 
-// TODO: There is a very small chance that duplicate files will be generated if there are
-// a lot of logs written in a very short time. Consider rename the rotated file with a version
-// number while rotate by size.
-fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
-    let mut new_path = path.to_path_buf().into_os_string();
-    new_path.push(format!("{}", Utc::now().format("%Y-%m-%d-%H:%M:%S%.f")));
-    Ok(PathBuf::from(new_path))
-}
-
-/// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger>>`.
+/// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger<N>>>`.
 // Avoid clippy type_complexity lint.
-pub type RotatingFileDecorator = PlainDecorator<BufWriter<RotatingFileLogger>>;
+pub type RotatingFileDecorator<N> = PlainDecorator<BufWriter<RotatingFileLogger<N>>>;
 
 /// Constructs a new file drainer which outputs log to a file at the specified
 /// path. The file drainer rotates for the specified timespan.
-pub fn file_drainer(
+pub fn file_drainer<N>(
     path: impl AsRef<Path>,
-    rotation_timespan: Duration,
+    rotation_timespan: ReadableDuration,
     rotation_size: ReadableSize,
-) -> io::Result<TikvFormat<RotatingFileDecorator>> {
+    rename: N,
+) -> io::Result<TikvFormat<RotatingFileDecorator<N>>>
+where
+    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
+{
     let logger = BufWriter::new(
-        RotatingFileLoggerBuilder::new(path, rename_by_timestamp)
+        RotatingFileLoggerBuilder::new(path, rename)
             .add_rotator(RotateByTime::new(rotation_timespan))
             .add_rotator(RotateBySize::new(rotation_size))
             .build()?,

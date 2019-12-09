@@ -254,6 +254,10 @@ impl ReadableDuration {
     pub fn as_millis(&self) -> u64 {
         crate::time::duration_to_ms(self.0)
     }
+
+    pub fn is_zero(&self) -> bool {
+        self.0.as_nanos() == 0
+    }
 }
 
 impl fmt::Display for ReadableDuration {
