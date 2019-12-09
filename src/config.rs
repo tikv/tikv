@@ -1674,8 +1674,8 @@ pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn to_config_entry(change: ConfigChange) -> Vec<configpb::ConfigEntry> {
-    fn helper(prefix: String, change: ConfigChange) -> Vec<configpb::ConfigEntry> {
+fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
+    fn helper(prefix: String, change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
         let mut entries = Vec::with_capacity(change.len());
         for (mut name, value) in change {
             if name == "raft_store" {
@@ -1689,40 +1689,44 @@ fn to_config_entry(change: ConfigChange) -> Vec<configpb::ConfigEntry> {
                 name = p;
             }
             if let ConfigValue::Module(change) = value {
-                entries.append(&mut helper(name, change));
+                entries.append(&mut helper(name, change)?);
             } else {
                 let mut e = configpb::ConfigEntry::new();
                 e.set_name(name);
-                e.set_value(from_change_value(value));
+                e.set_value(from_change_value(value)?);
                 entries.push(e);
             }
         }
-        entries
+        Ok(entries)
     };
     helper("".to_owned(), change)
 }
 
-fn from_change_value(v: ConfigValue) -> String {
-    match v {
+fn from_change_value(v: ConfigValue) -> CfgResult<String> {
+    let s = match v {
         ConfigValue::Duration(_) => {
             let v: ReadableDuration = v.into();
-            toml::to_string(&v).unwrap()
+            toml::to_string(&v)?
         }
         ConfigValue::Size(_) => {
             let v: ReadableSize = v.into();
-            toml::to_string(&v).unwrap()
+            toml::to_string(&v)?
         }
-        ConfigValue::U64(ref v) => toml::to_string(v).unwrap(),
-        ConfigValue::F64(ref v) => toml::to_string(v).unwrap(),
-        ConfigValue::Usize(ref v) => toml::to_string(v).unwrap(),
-        ConfigValue::Bool(ref v) => toml::to_string(v).unwrap(),
-        ConfigValue::String(ref v) => toml::to_string(v).unwrap(),
+        ConfigValue::U64(ref v) => toml::to_string(v)?,
+        ConfigValue::F64(ref v) => toml::to_string(v)?,
+        ConfigValue::Usize(ref v) => toml::to_string(v)?,
+        ConfigValue::Bool(ref v) => toml::to_string(v)?,
+        ConfigValue::String(ref v) => toml::to_string(v)?,
         _ => unreachable!(),
-    }
+    };
+    Ok(s)
 }
 
 type CfgResult<T> = Result<T, Box<dyn Error>>;
 
+/// ConfigController use to register each module's config manager,
+/// and dispatch the change of config to corresponding managers or
+/// return the change if the incoming change are unvalid.
 #[derive(Default)]
 pub struct ConfigController {
     current: TiKvConfig,
@@ -1736,10 +1740,9 @@ impl ConfigController {
     fn update_or_rollback(
         &mut self,
         mut incoming: TiKvConfig,
-    ) -> Option<Vec<configpb::ConfigEntry>> {
+    ) -> Option<ConfigChange>> {
         if incoming.validate().is_err() {
-            let entries = incoming.diff(&self.current);
-            return Some(to_config_entry(entries));
+            return Some(incoming.diff(&self.current));
         }
         let diff = self.current.diff(&incoming);
         if !diff.is_empty() {
@@ -1790,6 +1793,8 @@ impl ConfigClient {
 
 impl ConfigClient {
     // FIXME: the usage of version and status_code need to consist with pd
+
+    /// Register the local config to pd
     pub fn create(
         pd_client: Arc<impl PdClient>,
         cfg: &TiKvConfig,
@@ -1810,15 +1815,17 @@ impl ConfigClient {
         }
     }
 
+    /// Update the local config if remote config had been changed,
+    /// rollback the remote config if the change are invalid.
     pub fn refresh_config(&mut self, pd_client: Arc<impl PdClient>) -> CfgResult<()> {
         let mut resp = pd_client.get_config(self.get_id(), self.version.clone())?;
         match resp.get_status().code {
             StatusCode::NotChange => return Ok(()),
             StatusCode::WrongVersion => {
                 let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
-                if let Some(entries) = self.config_controller.update_or_rollback(incoming) {
+                if let Some(change) = self.config_controller.update_or_rollback(incoming) {
                     debug!("tried to update local config to an invalid config"; "version" => ?resp.version);
-                    Ok(self.update_config(entries, pd_client)?)
+                    Ok(self.update_config(to_config_entry(change)?, pd_client)?)
                 } else {
                     info!("local config updated"; "version" => ?resp.version);
                     self.version = resp.take_version();
