@@ -37,7 +37,7 @@ pub trait Rotator: Send {
 
     /// Check if the option is enabled in configuration.
     /// Return true if the `rotator` is valid.
-    fn is_enable(&self) -> bool;
+    fn is_enabled(&self) -> bool;
 }
 
 /// This `FileLogger` will iterate over a series of `Rotators`,
@@ -78,7 +78,7 @@ where
     }
 
     pub fn add_rotator<R: 'static + Rotator>(mut self, rotator: R) -> Self {
-        if rotator.is_enable() {
+        if rotator.is_enabled() {
             self.rotators.push(Box::new(rotator));
         }
         self
@@ -150,7 +150,7 @@ impl Rotator for RotateByTime {
         Ok(file_life > self.rotation_timespan.0)
     }
 
-    fn is_enable(&self) -> bool {
+    fn is_enabled(&self) -> bool {
         !self.rotation_timespan.is_zero()
     }
 }
@@ -170,7 +170,7 @@ impl Rotator for RotateBySize {
         Ok(file.metadata()?.len() > self.rotation_size.0)
     }
 
-    fn is_enable(&self) -> bool {
+    fn is_enabled(&self) -> bool {
         self.rotation_size.0 != 0
     }
 }
