@@ -52,6 +52,10 @@ pub struct IterOptions {
     upper_bound: Option<KeyBuilder>,
     prefix_same_as_start: bool,
     fill_cache: bool,
+    // hint for we will only scan data with commit ts >= hint_min_ts
+    hint_min_ts: Option<u64>,
+    // hint for we will only scan data with commit ts <= hint_max_ts
+    hint_max_ts: Option<u64>,
     // only supported when Titan enabled, otherwise it doesn't take effect.
     key_only: bool,
     seek_mode: SeekMode,
@@ -68,6 +72,8 @@ impl IterOptions {
             upper_bound,
             prefix_same_as_start: false,
             fill_cache,
+            hint_min_ts: None,
+            hint_max_ts: None,
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
         }
@@ -92,6 +98,26 @@ impl IterOptions {
     #[inline]
     pub fn set_fill_cache(&mut self, v: bool) {
         self.fill_cache = v;
+    }
+
+    #[inline]
+    pub fn set_hint_min_ts(&mut self, ts: u64) {
+        self.hint_min_ts = Some(ts)
+    }
+
+    #[inline]
+    pub fn hint_min_ts(&self) -> Option<u64> {
+        self.hint_min_ts
+    }
+
+    #[inline]
+    pub fn hint_max_ts(&self) -> Option<u64> {
+        self.hint_max_ts
+    }
+
+    #[inline]
+    pub fn set_hint_max_ts(&mut self, ts: u64) {
+        self.hint_max_ts = Some(ts)
     }
 
     #[inline]
@@ -172,6 +198,8 @@ impl Default for IterOptions {
             upper_bound: None,
             prefix_same_as_start: false,
             fill_cache: true,
+            hint_min_ts: None,
+            hint_max_ts: None,
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
         }

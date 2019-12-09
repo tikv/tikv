@@ -439,7 +439,7 @@ mod tests {
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
-    use engine::{ALL_CFS, CF_DEFAULT, CF_RAFT};
+    use engine::{IterOption, ALL_CFS, CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::{Peer, Region};
     use std::sync::Arc;
     use std::u64;
@@ -671,6 +671,83 @@ mod tests {
         // After this flush, we have a SST file without properties.
         // Without properties, we always need GC.
         assert!(check_need_gc(Arc::clone(&db), region.clone(), 10, true).is_none());
+    }
+
+    #[test]
+    fn test_ts_filter() {
+        let path = tempfile::Builder::new()
+            .prefix("test_ts_filter")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![0], vec![13]);
+
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        engine.put(&[2], 1, 2);
+        engine.put(&[4], 3, 4);
+        engine.flush();
+        engine.put(&[6], 5, 6);
+        engine.put(&[8], 7, 8);
+        engine.flush();
+        engine.put(&[10], 9, 10);
+        engine.put(&[12], 11, 12);
+        engine.flush();
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+
+        // test set both hint_min_ts and hint_max_ts
+        {
+            let mut iopt = IterOption::default();
+            iopt.set_hint_min_ts(6);
+            iopt.set_hint_max_ts(8);
+            let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
+
+            assert_eq!(iter.seek_to_first(), true);
+            let ts = Key::decode_ts_from(iter.key()).unwrap();
+            assert_eq!(ts.into_inner(), 6);
+
+            assert_eq!(iter.next(), true);
+            let ts = Key::decode_ts_from(iter.key()).unwrap();
+            assert_eq!(ts.into_inner(), 8);
+
+            assert_eq!(iter.next(), false);
+        }
+
+        // test set both hint_min_ts
+        {
+            let mut iopt = IterOption::default();
+            iopt.set_hint_min_ts(10);
+            let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
+
+            assert_eq!(iter.seek_to_first(), true);
+            let ts = Key::decode_ts_from(iter.key()).unwrap();
+            assert_eq!(ts.into_inner(), 10);
+
+            assert_eq!(iter.next(), true);
+            let ts = Key::decode_ts_from(iter.key()).unwrap();
+            assert_eq!(ts.into_inner(), 12);
+
+            assert_eq!(iter.next(), false);
+        }
+
+        // test set both hint_max_ts
+        {
+            let mut iopt = IterOption::default();
+            iopt.set_hint_max_ts(4);
+            let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
+
+            assert_eq!(iter.seek_to_first(), true);
+            let ts = Key::decode_ts_from(iter.key()).unwrap();
+            assert_eq!(ts.into_inner(), 2);
+
+            assert_eq!(iter.next(), true);
+            let ts = Key::decode_ts_from(iter.key()).unwrap();
+            assert_eq!(ts.into_inner(), 4);
+
+            assert_eq!(iter.next(), false);
+        }
     }
 
     fn test_with_properties(path: &str, region: &Region) {

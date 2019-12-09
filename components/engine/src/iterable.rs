@@ -1,8 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::DATA_KEY_PREFIX_LEN;
-pub use crate::rocks::{DBIterator, ReadOptions, DB};
+pub use crate::rocks::{DBIterator, ReadOptions, TableFilter, TableProperties, DB};
 use crate::Result;
+use tikv_util::codec::number;
 use tikv_util::keybuilder::KeyBuilder;
 
 pub use engine_traits::IterOptions as IterOption;
@@ -10,6 +11,52 @@ pub use engine_traits::SeekMode;
 
 pub trait IterOptionsExt {
     fn build_read_opts(self) -> ReadOptions;
+}
+
+struct TsFilter {
+    hint_min_ts: Option<u64>,
+    hint_max_ts: Option<u64>,
+}
+
+impl TsFilter {
+    fn new(hint_min_ts: Option<u64>, hint_max_ts: Option<u64>) -> TsFilter {
+        TsFilter {
+            hint_min_ts,
+            hint_max_ts,
+        }
+    }
+}
+
+impl TableFilter for TsFilter {
+    fn table_filter(&self, props: &TableProperties) -> bool {
+        if self.hint_max_ts.is_none() && self.hint_min_ts.is_none() {
+            return true;
+        }
+
+        let user_props = props.user_collected_properties();
+
+        if let Some(hint_min_ts) = self.hint_min_ts {
+            if let Some(mut p) = user_props.get("tikv.max_ts") {
+                if let Ok(get_max) = number::decode_u64(&mut p) {
+                    if get_max < hint_min_ts {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        if let Some(hint_max_ts) = self.hint_max_ts {
+            if let Some(mut p) = user_props.get("tikv.min_ts") {
+                if let Ok(get_min) = number::decode_u64(&mut p) {
+                    if get_min > hint_max_ts {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
+    }
 }
 
 impl IterOptionsExt for IterOption {
@@ -24,6 +71,12 @@ impl IterOptionsExt for IterOption {
         } else if self.prefix_same_as_start() {
             opts.set_prefix_same_as_start(true);
         }
+
+        if self.hint_min_ts().is_some() || self.hint_max_ts().is_some() {
+            let ts_filter = TsFilter::new(self.hint_min_ts(), self.hint_max_ts());
+            opts.set_table_filter(Box::new(ts_filter))
+        }
+
         let (lower, upper) = self.build_bounds();
         if let Some(lower) = lower {
             opts.set_iterate_lower_bound(lower);
@@ -31,6 +84,7 @@ impl IterOptionsExt for IterOption {
         if let Some(upper) = upper {
             opts.set_iterate_upper_bound(upper);
         }
+
         opts
     }
 }
