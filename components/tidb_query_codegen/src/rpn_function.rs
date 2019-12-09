@@ -69,9 +69,10 @@
 //!
 //! ### `metadata_mapper`
 //!
-//! A function name for custom code to construct metadata from raw metadata and
+//! A function name for custom code to construct metadata from optional raw metadata and
 //! its tree node in the expression tree.
-//! The mapper function should have the signature `metadata_type, &mut tipb::Expr -> T`.
+//! If metadata_type is specified, the mapper function should have the signature `metadata_type, &mut tipb::Expr -> T`.
+//! Otherwise, the mapper function should have the signature `&mut tipb::Expr -> T`
 //! E.g., `#[rpn_fn(varg, capture = [metadata], metadata_type = tipb::SomeMetadata, metadata_mapper = some_mapper)]`
 //!
 //! ### `capture`
@@ -581,11 +582,11 @@ fn generate_metadata_type_checker(
     if metadata_type.is_some() || metadata_mapper.is_some() {
         let metadata_ctor = match (metadata_type, metadata_mapper) {
             (Some(metadata_type), Some(metadata_mapper)) => quote! {
-                &#metadata_mapper(#metadata_type::new(), expr).unwrap()
+                &#metadata_mapper(#metadata_type::default(), expr).unwrap()
             },
-            (Some(metadata_type), None) => quote! { &#metadata_type::new() },
+            (Some(metadata_type), None) => quote! { &#metadata_type::default() },
             (None, Some(metadata_mapper)) => quote! { &#metadata_mapper(expr).unwrap() },
-            (None, None) => quote! { &#metadata_type::new() },
+            (None, None) => unreachable!(),
         };
         quote! {
             const _: () = {
