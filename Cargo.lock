@@ -3234,6 +3234,7 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "engine",
+ "engine_rocks",
  "futures",
  "futures-cpupool",
  "grpcio",
