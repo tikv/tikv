@@ -221,6 +221,7 @@ mod tests {
     #[test]
     fn test_json_length() {
         let cases = vec![
+            (None, None, None),
             (Some("null"), None, None),
             (Some(r#"{"a":{"a":1},"b":2}"#), Some(b"$".to_vec()), Some(2)),
             (Some("1"), None, Some(1)),
