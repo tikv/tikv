@@ -77,7 +77,7 @@ pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
 
 #[rpn_fn]
 #[inline]
-pub fn reverse(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+pub fn reverse_utf8(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|bytes| {
         let s = String::from_utf8_lossy(bytes);
         s.chars().rev().collect::<String>().into_bytes()
@@ -145,7 +145,7 @@ pub fn replace(
 
 #[rpn_fn]
 #[inline]
-pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
+pub fn left_utf8(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => {
             if *rhs <= 0 {
@@ -169,7 +169,7 @@ pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn right(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
+pub fn right_utf8(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => {
             if *rhs <= 0 {
@@ -319,7 +319,7 @@ pub fn strcmp(left: &Option<Bytes>, right: &Option<Bytes>) -> Result<Option<i64>
 
 #[rpn_fn]
 #[inline]
-pub fn instr(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<Int>> {
+pub fn instr_utf8(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<Int>> {
     if let (Some(s), Some(substr)) = (s, substr) {
         let s = String::from_utf8_lossy(s);
         let substr = String::from_utf8_lossy(substr);
@@ -640,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reverse() {
+    fn test_reverse_utf8() {
         let cases = vec![
             (Some(b"hello".to_vec()), Some(b"olleh".to_vec())),
             (Some(b"".to_vec()), Some(b"".to_vec())),
@@ -670,7 +670,7 @@ mod tests {
         for (arg, expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(ScalarFuncSig::Reverse)
+                .evaluate(ScalarFuncSig::ReverseUtf8)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
@@ -842,7 +842,7 @@ mod tests {
     }
 
     #[test]
-    fn test_left() {
+    fn test_left_utf8() {
         let cases = vec![
             (Some(b"hello".to_vec()), Some(0i64), Some(b"".to_vec())),
             (Some(b"hello".to_vec()), Some(1i64), Some(b"h".to_vec())),
@@ -880,14 +880,14 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(lhs)
                 .push_param(rhs)
-                .evaluate(ScalarFuncSig::Left)
+                .evaluate(ScalarFuncSig::LeftUtf8)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
     }
 
     #[test]
-    fn test_right() {
+    fn test_right_utf8() {
         let cases = vec![
             (Some(b"hello".to_vec()), Some(0), Some(b"".to_vec())),
             (Some(b"hello".to_vec()), Some(1), Some(b"o".to_vec())),
@@ -925,7 +925,7 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(lhs)
                 .push_param(rhs)
-                .evaluate(ScalarFuncSig::Right)
+                .evaluate(ScalarFuncSig::RightUtf8)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
@@ -1289,7 +1289,7 @@ mod tests {
     }
 
     #[test]
-    fn test_instr() {
+    fn test_instr_utf8() {
         let cases: Vec<(&str, &str, i64)> = vec![
             ("a", "abcdefg", 1),
             ("0", "abcdefg", 0),
@@ -1316,7 +1316,7 @@ mod tests {
             let got = RpnFnScalarEvaluator::new()
                 .push_param(s)
                 .push_param(substr)
-                .evaluate::<Int>(ScalarFuncSig::Instr)
+                .evaluate::<Int>(ScalarFuncSig::InstrUtf8)
                 .unwrap();
             assert_eq!(got, Some(exp))
         }
@@ -1332,7 +1332,7 @@ mod tests {
             let got = RpnFnScalarEvaluator::new()
                 .push_param(s)
                 .push_param(substr)
-                .evaluate::<Int>(ScalarFuncSig::Instr)
+                .evaluate::<Int>(ScalarFuncSig::InstrUtf8)
                 .unwrap();
             assert_eq!(got, exp);
         }
