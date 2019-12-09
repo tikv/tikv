@@ -16,7 +16,7 @@ use raft::eraftpb;
 use engine::rocks::Writable;
 use engine::*;
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
-use keys::Key;
+use keys::{Key, TimeStamp};
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
@@ -24,7 +24,7 @@ use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::store::StoreMeta;
 use tikv::raftstore::store::SnapManager;
-use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
+use tikv::storage::mvcc::{Lock, LockType, TransactionKind};
 use tikv_util::worker::FutureWorker;
 use tikv_util::HandyRwLock;
 
@@ -790,11 +790,11 @@ fn test_debug_scan_mvcc() {
     for k in &keys {
         let v = Lock::new(
             LockType::Put,
+            TransactionKind::Optimistic,
             b"pk".to_vec(),
             1.into(),
             10,
             None,
-            TimeStamp::zero(),
             0,
             TimeStamp::zero(),
         )

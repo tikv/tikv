@@ -1428,6 +1428,11 @@ pub mod batch_commands_request {
     }
 }
 
+#[cfg(feature = "prost-codec")]
+pub use kvproto::tikvpb::batch_commands_request;
+#[cfg(feature = "prost-codec")]
+pub use kvproto::tikvpb::batch_commands_response;
+
 #[cfg(test)]
 mod tests {
     use super::*;

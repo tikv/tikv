@@ -1,17 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryInto;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::iter::{self, FromIterator};
 use std::marker::PhantomData;
 
-use keys::Key;
+use keys::{Key, NonZeroTimeStamp, TimeStamp};
 use kvproto::kvrpcpb::*;
 use tikv_util::collections::HashMap;
 
 use crate::storage::errors::{Error, ErrorInner};
 use crate::storage::lock_manager::WaitTimeout;
 use crate::storage::metrics::{self, KV_COMMAND_COUNTER_VEC_STATIC};
-use crate::storage::mvcc::{Lock, Mutation, TimeStamp};
+use crate::storage::mvcc::{Lock, Mutation};
 use crate::storage::txn::latch::{self, Latches};
 use crate::storage::types::{MvccInfo, StorageCallbackType, TxnStatus};
 use crate::storage::{Callback, Result};
@@ -52,8 +53,28 @@ impl<T> From<TypedCommand<T>> for Command {
 impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
     fn from(mut req: PrewriteRequest) -> Self {
         let for_update_ts = req.get_for_update_ts();
-        if for_update_ts == 0 {
-            Prewrite::new(
+        match for_update_ts.try_into() {
+            Ok(for_update_ts) => {
+                let is_pessimistic_lock = req.take_is_pessimistic_lock();
+                let mutations = req
+                    .take_mutations()
+                    .into_iter()
+                    .map(Into::into)
+                    .zip(is_pessimistic_lock.into_iter())
+                    .collect();
+                PrewritePessimistic::new(
+                    mutations,
+                    req.take_primary_lock(),
+                    req.get_start_version().into(),
+                    req.get_lock_ttl(),
+                    for_update_ts,
+                    req.get_txn_size(),
+                    req.get_min_commit_ts().into(),
+                    req.take_context(),
+                )
+                .into()
+            }
+            Err(_) => Prewrite::new(
                 req.take_mutations().into_iter().map(Into::into).collect(),
                 req.take_primary_lock(),
                 req.get_start_version().into(),
@@ -63,26 +84,7 @@ impl From<PrewriteRequest> for TypedCommand<Vec<Result<()>>> {
                 req.get_min_commit_ts().into(),
                 req.take_context(),
             )
-            .into()
-        } else {
-            let is_pessimistic_lock = req.take_is_pessimistic_lock();
-            let mutations = req
-                .take_mutations()
-                .into_iter()
-                .map(Into::into)
-                .zip(is_pessimistic_lock.into_iter())
-                .collect();
-            PrewritePessimistic::new(
-                mutations,
-                req.take_primary_lock(),
-                req.get_start_version().into(),
-                req.get_lock_ttl(),
-                for_update_ts.into(),
-                req.get_txn_size(),
-                req.get_min_commit_ts().into(),
-                req.take_context(),
-            )
-            .into()
+            .into(),
         }
     }
 }
@@ -355,7 +357,7 @@ command! {
         /// The transaction timestamp.
         start_ts: TimeStamp,
         lock_ttl: u64,
-        for_update_ts: TimeStamp,
+        for_update_ts: NonZeroTimeStamp,
         /// How many keys this transaction involved.
         txn_size: u64,
         min_commit_ts: TimeStamp,

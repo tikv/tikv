@@ -564,7 +564,6 @@ mod tests {
                         pk,
                         false,
                         0,
-                        TimeStamp::default(),
                         0,
                         TimeStamp::default(),
                     )

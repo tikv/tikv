@@ -1538,7 +1538,7 @@ mod tests {
 
     use super::*;
     use crate::server::gc_worker::GcConfig;
-    use crate::storage::mvcc::{Lock, LockType};
+    use crate::storage::mvcc::{Lock, LockType, TransactionKind};
     use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
@@ -1849,11 +1849,11 @@ mod tests {
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
             let lock = Lock::new(
                 tp,
+                TransactionKind::Optimistic,
                 value.to_vec(),
                 version,
                 0,
                 None,
-                TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
             );
@@ -2255,11 +2255,11 @@ mod tests {
             };
             let lock = Lock::new(
                 tp,
+                TransactionKind::Optimistic,
                 vec![],
                 ts.into(),
                 0,
                 v,
-                TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
             );

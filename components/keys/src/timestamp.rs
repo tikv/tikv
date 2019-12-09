@@ -1,7 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    convert::TryFrom,
+    fmt,
+    num::NonZeroU64,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct TimeStamp(u64);
@@ -84,6 +88,38 @@ impl slog::Value for TimeStamp {
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         slog::Value::serialize(&self.0, record, key, serializer)
+    }
+}
+
+/// A timestamp that is guaranteed to be > 0. Useful for optimisations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct NonZeroTimeStamp(NonZeroU64);
+
+impl NonZeroTimeStamp {
+    pub fn into_inner(self) -> u64 {
+        self.0.get()
+    }
+}
+
+impl From<NonZeroTimeStamp> for TimeStamp {
+    fn from(nzts: NonZeroTimeStamp) -> TimeStamp {
+        TimeStamp(nzts.0.get())
+    }
+}
+
+impl TryFrom<u64> for NonZeroTimeStamp {
+    type Error = ();
+
+    fn try_from(u: u64) -> Result<NonZeroTimeStamp, ()> {
+        NonZeroU64::new(u).map(|u| NonZeroTimeStamp(u)).ok_or(())
+    }
+}
+
+impl TryFrom<TimeStamp> for NonZeroTimeStamp {
+    type Error = ();
+
+    fn try_from(ts: TimeStamp) -> Result<NonZeroTimeStamp, ()> {
+        NonZeroU64::new(ts.0).map(|u| NonZeroTimeStamp(u)).ok_or(())
     }
 }
 

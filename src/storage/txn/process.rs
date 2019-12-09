@@ -534,7 +534,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     &primary,
                     skip_constraint_check,
                     lock_ttl,
-                    TimeStamp::default(),
                     txn_size,
                     min_commit_ts,
                 ) {
@@ -567,7 +566,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             min_commit_ts,
         }) => {
             let rows = mutations.len();
-            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
 
             let mut locks = vec![];
             for (m, is_pessimistic_lock) in mutations.into_iter() {
@@ -763,7 +762,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             for (current_key, current_lock) in key_locks {
                 if let Some(txn_to_keys) = txn_to_keys.as_mut() {
                     txn_to_keys
-                        .entry((current_lock.ts, !current_lock.for_update_ts.is_zero()))
+                        .entry((current_lock.ts, current_lock.txn_kind.is_pessimistic()))
                         .and_modify(|key_hashes: &mut Option<Vec<u64>>| {
                             if let Some(key_hashes) = key_hashes {
                                 key_hashes.push(current_key.gen_hash());

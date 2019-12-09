@@ -500,7 +500,7 @@ impl<E: Engine, L: LockManager> MsgScheduler for Scheduler<E, L> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::mvcc::{self, Mutation};
+    use crate::storage::mvcc::{self, Mutation, TransactionKind};
     use crate::storage::txn::{commands, latch::*};
     use keys::Key;
     use kvproto::kvrpcpb::Context;
@@ -563,11 +563,11 @@ mod tests {
                     Key::from_raw(b"k"),
                     mvcc::Lock::new(
                         mvcc::LockType::Put,
+                        TransactionKind::Optimistic,
                         b"k".to_vec(),
                         10.into(),
                         20,
                         None,
-                        TimeStamp::zero(),
                         0,
                         TimeStamp::zero(),
                     ),

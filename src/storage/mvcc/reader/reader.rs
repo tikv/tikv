@@ -431,7 +431,7 @@ mod tests {
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
-    use crate::storage::mvcc::lock::LockType;
+    use crate::storage::mvcc::lock::{LockType, TransactionKind};
     use crate::storage::mvcc::{Mutation, MvccReader, MvccTxn};
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
@@ -440,6 +440,7 @@ mod tests {
     use engine_rocks::RocksEngine;
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
+    use std::convert::TryInto;
     use std::sync::Arc;
     use std::u64;
 
@@ -496,16 +497,8 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.prewrite(
-                m,
-                pk,
-                false,
-                0,
-                TimeStamp::default(),
-                0,
-                TimeStamp::default(),
-            )
-            .unwrap();
+            txn.prewrite(m, pk, false, 0, 0, TimeStamp::default())
+                .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -513,6 +506,7 @@ mod tests {
             &mut self,
             m: Mutation,
             pk: &[u8],
+            for_update_ts: impl Into<TimeStamp>,
             start_ts: impl Into<TimeStamp>,
         ) {
             let snap =
@@ -523,7 +517,7 @@ mod tests {
                 pk,
                 true,
                 0,
-                TimeStamp::default(),
+                for_update_ts.into().try_into().unwrap(),
                 0,
                 TimeStamp::default(),
             )
@@ -798,7 +792,7 @@ mod tests {
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 45, 45);
-        engine.prewrite_pessimistic_lock(m, k, 45);
+        engine.prewrite_pessimistic_lock(m, k, 45, 45);
         engine.commit(k, 45, 50);
 
         let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
@@ -872,11 +866,11 @@ mod tests {
 
         // txn: start_ts = 2, commit_ts = 3
         engine.acquire_pessimistic_lock(key.clone(), k, 2, 2);
-        engine.prewrite_pessimistic_lock(m.clone(), k, 2);
+        engine.prewrite_pessimistic_lock(m.clone(), k, 2, 2);
         engine.commit(k, 2, 3);
         // txn: start_ts = 1, commit_ts = 4
         engine.acquire_pessimistic_lock(key.clone(), k, 1, 3);
-        engine.prewrite_pessimistic_lock(m, k, 1);
+        engine.prewrite_pessimistic_lock(m, k, 1, 3);
         engine.commit(k, 1, 4);
 
         let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
@@ -914,7 +908,7 @@ mod tests {
 
         // Timestamp overlap with the previous transaction.
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 10, 18);
-        engine.prewrite_pessimistic_lock(Mutation::Lock(Key::from_raw(k)), k, 10);
+        engine.prewrite_pessimistic_lock(Mutation::Lock(Key::from_raw(k)), k, 10, 18);
         engine.commit(k, 10, 20);
 
         engine.prewrite(m, k, 23);
@@ -1026,17 +1020,17 @@ mod tests {
 
         let m = Mutation::Lock(Key::from_raw(k));
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 13, 15);
-        engine.prewrite_pessimistic_lock(m, k, 13);
+        engine.prewrite_pessimistic_lock(m, k, 13, 15);
         engine.commit(k, 13, 15);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 18, 18);
-        engine.prewrite_pessimistic_lock(m, k, 18);
+        engine.prewrite_pessimistic_lock(m, k, 18, 18);
         engine.commit(k, 18, 20);
 
         let m = Mutation::Lock(Key::from_raw(k));
         engine.acquire_pessimistic_lock(Key::from_raw(k), k, 17, 21);
-        engine.prewrite_pessimistic_lock(m, k, 17);
+        engine.prewrite_pessimistic_lock(m, k, 17, 21);
         engine.commit(k, 17, 21);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
@@ -1180,48 +1174,48 @@ mod tests {
                 LockType::Put,
                 Some(b"v1".to_vec()),
                 5.into(),
-                TimeStamp::zero(),
+                TransactionKind::Optimistic,
             ),
             (
                 b"k2".to_vec(),
                 LockType::Put,
                 Some(b"v2".to_vec()),
                 10.into(),
-                TimeStamp::zero(),
+                TransactionKind::Optimistic,
             ),
             (
                 b"k3".to_vec(),
                 LockType::Delete,
                 None,
                 10.into(),
-                TimeStamp::zero(),
+                TransactionKind::Optimistic,
             ),
             (
                 b"k3\x00".to_vec(),
                 LockType::Lock,
                 None,
                 10.into(),
-                TimeStamp::zero(),
+                TransactionKind::Optimistic,
             ),
             (
                 b"k5".to_vec(),
                 LockType::Pessimistic,
                 None,
                 10.into(),
-                12.into(),
+                TransactionKind::Pessimistic(12.try_into().unwrap()),
             ),
         ]
         .into_iter()
-        .map(|(k, lock_type, short_value, ts, for_update_ts)| {
+        .map(|(k, lock_type, short_value, ts, txn_kind)| {
             (
                 Key::from_raw(&k),
                 Lock::new(
                     lock_type,
+                    txn_kind,
                     b"k1".to_vec(),
                     ts,
                     0,
                     short_value,
-                    for_update_ts,
                     0,
                     TimeStamp::zero(),
                 ),

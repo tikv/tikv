@@ -25,7 +25,6 @@
 #![feature(const_fn)]
 #![feature(mem_take)]
 #![feature(box_patterns)]
-#![feature(type_alias_impl_trait)]
 
 #[macro_use]
 extern crate bitflags;

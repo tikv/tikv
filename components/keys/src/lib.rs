@@ -16,7 +16,7 @@ pub mod rewrite;
 mod timestamp;
 mod types;
 
-pub use timestamp::{TimeStamp, UnixSecs};
+pub use timestamp::{NonZeroTimeStamp, TimeStamp, UnixSecs};
 pub use types::{Key, KvPair, Value};
 
 pub const MIN_KEY: &[u8] = &[];
