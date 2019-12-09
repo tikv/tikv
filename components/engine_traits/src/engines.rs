@@ -11,7 +11,10 @@ pub struct KvEngines<K, R> {
     pub shared_block_cache: bool,
 }
 
-impl<K: KvEngine, R: KvEngine> KvEngines<K, R> {
+impl<K: KvEngine, R: KvEngine> KvEngines<K, R>
+where for <'a> &'a K::TablePropertiesCollectionView: IntoIterator<Item = (K::TablePropertiesStringRef, K::TablePropertiesRef), IntoIter = K::TablePropertiesCollectionIter>,
+for <'a> &'a R::TablePropertiesCollectionView: IntoIterator<Item = (R::TablePropertiesStringRef, R::TablePropertiesRef), IntoIter = R::TablePropertiesCollectionIter>,
+{
     pub fn new(kv_engine: K, raft_engine: R, shared_block_cache: bool) -> Self {
         KvEngines {
             kv: kv_engine,
