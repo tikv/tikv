@@ -338,18 +338,11 @@ impl Config {
         if self.apply_pool_size == 0 {
             return Err(box_err!("apply-pool-size should be greater than 0"));
         }
-        if self.apply_pool_size < 3 {
-            self.high_priority_apply_pool_size = 0;
-        }
-
         if self.apply_max_batch_size == 0 {
             return Err(box_err!("apply-max-batch-size should be greater than 0"));
         }
         if self.store_pool_size == 0 {
             return Err(box_err!("store-pool-size should be greater than 0"));
-        }
-        if self.store_pool_size < 3 {
-            self.high_priority_store_pool_size = 0;
         }
         if self.store_max_batch_size == 0 {
             return Err(box_err!("store-max-batch-size should be greater than 0"));
