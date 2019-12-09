@@ -97,18 +97,14 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let t: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
-        let month = t.month() as usize;
         if t.is_zero() && ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
             return ctx
                 .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
                 .map(|_| None);
-        } else if month == 0 || t.is_zero() {
-            return Ok(None);
         }
-        use crate::codec::mysql::time::MONTH_NAMES;
-        Ok(Some(Cow::Owned(
-            MONTH_NAMES[month - 1].to_string().into_bytes(),
-        )))
+        use crate::codec::mysql::time::MonthExtension;
+        Ok(t.month_name()
+            .map(|s| Cow::Owned(s.to_string().into_bytes())))
     }
 
     #[inline]
