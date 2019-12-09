@@ -1373,7 +1373,7 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
-            log_rotation_size: ReadableSize::gb(4),
+            log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
