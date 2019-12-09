@@ -812,6 +812,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_panic"
+version = "0.0.1"
+dependencies = [
+ "engine_traits",
+ "tikv_alloc",
+]
+
+[[package]]
 name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
@@ -3736,6 +3744,7 @@ dependencies = [
  "derive-new",
  "derive_more",
  "engine",
+ "engine_panic",
  "engine_rocks",
  "engine_traits",
  "fail",

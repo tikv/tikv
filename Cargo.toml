@@ -58,6 +58,7 @@ crossbeam = "0.7.2"
 derive-new = "0.5"
 derive_more = "0.15.0"
 engine = { path = "components/engine" }
+engine_panic = { path = "components/engine_panic" }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
 fail = "0.3"
