@@ -735,7 +735,7 @@ mod tests {
         // test set both hint_max_ts
         {
             let mut iopt = IterOption::default();
-            iopt.set_hint_max_ts(4);
+            iopt.set_hint_max_ts(7);
             let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
 
             assert_eq!(iter.seek_to_first(), true);
@@ -746,6 +746,11 @@ mod tests {
             let ts = Key::decode_ts_from(iter.key()).unwrap();
             assert_eq!(ts.into_inner(), 4);
 
+            assert_eq!(iter.next(), true);
+            let ts = Key::decode_ts_from(iter.key()).unwrap();
+            assert_eq!(ts.into_inner(), 6);
+
+            assert_eq!(iter.next(), true);
             assert_eq!(iter.next(), false);
         }
     }

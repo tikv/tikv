@@ -36,6 +36,8 @@ impl TableFilter for TsFilter {
         let user_props = props.user_collected_properties();
 
         if let Some(hint_min_ts) = self.hint_min_ts {
+            // TODO avoid hard code after refactor MvccProperties from
+            // tikv/src/raftstore/coprocessor/ into some component about engine.
             if let Some(mut p) = user_props.get("tikv.max_ts") {
                 if let Ok(get_max) = number::decode_u64(&mut p) {
                     if get_max < hint_min_ts {
@@ -46,6 +48,8 @@ impl TableFilter for TsFilter {
         }
 
         if let Some(hint_max_ts) = self.hint_max_ts {
+            // TODO avoid hard code after refactor MvccProperties from
+            // tikv/src/raftstore/coprocessor/ into some component about engine.
             if let Some(mut p) = user_props.get("tikv.min_ts") {
                 if let Ok(get_min) = number::decode_u64(&mut p) {
                     if get_min > hint_max_ts {
