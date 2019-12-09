@@ -19,6 +19,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ahash"
+version = "0.2.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f33b5018f120946c1dcf279194f238a9f146725593ead1c08fa47ff22b0b5d3"
+dependencies = [
+ "const-random",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -450,6 +459,26 @@ dependencies = [
  "proc-macro2 1.0.4",
  "quote 1.0.2",
  "syn 1.0.5",
+]
+
+[[package]]
+name = "const-random"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b641a8c9867e341f3295564203b1c250eb8ce6cb6126e007941f78c4d2ed7fe"
+dependencies = [
+ "const-random-macro",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "const-random-macro"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c750ec12b83377637110d5a57f5ae08e895b06c4b16e2bdbf1a94ef717428c59"
+dependencies = [
+ "proc-macro-hack",
+ "rand 0.7.2",
 ]
 
 [[package]]
@@ -2098,6 +2127,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro-hack"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecd45702f76d6d3c75a80564378ae228a85f0b59d2f3ed43c91b4a69eb2ebfc5"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "0.4.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3534,6 +3574,7 @@ dependencies = [
 name = "tikv_util"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "backtrace",
  "byteorder",
  "chrono",
@@ -3544,7 +3585,6 @@ dependencies = [
  "fail",
  "futures",
  "futures-cpupool",
- "fxhash",
  "grpcio",
  "hex",
  "lazy_static",
