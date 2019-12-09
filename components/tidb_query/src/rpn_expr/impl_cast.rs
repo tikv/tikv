@@ -1252,7 +1252,7 @@ mod tests {
     }
 
     fn make_metadata(in_union: bool) -> tipb::InUnionMetadata {
-        let mut metadata = tipb::InUnionMetadata::new();
+        let mut metadata = tipb::InUnionMetadata::default();
         metadata.set_in_union(in_union);
         metadata
     }
