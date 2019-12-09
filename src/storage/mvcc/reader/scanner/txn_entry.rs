@@ -383,18 +383,22 @@ pub mod tests {
             self.key = key.to_owned();
             self
         }
+
         pub fn value(&mut self, val: &[u8]) -> &mut Self {
             self.value = val.to_owned();
             self
         }
-        fn start_ts(&mut self, start_ts: TimeStamp) -> &mut Self {
+
+        pub fn start_ts(&mut self, start_ts: TimeStamp) -> &mut Self {
             self.start_ts = start_ts;
             self
         }
-        fn commit_ts(&mut self, commit_ts: TimeStamp) -> &mut Self {
+
+        pub fn commit_ts(&mut self, commit_ts: TimeStamp) -> &mut Self {
             self.commit_ts = commit_ts;
             self
         }
+
         pub fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
             let write_key = Key::from_raw(&self.key).append_ts(self.commit_ts);
 
