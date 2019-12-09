@@ -6,7 +6,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use codec;
 use codec::byte::MemComparableByteCodec;
 use codec::number::{self, NumberCodec};
-use codec::prelude::{MemComparableByteEncoder, NumberDecoder};
+use codec::prelude::{MemComparableByteDecoder, MemComparableByteEncoder, NumberDecoder};
 use tikv_util::codec::bytes;
 
 /// Value type which is essentially raw bytes.
@@ -36,7 +36,8 @@ impl Key {
     /// Creates a key from raw bytes.
     #[inline]
     pub fn from_raw(key: &[u8]) -> Key {
-        let len = MemComparableByteCodec::encoded_len(key.len() + number::U64_SIZE);
+        // adding extra length for appending timestamp
+        let len = MemComparableByteCodec::encoded_len(key.len()) + number::U64_SIZE;
         let mut encoded = Vec::with_capacity(len);
         encoded.write_comparable_bytes(key).unwrap();
         Key(encoded)
@@ -55,16 +56,7 @@ impl Key {
     /// Gets the raw representation of this key.
     #[inline]
     pub fn to_raw(&self) -> Result<Vec<u8>, codec::Error> {
-        let len = self.0.len();
-        if len == 0 {
-            let k = Vec::with_capacity(len);
-            return Ok(k);
-        }
-        let mut k = vec![0; len];
-        let (_read_bytes, written_bytes) =
-            MemComparableByteCodec::try_decode_first(&self.0.as_slice(), &mut k)?;
-        k.truncate(written_bytes);
-        Ok(k)
+        self.0.as_slice().read_comparable_bytes()
     }
 
     /// Creates a key from encoded bytes vector.
