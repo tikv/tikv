@@ -557,7 +557,7 @@ mod tests {
             let pk = primary_key.as_bytes();
             // do prewrite.
             {
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(
@@ -572,7 +572,7 @@ mod tests {
             self.refresh_snapshot();
             // do commit
             {
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
