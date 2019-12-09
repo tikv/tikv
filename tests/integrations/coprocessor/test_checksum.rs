@@ -2,13 +2,12 @@
 
 use std::u64;
 
-use crc::crc64::{self, Digest, Hasher64};
-
 use kvproto::coprocessor::{KeyRange, Request};
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use protobuf::Message;
 use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
+use keys::TimeStamp;
 use test_coprocessor::*;
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
 use tidb_query::storage::Range;
@@ -21,11 +20,11 @@ fn new_checksum_request(range: KeyRange, scan_on: ChecksumScanOn) -> Request {
     ctx.set_isolation_level(IsolationLevel::Si);
 
     let mut checksum = ChecksumRequest::default();
-    checksum.set_start_ts(u64::MAX);
     checksum.set_scan_on(scan_on);
     checksum.set_algorithm(ChecksumAlgorithm::Crc64Xor);
 
     let mut req = Request::default();
+    req.set_start_ts(u64::MAX);
     req.set_context(ctx);
     req.set_tp(REQ_TYPE_CHECKSUM);
     req.set_data(checksum.write_to_bytes().unwrap());
@@ -69,7 +68,7 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
     let ctx = Context::default();
     let store = SnapshotStore::new(
         store.get_engine().snapshot(&ctx).unwrap(),
-        u64::MAX,
+        TimeStamp::max(),
         IsolationLevel::Si,
         true,
         Default::default(),
@@ -83,8 +82,9 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
     });
 
     let mut checksum = 0;
+    let digest = crc64fast::Digest::new();
     while let Some((k, v)) = scanner.next().unwrap() {
-        let mut digest = Digest::new(crc64::ECMA);
+        let mut digest = digest.clone();
         digest.write(&k);
         digest.write(&v);
         checksum ^= digest.sum64();

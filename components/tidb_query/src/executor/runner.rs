@@ -49,7 +49,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
 
         let curr: Box<dyn Executor<StorageStats = S::Statistics> + Send> = match exec.get_tp() {
             ExecType::TypeSelection => {
-                COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
+                RUNNER_BUILDING_METRICS.with(|m| m.executor_count.selection.inc());
 
                 Box::new(
                     super::SelectionExecutor::new(exec.take_selection(), Arc::clone(&ctx), src)?
@@ -57,7 +57,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 )
             }
             ExecType::TypeAggregation => {
-                COPR_EXECUTOR_COUNT.with_label_values(&["hash_aggr"]).inc();
+                RUNNER_BUILDING_METRICS.with(|m| m.executor_count.hash_aggr.inc());
 
                 Box::new(
                     super::HashAggExecutor::new(exec.take_aggregation(), Arc::clone(&ctx), src)?
@@ -65,9 +65,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 )
             }
             ExecType::TypeStreamAgg => {
-                COPR_EXECUTOR_COUNT
-                    .with_label_values(&["stream_aggr"])
-                    .inc();
+                RUNNER_BUILDING_METRICS.with(|m| m.executor_count.stream_aggr.inc());
 
                 Box::new(
                     super::StreamAggExecutor::new(Arc::clone(&ctx), src, exec.take_aggregation())?
@@ -75,7 +73,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 )
             }
             ExecType::TypeTopN => {
-                COPR_EXECUTOR_COUNT.with_label_values(&["top_n"]).inc();
+                RUNNER_BUILDING_METRICS.with(|m| m.executor_count.top_n.inc());
 
                 Box::new(
                     super::TopNExecutor::new(exec.take_top_n(), Arc::clone(&ctx), src)?
@@ -83,7 +81,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 )
             }
             ExecType::TypeLimit => {
-                COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
+                RUNNER_BUILDING_METRICS.with(|m| m.executor_count.limit.inc());
 
                 Box::new(
                     super::LimitExecutor::new(exec.take_limit(), src)
@@ -99,6 +97,9 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
         };
         src = curr;
     }
+
+    RUNNER_BUILDING_METRICS.with(|m| m.may_flush_all());
+
     Ok(src)
 }
 
@@ -116,7 +117,7 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
     let context = EvalContext::new(context);
     match first.get_tp() {
         ExecType::TypeTableScan => {
-            COPR_EXECUTOR_COUNT.with_label_values(&["table_scan"]).inc();
+            RUNNER_BUILDING_METRICS.with(|m| m.executor_count.table_scan.inc());
 
             let ex = Box::new(
                 super::ScanExecutor::table_scan(
@@ -131,7 +132,7 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
             Ok(ex)
         }
         ExecType::TypeIndexScan => {
-            COPR_EXECUTOR_COUNT.with_label_values(&["index_scan"]).inc();
+            RUNNER_BUILDING_METRICS.with(|m| m.executor_count.index_scan.inc());
 
             let unique = first.get_idx_scan().get_unique();
             let ex = Box::new(

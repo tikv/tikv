@@ -42,7 +42,7 @@ pub struct RpnFnMeta {
     pub validator_ptr: fn(expr: &Expr) -> Result<()>,
 
     /// The metadata constructor of the RPN function.
-    pub metadata_ctor_ptr: fn(expr: &mut Expr) -> Box<dyn Any + Send>,
+    pub metadata_ctor_ptr: fn(expr: &mut Expr) -> Result<Box<dyn Any + Send>>,
 
     #[allow(clippy::type_complexity)]
     /// The RPN function.
@@ -256,6 +256,20 @@ pub fn validate_expr_arguments_gte(expr: &Expr, args: usize) -> Result<()> {
     } else {
         Err(other_err!(
             "Expect at least {} arguments, received {}",
+            args,
+            received_args
+        ))
+    }
+}
+
+/// Validates whether the number of arguments of an expression node <= expectation.
+pub fn validate_expr_arguments_lte(expr: &Expr, args: usize) -> Result<()> {
+    let received_args = expr.get_children().len();
+    if received_args <= args {
+        Ok(())
+    } else {
+        Err(other_err!(
+            "Expect at most {} arguments, received {}",
             args,
             received_args
         ))

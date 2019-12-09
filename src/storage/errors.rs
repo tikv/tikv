@@ -10,7 +10,7 @@ use crate::storage::{kv::Error as EngineError, mvcc, txn};
 
 quick_error! {
     #[derive(Debug)]
-    pub enum Error {
+    pub enum ErrorInner {
         Engine(err: EngineError) {
             from()
             cause(err)
@@ -42,7 +42,7 @@ quick_error! {
         SchedTooBusy {
             description("scheduler is too busy")
         }
-        GCWorkerTooBusy {
+        GcWorkerTooBusy {
             description("gc worker is too busy")
         }
         KeyTooLarge(size: usize, limit: usize) {
@@ -56,6 +56,45 @@ quick_error! {
         PessimisticTxnNotEnabled {
             description("pessimistic transaction is not enabled")
         }
+    }
+}
+
+pub struct Error(pub Box<ErrorInner>);
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        std::error::Error::description(&self.0)
+    }
+
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        std::error::Error::source(&self.0)
+    }
+}
+
+impl From<ErrorInner> for Error {
+    #[inline]
+    fn from(e: ErrorInner) -> Self {
+        Error(Box::new(e))
+    }
+}
+
+impl<T: Into<ErrorInner>> From<T> for Error {
+    #[inline]
+    default fn from(err: T) -> Self {
+        let err = err.into();
+        err.into()
     }
 }
 

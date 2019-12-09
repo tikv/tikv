@@ -3,14 +3,18 @@
 use std::thread;
 use std::time::Duration;
 
+use keys::{Key, TimeStamp};
 use kvproto::kvrpcpb::Context;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
-use tikv::server::gc_worker::{AutoGCConfig, GCConfig};
-use tikv::storage::{self, Engine, Key, Mutation};
-use tikv::storage::{kv, mvcc, txn};
+use tikv::server::gc_worker::{AutoGcConfig, GcConfig};
+use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
+use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
+use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+use tikv::storage::{Engine, Mutation};
+use tikv::storage::{Error as StorageError, ErrorInner as SotrageErrorInner};
 use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 
@@ -103,7 +107,9 @@ fn test_raft_storage_rollback_before_prewrite() {
     assert!(ret.is_err());
     let err = ret.unwrap_err();
     match err {
-        storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict { .. })) => {}
+        StorageError(box SotrageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::WriteConflict { .. },
+        ))))) => {}
         _ => {
             panic!("expect WriteConflict error, but got {:?}", err);
         }
@@ -140,8 +146,9 @@ fn test_raft_storage_store_not_match() {
     ctx.set_peer(peer);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
     let res = storage.get(ctx.clone(), &key, 20);
-    if let storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e))) =
-        *res.as_ref().err().unwrap()
+    if let StorageError(box SotrageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+        box KvErrorInner::Request(ref e),
+    ))))) = *res.as_ref().err().unwrap()
     {
         assert!(e.has_store_not_match());
     } else {
@@ -186,7 +193,7 @@ fn test_engine_leader_change_twice() {
     // Term not match.
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     let res = engine.put(&ctx, Key::from_raw(b"a"), b"a".to_vec());
-    if let kv::Error::Request(ref e) = *res.as_ref().err().unwrap() {
+    if let KvError(box KvErrorInner::Request(ref e)) = *res.as_ref().err().unwrap() {
         assert!(e.has_stale_command());
     } else {
         panic!("expect stale command, but got {:?}", res);
@@ -197,8 +204,9 @@ fn write_test_data<E: Engine>(
     storage: &SyncTestStorage<E>,
     ctx: &Context,
     data: &[(Vec<u8>, Vec<u8>)],
-    mut ts: u64,
+    ts: impl Into<TimeStamp>,
 ) {
+    let mut ts = ts.into();
     for (k, v) in data {
         storage
             .prewrite(
@@ -211,9 +219,9 @@ fn write_test_data<E: Engine>(
             .into_iter()
             .for_each(|res| res.unwrap());
         storage
-            .commit(ctx.clone(), vec![Key::from_raw(k)], ts, ts + 1)
+            .commit(ctx.clone(), vec![Key::from_raw(k)], ts, ts.next())
             .unwrap();
-        ts += 2;
+        ts.incr().incr();
     }
 }
 
@@ -221,9 +229,10 @@ fn check_data<E: Engine>(
     cluster: &mut Cluster<ServerCluster>,
     storages: &HashMap<u64, SyncTestStorage<E>>,
     test_data: &[(Vec<u8>, Vec<u8>)],
-    ts: u64,
+    ts: impl Into<TimeStamp>,
     expect_success: bool,
 ) {
+    let ts = ts.into();
     for (k, v) in test_data {
         let mut region = cluster.get_region(k);
         let leader = cluster.leader_of_region(region.get_id()).unwrap();
@@ -260,7 +269,7 @@ fn test_auto_gc() {
         .storages
         .iter()
         .map(|(id, engine)| {
-            let mut config = GCConfig::default();
+            let mut config = GcConfig::default();
             // Do not skip GC
             config.ratio_threshold = 0.9;
             let storage = SyncTestStorageBuilder::from_engine(engine.clone())
@@ -277,7 +286,7 @@ fn test_auto_gc() {
     for (id, storage) in &mut storages {
         let tx = finish_signal_tx.clone();
 
-        let mut cfg = AutoGCConfig::new_test_cfg(
+        let mut cfg = AutoGcConfig::new_test_cfg(
             Arc::clone(&pd_client),
             region_info_accessors.remove(id).unwrap(),
             *id,

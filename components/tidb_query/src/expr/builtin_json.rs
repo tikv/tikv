@@ -9,6 +9,16 @@ use std::collections::BTreeMap;
 
 impl ScalarFunc {
     #[inline]
+    pub fn json_depth<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let j = try_opt!(self.children[0].eval_json(ctx, row));
+        Ok(Some(j.depth()))
+    }
+
+    #[inline]
     pub fn json_type<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -312,6 +322,55 @@ mod tests {
                 None => Datum::Null,
                 Some(e) => Datum::I64(e),
             };
+            assert_eq!(got, exp);
+        }
+    }
+    
+    fn test_json_depth() {
+        let cases = vec![
+            (None, None),
+            (Some("null"), Some(1)),
+            (Some("[true, 2017]"), Some(2)),
+            (Some(r#"{"a": {"a1": [3]}, "b": {"b1": {"c": {"d": [5]}}}}"#), Some(6)),
+            (Some("{}"), Some(1)),
+            (Some("[]"), Some(1)),
+            (Some("true"), Some(1)),
+            (Some("1"), Some(1)),
+            (Some("-1"), Some(1)),
+            (Some(r#""a""#), Some(1)),
+            (Some(r#"[10, 20]"#), Some(2)),
+            (Some(r#"[[], {}]"#),Some(2) ),
+            (Some(r#"[10, {"a": 20}]"#), Some(3)),
+            (Some(r#"[[2], 3, [[[4]]]]"#), Some(5)),
+            (Some(r#"{"Name": "Homer"}"#), Some(2)),
+            (Some(r#"[10, {"a": 20}]"#), Some(3)),
+            (Some(r#"{"Person": {"Name": "Homer", "Age": 39, "Hobbies": ["Eating", "Sleeping"]} }"#), Some(4)),
+            (Some(r#"{"a":1}"#), Some(2)),
+            (Some(r#"{"a":[1]}"#), Some(3)),
+            (Some(r#"{"b":2, "c":3}"#), Some(2)),
+            (Some(r#"[1]"#), Some(2)),
+            (Some(r#"[1,2]"#), Some(2)),
+            (Some(r#"[1,2,[1,3]]"#), Some(3)),
+            (Some(r#"[1,2,[1,[5,[3]]]]"#), Some(5)),
+            (Some(r#"[1,2,[1,[5,{"a":[2,3]}]]]"#), Some(6)),
+            (Some(r#"[{"a":1}]"#), Some(3)),
+            (Some(r#"[{"a":1,"b":2}]"#), Some(3)),
+            (Some(r#"[{"a":{"a":1},"b":2}]"#), Some(4)),
+        ];
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = match input {
+                None => Datum::Null,
+                Some(s) => Datum::Json(s.parse().unwrap()),
+            };
+            let exp = match exp {
+                None => Datum::Null,
+                Some(s) => Datum::I64(s.to_owned()),
+            };
+            let arg = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::JsonDepthSig, &[arg]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }

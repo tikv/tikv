@@ -9,13 +9,13 @@ use std::sync::{Arc, RwLock};
 
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys::{Key, Value};
 use kvproto::kvrpcpb::Context;
 
 use crate::storage::kv::{
-    Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError, Iterator, Modify,
-    Result as EngineResult, ScanMode, Snapshot,
+    Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError,
+    ErrorInner as EngineErrorInner, Iterator, Modify, Result as EngineResult, ScanMode, Snapshot,
 };
-use crate::storage::{Key, Value};
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 
@@ -77,7 +77,7 @@ impl Engine for BTreeEngine {
         cb: EngineCallback<()>,
     ) -> EngineResult<()> {
         if modifies.is_empty() {
-            return Err(EngineError::EmptyRequest);
+            return Err(EngineError::from(EngineErrorInner::EmptyRequest));
         }
         cb((CbContext::new(), write_modifies(&self, modifies)));
 
@@ -277,7 +277,7 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
 #[cfg(test)]
 pub mod tests {
     use super::super::tests::*;
-    use super::super::CFStatistics;
+    use super::super::CfStatistics;
     use super::*;
 
     #[test]
@@ -311,7 +311,7 @@ pub mod tests {
             must_put(&engine, k.as_slice(), v.as_slice());
         }
         let snap = engine.snapshot(&Context::default()).unwrap();
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
 
         // lower bound > upper bound, seek() returns false.
         let mut iter_op = IterOption::default();

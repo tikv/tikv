@@ -14,6 +14,7 @@ use std::io::Write;
 use std::path::Path;
 use std::usize;
 
+use configuration::Configuration;
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -30,20 +31,19 @@ use crate::raftstore::coprocessor::properties::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use crate::raftstore::coprocessor::Config as CopConfig;
-use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
-use crate::server::gc_worker::GCConfig;
+use crate::server::gc_worker::GcConfig;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::config::DEFAULT_DATA_DIR;
-use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::future_pool;
@@ -703,6 +703,7 @@ pub struct DbConfig {
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
+    pub enable_unordered_write: bool,
     pub defaultcf: DefaultCfConfig,
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
@@ -739,6 +740,7 @@ impl Default for DbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
+            enable_unordered_write: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -794,6 +796,7 @@ impl DbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(EventListener::new("kv"));
 
         if self.titan.enabled {
@@ -827,6 +830,14 @@ impl DbConfig {
         self.writecf.validate()?;
         self.raftcf.validate()?;
         self.titan.validate()?;
+        if self.enable_unordered_write {
+            if self.titan.enabled {
+                return Err("RocksDB.unordered_write does not support Titan".into());
+            }
+            if self.enable_pipelined_write {
+                return Err("pipelined_write is not compatible with unordered_write".into());
+            }
+        }
         Ok(())
     }
 
@@ -930,6 +941,7 @@ pub struct RaftDbConfig {
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
+    pub enable_unordered_write: bool,
     pub allow_concurrent_memtable_write: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
@@ -961,6 +973,7 @@ impl Default for RaftDbConfig {
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
+            enable_unordered_write: false,
             allow_concurrent_memtable_write: false,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
@@ -1005,6 +1018,7 @@ impl RaftDbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.enable_unordered_write(self.enable_unordered_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
         opts.add_event_listener(EventListener::new("raft"));
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
@@ -1023,6 +1037,16 @@ impl RaftDbConfig {
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.defaultcf.validate()?;
+        if self.enable_unordered_write {
+            if self.titan.enabled {
+                return Err("raftdb: unordered_write is not compatible with Titan".into());
+            }
+            if self.enable_pipelined_write {
+                return Err(
+                    "raftdb: pipelined_write is not compatible with unordered_write".into(),
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -1299,29 +1323,46 @@ impl ReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
+    #[config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
+    #[config(skip)]
     pub log_file: String,
+    #[config(skip)]
     pub log_rotation_timespan: ReadableDuration,
+    #[config(skip)]
     pub panic_when_unexpected_key_or_data: bool,
+    #[config(skip)]
     pub readpool: ReadPoolConfig,
+    #[config(skip)]
     pub server: ServerConfig,
+    #[config(skip)]
     pub storage: StorageConfig,
+    #[config(skip)]
     pub pd: PdConfig,
+    #[config(skip)]
     pub metric: MetricConfig,
+    #[config(skip)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
+    #[config(skip)]
     pub coprocessor: CopConfig,
+    #[config(skip)]
     pub rocksdb: DbConfig,
+    #[config(skip)]
     pub raftdb: RaftDbConfig,
+    #[config(skip)]
     pub security: SecurityConfig,
+    #[config(skip)]
     pub import: ImportConfig,
+    #[config(skip)]
     pub pessimistic_txn: PessimisticTxnConfig,
-    pub gc: GCConfig,
+    #[config(skip)]
+    pub gc: GcConfig,
 }
 
 impl Default for TiKvConfig {
@@ -1343,7 +1384,7 @@ impl Default for TiKvConfig {
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
-            gc: GCConfig::default(),
+            gc: GcConfig::default(),
         }
     }
 }

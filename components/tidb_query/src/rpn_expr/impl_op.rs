@@ -3,6 +3,7 @@
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::codec::Error;
 use crate::Result;
 
 #[rpn_fn]
@@ -39,7 +40,7 @@ pub fn logical_xor(arg0: &Option<i64>, arg1: &Option<i64>) -> Result<Option<i64>
 
 #[rpn_fn]
 #[inline]
-pub fn unary_not_int(arg: &Option<i64>) -> Result<Option<i64>> {
+pub fn unary_not_int(arg: &Option<Int>) -> Result<Option<i64>> {
     Ok(arg.map(|v| (v == 0) as i64))
 }
 
@@ -53,6 +54,51 @@ pub fn unary_not_real(arg: &Option<Real>) -> Result<Option<i64>> {
 #[inline]
 pub fn unary_not_decimal(arg: &Option<Decimal>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|v| v.is_zero() as i64))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_minus_uint(arg: &Option<Int>) -> Result<Option<Int>> {
+    match *arg {
+        Some(val) => {
+            let uval = val as u64;
+            if uval > std::i64::MAX as u64 + 1 {
+                Err(Error::overflow("BIGINT", &format!("-{}", uval)).into())
+            } else if uval == std::i64::MAX as u64 + 1 {
+                Ok(Some(std::i64::MIN))
+            } else {
+                Ok(Some(-val))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_minus_int(arg: &Option<Int>) -> Result<Option<Int>> {
+    match *arg {
+        Some(val) => {
+            if val == std::i64::MIN {
+                Err(Error::overflow("BIGINT", &format!("-{}", val)).into())
+            } else {
+                Ok(Some(-val))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_minus_real(arg: &Option<Real>) -> Result<Option<Real>> {
+    Ok(arg.map(|val| -val))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unary_minus_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
+    Ok(arg.as_ref().map(|val| -val.clone()))
 }
 
 #[rpn_fn]
@@ -75,6 +121,15 @@ pub fn bit_and(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
 pub fn bit_or(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
     Ok(match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => Some(lhs | rhs),
+        _ => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
+pub fn bit_xor(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
+    Ok(match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => Some(lhs ^ rhs),
         _ => None,
     })
 }
@@ -125,17 +180,40 @@ fn decimal_is_false(arg: &Option<Decimal>) -> Result<Option<i64>> {
 #[inline]
 fn left_shift(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
     Ok(match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => Some((*lhs as u64).checked_shl(*rhs as u32).unwrap_or(0) as i64),
+        (Some(lhs), Some(rhs)) => {
+            if *rhs as u64 >= 64 {
+                Some(0)
+            } else {
+                Some((*lhs as u64).wrapping_shl(*rhs as u32) as i64)
+            }
+        }
+        _ => None,
+    })
+}
+
+#[rpn_fn]
+#[inline]
+fn right_shift(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<Int>> {
+    Ok(match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => {
+            if *rhs as u64 >= 64 {
+                Some(0)
+            } else {
+                Some((*lhs as u64).wrapping_shr(*rhs as u32) as i64)
+            }
+        }
         _ => None,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use tidb_query_datatype::{builder::FieldTypeBuilder, FieldTypeFlag, FieldTypeTp};
     use tipb::ScalarFuncSig;
 
+    use super::*;
     use crate::codec::mysql::TimeType;
+    use crate::expr::EvalContext;
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
 
     #[test]
@@ -251,6 +329,100 @@ mod tests {
     }
 
     #[test]
+    fn test_unary_minus_int() {
+        let unsigned_test_cases = vec![
+            (None, None),
+            (Some((std::i64::MAX as u64 + 1) as i64), Some(std::i64::MIN)),
+            (Some(12345), Some(-12345)),
+            (Some(0), Some(0)),
+        ];
+        for (arg, expect_output) in unsigned_test_cases {
+            let field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(FieldTypeFlag::UNSIGNED)
+                .build();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(arg, field_type)
+                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+        assert!(RpnFnScalarEvaluator::new()
+            .push_param_with_field_type(
+                Some((std::i64::MAX as u64 + 2) as i64),
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::LongLong)
+                    .flag(FieldTypeFlag::UNSIGNED)
+                    .build()
+            )
+            .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+            .is_err());
+
+        let signed_test_cases = vec![
+            (None, None),
+            (Some(std::i64::MAX), Some(-std::i64::MAX)),
+            (Some(-std::i64::MAX), Some(std::i64::MAX)),
+            (Some(std::i64::MIN + 1), Some(std::i64::MAX)),
+            (Some(0), Some(0)),
+        ];
+        for (arg, expect_output) in signed_test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+        assert!(RpnFnScalarEvaluator::new()
+            .push_param(std::i64::MIN)
+            .evaluate::<Int>(ScalarFuncSig::UnaryMinusInt)
+            .is_err());
+    }
+
+    #[test]
+    fn test_unary_minus_real() {
+        let test_cases = vec![
+            (None, None),
+            (Some(Real::from(0.123_f64)), Some(Real::from(-0.123_f64))),
+            (Some(Real::from(-0.123_f64)), Some(Real::from(0.123_f64))),
+            (Some(Real::from(0.0_f64)), Some(Real::from(0.0_f64))),
+            (
+                Some(Real::from(std::f64::INFINITY)),
+                Some(Real::from(std::f64::NEG_INFINITY)),
+            ),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Real>(ScalarFuncSig::UnaryMinusReal)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
+    fn test_unary_minus_decimal() {
+        let test_cases = vec![
+            (None, None),
+            (Some(Decimal::zero()), Some(Decimal::zero())),
+            (
+                "0.123".parse::<Decimal>().ok(),
+                "-0.123".parse::<Decimal>().ok(),
+            ),
+            (
+                "-0.123".parse::<Decimal>().ok(),
+                "0.123".parse::<Decimal>().ok(),
+            ),
+        ];
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate::<Decimal>(ScalarFuncSig::UnaryMinusDecimal)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
+
+    #[test]
     fn test_is_null() {
         let test_cases = vec![
             (ScalarValue::Int(None), ScalarFuncSig::IntIsNull, Some(1)),
@@ -279,7 +451,9 @@ mod tests {
                 Some(1),
             ),
             (
-                DateTime::zero(0, TimeType::DateTime).unwrap().into(),
+                DateTime::zero(&mut EvalContext::default(), 0, TimeType::DateTime)
+                    .unwrap()
+                    .into(),
                 ScalarFuncSig::TimeIsNull,
                 Some(0),
             ),
@@ -342,6 +516,25 @@ mod tests {
                 .push_param(lhs)
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::BitOrSig)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_bit_xor() {
+        let cases = vec![
+            (Some(123), Some(321), Some(314)),
+            (Some(-123), Some(321), Some(-316)),
+            (None, Some(1), None),
+            (Some(1), None, None),
+            (None, None, None),
+        ];
+        for (lhs, rhs, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::BitXorSig)
                 .unwrap();
             assert_eq!(output, expected);
         }
@@ -448,6 +641,27 @@ mod tests {
                 .push_param(lhs)
                 .push_param(rhs)
                 .evaluate(ScalarFuncSig::LeftShift)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_right_shift() {
+        let cases = vec![
+            (Some(123), Some(2), Some(30)),
+            (Some(-123), Some(-1), Some(0)),
+            (Some(123), Some(0), Some(123)),
+            (None, Some(1), None),
+            (Some(123), None, None),
+            (Some(-123), Some(2), Some(4611686018427387873)),
+            (None, None, None),
+        ];
+        for (lhs, rhs, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::RightShift)
                 .unwrap();
             assert_eq!(output, expected);
         }

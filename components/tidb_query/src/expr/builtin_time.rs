@@ -292,22 +292,22 @@ impl ScalarFunc {
             return Ok(Some(0));
         }
         let n = try_opt!(self.children[1].eval_int(ctx, row));
-        let (month, _) = (i64::from(period_to_month(p as u64) as i32)).overflowing_add(n);
-        Ok(Some(month_to_period(u64::from(month as u32)) as i64))
+        let (month, _) = (i64::from(Time::period_to_month(p as u64) as i32)).overflowing_add(n);
+        Ok(Some(Time::month_to_period(u64::from(month as u32)) as i64))
     }
 
     pub fn period_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let p1 = try_opt!(self.children[0].eval_int(ctx, row));
         let p2 = try_opt!(self.children[1].eval_int(ctx, row));
         Ok(Some(
-            period_to_month(p1 as u64) as i64 - period_to_month(p2 as u64) as i64,
+            Time::period_to_month(p1 as u64) as i64 - Time::period_to_month(p2 as u64) as i64,
         ))
     }
 
     #[inline]
     pub fn to_days(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
-        if t.is_zero() {
+        if t.invalid_zero() {
             return ctx
                 .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
                 .map(|_| None);
@@ -528,35 +528,16 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         Ok(None)
     }
-}
 
-#[inline]
-fn period_to_month(period: u64) -> u64 {
-    if period == 0 {
-        return 0;
-    }
-    let (year, month) = (period / 100, period % 100);
-    if year < 70 {
-        (year + 2000) * 12 + month - 1
-    } else if year < 100 {
-        (year + 1900) * 12 + month - 1
-    } else {
-        year * 12 + month - 1
-    }
-}
-
-#[inline]
-fn month_to_period(month: u64) -> u64 {
-    if month == 0 {
-        return 0;
-    }
-    let year = month / 12;
-    if year < 70 {
-        (year + 2000) * 100 + month % 12 + 1
-    } else if year < 100 {
-        (year + 1900) * 100 + month % 12 + 1
-    } else {
-        year * 100 + month % 12 + 1
+    #[inline]
+    pub fn from_days<'a>(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, Time>>> {
+        let days = try_opt!(self.children[0].eval_int(ctx, row)) as u32;
+        let time = Time::from_days(ctx, days)?;
+        Ok(Some(Cow::Owned(time)))
     }
 }
 
@@ -1739,5 +1720,39 @@ mod tests {
     fn test_add_sub_time_string_null() {
         let mut ctx = EvalContext::default();
         test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::AddTimeStringNull, Datum::Null);
+    }
+
+    #[test]
+    fn test_from_days() {
+        let cases = vec![
+            (-140, "0000-00-00"), // mysql FROM_DAYS returns 0000-00-00 for any day <= 365.
+            (140, "0000-00-00"),  // mysql FROM_DAYS returns 0000-00-00 for any day <= 365.
+            (735_000, "2012-05-12"), // Leap year.
+            (735_030, "2012-06-11"),
+            (735_130, "2012-09-19"),
+            (734_909, "2012-02-11"),
+            (734_878, "2012-01-11"),
+            (734_927, "2012-02-29"),
+            (734_634, "2011-05-12"), // Non Leap year.
+            (734_664, "2011-06-11"),
+            (734_764, "2011-09-19"),
+            (734_544, "2011-02-11"),
+            (734_513, "2011-01-11"),
+            (3_652_424, "9999-12-31"),
+            (3_652_425, "0000-00-00"), // mysql FROM_DAYS returns 0000-00-00 for any day >= 3652425
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let datetime = Time::parse_date(&mut ctx, exp).unwrap();
+            test_ok_case_one_arg(
+                &mut ctx,
+                ScalarFuncSig::FromDays,
+                Datum::I64(arg),
+                Datum::Time(datetime),
+            );
+        }
+
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::Month, Datum::Null);
     }
 }
