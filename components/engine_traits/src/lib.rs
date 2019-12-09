@@ -27,43 +27,65 @@
 //!
 //! The port is happening in stages:
 //!
-//!   1) Migrating the `engine` crate
-//!   2) Eliminating the `rocksdb` dep from TiKV
+//!   1) Migrating the `engine` abstractions
+//!   2) Eliminating direct-use of `rocksdb` re-exports
 //!   3) "Pulling up" the generic abstractions though TiKV
+//!   4) Isolating test cases from RocksDB
 //!
 //! These stages are described in more detail:
 //!
-//! ## 1) Migrating the `engine` crate
+//! ## 1) Migrating the `engine` abstractions
 //!
-//! Migrating the `engine` crate. The engine crate was an earlier attempt to
-//! abstract the storage engine. Much of its structure is duplicated
-//! near-identically in engine_traits, the difference being that engine_traits
-//! has no RocksDB dependencies. Having no RocksDB dependencies makes it trivial
-//! to guarantee that the abstractions are truly abstract.
+//! The engine crate was an earlier attempt to abstract the storage engine. Much
+//! of its structure is duplicated near-identically in engine_traits, the
+//! difference being that engine_traits has no RocksDB dependencies. Having no
+//! RocksDB dependencies makes it trivial to guarantee that the abstractions are
+//! truly abstract.
 //!
-//! During this stage, we will eliminate the `engine` trait to reduce code
-//! duplication. We do this by identifying a small subsystem within `engine`,
-//! duplicating it within `engine_traits` and `engine_rocks`, deleting the code
-//! from `engine`, and fixing all the callers to work with the abstracted
-//! implementation.
+//! `engine` also reexports raw bindings from `rust-rocksdb` for every purpose
+//! for which there is not yet an abstract trait.
 //!
-//! At the end of this stage the `engine` dependency will be deleted, but
-//! TiKV will still depend on the concrete RocksDB implementations from
-//! `engine_rocks`, as well as the raw API's from the `rocksdb` crate.
+//! During this stage, we will eliminate the wrappers from `engine` to reduce
+//! code duplication. We do this by identifying a small subsystem within
+//! `engine`, duplicating it within `engine_traits` and `engine_rocks`, deleting
+//! the code from `engine`, and fixing all the callers to work with the
+//! abstracted implementation.
 //!
-//! ## 2) Eliminating the `rocksdb` dep from TiKV
+//! At the end of this stage the `engine` dependency will contain no code except
+//! for `rust-rocksdb` reexports. TiKV will still depend on the concrete
+//! RocksDB implementations from `engine_rocks`, as well as the raw API's from
+//! reexported from the `rust-rocksdb` crate.
 //!
-//! TiKV uses RocksDB via both the `rocksdb` crate and the `engine` crate.
-//! During this stage we need to convert all callers to use the `engine_rocks`
-//! crate instead.
+//! ## 2) Eliminating the `engine` dep from TiKV with new abstractions
+//!
+//! TiKV uses reexported `rust-rocksdb` APIs via the `engine` crate. During this
+//! stage we need to identify each of these APIs, duplicate them generically in
+//! the `engine_traits` and `engine_rocks` crate, and convert all callers to use
+//! the `engine_rocks` crate instead.
+//!
+//! At the end of this phase the `engine` crate will be deleted.
 //!
 //! ## 3) "Pulling up" the generic abstractions through TiKv
 //!
-//! Finally, with all of TiKV using the `engine_traits` traits in conjunction
-//! with the concrete `engine_rocks` types, we can push generic type parameters
-//! up through the application. Then we will remove the concrete `engine_rocks`
+//! With all of TiKV using the `engine_traits` traits in conjunction with the
+//! concrete `engine_rocks` types, we can push generic type parameters up
+//! through the application. Then we will remove the concrete `engine_rocks`
 //! dependency from TiKV so that it is impossible to re-introduce
 //! engine-specific code again.
+//!
+//! We will probably introduce some other crate to mediate between multiple
+//! engine implementations, such that at the end of this phase TiKV will
+//! not have a dependency on `engine_rocks`.
+//!
+//! It will though still have a dev-dependency on `engine_rocks` for the
+//! test cases.
+//!
+//! ## 4) Isolating test cases from RocksDB
+//!
+//! Eventually we need our test suite to run over multiple engines.
+//! The exact strategy here is yet to be determined, but it may begin by
+//! breaking the `engine_rocks` dependency with a new `engine_test`, that
+//! begins by simply wrapping `engine_rocks`.
 //!
 //!
 //! # Design notes
