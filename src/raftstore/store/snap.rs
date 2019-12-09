@@ -12,10 +12,9 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
-use engine::rocks::DB;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{CFHandleExt, ImportExt};
+use engine_traits::{CFHandleExt, ImportExt, KvEngine, Snapshot as EngineSnapshot};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
@@ -26,7 +25,7 @@ use crate::raftstore::errors::Error as RaftStoreError;
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
 use engine_rocks::RocksIOLimiter;
-use engine_traits::{IOLimiter, LimitWriter, Snapshot as SnapshotTrait};
+use engine_traits::{IOLimiter, LimitWriter};
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size, sync_dir};
@@ -151,8 +150,11 @@ impl SnapshotStatistics {
     }
 }
 
-pub struct ApplyOptions {
-    pub db: Arc<DB>,
+pub struct ApplyOptions<E>
+where
+    E: KvEngine,
+{
+    pub db: E,
     pub region: Region,
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
@@ -180,7 +182,7 @@ pub trait Snapshot: Read + Write + Send {
     fn meta(&self) -> io::Result<Metadata>;
     fn total_size(&self) -> io::Result<u64>;
     fn save(&mut self) -> io::Result<()>;
-    fn apply(&mut self, options: ApplyOptions) -> Result<()>;
+    fn apply(&mut self, options: ApplyOptions<RocksEngine>) -> Result<()>;
 }
 
 // A helper function to copy snapshot.
@@ -547,7 +549,7 @@ impl Snap {
         )
     }
 
-    fn validate(&self, kv_engine: Arc<DB>) -> RaftStoreResult<()> {
+    fn validate(&self, engine: &RocksEngine) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
@@ -557,10 +559,7 @@ impl Snap {
             if plain_file_used(cf_file.cf) {
                 check_file_size_and_checksum(&cf_file.path, cf_file.size, cf_file.checksum)?;
             } else {
-                let engine = RocksEngine::from_ref(&kv_engine);
-                let cf = engine
-                    .cf_handle(cf_file.cf)
-                    .ok_or_else(|| Error::Other(box_err!("bad cf handle")))?;
+                let cf = engine.cf_handle(cf_file.cf)?;
                 engine.prepare_sst_for_ingestion(&cf_file.path, &cf_file.clone_path)?;
                 engine.validate_sst_for_ingestion(
                     &cf,
@@ -618,7 +617,7 @@ impl Snap {
     ) -> RaftStoreResult<()> {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(kv_snap.get_db().as_inner().clone()) {
+            match self.validate(kv_snap.get_db()) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(
@@ -836,8 +835,8 @@ impl Snapshot for Snap {
         Ok(())
     }
 
-    fn apply(&mut self, options: ApplyOptions) -> Result<()> {
-        box_try!(self.validate(Arc::clone(&options.db)));
+    fn apply(&mut self, options: ApplyOptions<RocksEngine>) -> Result<()> {
+        box_try!(self.validate(&options.db));
 
         let abort_checker = ApplyAbortChecker(options.abort);
         for cf_file in &mut self.cf_files {
@@ -1362,7 +1361,7 @@ pub mod tests {
     use engine::rocks::{DBOptions, Env, DB};
     use engine::{Engines, Mutable, Peekable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::{Compat, RocksSnapshot};
     use engine_traits::Iterable;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
@@ -1704,7 +1703,7 @@ pub mod tests {
         let dst_db =
             Arc::new(rocks::util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap());
         let options = ApplyOptions {
-            db: Arc::clone(&dst_db),
+            db: dst_db.c().clone(),
             region: region.clone(),
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
@@ -2018,7 +2017,7 @@ pub mod tests {
             .unwrap();
         let dst_db = open_test_empty_db(&dst_db_dir.path(), None, None).unwrap();
         let options = ApplyOptions {
-            db: Arc::clone(&dst_db),
+            db: dst_db.c().clone(),
             region: region.clone(),
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
