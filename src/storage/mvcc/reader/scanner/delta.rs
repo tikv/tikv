@@ -10,7 +10,7 @@ use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
-use crate::storage::{Cursor, Key, KvPair, Snapshot, Statistics};
+use crate::storage::{Cursor, Key, KvPair, Snapshot, Statistics, TimeStamp};
 
 use super::ScannerConfig;
 struct LockEntry {
@@ -39,7 +39,7 @@ pub struct DeltaScanner<S: Snapshot> {
     is_started: bool,
     statistics: Statistics,
     // the end ts is cfg.ts
-    begin_ts: u64,
+    begin_ts: TimeStamp,
     // check and return error if a lock exist
     err_lock_exist: bool,
     cache_lock: Option<LockEntry>,

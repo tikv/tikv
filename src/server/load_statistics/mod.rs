@@ -19,22 +19,28 @@ impl ThreadLoad {
         }
     }
 
+    #[allow(dead_code)]
+    pub fn get_threshold(&self) -> usize {
+        // read-only
+        self.threshold
+    }
+
     /// Returns true if the current load exceeds its threshold.
     #[allow(dead_code)]
     pub fn in_heavy_load(&self) -> bool {
-        self.load.load(Ordering::Acquire) > self.threshold
+        self.load.load(Ordering::Relaxed) > self.threshold
     }
 
     /// Increases when updating `load`.
     #[allow(dead_code)]
     pub fn term(&self) -> usize {
-        self.term.load(Ordering::Acquire)
+        self.term.load(Ordering::Relaxed)
     }
 
     /// Gets the current load. For example, 200 means the threads consuming 200% of the CPU resources.
     #[allow(dead_code)]
     pub fn load(&self) -> usize {
-        self.load.load(Ordering::Acquire)
+        self.load.load(Ordering::Relaxed)
     }
 }
 
@@ -57,6 +63,8 @@ mod other_os {
         pub fn new(_slots: usize, _prefix: &str, _thread_load: Arc<ThreadLoad>) -> Self {
             ThreadLoadStatistics {}
         }
+        /// Designate target thread count of this collector.
+        pub fn set_thread_target(&mut self, _target: usize) {}
         /// Records current thread load statistics.
         pub fn record(&mut self, _instant: Instant) {}
     }

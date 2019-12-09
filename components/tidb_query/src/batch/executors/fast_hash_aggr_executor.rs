@@ -14,7 +14,7 @@ use crate::batch::executors::util::hash_aggr_helper::HashAggregationHelper;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::codec::data_type::*;
-use crate::expr::EvalConfig;
+use crate::expr::{EvalConfig, EvalContext};
 use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::storage::IntervalRange;
 use crate::Result;
@@ -23,7 +23,7 @@ use tikv_util::box_try;
 macro_rules! match_template_hashable {
     ($t:tt, $($tail:tt)*) => {
         match_template::match_template! {
-            $t = [Int, Real, Bytes, Duration],
+            $t = [Int, Real, Bytes, Duration, Decimal, DateTime],
             $($tail)*
         }
     };
@@ -81,7 +81,12 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor<StorageStats = ()>>>
         // Only a subset of all eval types are supported.
         let eval_type = box_try!(EvalType::try_from(def.get_field_type().as_accessor().tp()));
         match eval_type {
-            EvalType::Int | EvalType::Real | EvalType::Bytes | EvalType::Duration => {}
+            EvalType::Int
+            | EvalType::Real
+            | EvalType::Bytes
+            | EvalType::Duration
+            | EvalType::Decimal
+            | EvalType::DateTime => {}
             _ => return Err(other_err!("Eval type {} is not supported", eval_type)),
         }
 
@@ -123,9 +128,10 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
         aggr_defs: Vec<Expr>,
     ) -> Result<Self> {
         assert_eq!(group_by_exp_defs.len(), 1);
+        let mut ctx = EvalContext::new(config.clone());
         let group_by_exp = RpnExpressionBuilder::build_from_expr_tree(
             group_by_exp_defs.into_iter().next().unwrap(),
-            &config.tz,
+            &mut ctx,
             src.schema().len(),
         )?;
         Self::new_impl(
@@ -184,6 +190,8 @@ enum Groups {
     Real(HashMap<Option<Real>, usize>),
     Bytes(HashMap<Option<Bytes>, usize>),
     Duration(HashMap<Option<Duration>, usize>),
+    Decimal(HashMap<Option<Decimal>, usize>),
+    DateTime(HashMap<Option<DateTime>, usize>),
 }
 
 impl Groups {
@@ -363,7 +371,6 @@ mod tests {
     use crate::batch::executors::util::aggr_executor::tests::*;
     use crate::batch::executors::util::mock_executor::MockExecutor;
     use crate::batch::executors::BatchSlowHashAggregationExecutor;
-    use crate::codec::mysql::Tz;
     use crate::expr::EvalWarnings;
     use crate::rpn_expr::impl_arithmetic::{arithmetic_fn_meta, RealPlus};
     use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
@@ -382,11 +389,13 @@ mod tests {
         // And group by:
         // - col_0 + col_1
 
-        let group_by_exp = RpnExpressionBuilder::new()
-            .push_column_ref(0)
-            .push_column_ref(1)
-            .push_fn_call(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
-            .build();
+        let group_by_exp = || {
+            RpnExpressionBuilder::new()
+                .push_column_ref(0)
+                .push_column_ref(1)
+                .push_fn_call(arithmetic_fn_meta::<RealPlus>(), 2, FieldTypeTp::Double)
+                .build()
+        };
 
         let aggr_definitions = vec![
             ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
@@ -407,7 +416,7 @@ mod tests {
         let exec_fast = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
-                group_by_exp.clone(),
+                group_by_exp(),
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -416,7 +425,7 @@ mod tests {
         let exec_slow = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![group_by_exp.clone()],
+                vec![group_by_exp()],
                 aggr_definitions.clone(),
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -448,7 +457,7 @@ mod tests {
             // Let's check group by column first. Group by column is decoded in fast hash agg,
             // but not decoded in slow hash agg. So decode it anyway.
             r.physical_columns[4]
-                .ensure_all_decoded(&Tz::utc(), &exec.schema()[4])
+                .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[4])
                 .unwrap();
 
             // The row order is not defined. Let's sort it by the group by column before asserting.
@@ -513,7 +522,7 @@ mod tests {
             fn parse(
                 &self,
                 _aggr_def: Expr,
-                _time_zone: &Tz,
+                _ctx: &mut EvalContext,
                 _src_schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,
@@ -582,12 +591,12 @@ mod tests {
     /// E.g. SELECT 1 FROM t GROUP BY x
     #[test]
     fn test_no_aggr_fn() {
-        let group_by_exp = RpnExpressionBuilder::new().push_column_ref(0).build();
+        let group_by_exp = || RpnExpressionBuilder::new().push_column_ref(0).build();
 
         let exec_fast = |src_exec| {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
-                group_by_exp.clone(),
+                group_by_exp(),
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -596,7 +605,7 @@ mod tests {
         let exec_slow = |src_exec| {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
-                vec![group_by_exp.clone()],
+                vec![group_by_exp()],
                 vec![],
                 AllAggrDefinitionParser,
             )) as Box<dyn BatchExecutor<StorageStats = ()>>
@@ -624,7 +633,7 @@ mod tests {
             assert_eq!(r.physical_columns.rows_len(), 3);
             assert_eq!(r.physical_columns.columns_len(), 1); // 0 result column, 1 group by column
             r.physical_columns[0]
-                .ensure_all_decoded(&Tz::utc(), &exec.schema()[0])
+                .ensure_all_decoded(&mut EvalContext::default(), &exec.schema()[0])
                 .unwrap();
             let mut sort_column: Vec<(usize, _)> = r.physical_columns[0]
                 .decoded()

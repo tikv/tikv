@@ -4,12 +4,6 @@ use tikv_util::keybuilder::KeyBuilder;
 
 use crate::*;
 
-#[derive(Clone, PartialEq)]
-pub enum SeekMode {
-    TotalOrder,
-    Prefix,
-}
-
 pub enum SeekKey<'a> {
     Start,
     End,
@@ -20,28 +14,53 @@ pub trait Iterator {
     fn seek(&mut self, key: SeekKey) -> bool;
     fn seek_for_prev(&mut self, key: SeekKey) -> bool;
 
+    fn seek_to_first(&mut self) -> bool {
+        self.seek(SeekKey::Start)
+    }
+
+    fn seek_to_last(&mut self) -> bool {
+        self.seek(SeekKey::End)
+    }
+
     fn prev(&mut self) -> bool;
     fn next(&mut self) -> bool;
 
-    fn key(&self) -> Result<&[u8]>;
-    fn value(&self) -> Result<&[u8]>;
+    fn key(&self) -> &[u8];
+    fn value(&self) -> &[u8];
+
+    fn kv(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+        if self.valid() {
+            let k = self.key();
+            let v = self.value();
+            Some((k.to_vec(), v.to_vec()))
+        } else {
+            None
+        }
+    }
 
     fn valid(&self) -> bool;
     fn status(&self) -> Result<()>;
+
+    fn as_std(&mut self) -> StdIterator<Self>
+    where
+        Self: Sized,
+    {
+        StdIterator(self)
+    }
 }
 
 pub trait Iterable {
-    type Iter: Iterator;
+    type Iterator: Iterator;
 
-    fn iterator_opt(&self, opts: &IterOptions) -> Result<Self::Iter>;
-    fn iterator_cf_opt(&self, opts: &IterOptions, cf: &str) -> Result<Self::Iter>;
+    fn iterator_opt(&self, opts: IterOptions) -> Result<Self::Iterator>;
+    fn iterator_cf_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator>;
 
-    fn iterator(&self) -> Result<Self::Iter> {
-        self.iterator_opt(&IterOptions::default())
+    fn iterator(&self) -> Result<Self::Iterator> {
+        self.iterator_opt(IterOptions::default())
     }
 
-    fn iterator_cf(&self, cf: &str) -> Result<Self::Iter> {
-        self.iterator_cf_opt(&IterOptions::default(), cf)
+    fn iterator_cf(&self, cf: &str) -> Result<Self::Iterator> {
+        self.iterator_cf_opt(cf, IterOptions::default())
     }
 
     fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
@@ -51,7 +70,7 @@ pub trait Iterable {
         let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
         let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
         let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
-        scan_impl(self.iterator_opt(&iter_opt)?, start_key, f)
+        scan_impl(self.iterator_opt(iter_opt)?, start_key, f)
     }
 
     // like `scan`, only on a specific column family.
@@ -69,7 +88,7 @@ pub trait Iterable {
         let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
         let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
         let iter_opt = IterOptions::new(Some(start), Some(end), fill_cache);
-        scan_impl(self.iterator_cf_opt(&iter_opt, cf)?, start_key, f)
+        scan_impl(self.iterator_cf_opt(cf, iter_opt)?, start_key, f)
     }
 
     // Seek the first key >= given key, if not found, return None.
@@ -77,7 +96,7 @@ pub trait Iterable {
         let mut iter = self.iterator()?;
         iter.seek(SeekKey::Key(key));
         if iter.valid() {
-            Ok(Some((iter.key()?.to_vec(), iter.value()?.to_vec())))
+            Ok(Some((iter.key().to_vec(), iter.value().to_vec())))
         } else {
             Ok(None)
         }
@@ -88,7 +107,7 @@ pub trait Iterable {
         let mut iter = self.iterator_cf(cf)?;
         iter.seek(SeekKey::Key(key));
         if iter.valid() {
-            Ok(Some((iter.key()?.to_vec(), iter.value()?.to_vec())))
+            Ok(Some((iter.key().to_vec(), iter.value().to_vec())))
         } else {
             Ok(None)
         }
@@ -102,11 +121,33 @@ where
 {
     it.seek(SeekKey::Key(start_key));
     while it.valid() {
-        let r = f(it.key()?, it.value()?)?;
+        let r = f(it.key(), it.value())?;
         if !r || !it.next() {
             break;
         }
     }
 
     it.status().map_err(From::from)
+}
+
+pub struct StdIterator<'a, I: Iterator>(&'a mut I);
+
+pub type Kv = (Vec<u8>, Vec<u8>);
+
+impl<'a, I: Iterator> std::iter::Iterator for StdIterator<'a, I> {
+    type Item = Kv;
+
+    fn next(&mut self) -> Option<Kv> {
+        let kv = self.0.kv();
+        if kv.is_some() {
+            I::next(&mut self.0);
+        }
+        kv
+    }
+}
+
+impl<'a> From<&'a [u8]> for SeekKey<'a> {
+    fn from(bs: &'a [u8]) -> SeekKey {
+        SeekKey::Key(bs)
+    }
 }

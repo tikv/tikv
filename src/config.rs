@@ -5,6 +5,7 @@
 //! TiKV is configured through the `TiKvConfig` type, which is in turn
 //! made up of many other configuration types.
 
+use std::cmp;
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -13,6 +14,7 @@ use std::io::Write;
 use std::path::Path;
 use std::usize;
 
+use configuration::Configuration;
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -29,19 +31,19 @@ use crate::raftstore::coprocessor::properties::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use crate::raftstore::coprocessor::Config as CopConfig;
-use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
+use crate::server::gc_worker::GcConfig;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::config::DEFAULT_DATA_DIR;
-use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use keys::region_raft_prefix_len;
 use pd_client::Config as PdConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::future_pool;
@@ -118,6 +120,26 @@ impl TitanCfConfig {
         opts.set_blob_run_mode(self.blob_run_mode.into());
         opts
     }
+}
+
+fn get_background_job_limit(
+    default_background_jobs: i32,
+    default_sub_compactions: u32,
+) -> (i32, u32) {
+    let cpu_num = sys_info::cpu_num().unwrap();
+    // At the minimum, we should have two background jobs: one for flush and one for compaction.
+    // Otherwise, the number of background jobs should not exceed cpu_num - 1.
+    // By default, rocksdb assign (max_background_jobs / 4) threads dedicated for flush, and
+    // the rest shared by flush and compaction.
+    let max_background_jobs: i32 =
+        cmp::max(2, cmp::min(default_background_jobs, (cpu_num - 1) as i32));
+    // Cap max_sub_compactions to allow at least two compactions.
+    let max_compactions = max_background_jobs - max_background_jobs / 4;
+    let max_sub_compactions: u32 = cmp::max(
+        1,
+        cmp::min(default_sub_compactions, (max_compactions - 1) as u32),
+    );
+    (max_background_jobs, max_sub_compactions)
 }
 
 macro_rules! cf_config {
@@ -392,7 +414,7 @@ impl Default for DefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: true,
+            force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -459,7 +481,7 @@ impl Default for WriteCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: true,
+            force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -528,7 +550,7 @@ impl Default for LockCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: true,
+            force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -587,7 +609,7 @@ impl Default for RaftCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: true,
+            force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -619,6 +641,7 @@ pub struct TitanDBConfig {
     pub dirname: String,
     pub disable_gc: bool,
     pub max_background_gc: i32,
+    // The value of this field will be truncated to seconds.
     pub purge_obsolete_files_period: ReadableDuration,
 }
 
@@ -680,6 +703,7 @@ pub struct DbConfig {
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
+    pub enable_unordered_write: bool,
     pub defaultcf: DefaultCfConfig,
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
@@ -689,13 +713,14 @@ pub struct DbConfig {
 
 impl Default for DbConfig {
     fn default() -> DbConfig {
+        let (max_background_jobs, max_sub_compactions) = get_background_job_limit(8, 3);
         DbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
-            max_background_jobs: 6,
+            max_background_jobs,
             max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
@@ -711,10 +736,11 @@ impl Default for DbConfig {
             auto_tuned: false,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
-            max_sub_compactions: 1,
+            max_sub_compactions,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
+            enable_unordered_write: false,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
@@ -770,6 +796,7 @@ impl DbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.enable_unordered_write(self.enable_unordered_write);
         opts.add_event_listener(EventListener::new("kv"));
 
         if self.titan.enabled {
@@ -783,7 +810,7 @@ impl DbConfig {
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
-            // TODO: rmeove CF_RAFT.
+            // TODO: remove CF_RAFT.
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
         ]
     }
@@ -803,6 +830,14 @@ impl DbConfig {
         self.writecf.validate()?;
         self.raftcf.validate()?;
         self.titan.validate()?;
+        if self.enable_unordered_write {
+            if self.titan.enabled {
+                return Err("RocksDB.unordered_write does not support Titan".into());
+            }
+            if self.enable_pipelined_write {
+                return Err("pipelined_write is not compatible with unordered_write".into());
+            }
+        }
         Ok(())
     }
 
@@ -856,7 +891,7 @@ impl Default for RaftDefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: true,
+            force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -872,6 +907,7 @@ impl RaftDefaultCfConfig {
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
+        cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
     }
 }
@@ -905,21 +941,24 @@ pub struct RaftDbConfig {
     pub writable_file_max_buffer_size: ReadableSize,
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
+    pub enable_unordered_write: bool,
     pub allow_concurrent_memtable_write: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     pub defaultcf: RaftDefaultCfConfig,
+    pub titan: TitanDBConfig,
 }
 
 impl Default for RaftDbConfig {
     fn default() -> RaftDbConfig {
+        let (max_background_jobs, max_sub_compactions) = get_background_job_limit(4, 2);
         RaftDbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
-            max_background_jobs: 4,
+            max_background_jobs,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -930,14 +969,16 @@ impl Default for RaftDbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
-            max_sub_compactions: 2,
+            max_sub_compactions,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
+            enable_unordered_write: false,
             allow_concurrent_memtable_write: false,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             defaultcf: RaftDefaultCfConfig::default(),
+            titan: TitanDBConfig::default(),
         }
     }
 }
@@ -977,11 +1018,15 @@ impl RaftDbConfig {
             self.use_direct_io_for_flush_and_compaction,
         );
         opts.enable_pipelined_write(self.enable_pipelined_write);
+        opts.enable_unordered_write(self.enable_unordered_write);
         opts.allow_concurrent_memtable_write(self.allow_concurrent_memtable_write);
         opts.add_event_listener(EventListener::new("raft"));
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         // TODO maybe create a new env for raft engine
+        if self.titan.enabled {
+            opts.set_titandb_options(&self.titan.build_opts());
+        }
 
         opts
     }
@@ -992,6 +1037,16 @@ impl RaftDbConfig {
 
     fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.defaultcf.validate()?;
+        if self.enable_unordered_write {
+            if self.titan.enabled {
+                return Err("raftdb: unordered_write is not compatible with Titan".into());
+            }
+            if self.enable_pipelined_write {
+                return Err(
+                    "raftdb: pipelined_write is not compatible with unordered_write".into(),
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -1196,7 +1251,8 @@ macro_rules! readpool_config {
     };
 }
 
-const DEFAULT_STORAGE_READPOOL_CONCURRENCY: usize = 4;
+const DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY: usize = 4;
+const DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY: usize = 8;
 
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds
@@ -1210,10 +1266,14 @@ readpool_config!(StorageReadPoolConfig, storage_read_pool_test, "storage");
 
 impl Default for StorageReadPoolConfig {
     fn default() -> Self {
+        let cpu_num = sys_info::cpu_num().unwrap();
+        let mut concurrency = (f64::from(cpu_num) * 0.5) as usize;
+        concurrency = cmp::max(DEFAULT_STORAGE_READPOOL_MIN_CONCURRENCY, concurrency);
+        concurrency = cmp::min(DEFAULT_STORAGE_READPOOL_MAX_CONCURRENCY, concurrency);
         Self {
-            high_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
-            normal_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
-            low_concurrency: DEFAULT_STORAGE_READPOOL_CONCURRENCY,
+            high_concurrency: concurrency,
+            normal_concurrency: concurrency,
+            low_concurrency: concurrency,
             max_tasks_per_worker_high: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             max_tasks_per_worker_normal: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
             max_tasks_per_worker_low: DEFAULT_READPOOL_MAX_TASKS_PER_WORKER,
@@ -1222,7 +1282,7 @@ impl Default for StorageReadPoolConfig {
     }
 }
 
-const DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY: usize = 8;
+const DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY: usize = 2;
 
 readpool_config!(
     CoprReadPoolConfig,
@@ -1233,11 +1293,8 @@ readpool_config!(
 impl Default for CoprReadPoolConfig {
     fn default() -> Self {
         let cpu_num = sys_info::cpu_num().unwrap();
-        let concurrency = if cpu_num > 8 {
-            (f64::from(cpu_num) * 0.8) as usize
-        } else {
-            DEFAULT_COPROCESSOR_READPOOL_CONCURRENCY
-        };
+        let mut concurrency = (f64::from(cpu_num) * 0.8) as usize;
+        concurrency = cmp::max(DEFAULT_COPROCESSOR_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             high_concurrency: concurrency,
             normal_concurrency: concurrency,
@@ -1266,28 +1323,46 @@ impl ReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
+    #[config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
+    #[config(skip)]
     pub log_file: String,
+    #[config(skip)]
     pub log_rotation_timespan: ReadableDuration,
+    #[config(skip)]
     pub panic_when_unexpected_key_or_data: bool,
+    #[config(skip)]
     pub readpool: ReadPoolConfig,
+    #[config(skip)]
     pub server: ServerConfig,
+    #[config(skip)]
     pub storage: StorageConfig,
+    #[config(skip)]
     pub pd: PdConfig,
+    #[config(skip)]
     pub metric: MetricConfig,
+    #[config(skip)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
+    #[config(skip)]
     pub coprocessor: CopConfig,
+    #[config(skip)]
     pub rocksdb: DbConfig,
+    #[config(skip)]
     pub raftdb: RaftDbConfig,
+    #[config(skip)]
     pub security: SecurityConfig,
+    #[config(skip)]
     pub import: ImportConfig,
+    #[config(skip)]
     pub pessimistic_txn: PessimisticTxnConfig,
+    #[config(skip)]
+    pub gc: GcConfig,
 }
 
 impl Default for TiKvConfig {
@@ -1309,6 +1384,7 @@ impl Default for TiKvConfig {
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
             pessimistic_txn: PessimisticTxnConfig::default(),
+            gc: GcConfig::default(),
         }
     }
 }
@@ -1338,6 +1414,27 @@ impl TiKvConfig {
             return Err("default rocksdb not exist, buf raftdb exist".into());
         }
 
+        // Check blob file dir is empty when titan is disabled
+        if !self.rocksdb.titan.enabled {
+            let titandb_path = if self.rocksdb.titan.dirname.is_empty() {
+                Path::new(&kv_db_path).join("titandb")
+            } else {
+                Path::new(&self.rocksdb.titan.dirname).to_path_buf()
+            };
+            if let Err(e) =
+                tikv_util::config::check_data_dir_empty(titandb_path.to_str().unwrap(), "blob")
+            {
+                return Err(format!(
+                    "check: titandb-data-dir-empty; err: \"{}\"; \
+                     hint: You have disabled titan when its data directory is not empty. \
+                     To properly shutdown titan, please enter fallback blob-run-mode and \
+                     wait till titandb files are all safely ingested.",
+                    e
+                )
+                .into());
+            }
+        }
+
         let expect_keepalive = self.raft_store.raft_heartbeat_interval() * 2;
         if expect_keepalive > self.server.grpc_keepalive_time.0 {
             return Err(format!(
@@ -1357,6 +1454,7 @@ impl TiKvConfig {
         self.security.validate()?;
         self.import.validate()?;
         self.pessimistic_txn.validate()?;
+        self.gc.validate()?;
         Ok(())
     }
 

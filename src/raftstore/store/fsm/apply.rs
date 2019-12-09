@@ -13,10 +13,11 @@ use std::{cmp, usize};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::Writable;
-use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
+use engine::rocks::{WriteBatch, WriteOptions};
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::raft_cmdpb::{
@@ -38,7 +39,7 @@ use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::KeysInfoFormatter;
-use crate::raftstore::store::{cmd_resp, keys, util, Config};
+use crate::raftstore::store::{cmd_resp, util, Config};
 use crate::raftstore::{Error, Result};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
@@ -187,7 +188,7 @@ pub enum ExecResult {
     ComputeHash {
         region: Region,
         index: u64,
-        snap: Snapshot,
+        snap: RocksSnapshot,
     },
     VerifyHash {
         index: u64,
@@ -655,7 +656,7 @@ impl ApplyDelegate {
             merged: false,
             ready_source_region_id: 0,
             wait_merge_state: None,
-            is_merging: false,
+            is_merging: reg.is_merging,
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
@@ -1084,9 +1085,13 @@ impl ApplyDelegate {
         ctx: &ApplyContext,
         req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
-        fail_point!("on_apply_write_cmd", self.id() == 3, |_| {
-            unimplemented!();
-        });
+        fail_point!(
+            "on_apply_write_cmd",
+            cfg!(release) || self.id() == 3,
+            |_| {
+                unimplemented!();
+            }
+        );
 
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
@@ -1337,7 +1342,7 @@ impl ApplyDelegate {
         }
 
         ctx.importer
-            .ingest(sst, &ctx.engines.kv)
+            .ingest(sst, RocksEngine::from_ref(&ctx.engines.kv))
             .unwrap_or_else(|e| {
                 // If this failed, it means that the file is corrupted or something
                 // is wrong with the engine, but we can do nothing about that.
@@ -2021,7 +2026,7 @@ impl ApplyDelegate {
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
-                snap: Snapshot::new(Arc::clone(&ctx.engines.kv)),
+                snap: RocksSnapshot::new(Arc::clone(&ctx.engines.kv)),
             }),
         ))
     }
@@ -2139,6 +2144,7 @@ pub struct Registration {
     pub applied_index_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
+    pub is_merging: bool,
 }
 
 impl Registration {
@@ -2150,6 +2156,7 @@ impl Registration {
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
+            is_merging: peer.pending_merge_state.is_some(),
         }
     }
 }
@@ -2243,8 +2250,8 @@ impl GenSnapTask {
             // This snapshot may be held for a long time, which may cause too many
             // open files in rocksdb.
             // TODO: figure out another way to do raft snapshot with short life rocksdb snapshots.
-            raft_snap: Snapshot::new(engines.raft.clone()),
-            kv_snap: Snapshot::new(engines.kv.clone()),
+            raft_snap: RocksSnapshot::new(engines.raft.clone()),
+            kv_snap: RocksSnapshot::new(engines.kv.clone()),
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
@@ -2394,6 +2401,8 @@ impl ApplyFsm {
             self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
             |_| {}
         );
+        fail_point!("on_handle_apply", |_| {});
+
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
@@ -2922,15 +2931,18 @@ mod tests {
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use engine::rocks::Writable;
+    use engine::Peekable;
     use engine::{WriteBatch, DB};
+    use engine_rocks::RocksEngine;
+    use engine_traits::Peekable as PeekableTrait;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
     use tempfile::{Builder, TempDir};
     use uuid::Uuid;
 
-    use crate::import::test_helpers::*;
     use crate::raftstore::store::{Config, RegionTask};
+    use test_sst_importer::*;
     use tikv_util::worker::dummy_scheduler;
 
     use super::*;
@@ -3606,7 +3618,7 @@ mod tests {
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(!resp.get_header().has_error(), "{:?}", resp);
-        check_db_range(&engines.kv, sst_range);
+        check_db_range(&RocksEngine::from_db(engines.kv.clone()), sst_range);
         let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert!(resp.get_header().has_error());
         let apply_res = fetch_apply_res(&rx);

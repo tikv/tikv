@@ -7,12 +7,15 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine::rocks::util::io_limiter::IOLimiter;
 use engine::DB;
+use engine_rocks::RocksIOLimiter;
+use engine_traits::IOLimiter;
 use external_storage::*;
 use futures::lazy;
 use futures::prelude::Future;
 use futures::sync::mpsc::*;
+use keys::Key;
+use keys::TimeStamp;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
@@ -20,7 +23,7 @@ use raft::StateRole;
 use tikv::raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, RegionInfoProvider};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
-use tikv::storage::{Key, Statistics};
+use tikv::storage::Statistics;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -37,8 +40,8 @@ const IDLE_THREADPOOL_DURATION: u64 = 30 * 60 * 1000; // 30 mins
 pub struct Task {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
-    start_ts: u64,
-    end_ts: u64,
+    start_ts: TimeStamp,
+    end_ts: TimeStamp,
     storage: LimitedStorage,
     pub(crate) resp: UnboundedSender<BackupResponse>,
     concurrency: u32,
@@ -63,7 +66,7 @@ impl fmt::Debug for Task {
 
 #[derive(Clone)]
 struct LimitedStorage {
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Option<Arc<RocksIOLimiter>>,
     storage: Arc<dyn ExternalStorage>,
 }
 
@@ -76,7 +79,7 @@ impl Task {
         let cancel = Arc::new(AtomicBool::new(false));
 
         let limiter = if req.get_rate_limit() != 0 {
-            Some(Arc::new(IOLimiter::new(req.get_rate_limit() as _)))
+            Some(Arc::new(RocksIOLimiter::new(req.get_rate_limit() as _)))
         } else {
             None
         };
@@ -89,8 +92,8 @@ impl Task {
             Task {
                 start_key: req.get_start_key().to_owned(),
                 end_key: req.get_end_key().to_owned(),
-                start_ts: req.get_start_version(),
-                end_ts: req.get_end_version(),
+                start_ts: req.get_start_version().into(),
+                end_ts: req.get_end_version().into(),
                 resp,
                 storage,
                 concurrency: req.get_concurrency(),
@@ -120,9 +123,9 @@ impl BackupRange {
         &self,
         writer: &mut BackupWriter,
         engine: &E,
-        backup_ts: u64,
+        backup_ts: TimeStamp,
     ) -> Result<Statistics> {
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
         ctx.set_peer(self.leader.clone());
@@ -138,6 +141,7 @@ impl BackupRange {
             backup_ts,
             IsolationLevel::Si,
             false, /* fill_cache */
+            Default::default(),
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
@@ -155,7 +159,7 @@ impl BackupRange {
             }
             debug!("backup scan entries"; "len" => batch.len());
             // Build sst files.
-            if let Err(e) = writer.write(batch.drain()) {
+            if let Err(e) = writer.write(batch.drain(), true) {
                 error!("backup build sst failed"; "error" => ?e);
                 return Err(e);
             }
@@ -216,6 +220,7 @@ impl<R: RegionInfoProvider> Progress<R> {
             .next_start
             .clone()
             .map_or_else(Vec::new, |k| k.into_encoded());
+
         let start_key = self.next_start.clone();
         let end_key = self.end_key.clone();
         let res = self.region_info.seek_region(
@@ -349,8 +354,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     fn spawn_backup_worker(
         &self,
         prs: Arc<Mutex<Progress<R>>>,
-        start_ts: u64,
-        end_ts: u64,
+        start_ts: TimeStamp,
+        end_ts: TimeStamp,
         storage: LimitedStorage,
         tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
         cancel: Arc<AtomicBool>,
@@ -373,7 +378,13 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     warn!("backup task has canceled"; "range" => ?brange);
                     return Ok(());
                 }
-                let name = backup_file_name(store_id, &brange.region);
+                // TODO: make file_name unique and short
+                let key = brange
+                    .start_key
+                    .clone()
+                    .map(|k| hex::encode(k.into_raw().unwrap()));
+
+                let name = backup_file_name(store_id, &brange.region, key);
                 let mut writer = match BackupWriter::new(db.clone(), &name, storage.limiter.clone())
                 {
                     Ok(w) => w,
@@ -443,7 +454,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             let end_key = brange
                 .end_key
                 .map_or_else(|| vec![], |k| k.into_raw().unwrap());
-            let mut response = BackupResponse::new();
+            let mut response = BackupResponse::default();
             match res {
                 Ok((mut files, stat)) => {
                     debug!("backup region finish";
@@ -456,8 +467,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     for file in files.iter_mut() {
                         file.set_start_key(start_key.clone());
                         file.set_end_key(end_key.clone());
-                        file.set_start_version(task.start_ts);
-                        file.set_end_version(task.end_ts);
+                        file.set_start_version(task.start_ts.into_inner());
+                        file.set_end_version(task.end_ts.into_inner());
                     }
                     response.set_files(files.into());
                 }
@@ -557,13 +568,22 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
 
 /// Construct an backup file name based on the given store id and region.
 /// A name consists with three parts: store id, region_id and a epoch version.
-fn backup_file_name(store_id: u64, region: &Region) -> String {
-    format!(
-        "{}_{}_{}",
-        store_id,
-        region.get_id(),
-        region.get_region_epoch().get_version()
-    )
+fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+    match key {
+        Some(k) => format!(
+            "{}_{}_{}_{}",
+            store_id,
+            region.get_id(),
+            region.get_region_epoch().get_version(),
+            k
+        ),
+        None => format!(
+            "{}_{}_{}",
+            store_id,
+            region.get_id(),
+            region.get_region_epoch().get_version()
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -730,8 +750,8 @@ pub mod tests {
                 let task = Task {
                     start_key: start_key.to_vec(),
                     end_key: end_key.to_vec(),
-                    start_ts: 1,
-                    end_ts: 1,
+                    start_ts: 1.into(),
+                    end_ts: 1.into(),
                     resp: tx,
                     storage,
                     concurrency: 4,
@@ -798,11 +818,8 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut ts = 1;
-        let mut alloc_ts = || {
-            ts += 1;
-            ts
-        };
+        let mut ts = TimeStamp::new(1);
+        let mut alloc_ts = || *ts.incr();
         let mut backup_tss = vec![];
         // Multi-versions for key 0..9.
         for len in &[SHORT_VALUE_MAX_LEN - 1, SHORT_VALUE_MAX_LEN * 2] {
@@ -823,13 +840,13 @@ pub mod tests {
         }
 
         // TODO: check key number for each snapshot.
-        let limiter = Arc::new(IOLimiter::new(10 * 1024 * 1024 /* 10 MB/s */));
+        let limiter = Arc::new(RocksIOLimiter::new(10 * 1024 * 1024 /* 10 MB/s */));
         for (ts, len) in backup_tss {
-            let mut req = BackupRequest::new();
+            let mut req = BackupRequest::default();
             req.set_start_key(vec![]);
             req.set_end_key(vec![b'5']);
-            req.set_start_version(ts);
-            req.set_end_version(ts);
+            req.set_start_version(ts.into_inner());
+            req.set_end_version(ts.into_inner());
             req.set_concurrency(4);
             let (tx, rx) = unbounded();
             // Empty path should return an error.
@@ -875,11 +892,8 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut ts = 1;
-        let mut alloc_ts = || {
-            ts += 1;
-            ts
-        };
+        let mut ts: TimeStamp = 1.into();
+        let mut alloc_ts = || *ts.incr();
         let start = alloc_ts();
         let key = format!("{}", start);
         must_prewrite_put(
@@ -891,11 +905,11 @@ pub mod tests {
         );
 
         let now = alloc_ts();
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![b'5']);
-        req.set_start_version(now);
-        req.set_end_version(now);
+        req.set_start_version(now.into_inner());
+        req.set_end_version(now.into_inner());
         req.set_concurrency(4);
         // Set an unique path to avoid AlreadyExists error.
         req.set_path(format!(
@@ -919,8 +933,8 @@ pub mod tests {
         // Test whether it can correctly convert not leader to region error.
         engine.trigger_not_leader();
         let now = alloc_ts();
-        req.set_start_version(now);
-        req.set_end_version(now);
+        req.set_start_version(now.into_inner());
+        req.set_end_version(now.into_inner());
         // Set an unique path to avoid AlreadyExists error.
         req.set_path(format!(
             "local://{}",
@@ -949,11 +963,8 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut ts = 1;
-        let mut alloc_ts = || {
-            ts += 1;
-            ts
-        };
+        let mut ts: TimeStamp = 1.into();
+        let mut alloc_ts = || *ts.incr();
         let start = alloc_ts();
         let key = format!("{}", start);
         must_prewrite_put(
@@ -968,11 +979,11 @@ pub mod tests {
         must_commit(&engine, key.as_bytes(), start, commit);
 
         let now = alloc_ts();
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
-        req.set_start_version(now);
-        req.set_end_version(now);
+        req.set_start_version(now.into_inner());
+        req.set_end_version(now.into_inner());
         req.set_concurrency(4);
         req.set_path(format!("local://{}", temp.path().display()));
 
@@ -1005,7 +1016,7 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
         req.set_start_version(1);
@@ -1037,7 +1048,7 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"".to_vec(), 1)]);
 
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
         req.set_start_version(1);
@@ -1097,7 +1108,7 @@ pub mod tests {
             tx
         };
 
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
         req.set_start_version(1);

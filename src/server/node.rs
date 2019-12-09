@@ -4,22 +4,20 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use super::transport::RaftStoreRouter;
 use super::RaftKv;
 use super::Result;
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::fsm::store::StoreMeta;
 use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
-    self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
+    self, initial_region, Config as StoreConfig, SnapManager, Transport,
 };
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
-use crate::server::ServerRaftStoreRouter;
-use crate::storage::{Config as StorageConfig, Storage};
-use engine::rocks::DB;
+use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
@@ -37,21 +35,12 @@ pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
     read_pools: Vec<FuturePool>,
-    local_storage: Option<Arc<DB>>,
-    raft_store_router: Option<ServerRaftStoreRouter>,
     lock_mgr: Option<LockManager>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let store = Storage::from_engine(
-        engine,
-        cfg,
-        read_pools,
-        local_storage,
-        raft_store_router,
-        lock_mgr,
-    )?;
+    let store = Storage::from_engine(engine, cfg, read_pools, lock_mgr)?;
     Ok(store)
 }
 
@@ -86,6 +75,12 @@ where
             store.set_address(cfg.advertise_addr.clone())
         }
         store.set_version(env!("CARGO_PKG_VERSION").to_string());
+        store.set_status_address(cfg.status_addr.clone());
+        store.set_git_hash(
+            option_env!("TIKV_BUILD_GIT_HASH")
+                .unwrap_or("Unknown git hash")
+                .to_string(),
+        );
 
         let mut labels = Vec::new();
         for (k, v) in &cfg.labels {

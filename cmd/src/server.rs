@@ -7,11 +7,14 @@ use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTER
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
+use futures_cpupool::Builder;
 use kvproto::backup::create_backup;
 use kvproto::deadlock::create_deadlock;
 use kvproto::debugpb::create_debug;
+use kvproto::diagnosticspb::create_diagnostics;
 use kvproto::import_sstpb::create_import_sst;
 use pd_client::{PdClient, RpcClient};
+use std::convert::TryFrom;
 use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -21,17 +24,18 @@ use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use tikv::raftstore::store::{fsm, LocalReader};
 use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
+use tikv::server::gc_worker::{AutoGcConfig, GcWorker};
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve;
-use tikv::server::service::DebugService;
+use tikv::server::service::{DebugService, DiagnosticsService};
 use tikv::server::status_server::StatusServer;
-use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv::server::{create_raft_storage, Node, RaftKv, Server};
-use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::storage;
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
@@ -82,7 +86,7 @@ pub fn run_tikv(mut config: TiKvConfig) {
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
     let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
-    let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
+    let db_path = store_path.join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
     let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
     let import_path = store_path.join("import");
@@ -174,11 +178,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let engine = RaftKv::new(raft_router.clone());
 
-    let storage_read_pool = storage::readpool_impl::build_read_pool(
-        &cfg.readpool.storage,
-        pd_sender.clone(),
-        engine.clone(),
-    );
+    let storage_read_pool =
+        storage::build_read_pool(&cfg.readpool.storage, pd_sender.clone(), engine.clone());
 
     let mut lock_mgr = if cfg.pessimistic_txn.enabled {
         Some(LockManager::new())
@@ -186,19 +187,30 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         None
     };
 
+    let mut gc_worker = GcWorker::new(
+        engine.clone(),
+        Some(engines.kv.clone()),
+        Some(raft_router.clone()),
+        cfg.gc.clone(),
+    );
+    gc_worker
+        .start()
+        .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
+
     let storage = create_raft_storage(
         engine.clone(),
         &cfg.storage,
         storage_read_pool,
-        Some(engines.kv.clone()),
-        Some(raft_router.clone()),
         lock_mgr.clone(),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
+    let bps = i64::try_from(cfg.server.snap_max_write_bytes_per_sec.0)
+        .unwrap_or_else(|_| fatal!("snap_max_write_bytes_per_sec > i64::max_value"));
+
     // Create snapshot manager, server.
     let snap_mgr = SnapManagerBuilder::default()
-        .max_write_bytes_per_sec(cfg.server.snap_max_write_bytes_per_sec.0)
+        .max_write_bytes_per_sec(bps)
         .max_total_size(cfg.server.snap_max_total_size.0)
         .build(
             snap_path.as_path().to_str().unwrap().to_owned(),
@@ -223,8 +235,21 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Arc::clone(&importer),
     );
 
+    // The `DebugService` and `DiagnosticsService` will share the same thread pool
+    let pool = Builder::new()
+        .name_prefix(thd_name!("debugger"))
+        .pool_size(1)
+        .create();
     // Create Debug service.
-    let debug_service = DebugService::new(engines.clone(), raft_router.clone());
+    let debug_service = DebugService::new(
+        engines.clone(),
+        pool.clone(),
+        raft_router.clone(),
+        gc_worker.clone(),
+    );
+
+    // Create Diagnostics service
+    let diag_service = DiagnosticsService::new(pool, cfg.log_file.clone());
 
     // Create Backup service.
     let mut backup_worker = tikv_util::worker::Worker::new("backup-endpoint");
@@ -240,6 +265,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         raft_router,
         resolver.clone(),
         snap_mgr.clone(),
+        gc_worker.clone(),
     )
     .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
@@ -255,6 +281,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .is_some()
     {
         fatal!("failed to register debug service");
+    }
+    if server
+        .register_service(create_diagnostics(diag_service))
+        .is_some()
+    {
+        fatal!("failed to register diagnostics service");
     }
     if let Some(lm) = lock_mgr.as_ref() {
         if server
@@ -313,12 +345,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
     // Start auto gc
-    let auto_gc_cfg = AutoGCConfig::new(
+    let auto_gc_cfg = AutoGcConfig::new(
         Arc::clone(&pd_client),
         region_info_accessor.clone(),
         node.id(),
     );
-    if let Err(e) = storage.start_auto_gc(auto_gc_cfg) {
+    if let Err(e) = gc_worker.start_auto_gc(auto_gc_cfg) {
         fatal!("failed to start auto_gc on storage, error: {}", e);
     }
 

@@ -4,7 +4,10 @@ use super::{EvalContext, Result, ScalarFunc};
 use crate::codec::data_type::Duration;
 use crate::codec::mysql::{Decimal, Json, Time};
 use crate::codec::Datum;
+use crate::expr_util;
+
 use std::borrow::Cow;
+use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -127,36 +130,8 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
-        let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        if input.len() == 0 || input.ends_with('.') {
-            return Ok(None);
-        }
-        let (mut byte_result, mut result, mut dot_count): (u64, u64, usize) = (0, 0, 0);
-        for c in input.chars() {
-            if c >= '0' && c <= '9' {
-                let digit = c as u64 - '0' as u64;
-                byte_result = byte_result * 10 + digit;
-                if byte_result > 255 {
-                    return Ok(None);
-                }
-            } else if c == '.' {
-                dot_count += 1;
-                if dot_count > 3 {
-                    return Ok(None);
-                }
-                result = (result << 8) + byte_result;
-                byte_result = 0;
-            } else {
-                return Ok(None);
-            }
-        }
-
-        if dot_count == 1 {
-            result <<= 16;
-        } else if dot_count == 2 {
-            result <<= 8;
-        }
-        Ok(Some(((result << 8) + byte_result) as i64))
+        let addr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        Ok(expr_util::miscellaneous::inet_aton(addr))
     }
 
     pub fn inet_ntoa<'a, 'b: 'a>(
@@ -165,14 +140,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let input = try_opt!(self.children[0].eval_int(ctx, row));
-        if input < 0 || input > i64::from(u32::max_value()) {
-            Ok(None)
-        } else {
-            let v = input as u32;
-            let ipv4_addr =
-                Ipv4Addr::new((v >> 24) as u8, (v >> 16) as u8, (v >> 8) as u8, v as u8);
-            Ok(Some(Cow::Owned(format!("{}", ipv4_addr).into_bytes())))
-        }
+        Ok(u32::try_from(input)
+            .ok()
+            .map(|input| Cow::Owned(format!("{}", Ipv4Addr::from(input)).into_bytes())))
     }
 
     pub fn inet6_aton<'a, 'b: 'a>(
@@ -224,7 +194,6 @@ mod tests {
     use crate::codec::mysql::json::Json;
     use crate::codec::mysql::Decimal;
     use crate::codec::mysql::Time;
-    use crate::codec::mysql::Tz;
     use crate::codec::Datum;
     use crate::expr::tests::{datum_expr, scalar_func_expr};
     use crate::expr::{EvalContext, Expression};
@@ -245,13 +214,13 @@ mod tests {
                     ScalarFuncSig::$sig_of_scalar_func,
                     &[input1, input2, input3, input4],
                 );
-                let op = Expression::build(&ctx, op).unwrap();
+                let op = Expression::build(&mut ctx, op).unwrap();
                 let got = op.eval(&mut ctx, &[]).unwrap();
                 let exp = Datum::from($maker_for_case_ele(expected));
                 assert_eq!(got, exp);
             }
             let op = scalar_func_expr(ScalarFuncSig::$sig_of_scalar_func, &[]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]);
             match got {
                 Ok(x) => assert_eq!(x, Datum::Null),
@@ -329,13 +298,14 @@ mod tests {
 
     #[test]
     fn test_time_any_value() {
+        let mut ctx = EvalContext::default();
         test_any_value!(
             vec![(
-                Time::parse_datetime("1000-01-01 00:00:00", 0, &Tz::utc()).unwrap(),
-                Time::parse_datetime("1000-01-01 00:00:01", 0, &Tz::utc()).unwrap(),
-                Time::parse_datetime("1000-01-01 00:00:02", 0, &Tz::utc()).unwrap(),
-                Time::parse_datetime("1000-01-01 00:00:03", 0, &Tz::utc()).unwrap(),
-                Time::parse_datetime("1000-01-01 00:00:00", 0, &Tz::utc()).unwrap(),
+                Time::parse_datetime(&mut ctx, "1000-01-01 00:00:00", 0, false).unwrap(),
+                Time::parse_datetime(&mut ctx, "1000-01-01 00:00:01", 0, false).unwrap(),
+                Time::parse_datetime(&mut ctx, "1000-01-01 00:00:02", 0, false).unwrap(),
+                Time::parse_datetime(&mut ctx, "1000-01-01 00:00:03", 0, false).unwrap(),
+                Time::parse_datetime(&mut ctx, "1000-01-01 00:00:00", 0, false).unwrap(),
             )],
             Vec<(Time, Time, Time, Time, Time)>,
             Datum::Time,
@@ -368,7 +338,7 @@ mod tests {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
 
             let op = scalar_func_expr(ScalarFuncSig::IsIPv4, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(expected);
             assert_eq!(got, exp);
@@ -409,7 +379,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::IsIPv4Compat, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -444,7 +414,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::IsIPv4Mapped, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -463,7 +433,7 @@ mod tests {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
 
             let op = scalar_func_expr(ScalarFuncSig::IsIPv6, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(expected);
             assert_eq!(got, exp);
@@ -500,7 +470,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::InetAton, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -525,7 +495,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::InetNtoa, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -585,7 +555,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Inet6Aton, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -656,7 +626,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Inet6Ntoa, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }

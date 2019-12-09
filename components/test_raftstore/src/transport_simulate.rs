@@ -13,9 +13,9 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
+use tikv::raftstore::router::RaftStoreRouter;
 use tikv::raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
 use tikv::raftstore::{DiscardReason, Error, Result};
-use tikv::server::transport::*;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::{Either, HandyRwLock};
 
@@ -320,6 +320,7 @@ pub struct RegionPacketFilter {
     block: Either<Arc<AtomicUsize>, Arc<AtomicBool>>,
     msg_type: Option<MessageType>,
     dropped_messages: Option<Arc<Mutex<Vec<RaftMessage>>>>,
+    msg_callback: Option<Arc<dyn Fn(&RaftMessage) + Send + Sync>>,
 }
 
 impl Filter for RegionPacketFilter {
@@ -337,6 +338,9 @@ impl Filter for RegionPacketFilter {
                     .as_ref()
                     .map_or(true, |t| t == &m.get_message().get_msg_type())
             {
+                if let Some(f) = self.msg_callback.as_ref() {
+                    f(m)
+                }
                 return match self.block {
                     Either::Left(ref count) => loop {
                         let left = count.load(Ordering::SeqCst);
@@ -371,6 +375,7 @@ impl RegionPacketFilter {
             msg_type: None,
             block: Either::Right(Arc::new(AtomicBool::new(true))),
             dropped_messages: None,
+            msg_callback: None,
         }
     }
 
@@ -396,6 +401,14 @@ impl RegionPacketFilter {
 
     pub fn reserve_dropped(mut self, dropped: Arc<Mutex<Vec<RaftMessage>>>) -> RegionPacketFilter {
         self.dropped_messages = Some(dropped);
+        self
+    }
+
+    pub fn set_msg_callback(
+        mut self,
+        cb: Arc<dyn Fn(&RaftMessage) + Send + Sync>,
+    ) -> RegionPacketFilter {
+        self.msg_callback = Some(cb);
         self
     }
 }

@@ -44,8 +44,8 @@ struct MatchArmIdentFolder {
 impl Fold for MatchArmIdentFolder {
     fn fold_macro(&mut self, i: Macro) -> Macro {
         let mut m = syn::fold::fold_macro(self, i);
-        m.tts = m
-            .tts
+        m.tokens = m
+            .tokens
             .into_iter()
             .map(|tt| {
                 if let TokenTree::Ident(i) = &tt {
@@ -92,14 +92,12 @@ impl Parse for MatchTemplate {
 
         let mut arm = arms.next().unwrap();
         assert!(arm.guard.is_none(), "Expect no match arm guard");
-        assert_eq!(arm.pats.len(), 1, "Expect one match arm pattern");
         arm.comma = None;
 
         let mut wildcard_arm = None;
         if let Some(arm) = arms.next() {
             assert!(arm.guard.is_none(), "Expect no match arm guard");
-            assert_eq!(arm.pats.len(), 1, "Expect one match arm pattern");
-            if let Pat::Wild(_) = arm.pats[0] {
+            if let Pat::Wild(_) = arm.pat {
                 wildcard_arm = Some(arm);
             } else {
                 panic!("Expect wildcard arm");

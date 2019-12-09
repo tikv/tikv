@@ -11,7 +11,6 @@ use raft::eraftpb::MessageType;
 
 use engine::*;
 use test_raftstore::*;
-use tikv::raftstore::store::keys;
 
 /// A helper function for testing the behaviour of the gc of stale peer
 /// which is out of region.

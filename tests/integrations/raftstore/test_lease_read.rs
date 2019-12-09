@@ -12,7 +12,7 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine::Peekable;
 use test_raftstore::*;
-use tikv::raftstore::store::{keys, Callback};
+use tikv::raftstore::store::Callback;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
@@ -44,8 +44,12 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     let peer = new_peer(store_id, node_id);
     cluster.pd_client.disable_default_operator();
     let region_id = cluster.run_conf_change();
+
+    let key = b"k";
+    cluster.must_put(key, b"v0");
     for id in 2..=cluster.engines.len() as u64 {
         cluster.pd_client.must_add_peer(region_id, new_peer(id, id));
+        must_get_equal(&cluster.get_engine(id), key, b"v0");
     }
 
     // Write the initial value for a key.
@@ -172,13 +176,20 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     // Avoid triggering the log compaction in this test case.
     cluster.cfg.raft_store.raft_log_gc_threshold = 100;
     // Increase the Raft tick interval to make this test case running reliably.
-    let election_timeout = configure_for_lease_read(cluster, Some(50), None);
+    let election_timeout = configure_for_lease_read(cluster, Some(500), None);
 
     let store_id = 1u64;
     let peer = new_peer(store_id, 1);
     let peer3_store_id = 3u64;
     let peer3 = new_peer(peer3_store_id, 3);
-    cluster.run();
+
+    cluster.pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k0", b"v0");
+    cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
+    cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
     let detector = LeaseReadFilter::default();
     cluster.add_send_filter(CloneFilterFactory(detector.clone()));
@@ -346,6 +357,7 @@ fn test_read_index_when_transfer_leader_1() {
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k0", b"v0");
     cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k0", b"v0");
     cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
@@ -497,7 +509,7 @@ fn test_not_leader_read_lease() {
     let (cb, rx) = make_cb(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
-    cluster.transfer_leader(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(region_id, new_peer(3, 3));
     // Even the leader steps down, it should respond to read index in time.
     rx.recv_timeout(heartbeat_interval).unwrap();
 }

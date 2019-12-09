@@ -8,21 +8,19 @@ use tempfile::Builder;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
-use engine::rocks;
-use engine::Engines;
 use engine::*;
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::{bootstrap_store, fsm, keys, SnapManager};
+use tikv::raftstore::store::{bootstrap_store, fsm, SnapManager};
 use tikv::server::Node;
 use tikv_util::worker::FutureWorker;
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully
     cluster.add_first_region().unwrap();
-    // now  at same time start the another node, and will recive cluster is not bootstrap
+    // now at same time start the another node, and will recive cluster is not bootstrap
     // it will try to bootstrap with a new region, but will failed
     // the region number still 1
     cluster.start().unwrap();
