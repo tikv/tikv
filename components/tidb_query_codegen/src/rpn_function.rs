@@ -64,12 +64,15 @@
 //! validated. The validator function should have the signature `&tipb::Expr -> Result<()>`.
 //! E.g., `#[rpn_fn(raw_varg, extra_validator = json_object_validator)]`
 //!
-//! ### `metadata_ctor`
+//! ### `metadata_type`
+//! Type of raw metadata type defined in tipb.
 //!
-//! A function name for custom code to construct metadata from its tree node in the
-//! expression tree. After setting this argument, `metadata` is available in the `capture` array.
-//! The constructor function should have the signature `&mut tipb::Expr -> T`.
-//! E.g., `#[rpn_fn(varg, capture = [metadata], metadata_ctor = some_ctor)]`
+//! ### `metadata_mapper`
+//!
+//! A function name for custom code to construct metadata from raw metadata and
+//! its tree node in the expression tree.
+//! The mapper function should have the signature `metadata_type, &mut tipb::Expr -> T`.
+//! E.g., `#[rpn_fn(varg, capture = [metadata], metadata_type = tipb::SomeMetadata, metadata_mapper = some_mapper)]`
 //!
 //! ### `capture`
 //!
