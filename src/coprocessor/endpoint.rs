@@ -97,6 +97,11 @@ impl<E: Engine> Endpoint<E> {
 
         match req.get_tp() {
             REQ_TYPE_DAG => {
+                debug!(
+                    "(QUPENG) dag request is received";
+                    "start_ts" => dag.get_start_ts(),
+                    "region_id" => req.get_context().get_region_id(),
+                );
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut is));
                 let mut table_scan = false;
