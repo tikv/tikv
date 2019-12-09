@@ -5,8 +5,10 @@ use std::fmt::{self, Debug, Display, Formatter};
 
 use codec;
 use codec::byte::MemComparableByteCodec;
-use codec::number::{self, NumberCodec};
-use codec::prelude::{MemComparableByteDecoder, MemComparableByteEncoder, NumberDecoder};
+use codec::number;
+use codec::prelude::{
+    MemComparableByteDecoder, MemComparableByteEncoder, NumberDecoder, NumberEncoder,
+};
 use tikv_util::codec::bytes;
 
 /// Value type which is essentially raw bytes.
@@ -89,7 +91,7 @@ impl Key {
     #[inline]
     pub fn append_ts(self, ts: TimeStamp) -> Key {
         let mut encoded = self.0;
-        NumberCodec::encode_u64_desc(&mut encoded, ts.into_inner());
+        encoded.write_u64_desc(ts.into_inner()).unwrap();
         Key(encoded)
     }
 
