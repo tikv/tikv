@@ -154,6 +154,16 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn oct_int<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let i = try_opt!(self.children[0].eval_int(ctx, row));
+        Ok(Some(Cow::Owned(format!("{:o}", i).into_bytes())))
+    }
+
+    #[inline]
     pub fn concat<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -1388,6 +1398,42 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Bin, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_oct_int() {
+        let cases = vec![
+            (
+                Datum::I64(-1),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
+            ),
+            (Datum::I64(0), Datum::Bytes(b"0".to_vec())),
+            (Datum::I64(1), Datum::Bytes(b"1".to_vec())),
+            (Datum::I64(8), Datum::Bytes(b"10".to_vec())),
+            (Datum::I64(12), Datum::Bytes(b"14".to_vec())),
+            (Datum::I64(20), Datum::Bytes(b"24".to_vec())),
+            (Datum::I64(100), Datum::Bytes(b"144".to_vec())),
+            (Datum::I64(1024), Datum::Bytes(b"2000".to_vec())),
+            (Datum::I64(2048), Datum::Bytes(b"4000".to_vec())),
+            (
+                Datum::I64(i64::MAX),
+                Datum::Bytes(b"777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::I64(i64::MIN),
+                Datum::Bytes(b"1000000000000000000000".to_vec()),
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::OctInt, &[input]);
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
