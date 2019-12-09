@@ -3609,7 +3609,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#0820b784842f3ef6cecc8f520e8834d326a0dbeb"
+source = "git+https://github.com/pingcap/tipb.git#a35f738b479682658520c708b316ea951121a124"
 dependencies = [
  "bytes",
  "lazy_static",
