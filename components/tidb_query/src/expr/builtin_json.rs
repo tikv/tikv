@@ -325,7 +325,8 @@ mod tests {
             assert_eq!(got, exp);
         }
     }
-    
+
+    #[test]
     fn test_json_depth() {
         let cases = vec![
             (None, None),
