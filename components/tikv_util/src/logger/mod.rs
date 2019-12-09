@@ -6,7 +6,7 @@ mod formatter;
 use std::env;
 use std::fmt;
 use std::io::{self, BufWriter};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use chrono::{self, Duration};
@@ -18,6 +18,7 @@ use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
 use crate::config::ReadableSize;
 
+use chrono::Utc;
 pub use slog::Level;
 
 // Default is 128.
@@ -86,6 +87,15 @@ where
     Ok(())
 }
 
+// TODO: There is a very small chance that duplicate files will be generated if there are
+// a lot of logs written in a very short time. Consider rename the rotated file with a version
+// number while rotate by size.
+fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
+    let mut new_path = path.to_path_buf().into_os_string();
+    new_path.push(format!("{}", Utc::now().format("%Y-%m-%d-%H:%M:%S%.f")));
+    Ok(PathBuf::from(new_path))
+}
+
 /// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger>>`.
 // Avoid clippy type_complexity lint.
 pub type RotatingFileDecorator = PlainDecorator<BufWriter<RotatingFileLogger>>;
@@ -98,7 +108,7 @@ pub fn file_drainer(
     rotation_size: ReadableSize,
 ) -> io::Result<TikvFormat<RotatingFileDecorator>> {
     let logger = BufWriter::new(
-        RotatingFileLoggerBuilder::new(path)
+        RotatingFileLoggerBuilder::new(path, rename_by_timestamp)
             .add_rotator(RotateByTime::new(rotation_timespan))
             .add_rotator(RotateBySize::new(rotation_size))
             .build()?,

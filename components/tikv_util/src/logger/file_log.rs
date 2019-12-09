@@ -1,26 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::Duration;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use crate::config::ReadableSize;
-
-/// Adds `Duration` to the initial date and time.
-fn compute_rotation_time(initial: &DateTime<Utc>, timespan: Duration) -> DateTime<Utc> {
-    *initial + timespan
-}
-
-/// Rotates file path with given timestamp.
-fn rotation_file_path_by_timestamp(
-    file_path: impl AsRef<Path>,
-    timestamp: &DateTime<Utc>,
-) -> PathBuf {
-    let mut file_path = file_path.as_ref().as_os_str().to_os_string();
-    file_path.push(format!(".{}", timestamp.format("%Y-%m-%d-%H:%M:%S")));
-    file_path.into()
-}
 
 /// Opens log file with append mode. Creates a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
@@ -34,82 +19,58 @@ fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     OpenOptions::new().append(true).create(true).open(path)
 }
 
-fn rename_by_timestamp(path: impl AsRef<Path>) -> io::Result<PathBuf> {
-    fail_point!("file_log_rename", |t| {
-        if let Some(t) = t {
-            Err(match t.as_ref() {
-                "NotFound" => ErrorKind::NotFound,
-                "PermissionDenied" => ErrorKind::PermissionDenied,
-                "AlreadyExists" => ErrorKind::AlreadyExists,
-                "InvalidInput" => ErrorKind::InvalidInput,
-                "InvalidData" => ErrorKind::InvalidData,
-                "WriteZero" => ErrorKind::WriteZero,
-                "UnexpectedEof" => ErrorKind::UnexpectedEof,
-                _ => ErrorKind::Other,
-            }
-            .into())
-        } else {
-            let mut buf = PathBuf::new();
-            buf.push("rotated_file");
-            Ok(buf)
-        }
-    });
-
-    // Note: renaming files while they're open only works on Linux and macOS.
-    let new_path = rotation_file_path_by_timestamp(&path, &Utc::now());
-    fs::rename(&path, &new_path).map(|_| new_path)
-}
-
-/// A trait that describes a file rotation operation
+/// A trait that describes a file rotation operation.
 pub trait Rotator: Send {
     /// Return if the file need to be rotated.
     fn should_rotate(&self, file: &File) -> io::Result<bool>;
 
-    /// Execute rotation and return a renamed file path
-    fn rotate(&mut self, path: &Path, file: &mut File) -> io::Result<Option<PathBuf>>;
+    /// Execute rotation and return a renamed file path.
+    fn rotate(&mut self, file: &mut File, old_path: &Path, new_path: &Path) -> io::Result<()> {
+        file.flush()?;
+        fs::rename(old_path, new_path)?;
 
-    /// Check if the option is enabled in configuration
+        *file = open_log_file(old_path)?;
+        Ok(())
+    }
+
+    /// Check if the option is enabled in configuration.
     /// Return true if the `rotator` is valid.
-    fn is_valid(&self) -> bool;
+    fn is_enable(&self) -> bool;
 }
 
 /// This `FileLogger` will iterate over a series of `Rotators`,
 /// once the context trigger the `Rotator`, it will execute a rotation.
 ///
-/// After rotating, the original log file would be renamed to "{original name}.{%Y-%m-%d-%H:%M:%S}"
+/// After rotating, the original log file would be renamed to "{original name}.{%Y-%m-%d-%H:%M:%S}".
 /// Note: log file will *not* be compressed or otherwise modified.
 pub struct RotatingFileLogger {
-    rotators: Vec<Box<dyn Rotator>>,
     path: PathBuf,
     file: File,
-
-    // Path for the latest rotated file
-    renamed: Option<PathBuf>,
+    rename: Box<dyn Fn(&Path) -> io::Result<PathBuf>>,
+    rotators: Vec<Box<dyn Rotator>>,
 }
 
-impl RotatingFileLogger {
-    #[cfg(test)]
-    pub fn get_rotated_file(&self) -> &Option<PathBuf> {
-        &self.renamed
-    }
-}
-
-/// Builder for `RotatingFileLogger`
+/// Builder for `RotatingFileLogger`.
 pub struct RotatingFileLoggerBuilder {
     rotators: Vec<Box<dyn Rotator>>,
     path: PathBuf,
+    rename: Box<dyn Fn(&Path) -> io::Result<PathBuf>>,
 }
 
 impl RotatingFileLoggerBuilder {
-    pub fn new(path: impl AsRef<Path>) -> Self {
+    pub fn new<N: Fn(&Path) -> io::Result<PathBuf> + 'static>(
+        path: impl AsRef<Path>,
+        rename: N,
+    ) -> Self {
         RotatingFileLoggerBuilder {
+            path: path.as_ref().to_path_buf(),
+            rename: Box::new(rename),
             rotators: vec![],
-            path: path.as_ref().to_owned(),
         }
     }
 
     pub fn add_rotator<R: 'static + Rotator>(mut self, rotator: R) -> Self {
-        if rotator.is_valid() {
+        if rotator.is_enable() {
             self.rotators.push(Box::new(rotator));
         }
         self
@@ -120,7 +81,7 @@ impl RotatingFileLoggerBuilder {
             rotators: self.rotators,
             file: open_log_file(&self.path)?,
             path: self.path,
-            renamed: None,
+            rename: self.rename,
         })
     }
 }
@@ -133,7 +94,8 @@ impl Write for RotatingFileLogger {
     fn flush(&mut self) -> io::Result<()> {
         for rotator in self.rotators.iter_mut() {
             if rotator.should_rotate(&self.file)? {
-                self.renamed = rotator.rotate(&self.path, &mut self.file)?;
+                let new_path = (self.rename)(&self.path)?;
+                rotator.rotate(&mut self.file, &self.path, &new_path)?;
                 break;
             }
         }
@@ -149,48 +111,30 @@ impl Drop for RotatingFileLogger {
 
 pub struct RotateByTime {
     rotation_timespan: Duration,
-    next_rotation_time: DateTime<Utc>,
 }
 
 impl RotateByTime {
     pub fn new(rotation_timespan: Duration) -> Self {
-        Self {
-            rotation_timespan,
-            next_rotation_time: compute_rotation_time(&Utc::now(), rotation_timespan),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn new_for_test(next_rotation_time: DateTime<Utc>, rotation_timespan: Duration) -> Self {
-        Self {
-            next_rotation_time,
-            rotation_timespan,
-        }
+        Self { rotation_timespan }
     }
 }
 
 impl Rotator for RotateByTime {
-    fn should_rotate(&self, _: &File) -> io::Result<bool> {
-        Ok(Utc::now() > self.next_rotation_time)
+    fn should_rotate(&self, file: &File) -> io::Result<bool> {
+        let metadata = file.metadata()?;
+        // Calculates how long the file has been written.
+        let file_life = metadata
+            .modified()?
+            // TODO: change it to `created()`, however, in some Linux distros it isn't supported.
+            .duration_since(metadata.accessed()?)
+            .map_err(|_| ErrorKind::InvalidInput)?;
+        Ok(
+            Duration::from_std(file_life).map_err(|_| ErrorKind::InvalidInput)?
+                > self.rotation_timespan,
+        )
     }
 
-    fn rotate(&mut self, path: &Path, file: &mut File) -> io::Result<Option<PathBuf>> {
-        file.flush()?;
-
-        let renamed = match rename_by_timestamp(path) {
-            Ok(path) => Some(path),
-            Err(ref e) if e.kind() == ErrorKind::NotFound => None,
-            Err(e) => return Err(e),
-        };
-
-        self.next_rotation_time = compute_rotation_time(&Utc::now(), self.rotation_timespan);
-
-        *file = open_log_file(&path)?;
-
-        Ok(renamed)
-    }
-
-    fn is_valid(&self) -> bool {
+    fn is_enable(&self) -> bool {
         !self.rotation_timespan.is_zero()
     }
 }
@@ -207,25 +151,11 @@ impl RotateBySize {
 
 impl Rotator for RotateBySize {
     fn should_rotate(&self, file: &File) -> io::Result<bool> {
-        Ok(file.metadata()?.len() > self.rotation_size.as_b())
+        Ok(file.metadata()?.len() > self.rotation_size.0)
     }
 
-    fn rotate(&mut self, path: &Path, file: &mut File) -> io::Result<Option<PathBuf>> {
-        file.flush()?;
-
-        let renamed = match rename_by_timestamp(path) {
-            Ok(path) => Some(path),
-            Err(ref e) if e.kind() == ErrorKind::NotFound => None,
-            Err(e) => return Err(e),
-        };
-
-        *file = open_log_file(&path)?;
-
-        Ok(renamed)
-    }
-
-    fn is_valid(&self) -> bool {
-        self.rotation_size.as_b() != 0
+    fn is_enable(&self) -> bool {
+        self.rotation_size.0 != 0
     }
 }
 
@@ -233,8 +163,10 @@ impl Rotator for RotateBySize {
 mod tests {
     use super::*;
 
-    use chrono::{Duration, Utc};
     use fail::FailScenario;
+    use std::ffi::OsStr;
+    use std::io::ErrorKind;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tempfile::TempDir;
 
     fn file_exists(file: impl AsRef<Path>) -> bool {
@@ -242,83 +174,167 @@ mod tests {
         path.exists() && path.is_file()
     }
 
+    fn rename_with_subffix(
+        path: impl AsRef<Path>,
+        suffix: impl AsRef<OsStr>,
+    ) -> io::Result<PathBuf> {
+        fail_point!("file_log_rename", |t| {
+            if let Some(t) = t {
+                Err(match t.as_ref() {
+                    "NotFound" => ErrorKind::NotFound,
+                    "PermissionDenied" => ErrorKind::PermissionDenied,
+                    "AlreadyExists" => ErrorKind::AlreadyExists,
+                    "InvalidInput" => ErrorKind::InvalidInput,
+                    "InvalidData" => ErrorKind::InvalidData,
+                    "WriteZero" => ErrorKind::WriteZero,
+                    "UnexpectedEof" => ErrorKind::UnexpectedEof,
+                    _ => ErrorKind::Other,
+                }
+                .into())
+            } else {
+                let mut buf = PathBuf::new();
+                buf.push("rotated_file");
+                Ok(buf)
+            }
+        });
+        let mut new_path = path.as_ref().to_path_buf().into_os_string();
+        new_path.push(suffix);
+
+        Ok(PathBuf::from(new_path))
+    }
+
     #[test]
     fn test_should_rotate_by_time() {
         let tmp_dir = TempDir::new().unwrap();
         let path = tmp_dir.path().join("test_should_rotate_by_time.log");
+        let suffix = ".backup";
 
-        let next_rotation_time = Utc::now() - Duration::days(1);
+        // Set last accessed time to NOW.
+        let accessed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-        let mut logger = RotatingFileLoggerBuilder::new(path)
-            .add_rotator(RotateByTime::new_for_test(
-                next_rotation_time,
-                Duration::days(1),
-            ))
-            .build()
-            .unwrap();
+        // Set the last modification time to 1 minute later.
+        let last_modified = SystemTime::now()
+            .checked_add(Duration::from_secs(60))
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Create a file.
+        open_log_file(path.clone()).unwrap();
+
+        // Modify last_modified time.
+        utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
+
+        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
+            rename_with_subffix(path, suffix)
+        })
+        .add_rotator(RotateByTime::new(chrono::Duration::seconds(5)))
+        .build()
+        .unwrap();
+
         // Rotate normally
         logger.flush().unwrap();
 
-        assert!(file_exists(logger.get_rotated_file().as_ref().unwrap()));
+        let mut new_path = PathBuf::from(path).into_os_string();
+        new_path.push(suffix);
+
+        assert!(file_exists(new_path));
     }
 
     #[test]
     fn test_should_not_rotate_by_time() {
         let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().join("test_should_not_rotate_by_time.log");
+        let path = tmp_dir.path().join("test_should_rotate_by_time.log");
+        let suffix = ".backup";
 
-        let next_rotation_time = Utc::now() + Duration::days(1);
+        // Set last accessed time to NOW.
+        let accessed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-        let mut logger = RotatingFileLoggerBuilder::new(path)
-            .add_rotator(RotateByTime::new_for_test(
-                next_rotation_time,
-                Duration::days(1),
-            ))
-            .build()
-            .unwrap();
+        // Set the last modification time to 1 minute later.
+        let last_modified = SystemTime::now()
+            .checked_add(Duration::from_secs(60))
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-        // Should not trigger rotation
-        logger.write_all(&[0xff; 1024]).unwrap();
+        // Create a file.
+        open_log_file(path.clone()).unwrap();
+
+        // Modify last_modified time.
+        utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
+
+        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
+            rename_with_subffix(path, suffix)
+        })
+        .add_rotator(RotateByTime::new(chrono::Duration::seconds(120)))
+        .build()
+        .unwrap();
+
+        // Rotate normally
         logger.flush().unwrap();
 
-        assert!(logger.get_rotated_file().is_none());
+        let mut new_path = PathBuf::from(path).into_os_string();
+        new_path.push(suffix);
+
+        assert!(!file_exists(new_path));
     }
 
     #[test]
     fn test_rotate_by_size() {
         let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().join("test_rotate_by_size.log");
+        let path = tmp_dir.path().join("test_should_rotate_by_time.log");
+        let suffix = ".backup";
 
-        let mut logger = RotatingFileLoggerBuilder::new(path)
-            .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
-            .build()
-            .unwrap();
+        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
+            rename_with_subffix(path, suffix)
+        })
+        .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
+        .build()
+        .unwrap();
 
-        logger.write_all(&[0xff; 512]).unwrap();
+        let mut new_path = PathBuf::from(path).into_os_string();
+        new_path.push(suffix);
+
+        // Should not rotate.
+        logger.write_all(&[0xff; 1024]).unwrap();
         logger.flush().unwrap();
-        assert!(logger.get_rotated_file().is_none());
+        assert!(!file_exists(new_path.clone()));
 
-        logger.write_all(&[0xff; 513]).unwrap();
+        // Triggers rotation.
+        logger.write_all(&[0xff; 1024]).unwrap();
         logger.flush().unwrap();
-
-        assert!(file_exists(logger.get_rotated_file().as_ref().unwrap()));
+        assert!(file_exists(new_path));
     }
 
     #[test]
     fn test_failing_to_rotate_file_will_not_cause_panic() {
         let tmp_dir = TempDir::new().unwrap();
-        let log_file = tmp_dir.path().join("test_no_panic.log");
-        let mut logger = RotatingFileLoggerBuilder::new(&log_file)
-            .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
-            .build()
-            .unwrap();
+        let path = tmp_dir.path().join("test_no_panic.log");
+        let suffix = ".backup";
+
+        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
+            rename_with_subffix(path, suffix)
+        })
+        .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
+        .build()
+        .unwrap();
+
+        let mut new_path = PathBuf::from(path).into_os_string();
+        new_path.push(suffix);
 
         logger.write_all(&[0xff; 1025]).unwrap();
         // trigger fail point
         let scenario = FailScenario::setup();
         fail::cfg("file_log_rename", "return(NotFound)").unwrap();
-        logger.flush().unwrap();
-        assert!(logger.get_rotated_file().is_none());
+        assert!(logger.flush().is_err());
         fail::remove("file_log_rename");
         scenario.teardown();
 
