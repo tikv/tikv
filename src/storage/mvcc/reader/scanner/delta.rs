@@ -8,7 +8,7 @@ use engine::CF_DEFAULT;
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteRef, WriteType};
-use crate::storage::mvcc::{Result, TsSet};
+use crate::storage::mvcc::Result;
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Key, KvPair, Snapshot, Statistics, TimeStamp};
 
@@ -94,7 +94,7 @@ impl<S: Snapshot> DeltaScanner<S> {
         if let Some(lock) = lock_item {
             let current_user_key = Key::from_encoded_slice(&lock.key);
             lock.lock
-                .check_ts_conflict(&current_user_key, self.cfg.ts, &TsSet::default())?;
+                .check_ts_conflict(&current_user_key, self.cfg.ts, &self.cfg.bypass_locks)?;
         }
         let data = self.read_next_commit_item()?;
         Ok(data.map(|e| e.entry))
