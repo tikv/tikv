@@ -6,7 +6,10 @@
 //! implementations. It lays out the complex system of engine modules and traits
 //! in a way that is consistent with other engines. To create a new engine
 //! simply copy the entire directory structure and replace all "Panic*" names
-//! with your engine's own name; then fill in the implementations.
+//! with your engine's own name; then fill in the implementations; remove
+//! the allow(unused) attribute;
+
+#![allow(unused)]
 
 mod cf_handle;
 pub use crate::cf_handle::*;
