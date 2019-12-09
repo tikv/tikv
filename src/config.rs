@@ -14,6 +14,7 @@ use std::io::Write;
 use std::path::Path;
 use std::usize;
 
+use configuration::Configuration;
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -1322,29 +1323,47 @@ impl ReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
+    #[config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
+    #[config(skip)]
     pub log_file: String,
+    #[config(skip)]
     pub log_rotation_timespan: ReadableDuration,
+    #[config(skip)]
     pub log_rotation_size: ReadableSize,
+    #[config(skip)]
     pub panic_when_unexpected_key_or_data: bool,
+    #[config(skip)]
     pub readpool: ReadPoolConfig,
+    #[config(skip)]
     pub server: ServerConfig,
+    #[config(skip)]
     pub storage: StorageConfig,
+    #[config(skip)]
     pub pd: PdConfig,
+    #[config(skip)]
     pub metric: MetricConfig,
+    #[config(skip)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
+    #[config(skip)]
     pub coprocessor: CopConfig,
+    #[config(skip)]
     pub rocksdb: DbConfig,
+    #[config(skip)]
     pub raftdb: RaftDbConfig,
+    #[config(skip)]
     pub security: SecurityConfig,
+    #[config(skip)]
     pub import: ImportConfig,
+    #[config(skip)]
     pub pessimistic_txn: PessimisticTxnConfig,
+    #[config(skip)]
     pub gc: GcConfig,
 }
 
