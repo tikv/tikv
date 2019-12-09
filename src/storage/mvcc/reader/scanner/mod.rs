@@ -97,7 +97,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
         }
     }
 
-    pub fn build_entry_scanner(mut self) -> Result<EntryScanner<S>> {
+    pub fn build_entry_scanner(mut self, after: TimeStamp) -> Result<EntryScanner<S>> {
         let lower_bound = self.0.lower_bound.clone();
         let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
@@ -110,6 +110,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
             write_cursor,
             default_cursor,
             lower_bound,
+            after,
         )?)
     }
 }

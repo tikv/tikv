@@ -145,7 +145,9 @@ impl BackupRange {
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
-        let mut scanner = snap_store.entry_scanner(start_key, end_key).unwrap();
+        let mut scanner = snap_store
+            .entry_scanner(start_key, end_key, 0.into())
+            .unwrap();
 
         let start = Instant::now();
         let mut batch = EntryBatch::with_capacity(1024);

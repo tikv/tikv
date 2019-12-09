@@ -27,6 +27,8 @@ pub struct Scanner<S: Snapshot> {
     write_cursor: Cursor<S::Iter>,
     default_cursor: Cursor<S::Iter>,
     lower_bound: Option<Key>,
+    /// Only returns newer records whose commit_ts > after
+    after: TimeStamp,
     /// Is iteration started
     is_started: bool,
     statistics: Statistics,
@@ -48,6 +50,7 @@ impl<S: Snapshot> Scanner<S> {
         write_cursor: Cursor<S::Iter>,
         default_cursor: Cursor<S::Iter>,
         lower_bound: Option<Key>,
+        after: TimeStamp,
     ) -> Result<Scanner<S>> {
         Ok(Scanner {
             cfg,
@@ -55,6 +58,7 @@ impl<S: Snapshot> Scanner<S> {
             write_cursor,
             default_cursor,
             lower_bound,
+            after,
             statistics: Statistics::default(),
             is_started: false,
         })
@@ -205,7 +209,6 @@ impl<S: Snapshot> Scanner<S> {
         met_next_user_key: &mut bool,
     ) -> Result<Option<TxnEntry>> {
         assert!(self.write_cursor.valid()?);
-
         // The logic starting from here is similar to `PointGetter`.
 
         // Try to iterate to `${user_key}_${ts}`. We first `next()` for a few times,
@@ -256,7 +259,12 @@ impl<S: Snapshot> Scanner<S> {
 
         // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
         // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
+        let mut current_key = self.write_cursor.key(&mut self.statistics.write);
         loop {
+            if Key::decode_ts_from(current_key)? <= self.after {
+                // There are no newer records of this key since `after`.
+                return Ok(None);
+            }
             let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
             self.statistics.write.processed += 1;
 
@@ -278,7 +286,7 @@ impl<S: Snapshot> Scanner<S> {
                 // Key space ended.
                 return Ok(None);
             }
-            let current_key = self.write_cursor.key(&mut self.statistics.write);
+            current_key = self.write_cursor.key(&mut self.statistics.write);
             if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                 // Meet another key.
                 *met_next_user_key = true;
@@ -433,7 +441,7 @@ mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
-            .build_entry_scanner()
+            .build_entry_scanner(0.into())
             .unwrap();
 
         // Initial position: 1 seek_to_first:
@@ -492,7 +500,7 @@ mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
-            .build_entry_scanner()
+            .build_entry_scanner(0.into())
             .unwrap();
 
         // The following illustration comments assume that SEEK_BOUND = 4.
@@ -561,7 +569,7 @@ mod tests {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
             .range(None, None)
-            .build_entry_scanner()
+            .build_entry_scanner(0.into())
             .unwrap();
 
         // The following illustration comments assume that SEEK_BOUND = 4.
@@ -636,7 +644,7 @@ mod tests {
         // Test both bound specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
-            .build_entry_scanner()
+            .build_entry_scanner(0.into())
             .unwrap();
 
         let entry = |key, ts| {
@@ -655,7 +663,7 @@ mod tests {
         // Test left bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(None, Some(Key::from_raw(&[3u8])))
-            .build_entry_scanner()
+            .build_entry_scanner(0.into())
             .unwrap();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7.into())));
@@ -664,7 +672,7 @@ mod tests {
         // Test right bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(Some(Key::from_raw(&[5u8])), None)
-            .build_entry_scanner()
+            .build_entry_scanner(0.into())
             .unwrap();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7.into())));
@@ -673,7 +681,7 @@ mod tests {
         // Test both bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
             .range(None, None)
-            .build_entry_scanner()
+            .build_entry_scanner(0.into())
             .unwrap();
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7.into())));
@@ -682,5 +690,73 @@ mod tests {
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), None);
+    }
+
+    /// Checks only records after `after` is returned.
+    #[test]
+    fn test_filter_old_records() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate 1 put for [a].
+        must_prewrite_put(&engine, b"a", b"a_value", b"a", 7);
+        must_commit(&engine, b"a", 7, 7);
+
+        // Generate 1 put for [b].
+        must_prewrite_put(&engine, b"b", b"b_value", b"b", 1);
+        must_commit(&engine, b"b", 1, 1);
+
+        // Generate 3 rollback for [b].
+        for ts in 2..5 {
+            must_rollback(&engine, b"b", ts);
+        }
+
+        let entry_a = EntryBuilder::default()
+            .key(b"a")
+            .value(b"a_value")
+            .start_ts(7.into())
+            .commit_ts(7.into())
+            .build_commit(WriteType::Put, true);
+        let entry_b = EntryBuilder::default()
+            .key(b"b")
+            .value(b"b_value")
+            .start_ts(1.into())
+            .commit_ts(1.into())
+            .build_commit(WriteType::Put, true);
+
+        // Scanning entries after timestamp 7 should get none
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+            .range(None, None)
+            .build_entry_scanner(7.into())
+            .unwrap();
+        assert!(scanner.next_entry().unwrap().is_none());
+
+        // Scanning entries after timestamp 6 should get entry a
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+            .range(None, None)
+            .build_entry_scanner(6.into())
+            .unwrap();
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry_a.clone()));
+        assert!(scanner.next_entry().unwrap().is_none());
+
+        // Scanning entries after timestamp 1 should only get entry a
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+            .range(None, None)
+            .build_entry_scanner(1.into())
+            .unwrap();
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry_a.clone()));
+        assert!(scanner.next_entry().unwrap().is_none());
+
+        // Scanning entries after timestamp 0 should only get both entry a and b
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+            .range(None, None)
+            .build_entry_scanner(0.into())
+            .unwrap();
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry_a.clone()));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry_b.clone()));
+        assert!(scanner.next_entry().unwrap().is_none());
     }
 }
