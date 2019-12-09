@@ -27,12 +27,17 @@ impl ImportExt for RocksEngine {
         cf: &Self::CFHandle,
         opts: &Self::IngestExternalFileOptions,
         files: &[&str],
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let cf = cf.as_inner();
-        let r = self
+        // This is calling a specially optimized version of
+        // ingest_external_file_cf. In cases where the memtable needs to be
+        // flushed it avoids blocking writers while doing the flush. The unused
+        // return value here just indicates whether the fallback path requiring
+        // the manual memtable flush was taken.
+        let _did_nonblocking_memtable_flush = self
             .as_inner()
             .ingest_external_file_optimized(&cf, &opts.0, files)?;
-        Ok(r)
+        Ok(())
     }
 
     fn validate_sst_for_ingestion<P: AsRef<Path>>(

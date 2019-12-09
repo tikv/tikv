@@ -18,7 +18,7 @@ pub trait ImportExt: CFHandleExt {
         cf: &Self::CFHandle,
         opt: &Self::IngestExternalFileOptions,
         files: &[&str],
-    ) -> Result<bool>;
+    ) -> Result<()>;
 
     fn validate_sst_for_ingestion<P: AsRef<Path>>(
         &self,
