@@ -12,9 +12,13 @@ use std::i32;
 use std::io::Error as IoError;
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 use std::usize;
 
-use configuration::Configuration;
+use kvproto::configpb::{self, StatusCode};
+
+use configuration::{ConfigChange, ConfigValue, Configuration};
 use engine::rocks::{
     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
@@ -32,6 +36,7 @@ use crate::raftstore::coprocessor::properties::{
 };
 use crate::raftstore::coprocessor::Config as CopConfig;
 use crate::raftstore::store::Config as RaftstoreConfig;
+use crate::raftstore::store::PdTask;
 use crate::server::gc_worker::GcConfig;
 use crate::server::lock_manager::Config as PessimisticTxnConfig;
 use crate::server::Config as ServerConfig;
@@ -44,11 +49,12 @@ use engine::rocks::util::{
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
-use pd_client::Config as PdConfig;
+use pd_client::{Config as PdConfig, PdClient};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
+use tikv_util::worker::FutureScheduler;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -1336,6 +1342,7 @@ pub struct TiKvConfig {
     pub log_rotation_timespan: ReadableDuration,
     #[config(skip)]
     pub panic_when_unexpected_key_or_data: bool,
+    pub refresh_config_interval: ReadableDuration,
     #[config(skip)]
     pub readpool: ReadPoolConfig,
     #[config(skip)]
@@ -1372,6 +1379,7 @@ impl Default for TiKvConfig {
             log_file: "".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
             panic_when_unexpected_key_or_data: false,
+            refresh_config_interval: ReadableDuration::secs(30),
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -1666,6 +1674,185 @@ pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
     Ok(())
 }
 
+fn to_config_entry(change: ConfigChange) -> Vec<configpb::ConfigEntry> {
+    fn helper(prefix: String, change: ConfigChange) -> Vec<configpb::ConfigEntry> {
+        let mut entries = Vec::with_capacity(change.len());
+        for (mut name, value) in change {
+            if name == "raft_store" {
+                name = "raftstore".to_owned();
+            } else {
+                name = name.replace("_", "-");
+            }
+            if !prefix.is_empty() {
+                let mut p = prefix.clone();
+                p.push_str(&format!(".{:}", name));
+                name = p;
+            }
+            if let ConfigValue::Module(change) = value {
+                entries.append(&mut helper(name, change));
+            } else {
+                let mut e = configpb::ConfigEntry::new();
+                e.set_name(name);
+                e.set_value(from_change_value(value));
+                entries.push(e);
+            }
+        }
+        entries
+    };
+    helper("".to_owned(), change)
+}
+
+fn from_change_value(v: ConfigValue) -> String {
+    match v {
+        ConfigValue::Duration(_) => {
+            let v: ReadableDuration = v.into();
+            toml::to_string(&v).unwrap()
+        }
+        ConfigValue::Size(_) => {
+            let v: ReadableSize = v.into();
+            toml::to_string(&v).unwrap()
+        }
+        ConfigValue::U64(ref v) => toml::to_string(v).unwrap(),
+        ConfigValue::F64(ref v) => toml::to_string(v).unwrap(),
+        ConfigValue::Usize(ref v) => toml::to_string(v).unwrap(),
+        ConfigValue::Bool(ref v) => toml::to_string(v).unwrap(),
+        ConfigValue::String(ref v) => toml::to_string(v).unwrap(),
+        _ => unreachable!(),
+    }
+}
+
+type CfgResult<T> = Result<T, Box<dyn Error>>;
+
+#[derive(Default)]
+pub struct ConfigController {
+    current: TiKvConfig,
+}
+
+impl ConfigController {
+    pub fn new(cfg: TiKvConfig) -> Self {
+        ConfigController { current: cfg }
+    }
+
+    fn update_or_rollback(
+        &mut self,
+        mut incoming: TiKvConfig,
+    ) -> Option<Vec<configpb::ConfigEntry>> {
+        if incoming.validate().is_err() {
+            let entries = incoming.diff(&self.current);
+            return Some(to_config_entry(entries));
+        }
+        let diff = self.current.diff(&incoming);
+        if !diff.is_empty() {
+            // TODO: dispatch change to each module
+            self.current.update(diff);
+        }
+        None
+    }
+}
+
+pub struct ConfigClient {
+    version: configpb::Version,
+    config_controller: ConfigController,
+}
+
+impl ConfigClient {
+    pub fn start(
+        controller: ConfigController,
+        version: configpb::Version,
+        scheduler: FutureScheduler<PdTask>,
+    ) -> CfgResult<Self> {
+        if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
+            return Err(format!("failed to schedule refresh config task: {:?}", e).into());
+        }
+        Ok(ConfigClient {
+            version,
+            config_controller: controller,
+        })
+    }
+
+    pub fn get_refresh_interval(&self) -> Duration {
+        Duration::from(
+            self.config_controller
+                .current
+                .refresh_config_interval
+                .clone(),
+        )
+    }
+
+    pub fn get_id(&self) -> String {
+        self.config_controller.current.server.addr.clone()
+    }
+
+    pub fn get_version(&self) -> configpb::Version {
+        self.version.clone()
+    }
+}
+
+impl ConfigClient {
+    // FIXME: the usage of version and status_code need to consist with pd
+    pub fn create(
+        pd_client: Arc<impl PdClient>,
+        cfg: &TiKvConfig,
+    ) -> CfgResult<(configpb::Version, TiKvConfig)> {
+        let id = cfg.server.addr.clone();
+        let version = configpb::Version::new();
+        let cfg = toml::to_string(cfg)?;
+        let mut resp = pd_client.register_config(id, version, cfg)?;
+        match resp.get_status().code {
+            StatusCode::Ok => {
+                let cfg: TiKvConfig = toml::from_str(resp.get_config())?;
+                Ok((resp.take_version(), cfg))
+            }
+            code => {
+                debug!("failed to register config"; "status" => ?code);
+                Err(format!("{:?}", resp).into())
+            }
+        }
+    }
+
+    pub fn refresh_config(&mut self, pd_client: Arc<impl PdClient>) -> CfgResult<()> {
+        let mut resp = pd_client.get_config(self.get_id(), self.version.clone())?;
+        match resp.get_status().code {
+            StatusCode::NotChange => return Ok(()),
+            StatusCode::WrongVersion => {
+                let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
+                if let Some(entries) = self.config_controller.update_or_rollback(incoming) {
+                    debug!("tried to update local config to an invalid config"; "version" => ?resp.version);
+                    Ok(self.update_config(entries, pd_client)?)
+                } else {
+                    info!("local config updated"; "version" => ?resp.version);
+                    self.version = resp.take_version();
+                    Ok(())
+                }
+            }
+            code => {
+                debug!("failed to get remote config"; "status" => ?code);
+                Err(format!("{:?}", resp).into())
+            }
+        }
+    }
+
+    fn update_config(
+        &mut self,
+        entries: Vec<configpb::ConfigEntry>,
+        pd_client: Arc<impl PdClient>,
+    ) -> CfgResult<()> {
+        let mut version = self.version.clone();
+        version.local += 1;
+        let mut resp = pd_client.update_config(self.get_id(), version, entries)?;
+        match resp.get_status().code {
+            StatusCode::Ok => {
+                self.version = resp.take_version();
+                Ok(())
+            }
+            code => {
+                debug!("failed to update remote config"; "status" => ?code);
+                Err(format!("{:?}", resp).into())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::Builder;
@@ -1809,5 +1996,19 @@ mod tests {
             let string = format!("v = \"{}\"\n", case);
             toml::from_str::<LevelHolder>(&string).unwrap_err();
         }
+    }
+
+    #[test]
+    fn test_config_change_to_config_entry() {
+        let old = TiKvConfig::default();
+        let mut incoming = TiKvConfig::default();
+        incoming.refresh_config_interval = ReadableDuration::hours(10);
+        let diff = to_config_entry(old.diff(&incoming));
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff[0].name, "refresh-config-interval");
+        assert_eq!(
+            diff[0].value,
+            toml::to_string(&incoming.refresh_config_interval).unwrap()
+        );
     }
 }
