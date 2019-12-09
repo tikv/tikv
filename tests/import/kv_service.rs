@@ -79,6 +79,17 @@ fn test_kv_service() {
     assert!(!resp.has_error());
     let resp = send_write(&client, &head, &batch).unwrap();
     assert!(!resp.has_error());
+
+    let mut m = Mutation::new();
+    m.op = Mutation_OP::Put;
+    m.set_key(vec![2]);
+    m.set_value(vec![0; 90_000_000]);
+    let mut huge_batch = WriteBatch::new();
+    huge_batch.set_commit_ts(124);
+    huge_batch.mut_mutations().push(m);
+    let resp = send_write(&client, &head, &huge_batch).unwrap();
+    assert!(!resp.has_error());
+
     let resp = client.close_engine(&close).unwrap();
     assert!(!resp.has_error());
 
