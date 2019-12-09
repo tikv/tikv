@@ -14,6 +14,7 @@ use kvproto::raft_serverpb;
 use tempfile::{Builder, TempDir};
 
 use engine::Engines;
+use engine_rocks::RocksEngine;
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -315,7 +316,7 @@ impl Simulator for ServerCluster {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
     ) -> Result<()> {
         let router = match self.metas.get(&node_id) {
             None => return Err(box_err!("missing sender for store {}", node_id)),

@@ -336,16 +336,22 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonExtractSig => json_extract_fn_meta(),
         ScalarFuncSig::JsonLengthSig => json_length_fn_meta(),
         ScalarFuncSig::JsonRemoveSig => json_remove_fn_meta(),
+        ScalarFuncSig::DecimalAnyValue => any_value_fn_meta::<Decimal>(),
+        ScalarFuncSig::DurationAnyValue => any_value_fn_meta::<Duration>(),
+        ScalarFuncSig::IntAnyValue => any_value_fn_meta::<Int>(),
+        ScalarFuncSig::JsonAnyValue => any_value_fn_meta::<Json>(),
+        ScalarFuncSig::RealAnyValue => any_value_fn_meta::<Real>(),
+        ScalarFuncSig::StringAnyValue => any_value_fn_meta::<Bytes>(),
+        ScalarFuncSig::TimeAnyValue => any_value_fn_meta::<DateTime>(),
+        ScalarFuncSig::InetAton => inet_aton_fn_meta(),
         ScalarFuncSig::InetNtoa => inet_ntoa_fn_meta(),
-        ScalarFuncSig::Bin => bin_fn_meta(),
-        ScalarFuncSig::OctInt => oct_int_fn_meta(),
+        ScalarFuncSig::Inet6Aton => inet6_aton_fn_meta(),
+        ScalarFuncSig::Inet6Ntoa => inet6_ntoa_fn_meta(),
         ScalarFuncSig::IsIPv4 => is_ipv4_fn_meta(),
         ScalarFuncSig::IsIPv4Compat => is_ipv4_compat_fn_meta(),
         ScalarFuncSig::IsIPv4Mapped => is_ipv4_mapped_fn_meta(),
         ScalarFuncSig::IsIPv6 => is_ipv6_fn_meta(),
-        ScalarFuncSig::Inet6Ntoa => inet6_ntoa_fn_meta(),
-        ScalarFuncSig::Inet6Aton => inet6_aton_fn_meta(),
-        ScalarFuncSig::InetAton => inet_aton_fn_meta(),
+        ScalarFuncSig::OctInt => oct_int_fn_meta(),
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
         ScalarFuncSig::CastIntAsString |
@@ -395,6 +401,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CastJsonAsTime |
         ScalarFuncSig::CastJsonAsDuration |
         ScalarFuncSig::CastJsonAsJson => map_cast_func(expr)?,
+        ScalarFuncSig::Bin => bin_fn_meta(),
         ScalarFuncSig::Length => length_fn_meta(),
         ScalarFuncSig::BitLength => bit_length_fn_meta(),
         ScalarFuncSig::Concat => concat_fn_meta(),
