@@ -244,9 +244,7 @@ impl RpnExpression {
                     assert!(stack.len() >= *args_len);
                     let stack_slice_begin = stack.len() - *args_len;
                     let stack_slice = &stack[stack_slice_begin..];
-                    let mut call_extra = RpnFnCallExtra {
-                        ret_field_type,
-                    };
+                    let mut call_extra = RpnFnCallExtra { ret_field_type };
                     let ret = (func_meta.fn_ptr)(
                         ctx,
                         output_rows,

@@ -674,9 +674,15 @@ impl VargsRpnFn {
         let fn_name = self.item_fn.sig.ident.to_string();
         let arg_type = &self.arg_type;
         let captures = &self.captures;
-        let init_metadata_fn =
-            generate_init_metadata_fn(&self.metadata_type, &self.metadata_mapper, &impl_generics, where_clause);
-        let downcast_metadata = generate_downcast_metadata(self.metadata_type.is_some() || self.metadata_mapper.is_some());
+        let init_metadata_fn = generate_init_metadata_fn(
+            &self.metadata_type,
+            &self.metadata_mapper,
+            &impl_generics,
+            where_clause,
+        );
+        let downcast_metadata = generate_downcast_metadata(
+            self.metadata_type.is_some() || self.metadata_mapper.is_some(),
+        );
         let metadata_type_checker = generate_metadata_type_checker(
             &self.metadata_type,
             &self.metadata_mapper,
@@ -808,9 +814,15 @@ impl RawVargsRpnFn {
         let fn_ident = &self.item_fn.sig.ident;
         let fn_name = self.item_fn.sig.ident.to_string();
         let captures = &self.captures;
-        let init_metadata_fn =
-            generate_init_metadata_fn(&self.metadata_type, &self.metadata_mapper, &impl_generics, where_clause);
-        let downcast_metadata = generate_downcast_metadata(self.metadata_type.is_some() || self.metadata_mapper.is_some());
+        let init_metadata_fn = generate_init_metadata_fn(
+            &self.metadata_type,
+            &self.metadata_mapper,
+            &impl_generics,
+            where_clause,
+        );
+        let downcast_metadata = generate_downcast_metadata(
+            self.metadata_type.is_some() || self.metadata_mapper.is_some(),
+        );
         let metadata_type_checker = generate_metadata_type_checker(
             &self.metadata_type,
             &self.metadata_mapper,

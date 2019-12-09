@@ -1170,7 +1170,7 @@ mod tests {
         let r = func(&metadata, &None).unwrap();
         assert!(r.is_none());
     }
-    
+
     fn test_none_with_ctx_and_metadata<F, Input, Ret>(func: F)
     where
         F: Fn(&mut EvalContext, &tipb::InUnionMetadata, &Option<Input>) -> Result<Option<Ret>>,
@@ -1183,7 +1183,12 @@ mod tests {
 
     fn test_none_with_ctx_and_extra_and_metadata<F, Input, Ret>(func: F)
     where
-        F: Fn(&mut EvalContext, &RpnFnCallExtra, &tipb::InUnionMetadata, &Option<Input>) -> Result<Option<Ret>>,
+        F: Fn(
+            &mut EvalContext,
+            &RpnFnCallExtra,
+            &tipb::InUnionMetadata,
+            &Option<Input>,
+        ) -> Result<Option<Ret>>,
     {
         let mut ctx = EvalContext::default();
         let ret_field_type: FieldType = FieldType::default();
@@ -1296,12 +1301,8 @@ mod tests {
         }
     }
 
-    fn make_extra<'a>(
-        ret_field_type: &'a FieldType,
-    ) -> RpnFnCallExtra<'a> {
-        RpnFnCallExtra {
-            ret_field_type,
-        }
+    fn make_extra<'a>(ret_field_type: &'a FieldType) -> RpnFnCallExtra<'a> {
+        RpnFnCallExtra { ret_field_type }
     }
 
     fn make_log<P: Display, R: Display + Debug>(
@@ -3478,11 +3479,9 @@ mod tests {
     }
 
     macro_rules! cast_closure_with_metadata {
-        ($cast_fn:expr) => (
-            |ctx, extra, _, val| {
-                $cast_fn(ctx, extra, val)
-            }
-        );
+        ($cast_fn:expr) => {
+            |ctx, extra, _, val| $cast_fn(ctx, extra, val)
+        };
     }
 
     /// base_cs
@@ -3495,7 +3494,12 @@ mod tests {
         input_as_debug_str_func: FnToStr,
         func_name: &str,
     ) where
-        FnCast: Fn(&mut EvalContext, &RpnFnCallExtra, &tipb::InUnionMetadata, &Option<T>) -> Result<Option<Decimal>>,
+        FnCast: Fn(
+            &mut EvalContext,
+            &RpnFnCallExtra,
+            &tipb::InUnionMetadata,
+            &Option<T>,
+        ) -> Result<Option<Decimal>>,
         FnToStr: Fn(&T) -> String,
     {
         #[derive(Clone, Copy, Debug)]
@@ -3827,7 +3831,8 @@ mod tests {
                         ..CtxConfig::default()
                     }
                     .into();
-                    let cast_func_res = cast_func(&mut ctx, &extra, &metadata, &Some(input.clone()));
+                    let cast_func_res =
+                        cast_func(&mut ctx, &extra, &metadata, &Some(input.clone()));
 
                     let mut ctx = CtxConfig {
                         overflow_as_warning,
