@@ -383,7 +383,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     // use start_key sha256 instead of start_key to avoid file name too long os error
                     tikv_util::file::sha256(&k.into_raw().unwrap())
                         .ok()
-                        .and_then(|b| String::from_utf8(b).ok())
+                        .map(|b| hex::encode(b))
                 });
 
                 let name = backup_file_name(store_id, &brange.region, key);
