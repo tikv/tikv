@@ -11,8 +11,8 @@ use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
 
 use chrono::Utc;
-use std::path::{Path, PathBuf};
 use std::io;
+use std::path::{Path, PathBuf};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);

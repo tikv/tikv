@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, ErrorKind, Write};
+use std::io::{self, Error, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use crate::config::{ReadableDuration, ReadableSize};
@@ -9,9 +9,12 @@ use crate::config::{ReadableDuration, ReadableSize};
 /// Opens log file with append mode. Creates a new log file if it doesn't exist.
 fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
     let path = path.as_ref();
-    let parent = path
-        .parent()
-        .expect("Unable to get parent directory of log file");
+    let parent = path.parent().ok_or_else(|| {
+        Error::new(
+            ErrorKind::Other,
+            "Unable to get parent directory of log file",
+        )
+    })?;
     if !parent.is_dir() {
         fs::create_dir_all(parent)?
     }
