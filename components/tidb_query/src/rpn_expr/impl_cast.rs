@@ -2021,6 +2021,43 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_decimal_as_time() {
+        let cases = vec![
+            ("2019-09-16 10:11:12", "20190916101112", 0),
+            ("2019-09-16 10:11:12", "190916101112", 0),
+            ("2019-09-16 10:11:01", "19091610111", 0),
+            ("2019-09-16 10:11:00", "1909161011", 0),
+            ("2019-09-16 10:01:00", "190916101", 0),
+            ("1909-12-10 00:00:00", "19091210", 0),
+            ("2020-02-29 10:00:00", "20200229100000", 0),
+            ("2019-09-16 01:00:00", "1909161", 0),
+            ("2019-09-16 00:00:00", "190916", 0),
+            ("2019-09-01 00:00:00", "19091", 0),
+            ("2019-09-16 10:11:12.111", "190916101112.111", 3),
+            ("2019-09-16 10:11:12.111", "20190916101112.111", 3),
+            ("2019-09-16 10:11:12.67", "20190916101112.666", 2),
+            ("2019-09-16 10:11:13.0", "20190916101112.999", 1),
+        ];
+
+        for (expected, decimal, fsp) in cases {
+            let decimal: Decimal = decimal.parse().unwrap();
+            let actual: Time = RpnFnScalarEvaluator::new()
+                .push_param(decimal)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::DateTime)
+                        .decimal(fsp)
+                        .build(),
+                )
+                .evaluate(ScalarFuncSig::CastDecimalAsTime)
+                // `Result<Option<_>>`
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.to_string(), expected);
+        }
+    }
+
+    #[test]
     fn test_duration_as_int() {
         // TODO: add more test case
         let cs: Vec<(Duration, i64)> = vec![

@@ -19,7 +19,7 @@ pub trait CFHandleExt {
     type CFHandle: CFHandle;
     type ColumnFamilyOptions: ColumnFamilyOptions;
 
-    fn cf_handle(&self, name: &str) -> Option<&Self::CFHandle>;
+    fn cf_handle(&self, name: &str) -> Result<&Self::CFHandle>;
     fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::ColumnFamilyOptions;
     fn set_options_cf(&self, cf: &Self::CFHandle, options: &[(&str, &str)]) -> Result<()>;
 }
