@@ -16,7 +16,7 @@ use grpcio::{
     CallOption, Channel, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
 };
-use kvproto::configpb_grpc::ConfigClient;
+use kvproto::configpb::ConfigClient;
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient, RegionHeartbeatRequest,
     RegionHeartbeatResponse, ResponseHeader,

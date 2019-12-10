@@ -70,7 +70,7 @@ impl RpcClient {
     }
 
     fn get_config_header(&self) -> configpb::Header {
-        let mut header = configpb::Header::new();
+        let mut header = configpb::Header::default();
         header.set_cluster_id(self.cluster_id);
         header
     }
@@ -577,7 +577,7 @@ impl PdClient for RpcClient {
         version: configpb::Version,
         cfg: String,
     ) -> Result<configpb::CreateResponse> {
-        let mut req = configpb::CreateRequest::new();
+        let mut req = configpb::CreateRequest::default();
         req.set_header(self.get_config_header());
         req.set_component(CONFIG_COMPONENT.to_owned());
         req.set_component_id(id);
@@ -591,7 +591,7 @@ impl PdClient for RpcClient {
     }
 
     fn get_config(&self, id: String, version: configpb::Version) -> Result<configpb::GetResponse> {
-        let mut req = configpb::GetRequest::new();
+        let mut req = configpb::GetRequest::default();
         req.set_header(self.get_config_header());
         req.set_component(CONFIG_COMPONENT.to_owned());
         req.set_component_id(id);
@@ -609,11 +609,11 @@ impl PdClient for RpcClient {
         version: configpb::Version,
         entries: Vec<configpb::ConfigEntry>,
     ) -> Result<configpb::UpdateResponse> {
-        let mut req = configpb::UpdateRequest::new();
+        let mut req = configpb::UpdateRequest::default();
         req.set_header(self.get_config_header());
         {
-            let mut kind = configpb::ConfigKind::new();
-            let mut local = configpb::Local::new();
+            let mut kind = configpb::ConfigKind::default();
+            let mut local = configpb::Local::default();
             local.set_component_id(id);
             kind.set_local(local);
             req.set_kind(kind);

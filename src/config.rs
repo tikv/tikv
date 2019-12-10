@@ -1771,12 +1771,7 @@ impl ConfigHandler {
     }
 
     pub fn get_refresh_interval(&self) -> Duration {
-        Duration::from(
-            self.config_controller
-                .current
-                .refresh_config_interval
-                .clone(),
-        )
+        Duration::from(self.config_controller.current.refresh_config_interval)
     }
 
     pub fn get_id(&self) -> String {
@@ -1817,7 +1812,7 @@ impl ConfigHandler {
     pub fn refresh_config(&mut self, pd_client: Arc<impl PdClient>) -> CfgResult<()> {
         let mut resp = pd_client.get_config(self.get_id(), self.version.clone())?;
         match resp.get_status().code {
-            StatusCode::NotChange => return Ok(()),
+            StatusCode::NotChange => Ok(()),
             StatusCode::WrongVersion => {
                 let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
                 if let Some(rollback_change) = self.config_controller.update_or_rollback(incoming) {
