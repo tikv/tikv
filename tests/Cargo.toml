@@ -44,8 +44,8 @@ path = "benches/channel/mod.rs"
 [features]
 failpoints = ["tikv/failpoints"]
 profiling = ["profiler/profiling"]
-protobuf-codec = ["tikv/protobuf-codec"]
-prost-codec = ["tikv/prost-codec", "test_coprocessor/prost-codec"]
+protobuf-codec = ["tikv/protobuf-codec", "external_storage/protobuf-codec"]
+prost-codec = ["tikv/prost-codec", "test_coprocessor/prost-codec", "external_storage/prost-codec"]
 
 [dependencies]
 crc32fast = "1.2"
@@ -82,6 +82,7 @@ rand_xorshift = "0.1"
 
 engine_rocks = { path = "../components/engine_rocks" }
 engine_traits = { path = "../components/engine_traits" }
+external_storage = { path = "../components/external_storage" }
 keys = { path = "../components/keys" }
 profiler = { path = "../components/profiler" }
 panic_hook = { path = "../components/panic_hook" }

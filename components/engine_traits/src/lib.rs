@@ -218,6 +218,8 @@ mod snapshot;
 pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
+mod table_properties;
+pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
 
@@ -242,6 +244,8 @@ mod errors;
 pub use crate::errors::*;
 mod options;
 pub use crate::options::*;
+pub mod range;
+pub use crate::range::*;
 pub mod util;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
