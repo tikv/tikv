@@ -6,7 +6,7 @@ use rusoto_core::region;
 use rusoto_core::request::DispatchSignedRequest;
 use rusoto_core::request::{HttpClient, HttpConfig};
 use rusoto_core::RusotoError;
-use rusoto_credential::StaticProvider;
+use rusoto_credential::{DefaultCredentialsProvider, StaticProvider};
 use rusoto_s3::*;
 
 use super::ExternalStorage;
@@ -40,21 +40,6 @@ impl S3Storage {
         if config.bucket.is_empty() {
             return Err(Error::new(ErrorKind::InvalidInput, "missing bucket name"));
         }
-        if config.access_key.is_empty() {
-            return Err(Error::new(ErrorKind::InvalidInput, "missing access_key"));
-        }
-        if config.secret_access_key.is_empty() {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                "missing secret_access_key",
-            ));
-        }
-        let static_cred = StaticProvider::new(
-            config.access_key.clone(),
-            config.secret_access_key.clone(),
-            None, /* token */
-            None, /* valid_for */
-        );
         let region = if config.endpoint.is_empty() {
             config.region.parse::<region::Region>().map_err(|e| {
                 Error::new(
@@ -68,9 +53,26 @@ impl S3Storage {
                 endpoint: config.endpoint.clone(),
             }
         };
+        let client = if config.access_key.is_empty() || config.secret_access_key.is_empty() {
+            let cred_provider = DefaultCredentialsProvider::new().map_err(|e| {
+                Error::new(
+                    ErrorKind::PermissionDenied,
+                    format!("unable to get credentials: {}", e),
+                )
+            })?;
+            S3Client::new_with(dispatcher, cred_provider, region)
+        } else {
+            let cred_provider = StaticProvider::new(
+                config.access_key.clone(),
+                config.secret_access_key.clone(),
+                None, /* token */
+                None, /* valid_for */
+            );
+            S3Client::new_with(dispatcher, cred_provider, region)
+        };
         Ok(S3Storage {
             config: config.clone(),
-            client: S3Client::new_with(dispatcher, static_cred, region),
+            client,
         })
     }
 
@@ -143,16 +145,6 @@ mod tests {
             ..Default::default()
         };
         let cases = vec![
-            // missing access_key
-            Config {
-                access_key: "".to_string(),
-                ..config.clone()
-            },
-            // missing secret_access_key
-            Config {
-                secret_access_key: "".to_string(),
-                ..config.clone()
-            },
             // missing both region and endpoint
             Config {
                 region: "".to_string(),
