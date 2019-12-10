@@ -36,7 +36,6 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "sst_importer/protobuf-codec",
 ]
-s3 = ["external_storage/s3"]
 
 [lib]
 name = "tikv"
