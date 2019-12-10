@@ -96,7 +96,7 @@ impl SSTImporter {
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
-            "url" => ?backend,
+            "url" => %(url_of_backend(backend)),
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.as_ref().map_or(0, |l| l.get_bytes_per_second()),
