@@ -124,6 +124,7 @@ impl BackupRange {
         writer: &mut BackupWriter,
         engine: &E,
         backup_ts: TimeStamp,
+        begin_ts: TimeStamp,
     ) -> Result<Statistics> {
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
@@ -146,7 +147,7 @@ impl BackupRange {
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
         let mut scanner = snap_store
-            .entry_scanner(start_key, end_key, 0.into())
+            .entry_scanner(start_key, end_key, begin_ts)
             .unwrap();
 
         let start = Instant::now();
@@ -362,9 +363,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
         cancel: Arc<AtomicBool>,
     ) {
-        // TODO: support incremental backup
-        let _ = start_ts;
-
         let backup_ts = end_ts;
         let engine = self.engine.clone();
         let db = self.db.clone();
@@ -397,7 +395,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         return tx.send((brange, Err(e))).map_err(|_| ());
                     }
                 };
-                let stat = match brange.backup(&mut writer, &engine, backup_ts) {
+                let stat = match brange.backup(&mut writer, &engine, backup_ts, start_ts) {
                     Ok(s) => s,
                     Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
                 };
