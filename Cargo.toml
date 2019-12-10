@@ -27,12 +27,14 @@ prost-codec = [
   "raft/prost-codec",
   "engine/prost-codec",
   "tikv_util/prost-codec",
+  "sst_importer/prost-codec",
 ]
 protobuf-codec = [
   "tipb/protobuf-codec",
   "kvproto/protobuf-codec",
   "grpcio/protobuf-codec",
   "raft/protobuf-codec",
+  "sst_importer/protobuf-codec",
 ]
 
 [lib]
@@ -45,6 +47,7 @@ byteorder = "1.2"
 bytes = "0.4.12"
 chrono = "0.4"
 codec = { path = "components/codec" }
+configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
@@ -158,6 +161,7 @@ members = [
   "components/tikv_alloc",
   "components/match_template",
   "components/codec",
+  "components/configuration",
   "components/panic_hook",
   "components/tipb_helper",
   "components/log_wrappers",
