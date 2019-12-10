@@ -65,15 +65,22 @@
 //! E.g., `#[rpn_fn(raw_varg, extra_validator = json_object_validator)]`
 //!
 //! ### `metadata_type`
-//! Type of raw metadata type defined in tipb.
+//!
+//! The type of the metadata structure defined in tipb.
+//! If `metadata_mapper` is not specified, the protobuf metadata structure will be used as the metadata directly.
 //!
 //! ### `metadata_mapper`
 //!
-//! A function name for custom code to construct metadata from optional raw metadata and
-//! its tree node in the expression tree.
-//! If metadata_type is specified, the mapper function should have the signature `metadata_type, &mut tipb::Expr -> T`.
-//! Otherwise, the mapper function should have the signature `&mut tipb::Expr -> T`
-//! E.g., `#[rpn_fn(varg, capture = [metadata], metadata_type = tipb::SomeMetadata, metadata_mapper = some_mapper)]`
+//! A function name to construct a new metadata or transform a protobuf metadata structure into a desired form.
+//! The function signatures varies according to the existence of `metadata_mapper` and `metadata_type` as follows.
+//!
+//! - `metadata_mapper ` exists, `metadata_type` missing: `fn(&mut tipb::Expr) -> T`
+//!
+//! Constructs a new metadata in type `T`.
+//!
+//! - `metadata_mapper ` exists, `metadata_type` exists: `fn(MetaDataType, &mut tipb::Expr) -> T`
+//!
+//! Transforms a protobuf metadata type `MetaDataType` specified by `metadata_type` into a new type `T`.
 //!
 //! ### `capture`
 //!
