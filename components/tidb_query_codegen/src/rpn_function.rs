@@ -554,7 +554,7 @@ fn generate_init_metadata_fn(
                     .and_then(|metadata| #metadata_mapper(expr, metadata))
                     .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
             }
-        },
+        }
         (Some(metadata_type), None) => {
             let parse_body = parse_body_gen(metadata_type);
             quote! {
@@ -562,7 +562,7 @@ fn generate_init_metadata_fn(
                 .map_err(|e| other_err!("Decode metadata failed: {}", e))
                 .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
             }
-        },
+        }
         (None, Some(metadata_mapper)) => quote! {
             #metadata_mapper(expr)
                 .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
