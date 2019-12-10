@@ -779,14 +779,23 @@ impl<T: PdClient> Runner<T> {
 
     fn handle_refresh_config(&mut self, handle: &Handle) {
         let config_handler = &mut self.config_handler;
-        info!("refresh config"; "component id" => config_handler.get_id(), "version" => ?config_handler.get_version());
+        info!(
+            "refresh config";
+            "component id" => config_handler.get_id(),
+            "version" => ?config_handler.get_version()
+        );
         if let Err(e) = config_handler.refresh_config(self.pd_client.clone()) {
-            error!("failed to refresh config"; "component id" => config_handler.get_id(), "version" => ?config_handler.get_version(), "err" => ?e)
+            error!(
+                "failed to refresh config";
+                "component id" => config_handler.get_id(),
+                "version" => ?config_handler.get_version(),
+                "err" => ?e
+            )
         }
         let scheduler = self.scheduler.clone();
         let when = Instant::now() + config_handler.get_refresh_interval();
         let f = Delay::new(when)
-            .map_err(|e| info!("timeout timer delay errored"; "err" => ?e))
+            .map_err(|e| warn!("timeout timer delay errored"; "err" => ?e))
             .then(move |_| {
                 if let Err(e) = scheduler.schedule(Task::RefreshConfig) {
                     error!("failed to schedule refresh config task"; "err" => ?e)

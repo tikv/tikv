@@ -1675,6 +1675,11 @@ pub fn persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
 }
 
 fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
+    // This helper function translate nested module config to a list
+    // of name/value pair and seperated module by '.' in the name field,
+    // by recursive call helper function with an prefix which represent
+    // th prefix of current module. And also compatible the field name
+    // in config struct with the name in toml file.
     fn helper(prefix: String, change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
         let mut entries = Vec::with_capacity(change.len());
         for (mut name, value) in change {
@@ -1685,7 +1690,7 @@ fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>
             }
             if !prefix.is_empty() {
                 let mut p = prefix.clone();
-                p.push_str(&format!(".{:}", name));
+                p.push_str(&format!(".{}", name));
                 name = p;
             }
             if let ConfigValue::Module(change) = value {

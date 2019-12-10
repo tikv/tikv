@@ -609,15 +609,13 @@ impl PdClient for RpcClient {
         version: configpb::Version,
         entries: Vec<configpb::ConfigEntry>,
     ) -> Result<configpb::UpdateResponse> {
+        let mut local = configpb::Local::default();
+        local.set_component_id(id);
+        let mut kind = configpb::ConfigKind::default();
+        kind.set_local(local);
         let mut req = configpb::UpdateRequest::default();
         req.set_header(self.get_config_header());
-        {
-            let mut kind = configpb::ConfigKind::default();
-            let mut local = configpb::Local::default();
-            local.set_component_id(id);
-            kind.set_local(local);
-            req.set_kind(kind);
-        }
+        req.set_kind(kind);
         req.set_version(version);
         req.set_entries(entries.into());
 
