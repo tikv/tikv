@@ -174,7 +174,7 @@ impl<E: Engine> Endpoint<E> {
                     }
                 }
                 if start_ts == 0 {
-                    start_ts = dag.get_start_ts();
+                    start_ts = dag.get_start_ts_fallback();
                 }
 
                 req_ctx = ReqContext::new(
@@ -217,7 +217,7 @@ impl<E: Engine> Endpoint<E> {
                 parser.merge_to(&mut analyze)?;
                 let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
                 if start_ts == 0 {
-                    start_ts = analyze.get_start_ts();
+                    start_ts = analyze.get_start_ts_fallback();
                 }
 
                 req_ctx = ReqContext::new(
@@ -243,7 +243,7 @@ impl<E: Engine> Endpoint<E> {
                 parser.merge_to(&mut checksum)?;
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
                 if start_ts == 0 {
-                    start_ts = checksum.get_start_ts();
+                    start_ts = checksum.get_start_ts_fallback();
                 }
 
                 req_ctx = ReqContext::new(
