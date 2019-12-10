@@ -50,13 +50,13 @@ use crate::raftstore::store::peer::{
 };
 use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::raftstore::store::transport::Transport;
-use crate::raftstore::store::util::KeysInfoFormatter;
+use crate::raftstore::store::util::{KeysInfoFormatter, LeaseState};
 use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
 use crate::raftstore::store::{
-    util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
-    SnapshotDeleter, StoreMsg,
+    util, CasualMessage, Config, PdTask, PeerMsg, PeerTicks, RaftCommand, RequestInspector,
+    SignificantMsg, SnapKey, SnapshotDeleter, StoreMsg,
 };
 
 pub struct DestroyPeerJob {
@@ -790,7 +790,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         // Send a read index to renew heartbeat
-        if self.fsm.peer.is_leader() {
+        if self.fsm.peer.is_leader() && self.fsm.peer.inspect_lease() != LeaseState::Valid {
             let last_pending_read_count = self.fsm.peer.raft_group.raft.pending_read_count();
             let last_ready_read_count = self.fsm.peer.raft_group.raft.ready_read_count();
 
