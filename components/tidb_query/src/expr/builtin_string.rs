@@ -87,11 +87,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn locate_2_args(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-    ) -> Result<Option<i64>> {
+    pub fn locate_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
         Ok(twoway::find_bytes(&s, &substr)
@@ -100,11 +96,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn locate_3_args(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-    ) -> Result<Option<i64>> {
+    pub fn locate_3_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
         let pos = try_opt!(self.children[2].eval_int(ctx, row));
