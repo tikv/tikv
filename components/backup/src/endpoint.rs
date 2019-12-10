@@ -84,7 +84,7 @@ impl Task {
             None
         };
         let storage = LimitedStorage {
-            storage: create_storage(req.get_path())?,
+            storage: create_storage(req.get_storage_backend())?,
             limiter,
         };
 
@@ -591,7 +591,7 @@ fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> Stri
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use external_storage::LocalStorage;
+    use external_storage::{make_local_backend, make_noop_backend, LocalStorage};
     use futures::{self, Future, Stream};
     use kvproto::metapb;
     use rand;
@@ -855,10 +855,7 @@ pub mod tests {
             Task::new(req.clone(), tx.clone()).unwrap_err();
 
             // Set an unique path to avoid AlreadyExists error.
-            req.set_path(format!(
-                "local://{}",
-                tmp.path().join(format!("{}", ts)).display()
-            ));
+            req.set_storage_backend(make_local_backend(&tmp.path().join(ts.to_string())));
             if len % 2 == 0 {
                 req.set_rate_limit(10 * 1024 * 1024);
             }
@@ -914,10 +911,7 @@ pub mod tests {
         req.set_end_version(now.into_inner());
         req.set_concurrency(4);
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", now)).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req.clone(), tx).unwrap();
         endpoint.handle_backup_task(task);
@@ -938,10 +932,7 @@ pub mod tests {
         req.set_start_version(now.into_inner());
         req.set_end_version(now.into_inner());
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", now)).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req.clone(), tx).unwrap();
         endpoint.handle_backup_task(task);
@@ -987,7 +978,7 @@ pub mod tests {
         req.set_start_version(now.into_inner());
         req.set_end_version(now.into_inner());
         req.set_concurrency(4);
-        req.set_path(format!("local://{}", temp.path().display()));
+        req.set_storage_backend(make_local_backend(temp.path()));
 
         // Cancel the task before starting the task.
         let (tx, rx) = unbounded();
@@ -1024,7 +1015,7 @@ pub mod tests {
         req.set_start_version(1);
         req.set_end_version(1);
         req.set_concurrency(4);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req.clone(), tx).unwrap();
@@ -1055,7 +1046,7 @@ pub mod tests {
         req.set_end_key(vec![]);
         req.set_start_version(1);
         req.set_end_version(1);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, _) = unbounded();
 
@@ -1116,7 +1107,7 @@ pub mod tests {
         req.set_start_version(1);
         req.set_end_version(1);
         req.set_concurrency(10);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, _) = futures::sync::mpsc::unbounded();
         let (task, _) = Task::new(req, tx).unwrap();
