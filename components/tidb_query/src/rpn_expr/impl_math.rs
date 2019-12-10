@@ -6,7 +6,7 @@ use tidb_query_codegen::rpn_fn;
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
-use crate::util::MySQLRng;
+use crate::expr_util::rand::MySQLRng;
 use crate::Result;
 
 #[rpn_fn]
