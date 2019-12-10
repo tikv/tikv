@@ -305,7 +305,7 @@ where
         )
     })?;
 
-    let metadata = (func_meta.metadata_ctor_ptr)(&mut tree_node)?;
+    let metadata = (func_meta.metadata_expr_ptr)(&mut tree_node)?;
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
 

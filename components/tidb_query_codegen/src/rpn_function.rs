@@ -595,7 +595,7 @@ fn generate_metadata_type_checker(
     fn_body: TokenStream,
 ) -> TokenStream {
     if metadata_type.is_some() || metadata_mapper.is_some() {
-        let metadata_ctor = match (metadata_type, metadata_mapper) {
+        let metadata_expr = match (metadata_type, metadata_mapper) {
             (Some(_), Some(metadata_mapper)) => quote! {
                 &#metadata_mapper(Default::default(), expr).unwrap()
             },
@@ -612,7 +612,7 @@ fn generate_metadata_type_checker(
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                     expr: &mut ::tipb::Expr,
                 ) #where_clause {
-                    let metadata = #metadata_ctor;
+                    let metadata = #metadata_expr;
                     #fn_body
                 }
             };
@@ -762,7 +762,7 @@ impl VargsRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    metadata_ctor_ptr: init_metadata #ty_generics_turbofish,
+                    metadata_expr_ptr: init_metadata #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -902,7 +902,7 @@ impl RawVargsRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    metadata_ctor_ptr: init_metadata #ty_generics_turbofish,
+                    metadata_expr_ptr: init_metadata #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -1163,7 +1163,7 @@ impl NormalRpnFn {
 
                 crate::rpn_expr::RpnFnMeta {
                     name: #fn_name,
-                    metadata_ctor_ptr: init_metadata #ty_generics_turbofish,
+                    metadata_expr_ptr: init_metadata #ty_generics_turbofish,
                     validator_ptr: validate #ty_generics_turbofish,
                     fn_ptr: run #ty_generics_turbofish,
                 }
@@ -1331,7 +1331,7 @@ mod tests_normal {
                 }
                 crate::rpn_expr::RpnFnMeta {
                     name: "foo",
-                    metadata_ctor_ptr: init_metadata,
+                    metadata_expr_ptr: init_metadata,
                     validator_ptr: validate,
                     fn_ptr: run,
                 }
@@ -1509,7 +1509,7 @@ mod tests_normal {
                 }
                 crate::rpn_expr::RpnFnMeta {
                     name: "foo",
-                    metadata_ctor_ptr: init_metadata::<A, B>,
+                    metadata_expr_ptr: init_metadata::<A, B>,
                     validator_ptr: validate::<A, B>,
                     fn_ptr: run::<A, B>,
                 }
