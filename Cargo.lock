@@ -778,6 +778,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git?branch=release-3.1)",
  "rand 0.6.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=91904ade)",
@@ -1306,7 +1307,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-3.1#4f292e1801d8d24b40f63acc9f9367a453de6b0f"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-3.1#c23886becb540cf68d6615455f3717427044bd20"
 dependencies = [
  "futures 0.1.29 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.4.7 (registry+https://github.com/rust-lang/crates.io-index)",
