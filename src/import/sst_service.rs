@@ -3,7 +3,7 @@
 use std::convert::TryFrom;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdon_writes};
+use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
 use engine::rocks::DB;
 use engine::CF_DEFAULT;
 use futures::sync::mpsc;
@@ -203,14 +203,16 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let label = "ingest";
         let timer = Instant::now_coarse();
 
-        // Make ingest command.
-        if ingest_maybe_slowdon_writes(&self.engine, CF_DEFAULT) {
+        if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
+            && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
+        {
             return send_rpc_error(
                 ctx,
                 sink,
                 Error::Engine(box_err!("too many sst files are ingesting.")),
             );
         }
+        // Make ingest command.
         let mut ingest = Request::default();
         ingest.set_cmd_type(CmdType::IngestSst);
         ingest.mut_ingest_sst().set_sst(req.take_sst());

@@ -53,7 +53,7 @@ pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
     Ok(handle)
 }
 
-pub fn ingest_maybe_slowdon_writes(db: &DB, cf: &str) -> bool {
+pub fn ingest_maybe_slowdown_writes(db: &DB, cf: &str) -> bool {
     let handle = get_cf_handle(db, cf).unwrap();
     if let Some(n) = get_cf_num_files_at_level(db, handle, 0) {
         let options = db.get_options_cf(handle);

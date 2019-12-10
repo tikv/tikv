@@ -502,7 +502,7 @@ impl SnapContext {
             if plain_file_used(cf) {
                 continue;
             }
-            if rocks::util::ingest_maybe_slowdon_writes(&self.engines.kv, cf) {
+            if rocks::util::ingest_maybe_slowdown_writes(&self.engines.kv, cf) {
                 return true;
             }
         }
