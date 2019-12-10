@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::path::Path;
 use std::sync::*;
 use std::thread;
 use std::time::Duration;
@@ -175,14 +176,14 @@ impl TestSuite {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         backup_ts: TimeStamp,
-        path: String,
+        path: &Path,
     ) -> future_mpsc::UnboundedReceiver<BackupResponse> {
         let mut req = BackupRequest::default();
         req.set_start_key(start_key);
         req.set_end_key(end_key);
         req.start_version = backup_ts.into_inner();
         req.end_version = backup_ts.into_inner();
-        req.set_path(path);
+        req.set_storage_backend(make_local_backend(path));
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
@@ -258,15 +259,12 @@ fn test_backup_and_import() {
     // Push down backup request.
     let tmp = Builder::new().tempdir().unwrap();
     let backup_ts = suite.alloc_ts();
-    let storage_path = format!(
-        "local://{}",
-        tmp.path().join(format!("{}", backup_ts)).display()
-    );
+    let storage_path = tmp.path().join(format!("{}", backup_ts));
     let rx = suite.backup(
         vec![], // start
         vec![], // end
         backup_ts,
-        storage_path.clone(),
+        &storage_path,
     );
     let resps1 = rx.collect().wait().unwrap();
     // Only leader can handle backup.
@@ -284,16 +282,14 @@ fn test_backup_and_import() {
         vec![], // start
         vec![], // end
         backup_ts,
-        format!(
-            "local://{}",
-            tmp.path().join(format!("{}", backup_ts.next())).display()
-        ),
+        &tmp.path().join(format!("{}", backup_ts.next())),
     );
     let resps2 = rx.collect().wait().unwrap();
     assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
 
     // Use importer to restore backup files.
-    let storage = create_storage(&storage_path).unwrap();
+    let backend = make_local_backend(&storage_path);
+    let storage = create_storage(&backend).unwrap();
     let region = suite.cluster.get_region(b"");
     let mut sst_meta = SstMeta::default();
     sst_meta.region_id = region.get_id();
@@ -343,12 +339,7 @@ fn test_backup_and_import() {
         vec![], // start
         vec![], // end
         backup_ts,
-        format!(
-            "local://{}",
-            tmp.path()
-                .join(format!("{}", backup_ts.next().next()))
-                .display()
-        ),
+        &tmp.path().join(format!("{}", backup_ts.next().next())),
     );
     let resps3 = rx.collect().wait().unwrap();
     assert_eq!(files1, resps3[0].files);
@@ -384,15 +375,12 @@ fn test_backup_meta() {
 
     // Push down backup request.
     let tmp = Builder::new().tempdir().unwrap();
-    let storage_path = format!(
-        "local://{}",
-        tmp.path().join(format!("{}", backup_ts)).display()
-    );
+    let storage_path = tmp.path().join(format!("{}", backup_ts));
     let rx = suite.backup(
         vec![], // start
         vec![], // end
         backup_ts,
-        storage_path.clone(),
+        &storage_path,
     );
     let resps1 = rx.collect().wait().unwrap();
     // Only leader can handle backup.
