@@ -280,3 +280,12 @@ thread_local! {
     pub static RAW_VARG_PARAM_BUF: std::cell::RefCell<Vec<ScalarValueRef<'static>>> =
         std::cell::RefCell::new(Vec::with_capacity(20));
 }
+
+pub fn extract_metadata_from_val<T: protobuf::Message + Default>(val: &[u8]) -> Result<T> {
+    if val.len() == 0 {
+        Ok(T::default())
+    } else {
+        protobuf::parse_from_bytes::<T>(val)
+            .map_err(|e| other_err!("Decode metadata failed: {}", e))
+    }
+}

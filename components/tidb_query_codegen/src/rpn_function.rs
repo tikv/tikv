@@ -543,33 +543,17 @@ fn generate_init_metadata_fn(
     impl_generics: &ImplGenerics<'_>,
     where_clause: Option<&WhereClause>,
 ) -> TokenStream {
-    let parse_body_gen = |metadata_type: &TokenStream| {
-        quote! {
-            (if expr.get_val().len() == 0 {
-                Ok(Default::default())
-            } else {
-                protobuf::parse_from_bytes::<#metadata_type>(expr.get_val())
-                    .map_err(|e| other_err!("Decode metadata failed: {}", e))
-            })
-        }
-    };
     let fn_body = match (metadata_type, metadata_mapper) {
-        (Some(metadata_type), Some(metadata_mapper)) => {
-            let parse_body = parse_body_gen(metadata_type);
-            quote! {
-                #parse_body
-                    .and_then(|metadata| #metadata_mapper(expr, metadata))
-                    .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
-            }
-        }
-        (Some(metadata_type), None) => {
-            let parse_body = parse_body_gen(metadata_type);
-            quote! {
-                #parse_body
+        (Some(metadata_type), Some(metadata_mapper)) => quote! {
+            crate::rpn_expr::types::function::extract_metadata_from_val::<#metadata_type>(expr.get_val())
+                .and_then(|metadata| #metadata_mapper(expr, metadata))
+                .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
+        },
+        (Some(metadata_type), None) => quote! {
+            crate::rpn_expr::types::function::extract_metadata_from_val::<#metadata_type>(expr.get_val())
                 .map_err(|e| other_err!("Decode metadata failed: {}", e))
                 .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
-            }
-        }
+        },
         (None, Some(metadata_mapper)) => quote! {
             #metadata_mapper(expr)
                 .map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>)
