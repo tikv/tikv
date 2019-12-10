@@ -774,7 +774,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::float_cmp)]
-    fn test_rand_with_seed() {
+    fn test_rand_with_seed_first_gen() {
         let tests: Vec<(i64, f64)> = vec![
             (0, 0.15522042769493574),
             (1, 0.40540353712197724),
@@ -788,7 +788,7 @@ mod tests {
         ];
 
         for (seed, exp) in tests {
-            let got = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(seed)])
+            let got = eval_func(ScalarFuncSig::RandWithSeedFirstGen, &[Datum::I64(seed)])
                 .unwrap()
                 .as_real()
                 .unwrap()
@@ -796,7 +796,7 @@ mod tests {
             assert_eq!(got, exp);
         }
 
-        let none_case_got = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::Null])
+        let none_case_got = eval_func(ScalarFuncSig::RandWithSeedFirstGen, &[Datum::Null])
             .unwrap()
             .as_real()
             .unwrap()

@@ -370,7 +370,7 @@ fn rand() -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
-fn rand_with_seed(seed: &Option<i64>) -> Result<Option<Real>> {
+fn rand_with_seed_first_gen(seed: &Option<i64>) -> Result<Option<Real>> {
     let mut rng = MySQLRng::new_with_seed(seed.unwrap_or(0));
     let res = rng.gen();
     Ok(Real::new(res).ok())
@@ -1100,7 +1100,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::float_cmp)]
-    fn test_rand_with_seed() {
+    fn test_rand_with_seed_first_gen() {
         let tests: Vec<(i64, f64)> = vec![
             (0, 0.15522042769493574),
             (1, 0.40540353712197724),
@@ -1116,7 +1116,7 @@ mod tests {
         for (seed, exp) in tests {
             let got = RpnFnScalarEvaluator::new()
                 .push_param(Some(seed))
-                .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
+                .evaluate::<Real>(ScalarFuncSig::RandWithSeedFirstGen)
                 .unwrap()
                 .unwrap();
             assert_eq!(got, Real::from(exp));
@@ -1124,7 +1124,7 @@ mod tests {
 
         let none_case_got = RpnFnScalarEvaluator::new()
             .push_param(ScalarValue::Int(None))
-            .evaluate::<Real>(ScalarFuncSig::RandWithSeed)
+            .evaluate::<Real>(ScalarFuncSig::RandWithSeedFirstGen)
             .unwrap()
             .unwrap();
         assert_eq!(none_case_got, Real::from(0.15522042769493574));
