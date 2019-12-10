@@ -292,22 +292,22 @@ impl ScalarFunc {
             return Ok(Some(0));
         }
         let n = try_opt!(self.children[1].eval_int(ctx, row));
-        let (month, _) = (i64::from(period_to_month(p as u64) as i32)).overflowing_add(n);
-        Ok(Some(month_to_period(u64::from(month as u32)) as i64))
+        let (month, _) = (i64::from(Time::period_to_month(p as u64) as i32)).overflowing_add(n);
+        Ok(Some(Time::month_to_period(u64::from(month as u32)) as i64))
     }
 
     pub fn period_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let p1 = try_opt!(self.children[0].eval_int(ctx, row));
         let p2 = try_opt!(self.children[1].eval_int(ctx, row));
         Ok(Some(
-            period_to_month(p1 as u64) as i64 - period_to_month(p2 as u64) as i64,
+            Time::period_to_month(p1 as u64) as i64 - Time::period_to_month(p2 as u64) as i64,
         ))
     }
 
     #[inline]
     pub fn to_days(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
-        if t.is_zero() {
+        if t.invalid_zero() {
             return ctx
                 .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
                 .map(|_| None);
@@ -560,36 +560,6 @@ impl ScalarFunc {
         let days = try_opt!(self.children[0].eval_int(ctx, row)) as u32;
         let time = Time::from_days(ctx, days)?;
         Ok(Some(Cow::Owned(time)))
-    }
-}
-
-#[inline]
-fn period_to_month(period: u64) -> u64 {
-    if period == 0 {
-        return 0;
-    }
-    let (year, month) = (period / 100, period % 100);
-    if year < 70 {
-        (year + 2000) * 12 + month - 1
-    } else if year < 100 {
-        (year + 1900) * 12 + month - 1
-    } else {
-        year * 12 + month - 1
-    }
-}
-
-#[inline]
-fn month_to_period(month: u64) -> u64 {
-    if month == 0 {
-        return 0;
-    }
-    let year = month / 12;
-    if year < 70 {
-        (year + 2000) * 100 + month % 12 + 1
-    } else if year < 100 {
-        (year + 1900) * 100 + month % 12 + 1
-    } else {
-        year * 100 + month % 12 + 1
     }
 }
 
