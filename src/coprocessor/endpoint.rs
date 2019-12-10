@@ -1,10 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::future::Future as StdFuture;
 use std::marker::PhantomData;
 use std::time::Duration;
 
 use futures::sync::mpsc;
 use futures::{future, stream, Future, Stream};
+use futures03::prelude::*;
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
@@ -293,16 +295,42 @@ impl<E: Engine> Endpoint<E> {
             .map_err(Error::from)
     }
 
+    #[inline]
+    fn async_snapshot_new(
+        engine: &E,
+        ctx: &kvrpcpb::Context,
+    ) -> impl std::future::Future<Output = Result<E::Snap>> {
+        let (callback, future) = tikv_util::future::paired_future_callback_new();
+        let val = engine.async_snapshot(ctx, callback);
+        // make engine not cross yield point
+        async move {
+            val?; // propagate error
+            let (_ctx, result) = future
+                .map_err(|cancel| KvError::from(KvErrorInner::Other(box_err!(cancel))))
+                .await?;
+            // map storage::kv::Error -> storage::txn::Error -> storage::Error
+            result.map_err(Error::from)
+        }
+    }
+
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
     /// the given `handler_builder`. Finally, it calls the unary request interface of the
     /// `RequestHandler` to process the request and produce a result.
     // TODO: Convert to use async / await.
-    fn handle_unary_request_impl(
+    async fn handle_unary_request_impl(
         tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Future<Item = coppb::Response, Error = Error> {
+    ) -> Result<coppb::Response> {
+        tracker.req_ctx.deadline.check()?;
+        let snapshot = unsafe {
+            with_tls_engine(|engine| Self::async_snapshot_new(engine, &tracker.req_ctx.context))
+        }
+        .await?;
+
+        Ok(Default::default())
+        /*
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
@@ -356,6 +384,7 @@ impl<E: Engine> Endpoint<E> {
                         resp
                     })
             })
+            */
     }
 
     /// Handle a unary request and run on the read pool.
@@ -372,7 +401,12 @@ impl<E: Engine> Endpoint<E> {
         let tracker = Box::new(Tracker::new(req_ctx));
 
         read_pool
-            .spawn_handle(move || Self::handle_unary_request_impl(tracker, handler_builder))
+            .spawn_handle(move || {
+                // FIXME: This is an unnecessary box just in order to satisfy the Unpin
+                // requirement of compat. Remove it after using a thread pool accepting
+                // !Unpin std Futures.
+                Box::pin(Self::handle_unary_request_impl(tracker, handler_builder)).compat()
+            })
             .map_err(|_| Error::MaxPendingTasksExceeded)
     }
 
