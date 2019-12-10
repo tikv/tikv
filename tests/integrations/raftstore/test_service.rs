@@ -19,6 +19,7 @@ use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
 use keys::Key;
 use tempfile::Builder;
 use test_raftstore::*;
+use tikv::config::ConfigController;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -840,6 +841,7 @@ fn test_double_run_node() {
     };
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
+    let cfg_controller = ConfigController::new(Default::default());
     let e = node
         .start(
             engines,
@@ -849,6 +851,7 @@ fn test_double_run_node() {
             store_meta,
             coprocessor_host,
             importer,
+            cfg_controller,
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

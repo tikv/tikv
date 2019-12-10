@@ -1737,10 +1737,7 @@ impl ConfigController {
         ConfigController { current: cfg }
     }
 
-    fn update_or_rollback(
-        &mut self,
-        mut incoming: TiKvConfig,
-    ) -> Option<ConfigChange>> {
+    fn update_or_rollback(&mut self, mut incoming: TiKvConfig) -> Option<ConfigChange> {
         if incoming.validate().is_err() {
             return Some(incoming.diff(&self.current));
         }
@@ -1823,14 +1820,15 @@ impl ConfigClient {
             StatusCode::NotChange => return Ok(()),
             StatusCode::WrongVersion => {
                 let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
-                if let Some(change) = self.config_controller.update_or_rollback(incoming) {
+                if let Some(rollback_change) = self.config_controller.update_or_rollback(incoming) {
+                    let entries = to_config_entry(rollback_change)?;
                     debug!("tried to update local config to an invalid config"; "version" => ?resp.version);
-                    Ok(self.update_config(to_config_entry(change)?, pd_client)?)
+                    self.update_config(entries, pd_client)?;
                 } else {
                     info!("local config updated"; "version" => ?resp.version);
                     self.version = resp.take_version();
-                    Ok(())
                 }
+                Ok(())
             }
             code => {
                 debug!("failed to get remote config"; "status" => ?code);
@@ -2010,7 +2008,7 @@ mod tests {
         let old = TiKvConfig::default();
         let mut incoming = TiKvConfig::default();
         incoming.refresh_config_interval = ReadableDuration::hours(10);
-        let diff = to_config_entry(old.diff(&incoming));
+        let diff = to_config_entry(old.diff(&incoming)).unwrap();
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0].name, "refresh-config-interval");
         assert_eq!(
