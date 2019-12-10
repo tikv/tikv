@@ -282,7 +282,7 @@ thread_local! {
 }
 
 pub fn extract_metadata_from_val<T: protobuf::Message + Default>(val: &[u8]) -> Result<T> {
-    if val.len() == 0 {
+    if val.is_empty() {
         Ok(T::default())
     } else {
         protobuf::parse_from_bytes::<T>(val)
