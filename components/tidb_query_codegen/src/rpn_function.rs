@@ -539,7 +539,7 @@ fn generate_init_metadata_fn(
     let parse_body_gen = |metadata_type: &TokenStream| {
         quote! {
             (if expr.get_val().len() == 0 {
-                Ok(#metadata_type::default())
+                Ok(Default::default())
             } else {
                 protobuf::parse_from_bytes::<#metadata_type>(expr.get_val())
                     .map_err(|e| other_err!("Decode metadata failed: {}", e))
@@ -596,10 +596,10 @@ fn generate_metadata_type_checker(
 ) -> TokenStream {
     if metadata_type.is_some() || metadata_mapper.is_some() {
         let metadata_ctor = match (metadata_type, metadata_mapper) {
-            (Some(metadata_type), Some(metadata_mapper)) => quote! {
-                &#metadata_mapper(#metadata_type::default(), expr).unwrap()
+            (Some(_), Some(metadata_mapper)) => quote! {
+                &#metadata_mapper(Default::default(), expr).unwrap()
             },
-            (Some(metadata_type), None) => quote! { &#metadata_type::default() },
+            (Some(_), None) => quote! { &Default::default() },
             (None, Some(metadata_mapper)) => quote! { &#metadata_mapper(expr).unwrap() },
             (None, None) => unreachable!(),
         };
