@@ -505,16 +505,13 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
             return;
         }
         info!("run backup task"; "task" => %task);
-        if task.start_ts == task.end_ts {
-            self.handle_backup_task(task);
-            self.pool.borrow_mut().heartbeat();
-        } else {
-            // TODO: support incremental backup
+        if !task.start_ts.is_zero() {
             BACKUP_RANGE_ERROR_VEC
                 .with_label_values(&["incremental"])
                 .inc();
-            error!("incremental backup is not supported yet");
         }
+        self.handle_backup_task(task);
+        self.pool.borrow_mut().heartbeat();
     }
 }
 
