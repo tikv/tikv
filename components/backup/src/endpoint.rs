@@ -847,7 +847,7 @@ pub mod tests {
             let mut req = BackupRequest::default();
             req.set_start_key(vec![]);
             req.set_end_key(vec![b'5']);
-            req.set_start_version(ts.into_inner());
+            req.set_start_version(0);
             req.set_end_version(ts.into_inner());
             req.set_concurrency(4);
             let (tx, rx) = unbounded();
