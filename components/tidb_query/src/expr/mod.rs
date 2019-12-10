@@ -37,7 +37,7 @@ mod scalar_function;
 pub use self::ctx::*;
 pub use crate::codec::{Error, Result};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum Expression {
     Constant(Constant),
     ColumnRef(Column),
@@ -57,10 +57,11 @@ pub struct Constant {
 }
 
 /// A single scalar function call
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
+    metadata: Option<Box<dyn protobuf::Message>>,
     field_type: FieldType,
     cus_rng: CusRng,
 }
@@ -295,6 +296,7 @@ impl Expression {
                             sig: expr.get_sig(),
                             children,
                             field_type,
+                            metadata: None,
                             cus_rng: CusRng {
                                 rng: RefCell::new(None),
                             },
