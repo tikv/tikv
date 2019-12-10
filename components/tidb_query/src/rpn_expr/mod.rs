@@ -13,6 +13,7 @@ pub mod impl_like;
 pub mod impl_math;
 pub mod impl_miscellaneous;
 pub mod impl_op;
+pub mod impl_other;
 pub mod impl_string;
 pub mod impl_time;
 
@@ -35,6 +36,7 @@ use self::impl_like::*;
 use self::impl_math::*;
 use self::impl_miscellaneous::*;
 use self::impl_op::*;
+use self::impl_other::*;
 use self::impl_string::*;
 use self::impl_time::*;
 
@@ -397,6 +399,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::BitNegSig => bit_neg_fn_meta(),
         ScalarFuncSig::LeftShift => left_shift_fn_meta(),
         ScalarFuncSig::RightShift => right_shift_fn_meta(),
+        // impl_other
+        ScalarFuncSig::BitCount => bit_count_fn_meta(),
         // impl_string
         ScalarFuncSig::Bin => bin_fn_meta(),
         ScalarFuncSig::Length => length_fn_meta(),
