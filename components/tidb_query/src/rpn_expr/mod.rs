@@ -13,6 +13,7 @@ pub mod impl_like;
 pub mod impl_math;
 pub mod impl_miscellaneous;
 pub mod impl_op;
+pub mod impl_other;
 pub mod impl_string;
 pub mod impl_time;
 
@@ -35,6 +36,7 @@ use self::impl_like::*;
 use self::impl_math::*;
 use self::impl_miscellaneous::*;
 use self::impl_op::*;
+use self::impl_other::*;
 use self::impl_string::*;
 use self::impl_time::*;
 
@@ -217,6 +219,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::BitOrSig => bit_or_fn_meta(),
         ScalarFuncSig::BitXorSig => bit_xor_fn_meta(),
         ScalarFuncSig::BitNegSig => bit_neg_fn_meta(),
+        ScalarFuncSig::BitCount => bit_count_fn_meta(),
         ScalarFuncSig::LeftShift => left_shift_fn_meta(),
         ScalarFuncSig::RightShift => right_shift_fn_meta(),
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
@@ -407,24 +410,24 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Concat => concat_fn_meta(),
         ScalarFuncSig::ConcatWs => concat_ws_fn_meta(),
         ScalarFuncSig::Ascii => ascii_fn_meta(),
+        ScalarFuncSig::ReverseUtf8 => reverse_utf8_fn_meta(),
         ScalarFuncSig::Reverse => reverse_fn_meta(),
-        ScalarFuncSig::ReverseBinary => reverse_binary_fn_meta(),
         ScalarFuncSig::HexIntArg => hex_int_arg_fn_meta(),
         ScalarFuncSig::HexStrArg => hex_str_arg_fn_meta(),
         ScalarFuncSig::LTrim => ltrim_fn_meta(),
         ScalarFuncSig::RTrim => rtrim_fn_meta(),
         ScalarFuncSig::Replace => replace_fn_meta(),
-        ScalarFuncSig::Left => left_fn_meta(),
-        ScalarFuncSig::Right => right_fn_meta(),
-        ScalarFuncSig::LocateBinary2Args => locate_binary_2_args_fn_meta(),
-        ScalarFuncSig::LocateBinary3Args => locate_binary_3_args_fn_meta(),
+        ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
+        ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
+        ScalarFuncSig::Locate2Args => locate_2_args_fn_meta(),
+        ScalarFuncSig::Locate3Args => locate_3_args_fn_meta(),
         ScalarFuncSig::FieldInt => field_fn_meta::<Int>(),
         ScalarFuncSig::FieldReal => field_fn_meta::<Real>(),
         ScalarFuncSig::FieldString => field_fn_meta::<Bytes>(),
         ScalarFuncSig::Elt => elt_fn_meta(),
         ScalarFuncSig::Space => space_fn_meta(),
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
-        ScalarFuncSig::Instr => instr_fn_meta(),
+        ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
         ScalarFuncSig::DayOfMonth => day_of_month_fn_meta(),
         ScalarFuncSig::Rand => rand_fn_meta(),

@@ -159,7 +159,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn rand_with_seed(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn rand_with_seed_first_gen(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let seed = match self.children[0].eval_int(ctx, row)? {
             Some(v) => Some(v),
             _ => None,
