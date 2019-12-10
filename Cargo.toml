@@ -36,6 +36,7 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "sst_importer/protobuf-codec",
 ]
+s3 = ["external_storage/s3"]
 
 [lib]
 name = "tikv"
@@ -56,6 +57,7 @@ derive_more = "0.15.0"
 engine = { path = "components/engine" }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
+external_storage = { path = "components/external_storage" }
 fail = "0.3"
 failure = "0.1"
 fs2 = "0.4"

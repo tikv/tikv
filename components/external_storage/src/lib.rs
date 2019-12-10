@@ -19,12 +19,16 @@ use kvproto::backup::storage_backend::Backend;
 #[cfg(feature = "protobuf-codec")]
 use kvproto::backup::StorageBackend_oneof_backend as Backend;
 #[cfg_attr(feature = "protobuf-codec", allow(unused_imports))]
-use kvproto::backup::{Local, Noop, StorageBackend};
+use kvproto::backup::{Local, Noop, StorageBackend, S3};
 
 mod local;
 pub use local::LocalStorage;
 mod noop;
 pub use noop::NoopStorage;
+#[cfg(feature = "s3")]
+mod s3;
+#[cfg(feature = "s3")]
+pub use s3::S3Storage;
 
 /// Create a new storage from the given storage backend description.
 pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalStorage>> {
@@ -34,6 +38,8 @@ pub fn create_storage(backend: &StorageBackend) -> io::Result<Arc<dyn ExternalSt
             LocalStorage::new(p).map(|s| Arc::new(s) as _)
         }
         Some(Backend::Noop(_)) => Ok(Arc::new(NoopStorage::new()) as _),
+        #[cfg(feature = "s3")]
+        Some(Backend::S3(config)) => S3Storage::new(config).map(|s| Arc::new(s) as _),
         _ => {
             let u = url_of_backend(backend);
             error!("unknown storage"; "scheme" => u.scheme());
