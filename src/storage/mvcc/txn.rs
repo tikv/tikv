@@ -24,52 +24,51 @@ pub struct GcInfo {
 pub struct MvccTxn<S: Snapshot> {
     reader: MvccReader<S>,
     start_ts: TimeStamp,
-    writes: Vec<Modify>,
     write_size: usize,
+    writes: Vec<Modify>,
     // collapse continuous rollbacks.
     collapse_rollback: bool,
 }
 
-impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "txn @{}", self.start_ts)
-    }
-}
-
 impl<S: Snapshot> MvccTxn<S> {
-    pub fn new(snapshot: S, start_ts: TimeStamp, fill_cache: bool) -> Result<Self> {
-        Ok(Self {
-            // FIXME: use session variable to indicate fill cache or not.
+    pub fn new(snapshot: S, start_ts: TimeStamp, fill_cache: bool) -> MvccTxn<S> {
+        // FIXME: use session variable to indicate fill cache or not.
 
-            // ScanMode is `None`, since in prewrite and other operations, keys are not given in
-            // order and we use prefix seek for each key. An exception is GC, which uses forward
-            // scan only.
-            // IsolationLevel is `Si`, actually the method we use in MvccTxn does not rely on
-            // isolation level, so it can be any value.
-            reader: MvccReader::new(snapshot.clone(), None, fill_cache, IsolationLevel::Si),
+        // ScanMode is `None`, since in prewrite and other operations, keys are not given in
+        // order and we use prefix seek for each key. An exception is GC, which uses forward
+        // scan only.
+        // IsolationLevel is `Si`, actually the method we use in MvccTxn does not rely on
+        // isolation level, so it can be any value.
+        Self::from_reader(
+            MvccReader::new(snapshot.clone(), None, fill_cache, IsolationLevel::Si),
             start_ts,
-            writes: vec![],
-            write_size: 0,
-            collapse_rollback: true,
-        })
+        )
     }
+
+    // Use `ScanMode::Forward` when gc or prewrite with multiple `Mutation::Insert`,
+    // which would seek less times.
+    // When `scan_mode` is `Some(ScanMode::Forward)`, all keys must be written by
+    // in ascending order.
     pub fn for_scan(
         snapshot: S,
         scan_mode: Option<ScanMode>,
         start_ts: TimeStamp,
         fill_cache: bool,
-    ) -> Result<Self> {
-        Ok(Self {
-            // Use `ScanMode::Forward` when gc or prewrite with multiple `Mutation::Insert`,
-            // which would seek less times.
-            // When `scan_mode` is `Some(ScanMode::Forward)`, all keys must be writte by
-            // in ascending order.
-            reader: MvccReader::new(snapshot.clone(), scan_mode, fill_cache, IsolationLevel::Si),
+    ) -> MvccTxn<S> {
+        Self::from_reader(
+            MvccReader::new(snapshot.clone(), scan_mode, fill_cache, IsolationLevel::Si),
             start_ts,
-            writes: vec![],
+        )
+    }
+
+    fn from_reader(reader: MvccReader<S>, start_ts: TimeStamp) -> MvccTxn<S> {
+        MvccTxn {
+            reader,
+            start_ts,
             write_size: 0,
+            writes: vec![],
             collapse_rollback: true,
-        })
+        }
     }
 
     pub fn collapse_rollback(&mut self, collapse: bool) {
@@ -91,60 +90,72 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     fn put_lock(&mut self, key: Key, lock: &Lock) {
-        let lock = lock.to_bytes();
-        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
-        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+        let write = Modify::Put(CF_LOCK, key, lock.to_bytes());
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
-    fn lock_key(
-        &mut self,
-        key: Key,
+    fn lock(
+        &self,
         lock_type: LockType,
-        primary: Vec<u8>,
+        primary: &[u8],
         short_value: Option<Value>,
         lock_ttl: u64,
         options: &Options,
-    ) {
-        let lock = Lock::new(
+    ) -> Lock {
+        Lock::new(
             lock_type,
-            primary,
+            primary.to_vec(),
             self.start_ts,
             lock_ttl,
             short_value,
             options.for_update_ts,
             options.txn_size,
             options.min_commit_ts,
-        );
-        self.put_lock(key, &lock);
+        )
+    }
+
+    fn pessimistic_lock(&self, primary: &[u8], options: &Options) -> Lock {
+        Lock::new(
+            LockType::Pessimistic,
+            primary.to_vec(),
+            self.start_ts,
+            options.lock_ttl,
+            None,
+            options.for_update_ts,
+            options.txn_size,
+            options.min_commit_ts,
+        )
     }
 
     fn unlock_key(&mut self, key: Key) {
-        self.write_size += CF_LOCK.len() + key.as_encoded().len();
-        self.writes.push(Modify::Delete(CF_LOCK, key));
+        let write = Modify::Delete(CF_LOCK, key);
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
     fn put_value(&mut self, key: Key, ts: TimeStamp, value: Value) {
-        let key = key.append_ts(ts);
-        self.write_size += key.as_encoded().len() + value.len();
-        self.writes.push(Modify::Put(CF_DEFAULT, key, value));
+        let write = Modify::Put(CF_DEFAULT, key.append_ts(ts), value);
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
     fn delete_value(&mut self, key: Key, ts: TimeStamp) {
-        let key = key.append_ts(ts);
-        self.write_size += key.as_encoded().len();
-        self.writes.push(Modify::Delete(CF_DEFAULT, key));
+        let write = Modify::Delete(CF_DEFAULT, key.append_ts(ts));
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
     fn put_write(&mut self, key: Key, ts: TimeStamp, value: Value) {
-        let key = key.append_ts(ts);
-        self.write_size += CF_WRITE.len() + key.as_encoded().len() + value.len();
-        self.writes.push(Modify::Put(CF_WRITE, key, value));
+        let write = Modify::Put(CF_WRITE, key.append_ts(ts), value);
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
     fn delete_write(&mut self, key: Key, ts: TimeStamp) {
-        let key = key.append_ts(ts);
-        self.write_size += CF_WRITE.len() + key.as_encoded().len();
-        self.writes.push(Modify::Delete(CF_WRITE, key));
+        let write = Modify::Delete(CF_WRITE, key.append_ts(ts));
+        self.write_size += write.size();
+        self.writes.push(write);
     }
 
     fn key_exist(&mut self, key: &Key, ts: TimeStamp) -> Result<bool> {
@@ -155,25 +166,27 @@ impl<S: Snapshot> MvccTxn<S> {
         &mut self,
         key: Key,
         lock_type: LockType,
-        primary: Vec<u8>,
+        primary: &[u8],
         value: Option<Value>,
         lock_ttl: u64,
         options: &Options,
     ) {
+        // If there is a value we must store it in the lock or as a regular value.
         if let Some(value) = value {
             if is_short_value(&value) {
-                // If the value is short, embed it in Lock.
-                self.lock_key(key, lock_type, primary, Some(value), lock_ttl, options);
+                // If the value is short, embed it in the lock.
+                let lock = self.lock(lock_type, primary, Some(value), lock_ttl, options);
+                self.put_lock(key, &lock);
+                return;
             } else {
                 // value is long
                 let ts = self.start_ts;
                 self.put_value(key.clone(), ts, value);
-
-                self.lock_key(key, lock_type, primary, None, lock_ttl, options);
             }
-        } else {
-            self.lock_key(key, lock_type, primary, None, lock_ttl, options);
         }
+
+        let lock = self.lock(lock_type, primary, None, lock_ttl, options);
+        self.put_lock(key, &lock);
     }
 
     fn rollback_lock(&mut self, key: Key, lock: &Lock, is_pessimistic_txn: bool) -> Result<()> {
@@ -221,26 +234,16 @@ impl<S: Snapshot> MvccTxn<S> {
     // It's possible that lock conflict occours on them, but the isolation is
     // guaranteed by pessimistic locks on row keys, so let TiDB resolves these
     // locks immediately.
-    fn handle_non_pessimistic_lock_conflict(
-        &self,
-        key: Key,
-        for_update_ts: TimeStamp,
-        lock: Lock,
-    ) -> Result<()> {
+    fn handle_non_pessimistic_lock_conflict(&self, key: Key, lock: Lock) -> Result<()> {
         // The previous pessimistic transaction has been committed or aborted.
         // Resolve it immediately.
         //
         // Because the row key is locked, the optimistic transaction will
         // abort. Resolve it immediately.
-        // Optimistic lock's for_update_ts is zero.
-        if for_update_ts > lock.for_update_ts {
-            let mut info = lock.into_lock_info(key.into_raw()?);
-            // Set ttl to 0 so TiDB will resolve lock immediately.
-            info.set_lock_ttl(0);
-            Err(ErrorInner::KeyIsLocked(info).into())
-        } else {
-            Err(ErrorInner::Other("stale request".into()).into())
-        }
+        let mut info = lock.into_lock_info(key.into_raw()?);
+        // Set ttl to 0 so TiDB will resolve lock immediately.
+        info.set_lock_ttl(0);
+        Err(ErrorInner::KeyIsLocked(info).into())
     }
 
     pub fn acquire_pessimistic_lock(
@@ -265,14 +268,8 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             // Overwrite the lock with small for_update_ts
             if for_update_ts > lock.for_update_ts {
-                self.lock_key(
-                    key,
-                    LockType::Pessimistic,
-                    primary.to_vec(),
-                    None,
-                    options.lock_ttl,
-                    options,
-                );
+                let lock = self.pessimistic_lock(primary, options);
+                self.put_lock(key, &lock);
             } else {
                 MVCC_DUPLICATE_CMD_COUNTER_VEC
                     .acquire_pessimistic_lock
@@ -331,14 +328,8 @@ impl<S: Snapshot> MvccTxn<S> {
             self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
         }
 
-        self.lock_key(
-            key,
-            LockType::Pessimistic,
-            primary.to_vec(),
-            None,
-            options.lock_ttl,
-            options,
-        );
+        let lock = self.pessimistic_lock(primary, options);
+        self.put_lock(key, &lock);
 
         Ok(())
     }
@@ -370,7 +361,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     }
                     .into());
                 }
-                return self.handle_non_pessimistic_lock_conflict(key, options.for_update_ts, lock);
+                return self.handle_non_pessimistic_lock_conflict(key, lock);
             } else {
                 if lock.lock_type != LockType::Pessimistic {
                     // Duplicated command. No need to overwrite the lock and data.
@@ -399,7 +390,7 @@ impl<S: Snapshot> MvccTxn<S> {
         self.prewrite_key_value(
             key,
             lock_type,
-            primary.to_vec(),
+            primary,
             value,
             ::std::cmp::max(last_lock_ttl, options.lock_ttl),
             options,
@@ -458,14 +449,7 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
-        self.prewrite_key_value(
-            key,
-            lock_type,
-            primary.to_vec(),
-            value,
-            options.lock_ttl,
-            options,
-        );
+        self.prewrite_key_value(key, lock_type, primary, value, options.lock_ttl, options);
         Ok(())
     }
 
@@ -823,13 +807,19 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 }
 
+impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "txn @{}", self.start_ts)
+    }
+}
+
 /// Create a new MvccTxn using a u64 literal for the timestamp.
 ///
 /// Intended to only be used in test code.
 #[macro_export]
 macro_rules! new_txn {
     ($ss: expr, $ts: literal, $fill_cache: expr) => {
-        $crate::storage::mvcc::MvccTxn::new($ss, $ts.into(), $fill_cache).unwrap()
+        $crate::storage::mvcc::MvccTxn::new($ss, $ts.into(), $fill_cache)
     };
 }
 
@@ -1390,7 +1380,7 @@ mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = new_txn!(snapshot, 10, true);
         let key = Key::from_raw(k);
-        assert_eq!(txn.write_size, 0);
+        assert_eq!(txn.write_size(), 0);
 
         txn.prewrite(
             Mutation::Put((key.clone(), v.to_vec())),
@@ -1837,19 +1827,6 @@ mod tests {
         must_pessimistic_locked(&engine, k, 20, 20);
         must_pessimistic_prewrite_put_with_ttl(&engine, k, v, k, 20, 20, true, 90);
         must_locked_with_ttl(&engine, k, 20, 100);
-    }
-
-    #[test]
-    fn test_non_pessimistic_lock_conflict() {
-        let engine = TestEngineBuilder::new().build().unwrap();
-
-        let k = b"k1";
-        let v = b"v1";
-
-        must_prewrite_put(&engine, k, v, k, 2);
-        must_locked(&engine, k, 2);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 1, 1, false);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 3, 3, false);
     }
 
     #[test]
@@ -2351,5 +2328,54 @@ mod tests {
             must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60),
             &expected_lock_info,
         );
+    }
+
+    #[test]
+    fn test_non_pessimistic_lock_conflict_with_optimistic_txn() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k1";
+        let v = b"v1";
+
+        must_prewrite_put(&engine, k, v, k, 2);
+        must_locked(&engine, k, 2);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 1, 1, false);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 3, 3, false);
+    }
+
+    #[test]
+    fn test_non_pessimistic_lock_conflict_with_pessismitic_txn() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // k1 is a row key, k2 is the corresponding index key.
+        let (k1, v1) = (b"k1", b"v1");
+        let (k2, v2) = (b"k2", b"v2");
+        let (k3, v3) = (b"k3", b"v3");
+
+        // Commit k3 at 20.
+        must_prewrite_put(&engine, k3, v3, k3, 1);
+        must_commit(&engine, k3, 1, 20);
+
+        // Txn-10 acquires pessimistic locks on k1 and k3.
+        must_acquire_pessimistic_lock(&engine, k1, k1, 10, 10);
+        must_acquire_pessimistic_lock_err(&engine, k3, k1, 10, 10);
+        // Update for_update_ts to 20 due to write conflict
+        must_acquire_pessimistic_lock(&engine, k3, k1, 10, 20);
+        must_pessimistic_prewrite_put(&engine, k1, v1, k1, 10, 20, true);
+        must_pessimistic_prewrite_put(&engine, k3, v3, k1, 10, 20, true);
+        // Write a non-pessimistic lock with for_update_ts 20.
+        must_pessimistic_prewrite_put(&engine, k2, v2, k1, 10, 20, false);
+        // Roll back the primary key due to timeout, but the non-pessimistic lock is not rolled
+        // back.
+        must_rollback(&engine, k1, 10);
+
+        // Txn-15 acquires pessimistic locks on k1.
+        must_acquire_pessimistic_lock(&engine, k1, k1, 15, 15);
+        must_pessimistic_prewrite_put(&engine, k1, v1, k1, 15, 15, true);
+        // There is a non-pessimistic lock conflict here.
+        match must_pessimistic_prewrite_put_err(&engine, k2, v2, k1, 15, 15, false) {
+            Error(box ErrorInner::KeyIsLocked(info)) => assert_eq!(info.get_lock_ttl(), 0),
+            e => panic!("unexpected error: {}", e),
+        };
     }
 }

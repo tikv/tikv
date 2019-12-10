@@ -16,7 +16,7 @@ pub trait ImportExt: CFHandleExt {
     fn ingest_external_file_cf(
         &self,
         cf: &Self::CFHandle,
-        opts: &Self::IngestExternalFileOptions,
+        opt: &Self::IngestExternalFileOptions,
         files: &[&str],
     ) -> Result<()>;
 
