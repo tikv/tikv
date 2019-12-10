@@ -40,12 +40,6 @@ impl S3Storage {
         if config.bucket.is_empty() {
             return Err(Error::new(ErrorKind::InvalidInput, "missing bucket name"));
         }
-        if config.prefix.contains("/") {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                format!("multi-prefix is not allowed: {}", config.prefix),
-            ));
-        }
         if config.access_key.is_empty() {
             return Err(Error::new(ErrorKind::InvalidInput, "missing access_key"));
         }
@@ -162,11 +156,6 @@ mod tests {
             // missing both region and endpoint
             Config {
                 region: "".to_string(),
-                ..config.clone()
-            },
-            // multi-prefix is not allowed
-            Config {
-                prefix: "p1/p2".to_string(),
                 ..config.clone()
             },
         ];
