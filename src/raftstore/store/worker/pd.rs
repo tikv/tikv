@@ -22,7 +22,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
-use crate::config::ConfigClient;
+use crate::config::ConfigHandler;
 use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
 use crate::raftstore::store::util::is_epoch_stale;
@@ -290,7 +290,7 @@ impl StatsMonitor {
 pub struct Runner<T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
-    config_client: ConfigClient,
+    config_handler: ConfigHandler,
     router: RaftRouter,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
@@ -312,7 +312,7 @@ impl<T: PdClient> Runner<T> {
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
-        config_client: ConfigClient,
+        config_handler: ConfigHandler,
         router: RaftRouter,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
@@ -327,7 +327,7 @@ impl<T: PdClient> Runner<T> {
         Runner {
             store_id,
             pd_client,
-            config_client,
+            config_handler,
             router,
             db,
             is_hb_receiver_scheduled: false,
@@ -778,13 +778,13 @@ impl<T: PdClient> Runner<T> {
     }
 
     fn handle_refresh_config(&mut self, handle: &Handle) {
-        let config_client = &mut self.config_client;
-        info!("refresh config"; "component id" => config_client.get_id(), "version" => ?config_client.get_version());
-        if let Err(e) = config_client.refresh_config(self.pd_client.clone()) {
-            error!("failed to refresh config"; "component id" => config_client.get_id(), "version" => ?config_client.get_version(), "err" => ?e)
+        let config_handler = &mut self.config_handler;
+        info!("refresh config"; "component id" => config_handler.get_id(), "version" => ?config_handler.get_version());
+        if let Err(e) = config_handler.refresh_config(self.pd_client.clone()) {
+            error!("failed to refresh config"; "component id" => config_handler.get_id(), "version" => ?config_handler.get_version(), "err" => ?e)
         }
         let scheduler = self.scheduler.clone();
-        let when = Instant::now() + config_client.get_refresh_interval();
+        let when = Instant::now() + config_handler.get_refresh_interval();
         let f = Delay::new(when)
             .map_err(|e| info!("timeout timer delay errored"; "err" => ?e))
             .then(move |_| {

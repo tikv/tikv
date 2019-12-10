@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tikv::config::TiKvConfig;
-use tikv::config::{ConfigClient, ConfigController};
+use tikv::config::{ConfigController, ConfigHandler};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -72,7 +72,7 @@ pub fn run_tikv(mut config: TiKvConfig) {
         "cluster_id" => cluster_id
     );
 
-    let (_, config) = ConfigClient::create(pd_client.clone(), &config)
+    let (_, config) = ConfigHandler::create(pd_client.clone(), &config)
         .unwrap_or_else(|e| fatal!("failed to register config to pd: {}", e));
 
     // Print version information.

@@ -23,7 +23,7 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
-use crate::config::{ConfigClient, ConfigController};
+use crate::config::{ConfigController, ConfigHandler};
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -1104,9 +1104,9 @@ impl RaftBatchSystem {
         let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
         box_try!(workers.cleanup_worker.start(cleanup_runner));
 
-        let config_client = box_try!(ConfigClient::start(
+        let config_client = box_try!(ConfigHandler::start(
             cfg_controller,
-            configpb::Version::new(), // TODO: we can reuse the returned Version of ConfigClient::create
+            configpb::Version::new(), // TODO: we can reuse the returned Version of ConfigHandler::create
             workers.pd_worker.scheduler(),
         ));
         let pd_runner = PdRunner::new(

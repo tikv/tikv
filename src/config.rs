@@ -1750,12 +1750,12 @@ impl ConfigController {
     }
 }
 
-pub struct ConfigClient {
+pub struct ConfigHandler {
     version: configpb::Version,
     config_controller: ConfigController,
 }
 
-impl ConfigClient {
+impl ConfigHandler {
     pub fn start(
         controller: ConfigController,
         version: configpb::Version,
@@ -1764,7 +1764,7 @@ impl ConfigClient {
         if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
             return Err(format!("failed to schedule refresh config task: {:?}", e).into());
         }
-        Ok(ConfigClient {
+        Ok(ConfigHandler {
             version,
             config_controller: controller,
         })
@@ -1788,7 +1788,7 @@ impl ConfigClient {
     }
 }
 
-impl ConfigClient {
+impl ConfigHandler {
     // FIXME: the usage of version and status_code need to consist with pd
 
     /// Register the local config to pd
