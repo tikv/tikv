@@ -167,7 +167,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         ctx.spawn(self.threads.spawn_fn(move || {
             let res = importer.download::<RocksEngine>(
                 req.get_sst(),
-                req.get_url(),
+                req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
