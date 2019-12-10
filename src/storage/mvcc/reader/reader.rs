@@ -439,9 +439,9 @@ mod tests {
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
+    use engine::{IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_rocks::RocksEngine;
     use kvproto::kvrpcpb::IsolationLevel;
-    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, IterOption};
     use kvproto::metapb::{Peer, Region};
     use std::sync::Arc;
     use std::u64;
