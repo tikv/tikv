@@ -81,8 +81,7 @@ pub fn calc_crc32_bytes(contents: &[u8]) -> u32 {
 
 /// Calculates the given content's SHA256 checksum.
 pub fn sha256(input: &[u8]) -> Result<Vec<u8>, openssl::error::ErrorStack> {
-    openssl::hash::hash(openssl::hash::MessageDigest::sha256(), input)
-        .map(|digest| hex::encode(digest).into_bytes())
+    openssl::hash::hash(openssl::hash::MessageDigest::sha256(), input).map(|digest| digest.to_vec())
 }
 
 #[cfg(test)]

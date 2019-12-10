@@ -375,10 +375,12 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     return Ok(());
                 }
                 // TODO: make file_name unique and short
-                let key = brange
-                    .start_key
-                    .clone()
-                    .map(|k| hex::encode(k.into_raw().unwrap()));
+                let key = brange.start_key.clone().and_then(|k| {
+                    // use start_key sha256 instead of start_key to avoid file name too long os error
+                    tikv_util::file::sha256(&k.into_raw().unwrap())
+                        .ok()
+                        .map(|b| hex::encode(b))
+                });
 
                 let name = backup_file_name(store_id, &brange.region, key);
                 let mut writer = match BackupWriter::new(db.clone(), &name, storage.limiter.clone())
