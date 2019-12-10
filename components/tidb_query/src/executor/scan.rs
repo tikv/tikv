@@ -8,7 +8,7 @@ use tipb::ColumnInfo;
 use super::{Executor, Row};
 use crate::codec::table;
 use crate::execute_stats::ExecuteStats;
-use crate::expr::EvalWarnings;
+use crate::expr::{EvalContext, EvalWarnings};
 use crate::storage::scanner::{RangesScanner, RangesScannerOptions};
 use crate::storage::{IntervalRange, Range, Storage};
 use crate::Result;
@@ -18,6 +18,7 @@ use crate::Result;
 pub trait InnerExecutor: Send {
     fn decode_row(
         &self,
+        ctx: &mut EvalContext,
         key: Vec<u8>,
         value: Vec<u8>,
         columns: Arc<Vec<ColumnInfo>>,
@@ -27,12 +28,14 @@ pub trait InnerExecutor: Send {
 // Executor for table scan and index scan
 pub struct ScanExecutor<S: Storage, T: InnerExecutor> {
     inner: T,
+    context: EvalContext,
     scanner: RangesScanner<S>,
     columns: Arc<Vec<ColumnInfo>>,
 }
 
 pub struct ScanExecutorOptions<S, T> {
     pub inner: T,
+    pub context: EvalContext,
     pub columns: Vec<ColumnInfo>,
     pub key_ranges: Vec<KeyRange>,
     pub storage: S,
@@ -46,6 +49,7 @@ impl<S: Storage, T: InnerExecutor> ScanExecutor<S, T> {
     pub fn new(
         ScanExecutorOptions {
             inner,
+            context,
             columns,
             mut key_ranges,
             storage,
@@ -73,6 +77,7 @@ impl<S: Storage, T: InnerExecutor> ScanExecutor<S, T> {
 
         Ok(Self {
             inner,
+            context,
             scanner,
             columns: Arc::new(columns),
         })
@@ -85,7 +90,8 @@ impl<S: Storage, T: InnerExecutor> Executor for ScanExecutor<S, T> {
     fn next(&mut self) -> Result<Option<Row>> {
         let some_row = self.scanner.next()?;
         if let Some((key, value)) = some_row {
-            self.inner.decode_row(key, value, self.columns.clone())
+            self.inner
+                .decode_row(&mut self.context, key, value, self.columns.clone())
         } else {
             Ok(None)
         }

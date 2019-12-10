@@ -46,6 +46,12 @@
 //! Use `raw_varg` where the function takes a variable number of arguments and the types
 //! are not the same, for example, RPN function `case_when`.
 //!
+//! ### `max_args`
+//!
+//! The maximum number of arguments. The macro will generate code to check this
+//! as part of validation. Only valid if `varg` or `raw_varg` is also used.
+//! E.g., `#[rpn_fn(varg, max_args = 2)]`
+//!
 //! ### `min_args`
 //!
 //! The minimum number of arguments. The macro will generate code to check this
@@ -211,10 +217,13 @@ struct RpnFnAttr {
     /// Whether or not the function is a raw varg function. Raw varg function accepts `&[ScalarValueRef]`.
     is_raw_varg: bool,
 
-    /// The minimal accepted arguments, which will be checked by the validator.
+    /// The maximum accepted arguments, which will be checked by the validator.
     ///
     /// Only varg or raw_varg function accepts a range of number of arguments. Other kind of
     /// function strictly stipulates number of arguments according to the function definition.
+    max_args: Option<usize>,
+
+    /// The minimal accepted arguments, which will be checked by the validator.
     min_args: Option<usize>,
 
     /// Extra validator.
@@ -231,6 +240,7 @@ impl parse::Parse for RpnFnAttr {
     fn parse(input: parse::ParseStream<'_>) -> Result<Self> {
         let mut is_varg = false;
         let mut is_raw_varg = false;
+        let mut max_args = None;
         let mut min_args = None;
         let mut extra_validator = None;
         let mut metadata_ctor = None;
@@ -257,6 +267,12 @@ impl parse::Parse for RpnFnAttr {
                                 Error::new_spanned(right, "Expect int literal for `min_args`")
                             })?;
                             min_args = Some(lit.base10_parse()?);
+                        }
+                        "max_args" => {
+                            let lit: LitInt = parse2(right.into_token_stream()).map_err(|_| {
+                                Error::new_spanned(right, "Expect int literal for `max_args`")
+                            })?;
+                            max_args = Some(lit.base10_parse()?);
                         }
                         "extra_validator" => {
                             extra_validator = Some((&**right).into_token_stream());
@@ -303,16 +319,17 @@ impl parse::Parse for RpnFnAttr {
                 "`varg` and `raw_varg` conflicts to each other",
             ));
         }
-        if !is_varg && !is_raw_varg && min_args != None {
+        if !is_varg && !is_raw_varg && (min_args != None || max_args != None) {
             return Err(Error::new_spanned(
                 config_items,
-                "`min_args` is only available when `varg` or `raw_varg` presents",
+                "`min_args` or `max_args` is only available when `varg` or `raw_varg` presents",
             ));
         }
 
         Ok(Self {
             is_varg,
             is_raw_varg,
+            max_args,
             min_args,
             extra_validator,
             metadata_ctor,
@@ -430,6 +447,15 @@ impl ValidatorFnGenerator {
         self
     }
 
+    fn validate_max_args(mut self, max_args: Option<usize>) -> Self {
+        if let Some(max_args) = max_args {
+            self.tokens.push(quote! {
+                function::validate_expr_arguments_lte(expr, #max_args)?;
+            });
+        }
+        self
+    }
+
     fn validate_min_args(mut self, min_args: Option<usize>) -> Self {
         if let Some(min_args) = min_args {
             self.tokens.push(quote! {
@@ -498,13 +524,13 @@ fn generate_init_metadata_fn(
     where_clause: Option<&WhereClause>,
 ) -> TokenStream {
     let fn_body = if let Some(metadata_ctor) = metadata_ctor {
-        quote! { Box::new(#metadata_ctor(expr)) }
+        quote! { #metadata_ctor(expr).map(|metadata| Box::new(metadata) as Box<(dyn std::any::Any + std::marker::Send + 'static)>) }
     } else {
-        quote! { Box::new(()) }
+        quote! { Ok(Box::new(())) }
     };
     quote! {
         fn init_metadata #impl_generics (expr: &mut ::tipb::Expr)
-            -> Box<dyn std::any::Any + Send> #where_clause {
+            -> Result<Box<dyn std::any::Any + Send>> #where_clause {
             #fn_body
         }
     }
@@ -550,6 +576,7 @@ fn generate_metadata_type_checker(
 #[derive(Debug)]
 struct VargsRpnFn {
     captures: Vec<Expr>,
+    max_args: Option<usize>,
     min_args: Option<usize>,
     extra_validator: Option<TokenStream>,
     metadata_ctor: Option<TokenStream>,
@@ -584,6 +611,7 @@ impl VargsRpnFn {
         })?;
         Ok(Self {
             captures: attr.captures,
+            max_args: attr.max_args,
             min_args: attr.min_args,
             extra_validator: attr.extra_validator,
             metadata_ctor: attr.metadata_ctor,
@@ -622,7 +650,7 @@ impl VargsRpnFn {
             where_clause,
             |metadata_ctor| {
                 quote! {
-                    let metadata = &#metadata_ctor(expr);
+                    let metadata = &#metadata_ctor(expr).unwrap();
                     #fn_ident #ty_generics_turbofish ( #(#captures,)* &[]).ok();
                 }
             },
@@ -630,6 +658,7 @@ impl VargsRpnFn {
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
+            .validate_max_args(self.max_args)
             .validate_min_args(self.min_args)
             .validate_args_identical_type(&self.arg_type)
             .validate_by_fn(&self.extra_validator)
@@ -690,6 +719,7 @@ impl VargsRpnFn {
 #[derive(Debug)]
 struct RawVargsRpnFn {
     captures: Vec<Expr>,
+    max_args: Option<usize>,
     min_args: Option<usize>,
     extra_validator: Option<TokenStream>,
     metadata_ctor: Option<TokenStream>,
@@ -717,6 +747,7 @@ impl RawVargsRpnFn {
         })?;
         Ok(Self {
             captures: attr.captures,
+            max_args: attr.max_args,
             min_args: attr.min_args,
             extra_validator: attr.extra_validator,
             metadata_ctor: attr.metadata_ctor,
@@ -753,7 +784,7 @@ impl RawVargsRpnFn {
             where_clause,
             |metadata_ctor| {
                 quote! {
-                    let metadata = &#metadata_ctor(expr);
+                    let metadata = &#metadata_ctor(expr).unwrap();
                     #fn_ident #ty_generics_turbofish ( #(#captures,)* &[]).ok();
                 }
             },
@@ -761,6 +792,7 @@ impl RawVargsRpnFn {
 
         let validator_fn = ValidatorFnGenerator::new()
             .validate_return_type(&self.ret_type)
+            .validate_max_args(self.max_args)
             .validate_min_args(self.min_args)
             .validate_by_fn(&self.extra_validator)
             .generate(&impl_generics, where_clause);
@@ -955,7 +987,7 @@ impl NormalRpnFn {
                 quote! {
                     let arg: &#tp = unsafe { &*std::ptr::null() };
                     #(let (#extract2, arg) = arg.extract(0));*;
-                    let metadata = &#metadata_ctor(expr);
+                    let metadata = &#metadata_ctor(expr).unwrap();
                     #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg2),* ).ok();
                 }
             },
@@ -1214,9 +1246,9 @@ mod tests_normal {
                     )
                     .eval(Null, ctx, output_rows, args, extra, metadata)
                 }
-                fn init_metadata(expr: &mut ::tipb::Expr)-> Box<dyn std::any::Any + Send>
+                fn init_metadata(expr: &mut ::tipb::Expr)-> Result<Box<dyn std::any::Any + Send>>
                 {
-                    Box::new(())
+                    Ok(Box::new(()))
                 }
                 fn validate(expr: &tipb::Expr) -> crate::Result<()> {
                     use crate::codec::data_type::Evaluable;
@@ -1389,11 +1421,11 @@ mod tests_normal {
                     <ArgConstructor<A::X, _>>::new(0usize, Foo_Evaluator::<A, B>(std::marker::PhantomData))
                                 .eval(Null, ctx, output_rows, args, extra, metadata)
                 }
-                fn init_metadata <A: M, B> (expr: &mut ::tipb::Expr)-> Box<dyn std::any::Any + Send>
+                fn init_metadata <A: M, B> (expr: &mut ::tipb::Expr)-> Result<Box<dyn std::any::Any + Send>>
                 where
                     B: N<A>
                 {
-                    Box::new(())
+                    Ok(Box::new(()))
                 }
                 fn validate<A: M, B>(expr: &tipb::Expr) -> crate::Result<()>
                 where
@@ -1432,6 +1464,7 @@ mod tests_normal {
             RpnFnAttr {
                 is_varg: false,
                 is_raw_varg: false,
+                max_args: None,
                 min_args: None,
                 extra_validator: None,
                 metadata_ctor: None,

@@ -551,7 +551,7 @@ pub fn is_zero_duration(d: &Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protobuf::Message;
+
     use raft::eraftpb::Entry;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};

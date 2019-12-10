@@ -4,13 +4,17 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[dependencies]
-tikv = { path = "../../", default-features = false }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
-protobuf = "2"
-futures = "0.1"
+[features]
+prost-codec = ["prost"]
 
-tikv_util = { path = "../tikv_util" }
+[dependencies]
+futures = "0.1"
+keys = { path = "../keys" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+prost = { version = "0.5", optional = true }
+protobuf = "2"
 test_storage = { path = "../test_storage" }
 tidb_query = { path = "../tidb_query" }
+tikv = { path = "../../", default-features = false}
+tikv_util = { path = "../tikv_util" }
+tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }

@@ -408,9 +408,7 @@ impl ToInt for DateTime {
     //  will get 2000-01-01T12:13:14, this is a bug
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
-        // TODO: avoid this clone after refactor the `Time`
-        let mut t = self.clone();
-        t.round_frac(DEFAULT_FSP)?;
+        let t = self.round_frac(ctx, DEFAULT_FSP)?;
         let dec: Decimal = t.convert(ctx)?;
         let val = dec.as_i64();
         let val = val.into_result(ctx)?;
@@ -419,9 +417,7 @@ impl ToInt for DateTime {
 
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        // TODO: avoid this clone after refactor the `Time`
-        let mut t = self.clone();
-        t.round_frac(DEFAULT_FSP)?;
+        let t = self.round_frac(ctx, DEFAULT_FSP)?;
         let dec: Decimal = t.convert(ctx)?;
         decimal_as_u64(ctx, dec, tp)
     }
@@ -620,8 +616,8 @@ pub fn produce_float_with_specified_tp(
     tp: &FieldType,
     num: f64,
 ) -> Result<f64> {
-    let flen = tp.flen();
-    let decimal = tp.decimal();
+    let flen = tp.as_accessor().flen();
+    let decimal = tp.as_accessor().decimal();
     let ul = tidb_query_datatype::UNSPECIFIED_LENGTH;
 
     let res = if flen != ul && decimal != ul {
@@ -633,7 +629,7 @@ pub fn produce_float_with_specified_tp(
     };
 
     if tp.is_unsigned() && res < 0f64 {
-        ctx.handle_overflow_err(overflow(res, tp.tp()))?;
+        ctx.handle_overflow_err(overflow(res, tp.as_accessor().tp()))?;
         return Ok(0f64);
     }
 
@@ -743,26 +739,19 @@ impl ConvertTo<f64> for &[u8] {
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
         let s = str::from_utf8(self)?.trim();
         let vs = get_valid_float_prefix(ctx, s)?;
-        match vs.parse::<f64>() {
-            Ok(val) => {
-                // In rust's parse, if the number is out of range,
-                // it will return Ok but the res is inf
-                if val.is_infinite() {
-                    ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", &vs))?;
-                    if val.is_sign_negative() {
-                        return Ok(std::f64::MIN);
-                    } else {
-                        return Ok(std::f64::MAX);
-                    }
-                }
-                Ok(val)
-            }
-            // if reaches here, it means our code has bug
-            Err(err) => {
-                debug_assert!(false);
-                Err(box_err!("parse float err: {}, this is a bug", err))
+        let val = vs
+            .parse::<f64>()
+            .map_err(|err| -> Error { box_err!("Parse '{}' to float err: {:?}", vs, err) })?;
+        // The `parse` will return Ok(inf) if the float string literal out of range
+        if val.is_infinite() {
+            ctx.handle_truncate_err(Error::truncated_wrong_val("DOUBLE", &vs))?;
+            if val.is_sign_negative() {
+                return Ok(std::f64::MIN);
+            } else {
+                return Ok(std::f64::MAX);
             }
         }
+        Ok(val)
     }
 }
 
@@ -792,7 +781,7 @@ pub fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&
     let mut e_idx = 0;
     for (i, c) in s.chars().enumerate() {
         if c == '+' || c == '-' {
-            if i != 0 && i != e_idx + 1 {
+            if i != 0 && (e_idx == 0 || i != e_idx + 1) {
                 // "1e+1" is valid.
                 break;
             }
@@ -926,7 +915,10 @@ fn exp_float_str_to_int_str<'a>(
     }
     // make `digits` immutable
     let digits = digits;
-    let exp: i64 = box_try!((&valid_float[(e_idx + 1)..]).parse::<i64>());
+    let exp = match valid_float[(e_idx + 1)..].parse::<i64>() {
+        Ok(exp) => exp,
+        _ => return Ok(Cow::Borrowed(valid_float)),
+    };
     let (int_cnt, is_overflow): (i64, bool) = int_cnt.overflowing_add(exp);
     if int_cnt > 21 || is_overflow {
         // MaxInt64 has 19 decimal digits.
@@ -1205,6 +1197,28 @@ mod tests {
                     tp
                 ),
             }
+        }
+    }
+
+    #[test]
+    fn test_bytes_to_int_overflow() {
+        let tests: Vec<(&[u8], _, _)> = vec![
+            (
+                b"12e1234817291749271847289417294",
+                FieldTypeTp::LongLong,
+                9223372036854775807,
+            ),
+            (
+                b"12e1234817291749271847289417294",
+                FieldTypeTp::Long,
+                2147483647,
+            ),
+            (b"12e1234817291749271847289417294", FieldTypeTp::Tiny, 127),
+        ];
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
+        for (from, tp, to) in tests {
+            let r = from.to_int(&mut ctx, tp).unwrap();
+            assert_eq!(to, r);
         }
     }
 
@@ -1832,6 +1846,9 @@ mod tests {
             ("", "0"),
             ("123e+", "123"),
             ("123.e", "123."),
+            ("1-1-", "1"),
+            ("11-1-", "11"),
+            ("-1-1-", "-1"),
         ];
 
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));

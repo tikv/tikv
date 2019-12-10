@@ -47,7 +47,7 @@ pub fn delete_all_in_range_cf(
         if db.is_titan() {
             // Cause DeleteFilesInRange may expose old blob index keys, setting key only for Titan
             // to avoid referring to missing blob files.
-            iter_opt.titan_key_only(true);
+            iter_opt.set_key_only(true);
         }
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
         it.seek(start_key.into());

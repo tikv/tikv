@@ -13,11 +13,11 @@ use std::{cmp, usize};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::Writable;
-use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
+use engine::rocks::{WriteBatch, WriteOptions};
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::raft_cmdpb::{
@@ -39,7 +39,7 @@ use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::KeysInfoFormatter;
-use crate::raftstore::store::{cmd_resp, keys, util, Config};
+use crate::raftstore::store::{cmd_resp, util, Config};
 use crate::raftstore::{Error, Result};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
@@ -61,11 +61,11 @@ const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 pub struct PendingCmd {
     pub index: u64,
     pub term: u64,
-    pub cb: Option<Callback>,
+    pub cb: Option<Callback<RocksEngine>>,
 }
 
 impl PendingCmd {
-    fn new(index: u64, term: u64, cb: Callback) -> PendingCmd {
+    fn new(index: u64, term: u64, cb: Callback<RocksEngine>) -> PendingCmd {
         PendingCmd {
             index,
             term,
@@ -188,7 +188,7 @@ pub enum ExecResult {
     ComputeHash {
         region: Region,
         index: u64,
-        snap: Snapshot,
+        snap: RocksSnapshot,
     },
     VerifyHash {
         index: u64,
@@ -231,7 +231,7 @@ impl ExecContext {
 
 struct ApplyCallback {
     region: Region,
-    cbs: Vec<(Option<Callback>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<RocksEngine>>, RaftCmdResponse)>,
 }
 
 impl ApplyCallback {
@@ -249,7 +249,7 @@ impl ApplyCallback {
         }
     }
 
-    fn push(&mut self, cb: Option<Callback>, resp: RaftCmdResponse) {
+    fn push(&mut self, cb: Option<Callback<RocksEngine>>, resp: RaftCmdResponse) {
         self.cbs.push((cb, resp));
     }
 }
@@ -489,7 +489,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
 }
 
-pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
+pub fn notify_req_region_removed(region_id: u64, cb: Callback<RocksEngine>) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
     cb.invoke_with_response(resp);
@@ -507,7 +507,7 @@ fn notify_stale_command(region_id: u64, peer_id: u64, term: u64, mut cmd: Pendin
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback) {
+pub fn notify_stale_req(term: u64, cb: Callback<RocksEngine>) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
     cb.invoke_with_response(resp);
 }
@@ -656,7 +656,7 @@ impl ApplyDelegate {
             merged: false,
             ready_source_region_id: 0,
             wait_merge_state: None,
-            is_merging: false,
+            is_merging: reg.is_merging,
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
@@ -832,7 +832,12 @@ impl ApplyDelegate {
         }
     }
 
-    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback> {
+    fn find_cb(
+        &mut self,
+        index: u64,
+        term: u64,
+        is_conf_change: bool,
+    ) -> Option<Callback<RocksEngine>> {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
@@ -1085,9 +1090,13 @@ impl ApplyDelegate {
         ctx: &ApplyContext,
         req: &RaftCmdRequest,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
-        fail_point!("on_apply_write_cmd", self.id() == 3, |_| {
-            unimplemented!();
-        });
+        fail_point!(
+            "on_apply_write_cmd",
+            cfg!(release) || self.id() == 3,
+            |_| {
+                unimplemented!();
+            }
+        );
 
         let requests = req.get_requests();
         let mut responses = Vec::with_capacity(requests.len());
@@ -2022,7 +2031,7 @@ impl ApplyDelegate {
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
-                snap: Snapshot::new(Arc::clone(&ctx.engines.kv)),
+                snap: RocksSnapshot::new(Arc::clone(&ctx.engines.kv)),
             }),
         ))
     }
@@ -2140,6 +2149,7 @@ pub struct Registration {
     pub applied_index_term: u64,
     pub region: Region,
     pub pending_request_snapshot_count: Arc<AtomicUsize>,
+    pub is_merging: bool,
 }
 
 impl Registration {
@@ -2151,6 +2161,7 @@ impl Registration {
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
             pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
+            is_merging: peer.pending_merge_state.is_some(),
         }
     }
 }
@@ -2159,11 +2170,11 @@ pub struct Proposal {
     is_conf_change: bool,
     index: u64,
     term: u64,
-    pub cb: Callback,
+    pub cb: Callback<RocksEngine>,
 }
 
 impl Proposal {
-    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback) -> Proposal {
+    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<RocksEngine>) -> Proposal {
         Proposal {
             is_conf_change,
             index,
@@ -2244,8 +2255,8 @@ impl GenSnapTask {
             // This snapshot may be held for a long time, which may cause too many
             // open files in rocksdb.
             // TODO: figure out another way to do raft snapshot with short life rocksdb snapshots.
-            raft_snap: Snapshot::new(engines.raft.clone()),
-            kv_snap: Snapshot::new(engines.kv.clone()),
+            raft_snap: RocksSnapshot::new(engines.raft.clone()),
+            kv_snap: RocksSnapshot::new(engines.kv.clone()),
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
@@ -2395,6 +2406,8 @@ impl ApplyFsm {
             self.delegate.region_id() == 1000 && self.delegate.id() == 1003,
             |_| {}
         );
+        fail_point!("on_handle_apply", |_| {});
+
         if apply.entries.is_empty() || self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
@@ -2923,8 +2936,10 @@ mod tests {
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
     use engine::rocks::Writable;
+    use engine::Peekable;
     use engine::{WriteBatch, DB};
     use engine_rocks::RocksEngine;
+    use engine_traits::Peekable as PeekableTrait;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;

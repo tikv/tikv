@@ -15,7 +15,6 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use engine::*;
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv_util::config::ReadableDuration;
 use tikv_util::HandyRwLock;

@@ -12,6 +12,7 @@ use tokio_core::reactor::Handle;
 
 use engine::rocks::util::*;
 use engine::rocks::DB;
+use engine_rocks::RocksEngine;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -28,11 +29,11 @@ use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
+use keys::UnixSecs;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
-use tikv_util::time::time_now_sec;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
@@ -45,7 +46,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -53,7 +54,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     },
     Heartbeat {
         term: u64,
@@ -96,7 +97,7 @@ pub struct StoreStat {
     pub engine_total_keys_read: u64,
     pub engine_last_total_bytes_read: u64,
     pub engine_last_total_keys_read: u64,
-    pub last_report_ts: u64,
+    pub last_report_ts: UnixSecs,
 
     pub region_bytes_read: LocalHistogram,
     pub region_keys_read: LocalHistogram,
@@ -116,7 +117,7 @@ impl Default for StoreStat {
             region_bytes_written: REGION_WRITTEN_BYTES_HISTOGRAM.local(),
             region_keys_written: REGION_WRITTEN_KEYS_HISTOGRAM.local(),
 
-            last_report_ts: 0,
+            last_report_ts: UnixSecs::zero(),
             engine_total_bytes_read: 0,
             engine_total_keys_read: 0,
             engine_last_total_bytes_read: 0,
@@ -137,7 +138,7 @@ pub struct PeerStat {
     pub last_read_keys: u64,
     pub last_written_bytes: u64,
     pub last_written_keys: u64,
-    pub last_report_ts: u64,
+    pub last_report_ts: UnixSecs,
 }
 
 impl Display for Task {
@@ -209,7 +210,7 @@ impl Display for Task {
 fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
     m.into_iter()
         .map(|(k, v)| {
-            let mut pair = pdpb::RecordPair::new();
+            let mut pair = pdpb::RecordPair::default();
             pair.set_key(k);
             pair.set_value(v);
             pair
@@ -290,8 +291,8 @@ pub struct Runner<T: PdClient> {
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
-    // Records the timestamp of boot time.
-    start_ts: u64,
+    // Records the boot time.
+    start_ts: UnixSecs,
 
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
@@ -325,7 +326,7 @@ impl<T: PdClient> Runner<T> {
             is_hb_receiver_scheduled: false,
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
-            start_ts: time_now_sec(),
+            start_ts: UnixSecs::now(),
             scheduler,
             stats_monitor,
         }
@@ -338,7 +339,7 @@ impl<T: PdClient> Runner<T> {
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     ) {
         let router = self.router.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
@@ -379,7 +380,7 @@ impl<T: PdClient> Runner<T> {
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     ) {
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
@@ -535,22 +536,16 @@ impl<T: PdClient> Runner<T> {
             self.store_stat.engine_total_keys_read - self.store_stat.engine_last_total_keys_read,
         );
 
-        stats.set_cpu_usages(protobuf::RepeatedField::from_vec(
-            self.store_stat.store_cpu_usages.clone(),
-        ));
-        stats.set_read_io_rates(protobuf::RepeatedField::from_vec(
-            self.store_stat.store_read_io_rates.clone(),
-        ));
-        stats.set_write_io_rates(protobuf::RepeatedField::from_vec(
-            self.store_stat.store_write_io_rates.clone(),
-        ));
+        stats.set_cpu_usages(self.store_stat.store_cpu_usages.clone().into());
+        stats.set_read_io_rates(self.store_stat.store_read_io_rates.clone().into());
+        stats.set_write_io_rates(self.store_stat.store_write_io_rates.clone().into());
 
         let mut interval = pdpb::TimeInterval::default();
-        interval.set_start_timestamp(self.store_stat.last_report_ts);
+        interval.set_start_timestamp(self.store_stat.last_report_ts.into_inner());
         stats.set_interval(interval);
         self.store_stat.engine_last_total_bytes_read = self.store_stat.engine_total_bytes_read;
         self.store_stat.engine_last_total_keys_read = self.store_stat.engine_total_keys_read;
-        self.store_stat.last_report_ts = time_now_sec();
+        self.store_stat.last_report_ts = UnixSecs::now();
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
         self.store_stat.region_bytes_read.flush();
@@ -710,7 +705,7 @@ impl<T: PdClient> Runner<T> {
                     let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
                         CasualMessage::SplitRegion{
                             region_epoch: epoch,
-                            split_keys: split_region.take_keys().into_vec(),
+                            split_keys: split_region.take_keys().into(),
                             callback: Callback::None,
                         }
                     } else {
@@ -843,8 +838,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                     peer_stat.last_written_keys = written_keys;
                     peer_stat.last_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_read_keys = peer_stat.read_keys;
-                    peer_stat.last_report_ts = time_now_sec();
-                    if last_report_ts == 0 {
+                    peer_stat.last_report_ts = UnixSecs::now();
+                    if last_report_ts.is_zero() {
                         last_report_ts = self.start_ts;
                     }
                     (
@@ -961,7 +956,7 @@ fn send_admin_request(
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback,
+    callback: Callback<RocksEngine>,
 ) {
     let cmd_type = request.get_cmd_type();
 

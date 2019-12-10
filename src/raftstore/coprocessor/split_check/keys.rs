@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use crate::raftstore::store::{CasualMessage, CasualRouter};
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
 use engine::util;
@@ -215,14 +215,14 @@ mod tests {
         MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
     };
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};
-    use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::mvcc::{Write, WriteType};
-    use crate::storage::Key;
+    use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
+    use crate::storage::mvcc::{TimeStamp, Write, WriteType};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
     use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
+    use keys::Key;
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;
@@ -237,10 +237,15 @@ mod tests {
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
         let default_cf = engine.cf_handle(CF_DEFAULT).unwrap();
         let write_value = if fill_short_value {
-            Write::new(WriteType::Put, 0, Some(b"shortvalue".to_vec()))
+            Write::new(
+                WriteType::Put,
+                TimeStamp::zero(),
+                Some(b"shortvalue".to_vec()),
+            )
         } else {
-            Write::new(WriteType::Put, 0, None)
+            Write::new(WriteType::Put, TimeStamp::zero(), None)
         }
+        .as_ref()
         .to_bytes();
 
         while start_idx < end_idx {
@@ -248,7 +253,7 @@ mod tests {
             for i in start_idx..batch_idx {
                 let key = keys::data_key(
                     Key::from_raw(format!("{:04}", i).as_bytes())
-                        .append_ts(2)
+                        .append_ts(2.into())
                         .as_encoded(),
                 );
                 engine.put_cf(write_cf, &key, &write_value).unwrap();
@@ -313,7 +318,7 @@ mod tests {
         must_split_at(
             &rx,
             &region,
-            vec![Key::from_raw(b"0080").append_ts(2).into_encoded()],
+            vec![Key::from_raw(b"0080").append_ts(2.into()).into_encoded()],
         );
 
         put_data(&engine, 160, 300, false);
@@ -322,9 +327,9 @@ mod tests {
             &rx,
             &region,
             vec![
-                Key::from_raw(b"0080").append_ts(2).into_encoded(),
-                Key::from_raw(b"0160").append_ts(2).into_encoded(),
-                Key::from_raw(b"0240").append_ts(2).into_encoded(),
+                Key::from_raw(b"0080").append_ts(2.into()).into_encoded(),
+                Key::from_raw(b"0160").append_ts(2.into()).into_encoded(),
+                Key::from_raw(b"0240").append_ts(2.into()).into_encoded(),
             ],
         );
 
@@ -334,11 +339,11 @@ mod tests {
             &rx,
             &region,
             vec![
-                Key::from_raw(b"0080").append_ts(2).into_encoded(),
-                Key::from_raw(b"0160").append_ts(2).into_encoded(),
-                Key::from_raw(b"0240").append_ts(2).into_encoded(),
-                Key::from_raw(b"0320").append_ts(2).into_encoded(),
-                Key::from_raw(b"0400").append_ts(2).into_encoded(),
+                Key::from_raw(b"0080").append_ts(2.into()).into_encoded(),
+                Key::from_raw(b"0160").append_ts(2.into()).into_encoded(),
+                Key::from_raw(b"0240").append_ts(2.into()).into_encoded(),
+                Key::from_raw(b"0320").append_ts(2.into()).into_encoded(),
+                Key::from_raw(b"0400").append_ts(2.into()).into_encoded(),
             ],
         );
 
@@ -367,8 +372,14 @@ mod tests {
 
         let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
         for &(key, vlen) in &cases {
-            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
-            let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
+            let key = keys::data_key(
+                Key::from_raw(key.as_bytes())
+                    .append_ts(2.into())
+                    .as_encoded(),
+            );
+            let write_v = Write::new(WriteType::Put, TimeStamp::zero(), None)
+                .as_ref()
+                .to_bytes();
             let write_cf = db.cf_handle(CF_WRITE).unwrap();
             db.put_cf(write_cf, &key, &write_v).unwrap();
             db.flush_cf(write_cf, true).unwrap();
@@ -411,8 +422,14 @@ mod tests {
         // 3 points will be inserted into range properties
         let cases = [("a", 4194304), ("b", 4194304), ("c", 4194304)];
         for &(key, vlen) in &cases {
-            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
-            let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
+            let key = keys::data_key(
+                Key::from_raw(key.as_bytes())
+                    .append_ts(2.into())
+                    .as_encoded(),
+            );
+            let write_v = Write::new(WriteType::Put, TimeStamp::zero(), None)
+                .as_ref()
+                .to_bytes();
             db.put_cf(write_cf, &key, &write_v).unwrap();
 
             let default_v = vec![0; vlen as usize];

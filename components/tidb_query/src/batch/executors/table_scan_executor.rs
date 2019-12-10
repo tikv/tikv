@@ -13,6 +13,7 @@ use tipb::TableScan;
 use super::util::scan_executor::*;
 use crate::batch::interface::*;
 use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::codec::table::check_record_key;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::storage::{IntervalRange, Storage};
 use crate::Result;
@@ -206,6 +207,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         use crate::codec::{datum, table};
         use codec::prelude::NumberDecoder;
 
+        check_record_key(&key)?;
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
@@ -312,7 +314,6 @@ mod tests {
 
     use crate::codec::batch::LazyBatchColumnVec;
     use crate::codec::data_type::*;
-    use crate::codec::mysql::Tz;
     use crate::codec::{datum, table, Datum};
     use crate::execute_stats::*;
     use crate::expr::EvalConfig;
@@ -391,6 +392,8 @@ mod tests {
                 (6, None, Real::new(4.5).ok()),
             ];
 
+            let mut ctx = EvalContext::default();
+
             // The column info for each column in `data`.
             let columns_info = vec![
                 {
@@ -410,7 +413,7 @@ mod tests {
                     let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                     ci.set_column_id(4);
-                    ci.set_default_val(datum::encode_value(&[Datum::F64(4.5)]).unwrap());
+                    ci.set_default_val(datum::encode_value(&mut ctx, &[Datum::F64(4.5)]).unwrap());
                     ci
                 },
             ];
@@ -429,7 +432,7 @@ mod tests {
                         let value = {
                             let row = columns.iter().map(|(_, datum)| datum.clone()).collect();
                             let col_ids: Vec<_> = columns.iter().map(|(id, _)| *id).collect();
-                            table::encode_row(row, &col_ids).unwrap()
+                            table::encode_row(&mut ctx, row, &col_ids).unwrap()
                         };
                         (key, value)
                     })
@@ -543,7 +546,10 @@ mod tests {
                 } else {
                     assert!(columns[id].is_raw());
                     columns[id]
-                        .ensure_all_decoded(&Tz::utc(), self.get_field_type(col_idx))
+                        .ensure_all_decoded(
+                            &mut EvalContext::default(),
+                            self.get_field_type(col_idx),
+                        )
                         .unwrap();
                 }
                 assert_eq!(columns[id].decoded(), &values[col_idx]);
@@ -650,7 +656,7 @@ mod tests {
             false,
         )
         .unwrap()
-        .with_summary_collector(ExecSummaryCollectorEnabled::new(1));
+        .collect_summary(1);
 
         executor.next_batch(1);
         executor.next_batch(2);
@@ -721,11 +727,13 @@ mod tests {
             FieldTypeTp::LongLong.into(),
         ];
 
+        let mut ctx = EvalContext::default();
         let mut kv = vec![];
         {
             // row 0, which is not corrupted
             let key = table::encode_row_key(TABLE_ID, 0);
-            let value = table::encode_row(vec![Datum::I64(5), Datum::I64(7)], &[2, 3]).unwrap();
+            let value =
+                table::encode_row(&mut ctx, vec![Datum::I64(5), Datum::I64(7)], &[2, 3]).unwrap();
             kv.push((key, value));
         }
         {
@@ -737,7 +745,8 @@ mod tests {
         {
             // row 2, which is partially corrupted
             let key = table::encode_row_key(TABLE_ID, 2);
-            let mut value = table::encode_row(vec![Datum::I64(5), Datum::I64(7)], &[2, 3]).unwrap();
+            let mut value =
+                table::encode_row(&mut ctx, vec![Datum::I64(5), Datum::I64(7)], &[2, 3]).unwrap();
             // resize the value to make it partially corrupted
             value.truncate(value.len() - 3);
             kv.push((key, value));
@@ -752,7 +761,7 @@ mod tests {
         {
             // row 4, which is totally corrupted due to missing datum for column value
             let key = table::encode_row_key(TABLE_ID, 4);
-            let value = datum::encode_value(&[Datum::I64(2)]).unwrap(); // col_id = 2
+            let value = datum::encode_value(&mut ctx, &[Datum::I64(2)]).unwrap(); // col_id = 2
             kv.push((key, value));
         }
 
@@ -796,7 +805,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .ensure_all_decoded(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_int_slice(),
@@ -804,7 +813,7 @@ mod tests {
             );
             assert!(result.physical_columns[2].is_raw());
             result.physical_columns[2]
-                .ensure_all_decoded(&Tz::utc(), &schema[2])
+                .ensure_all_decoded(&mut ctx, &schema[2])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[2].decoded().as_int_slice(),
@@ -834,11 +843,12 @@ mod tests {
         ];
         let schema = vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
 
+        let mut ctx = EvalContext::default();
         let mut kv = vec![];
         {
             // row 0: ok
             let key = table::encode_row_key(TABLE_ID, 0);
-            let value = table::encode_row(vec![Datum::I64(7)], &[2]).unwrap();
+            let value = table::encode_row(&mut ctx, vec![Datum::I64(7)], &[2]).unwrap();
             kv.push((key, Ok(value)));
         }
         {
@@ -853,7 +863,7 @@ mod tests {
         {
             // row 2: not locked
             let key = table::encode_row_key(TABLE_ID, 2);
-            let value = table::encode_row(vec![Datum::I64(5)], &[2]).unwrap();
+            let value = table::encode_row(&mut ctx, vec![Datum::I64(5)], &[2]).unwrap();
             kv.push((key, Ok(value)));
         }
 
@@ -899,7 +909,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .ensure_all_decoded(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_int_slice(),
@@ -933,7 +943,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .ensure_all_decoded(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_int_slice(),
@@ -987,7 +997,7 @@ mod tests {
             );
             assert!(result.physical_columns[1].is_raw());
             result.physical_columns[1]
-                .ensure_all_decoded(&Tz::utc(), &schema[1])
+                .ensure_all_decoded(&mut ctx, &schema[1])
                 .unwrap();
             assert_eq!(
                 result.physical_columns[1].decoded().as_int_slice(),
@@ -1037,7 +1047,7 @@ mod tests {
         let key = table::encode_row_key(TABLE_ID, 1);
         let col_ids = (10..10 + schema.len() as i64).collect::<Vec<_>>();
         let row = col_ids.iter().map(|i| Datum::I64(*i)).collect();
-        let value = table::encode_row(row, &col_ids).unwrap();
+        let value = table::encode_row(&mut EvalContext::default(), row, &col_ids).unwrap();
 
         let mut key_range = KeyRange::default();
         key_range.set_start(table::encode_row_key(TABLE_ID, std::i64::MIN));
@@ -1060,7 +1070,7 @@ mod tests {
         assert_eq!(result.physical_columns.columns_len(), columns_is_pk.len());
         for i in 0..columns_is_pk.len() {
             result.physical_columns[i]
-                .ensure_all_decoded(&Tz::utc(), &schema[i])
+                .ensure_all_decoded(&mut EvalContext::default(), &schema[i])
                 .unwrap();
             if columns_is_pk[i] {
                 assert_eq!(
