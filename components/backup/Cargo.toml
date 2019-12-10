@@ -47,3 +47,7 @@ rand = "0.7"
 test_util = { path = "../test_util" }
 test_raftstore = { path = "../test_raftstore" }
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
+
+[features]
+protobuf-codec = ["kvproto/protobuf-codec", "external_storage/protobuf-codec"]
+prost-codec = ["kvproto/prost-codec", "external_storage/prost-codec"]
