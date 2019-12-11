@@ -27,12 +27,14 @@ prost-codec = [
   "raft/prost-codec",
   "engine/prost-codec",
   "tikv_util/prost-codec",
+  "sst_importer/prost-codec",
 ]
 protobuf-codec = [
   "tipb/protobuf-codec",
   "kvproto/protobuf-codec",
   "grpcio/protobuf-codec",
   "raft/protobuf-codec",
+  "sst_importer/protobuf-codec",
 ]
 
 [lib]

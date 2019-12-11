@@ -12,6 +12,7 @@ use tokio_core::reactor::Handle;
 
 use engine::rocks::util::*;
 use engine::rocks::DB;
+use engine_rocks::RocksEngine;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -45,7 +46,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -53,7 +54,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     },
     Heartbeat {
         term: u64,
@@ -338,7 +339,7 @@ impl<T: PdClient> Runner<T> {
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     ) {
         let router = self.router.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
@@ -379,7 +380,7 @@ impl<T: PdClient> Runner<T> {
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     ) {
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
@@ -955,7 +956,7 @@ fn send_admin_request(
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback,
+    callback: Callback<RocksEngine>,
 ) {
     let cmd_type = request.get_cmd_type();
 
