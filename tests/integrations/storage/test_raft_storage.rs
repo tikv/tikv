@@ -12,11 +12,10 @@ use tikv::server::gc_worker::{AutoGcConfig, GcConfig};
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::{Engine, Mutation};
-use tikv::storage::{Error as StorageError, ErrorInner as SotrageErrorInner};
+use tikv::storage::{Engine, Error as StorageError, ErrorInner as StorageErrorInner};
 use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, Mutation, TimeStamp};
 
 fn new_raft_storage() -> (
     Cluster<ServerCluster>,
@@ -107,7 +106,7 @@ fn test_raft_storage_rollback_before_prewrite() {
     assert!(ret.is_err());
     let err = ret.unwrap_err();
     match err {
-        StorageError(box SotrageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::WriteConflict { .. },
         ))))) => {}
         _ => {
@@ -146,7 +145,7 @@ fn test_raft_storage_store_not_match() {
     ctx.set_peer(peer);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
     let res = storage.get(ctx.clone(), &key, 20);
-    if let StorageError(box SotrageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+    if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
         box KvErrorInner::Request(ref e),
     ))))) = *res.as_ref().err().unwrap()
     {

@@ -11,7 +11,7 @@ use tidb_query::codec::{datum, table, Datum};
 use tidb_query::expr::EvalContext;
 use tikv::storage::{txn::FixtureStore, Engine, RocksEngine, SnapshotStore, TestEngineBuilder};
 use tikv_util::collections::HashMap;
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, Mutation, TimeStamp};
 
 pub struct Insert<'a, E: Engine> {
     store: &'a mut Store<E>,

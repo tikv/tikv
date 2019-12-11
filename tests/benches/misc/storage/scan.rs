@@ -6,8 +6,7 @@ use kvproto::kvrpcpb::Context;
 
 use test_storage::SyncTestStorageBuilder;
 use test_util::*;
-use tikv::storage::Mutation;
-use txn_types::Key;
+use txn_types::{Key, Mutation};
 
 /// In mvcc kv is not actually deleted, which may cause performance issue
 /// when doing scan.

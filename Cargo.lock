@@ -3338,6 +3338,7 @@ dependencies = [
  "tipb_helper",
  "tokio-threadpool",
  "toml",
+ "txn_types",
  "uuid",
 ]
 
