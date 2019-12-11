@@ -57,7 +57,6 @@ const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
-const MAX_LOW_PRIORITY_BATCH_SIZE_PER_TICK: usize = 64 * 1024;
 
 pub struct PendingCmd {
     pub index: u64,
@@ -2786,17 +2785,9 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
             }
             expected_msg_count = None;
         }
-        let mut msg_size = 0;
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
                 Ok(msg) => {
-                    if let Msg::Apply { ref apply, .. } = msg {
-                        for e in apply.entries.iter() {
-                            msg_size += e.get_data().len();
-                        }
-                    } else {
-                        msg_size += 1;
-                    }
                     self.msg_buf.push(msg)
                 }
                 Err(TryRecvError::Empty) => {
@@ -2808,12 +2799,6 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
                     expected_msg_count = Some(0);
                     break;
                 }
-            }
-            if self.is_high_priority()
-                && !normal.delegate.high_priority
-                && msg_size > MAX_LOW_PRIORITY_BATCH_SIZE_PER_TICK
-            {
-                break;
             }
         }
         normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);

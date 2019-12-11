@@ -19,7 +19,6 @@ pub use self::apply::{
 };
 pub use self::batch::{
     BatchRouter, BatchSystem, Fsm, FsmScheduler, HandlerBuilder, NormalScheduler, PollHandler,
-    MAX_LOW_PRIORITY_MESSAGE_PER_TICK,
 };
 pub use self::peer::{DestroyPeerJob, GroupState, PeerFsm};
 pub use self::router::{BasicMailbox, Mailbox};

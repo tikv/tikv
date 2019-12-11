@@ -12,8 +12,6 @@ use std::thread::{self, JoinHandle};
 use tikv_util::mpsc;
 use tikv_util::sys as sys_util;
 
-pub const MAX_LOW_PRIORITY_MESSAGE_PER_TICK: usize = 128;
-
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
     type Fsm: Fsm;
@@ -280,7 +278,6 @@ pub trait PollHandler<N, C> {
 struct Poller<N: Fsm, C: Fsm, Handler> {
     router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
-    low_receiver: Option<channel::Receiver<FsmTypes<N, C>>>,
     handler: Handler,
     max_batch_size: usize,
 }
@@ -295,12 +292,6 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
         let mut pushed = if curr_batch_len == 0 {
             match self.fsm_receiver.try_recv().or_else(|_| {
-                if let Some(receiver) = self.low_receiver.as_ref() {
-                    return receiver.try_recv().or_else(|_| {
-                        self.handler.pause();
-                        self.fsm_receiver.recv()
-                    });
-                }
                 self.handler.pause();
                 // Block if the batch is empty.
                 self.fsm_receiver.recv()
@@ -416,15 +407,14 @@ where
         for i in 0..pool_size {
             let high_priority = i < self.high_priority_thread_number;
             let handler = builder.build(high_priority);
-            let (receiver, low_receiver) = if high_priority {
-                (self.high_receiver.clone(), Some(self.receiver.clone()))
+            let receiver = if high_priority {
+                self.high_receiver.clone()
             } else {
-                (self.receiver.clone(), None)
+                self.receiver.clone()
             };
             let mut poller = Poller {
                 router: self.router.clone(),
                 fsm_receiver: receiver,
-                low_receiver,
                 handler,
                 max_batch_size: self.max_batch_size,
             };

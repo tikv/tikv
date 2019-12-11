@@ -33,7 +33,7 @@ use crate::raftstore::store::fsm::peer::{
 use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder, MAX_LOW_PRIORITY_MESSAGE_PER_TICK,
+    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
 };
 use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
 use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -669,11 +669,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                     expected_msg_count = Some(0);
                     break;
                 }
-            }
-            if self.is_high_priority()
-                && self.peer_msg_buf.len() > MAX_LOW_PRIORITY_MESSAGE_PER_TICK
-            {
-                break;
             }
         }
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
