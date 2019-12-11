@@ -19,7 +19,7 @@ use kvproto::backup::storage_backend::Backend;
 #[cfg(feature = "protobuf-codec")]
 use kvproto::backup::StorageBackend_oneof_backend as Backend;
 #[cfg_attr(feature = "protobuf-codec", allow(unused_imports))]
-use kvproto::backup::{Local, Noop, StorageBackend, S3};
+use kvproto::backup::{Local, Noop, StorageBackend};
 
 mod local;
 pub use local::LocalStorage;
