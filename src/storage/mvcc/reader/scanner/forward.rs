@@ -351,7 +351,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             if has_write {
                 let is_current_user_key = self.move_write_cursor_to_ts(&current_user_key, ts)?;
                 if is_current_user_key {
-                    if let HandleRes::Return(output) = self.scan_policy.handle_lock(
+                    if let HandleRes::Return(output) = self.scan_policy.handle_write(
                         current_user_key,
                         ts,
                         &mut self.cfg,
