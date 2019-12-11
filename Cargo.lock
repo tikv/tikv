@@ -1395,6 +1395,7 @@ dependencies = [
  "kvproto",
  "panic_hook",
  "slog",
+ "tikv_alloc",
 ]
 
 [[package]]
