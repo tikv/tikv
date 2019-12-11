@@ -72,7 +72,7 @@ pub fn run_tikv(mut config: TiKvConfig) {
         "cluster_id" => cluster_id
     );
 
-    let (_, config) = ConfigHandler::create(pd_client.clone(), &config)
+    let (_, config) = ConfigHandler::create(config.server.addr.clone(), pd_client.clone(), config)
         .unwrap_or_else(|e| fatal!("failed to register config to pd: {}", e));
 
     // Print version information.

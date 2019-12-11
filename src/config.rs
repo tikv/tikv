@@ -5,7 +5,7 @@
 //! TiKV is configured through the `TiKvConfig` type, which is in turn
 //! made up of many other configuration types.
 
-use std::cmp;
+use std::cmp::{self, Ord, Ordering};
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -1353,7 +1353,7 @@ pub struct TiKvConfig {
     pub pd: PdConfig,
     #[config(skip)]
     pub metric: MetricConfig,
-    #[config(skip)]
+    #[config(submodule)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
     #[config(skip)]
@@ -1727,6 +1727,17 @@ fn from_change_value(v: ConfigValue) -> CfgResult<String> {
     Ok(s)
 }
 
+pub fn cmp_version(version: &configpb::Version, other: &configpb::Version) -> Ordering {
+    match (
+        Ord::cmp(&version.local, &other.local),
+        Ord::cmp(&version.global, &other.global),
+    ) {
+        (Ordering::Equal, Ordering::Equal) => Ordering::Equal,
+        (Ordering::Less, _) | (_, Ordering::Less) => Ordering::Less,
+        _ => Ordering::Greater,
+    }
+}
+
 type CfgResult<T> = Result<T, Box<dyn Error>>;
 
 /// ConfigController use to register each module's config manager,
@@ -1753,15 +1764,21 @@ impl ConfigController {
         }
         None
     }
+
+    pub fn get_current(&self) -> &TiKvConfig {
+        &self.current
+    }
 }
 
 pub struct ConfigHandler {
+    id: String,
     version: configpb::Version,
     config_controller: ConfigController,
 }
 
 impl ConfigHandler {
     pub fn start(
+        id: String,
         controller: ConfigController,
         version: configpb::Version,
         scheduler: FutureScheduler<PdTask>,
@@ -1770,6 +1787,7 @@ impl ConfigHandler {
             return Err(format!("failed to schedule refresh config task: {:?}", e).into());
         }
         Ok(ConfigHandler {
+            id,
             version,
             config_controller: controller,
         })
@@ -1780,25 +1798,28 @@ impl ConfigHandler {
     }
 
     pub fn get_id(&self) -> String {
-        self.config_controller.current.server.addr.clone()
+        self.id.clone()
     }
 
-    pub fn get_version(&self) -> configpb::Version {
-        self.version.clone()
+    pub fn get_version(&self) -> &configpb::Version {
+        &self.version
+    }
+
+    pub fn get_config(&self) -> &TiKvConfig {
+        self.config_controller.get_current()
     }
 }
 
+// FIXME: the usage of version and status_code need to consist with pd
 impl ConfigHandler {
-    // FIXME: the usage of version and status_code need to consist with pd
-
     /// Register the local config to pd
     pub fn create(
+        id: String,
         pd_client: Arc<impl PdClient>,
-        cfg: &TiKvConfig,
+        cfg: TiKvConfig,
     ) -> CfgResult<(configpb::Version, TiKvConfig)> {
-        let id = cfg.server.addr.clone();
+        let cfg = toml::to_string(&cfg)?;
         let version = configpb::Version::new();
-        let cfg = toml::to_string(cfg)?;
         let mut resp = pd_client.register_config(id, version, cfg)?;
         match resp.get_status().code {
             StatusCode::Ok => {
@@ -1816,22 +1837,30 @@ impl ConfigHandler {
     /// rollback the remote config if the change are invalid.
     pub fn refresh_config(&mut self, pd_client: Arc<impl PdClient>) -> CfgResult<()> {
         let mut resp = pd_client.get_config(self.get_id(), self.version.clone())?;
+        let version = resp.take_version();
         match resp.get_status().code {
             StatusCode::NotChange => Ok(()),
-            StatusCode::WrongVersion => {
+            StatusCode::WrongVersion if cmp_version(&self.version, &version) == Ordering::Less => {
                 let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
                 if let Some(rollback_change) = self.config_controller.update_or_rollback(incoming) {
+                    debug!(
+                        "tried to update local config to an invalid config";
+                        "version" => ?resp.version
+                    );
                     let entries = to_config_entry(rollback_change)?;
-                    debug!("tried to update local config to an invalid config"; "version" => ?resp.version);
-                    self.update_config(entries, pd_client)?;
+                    self.update_config(version, entries, pd_client)?;
                 } else {
                     info!("local config updated"; "version" => ?resp.version);
-                    self.version = resp.take_version();
+                    self.version = version;
                 }
                 Ok(())
             }
             code => {
-                debug!("failed to get remote config"; "status" => ?code);
+                debug!(
+                    "failed to get remote config";
+                    "status" => ?code,
+                    "version" => ?version
+                );
                 Err(format!("{:?}", resp).into())
             }
         }
@@ -1839,10 +1868,10 @@ impl ConfigHandler {
 
     fn update_config(
         &mut self,
+        mut version: configpb::Version,
         entries: Vec<configpb::ConfigEntry>,
         pd_client: Arc<impl PdClient>,
     ) -> CfgResult<()> {
-        let mut version = self.version.clone();
         version.local += 1;
         let mut resp = pd_client.update_config(self.get_id(), version, entries)?;
         match resp.get_status().code {

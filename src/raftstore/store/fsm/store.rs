@@ -1105,6 +1105,7 @@ impl RaftBatchSystem {
         box_try!(workers.cleanup_worker.start(cleanup_runner));
 
         let config_client = box_try!(ConfigHandler::start(
+            cfg_controller.get_current().server.addr.clone(),
             cfg_controller,
             configpb::Version::new(), // TODO: we can reuse the returned Version of ConfigHandler::create
             workers.pd_worker.scheduler(),
