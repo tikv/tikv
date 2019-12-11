@@ -354,6 +354,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Degrees => degrees_fn_meta(),
         ScalarFuncSig::Radians => radians_fn_meta(),
         ScalarFuncSig::Conv => conv_fn_meta(),
+        ScalarFuncSig::Rand => rand_fn_meta(),
+        ScalarFuncSig::RandWithSeedFirstGen => rand_with_seed_first_gen_fn_meta(),
         // impl_miscellaneous
         ScalarFuncSig::DecimalAnyValue => any_value_fn_meta::<Decimal>(),
         ScalarFuncSig::DurationAnyValue => any_value_fn_meta::<Duration>(),
