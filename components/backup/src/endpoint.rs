@@ -124,6 +124,7 @@ impl BackupRange {
         writer: &mut BackupWriter,
         engine: &E,
         backup_ts: TimeStamp,
+        begin_ts: TimeStamp,
     ) -> Result<Statistics> {
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
@@ -145,7 +146,11 @@ impl BackupRange {
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
-        let mut scanner = snap_store.entry_scanner(start_key, end_key).unwrap();
+        // Incremental backup needs to output delete records.
+        let incremental = !begin_ts.is_zero();
+        let mut scanner = snap_store
+            .entry_scanner(start_key, end_key, begin_ts, incremental)
+            .unwrap();
 
         let start = Instant::now();
         let mut batch = EntryBatch::with_capacity(1024);
@@ -360,9 +365,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
         cancel: Arc<AtomicBool>,
     ) {
-        // TODO: support incremental backup
-        let _ = start_ts;
-
         let backup_ts = end_ts;
         let engine = self.engine.clone();
         let db = self.db.clone();
@@ -395,7 +397,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         return tx.send((brange, Err(e))).map_err(|_| ());
                     }
                 };
-                let stat = match brange.backup(&mut writer, &engine, backup_ts) {
+                let stat = match brange.backup(&mut writer, &engine, backup_ts, start_ts) {
                     Ok(s) => s,
                     Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
                 };
@@ -505,16 +507,13 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
             return;
         }
         info!("run backup task"; "task" => %task);
-        if task.start_ts == task.end_ts {
-            self.handle_backup_task(task);
-            self.pool.borrow_mut().heartbeat();
-        } else {
-            // TODO: support incremental backup
+        if !task.start_ts.is_zero() {
             BACKUP_RANGE_ERROR_VEC
                 .with_label_values(&["incremental"])
                 .inc();
-            error!("incremental backup is not supported yet");
         }
+        self.handle_backup_task(task);
+        self.pool.borrow_mut().heartbeat();
     }
 }
 
@@ -847,7 +846,7 @@ pub mod tests {
             let mut req = BackupRequest::default();
             req.set_start_key(vec![]);
             req.set_end_key(vec![b'5']);
-            req.set_start_version(ts.into_inner());
+            req.set_start_version(0);
             req.set_end_version(ts.into_inner());
             req.set_concurrency(4);
             let (tx, rx) = unbounded();
