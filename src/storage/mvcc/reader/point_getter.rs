@@ -1,11 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::write::{WriteRef, WriteType};
-use crate::storage::mvcc::{default_not_found_error, Lock, Result, TimeStamp, TsSet};
+use crate::storage::mvcc::{default_not_found_error, Result};
 use crate::storage::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics, CF_LOCK};
 use crate::storage::{CF_DEFAULT, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, Value};
+use txn_types::{Key, Value, WriteRef, WriteType, TimeStamp, TsSet, Lock};
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -176,7 +175,7 @@ impl<S: Snapshot> PointGetter<S> {
         if let Some(ref lock_value) = lock_value {
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
-            lock.check_ts_conflict(user_key, self.ts, &self.bypass_locks)
+            lock.check_ts_conflict(user_key, self.ts, &self.bypass_locks).map_err(Into::into)
         } else {
             Ok(())
         }

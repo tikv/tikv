@@ -2,14 +2,11 @@
 
 use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::lock::Lock;
-use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::{default_not_found_error, WriteRef};
-use crate::storage::mvcc::{Result, TimeStamp};
+use crate::storage::mvcc::{default_not_found_error, Result};
 use engine::IterOption;
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, Value};
+use txn_types::{Key, Value, Lock, Write, WriteType, WriteRef, TimeStamp};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -158,7 +155,7 @@ impl<S: Snapshot> MvccReader<S> {
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: TimeStamp) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            return lock.check_ts_conflict(key, ts, &Default::default());
+            return lock.check_ts_conflict(key, ts, &Default::default()).map_err(From::from);
         }
         Ok(())
     }
@@ -433,7 +430,6 @@ mod tests {
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
-    use crate::storage::mvcc::lock::LockType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use crate::storage::{Mutation, Options};
     use engine::rocks::util::CFOptions;

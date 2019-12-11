@@ -9,13 +9,11 @@ mod txn;
 pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use crate::new_txn;
-pub use txn_types::{Lock, LockType, Write, WriteRef, WriteType};
+pub use txn_types::{Lock, TimeStamp, LockType, Write, WriteRef, WriteType};
 
 use std::error;
 use std::fmt;
 use std::io;
-use std::sync::Arc;
-use tikv_util::collections::HashSet;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
@@ -107,8 +105,7 @@ impl ErrorInner {
             ErrorInner::Engine(e) => e.maybe_clone().map(ErrorInner::Engine),
             ErrorInner::Codec(e) => e.maybe_clone().map(ErrorInner::Codec),
             ErrorInner::KeyIsLocked(info) => Some(ErrorInner::KeyIsLocked(info.clone())),
-            ErrorInner::BadFormatLock => Some(ErrorInner::BadFormatLock),
-            ErrorInner::BadFormatWrite => Some(ErrorInner::BadFormatWrite),
+            ErrorInner::BadFormat(e) => e.maybe_clone().map(ErrorInner::BadFormat),
             ErrorInner::TxnLockNotFound {
                 start_ts,
                 commit_ts,
@@ -245,10 +242,10 @@ impl From<codec::Error> for ErrorInner {
 impl From<txn_types::Error> for ErrorInner {
     fn from(err: txn_types::Error) -> Self {
         match err {
-            txn_types::Error::Io(e) => Error::Io(e),
-            txn_types::Error::Codec(e) => Error::Codec(e),
-            txn_types::Error::BadFormatLock | txn_types::Error::BadFormatWrite => Error::BadFormat(err),
-            txn_types::Error::KeyIsLocked(lock_info) => Error::KeyIsLocked(lock_info),
+            txn_types::Error::Io(e) => ErrorInner::Io(e),
+            txn_types::Error::Codec(e) => ErrorInner::Codec(e),
+            txn_types::Error::BadFormatLock | txn_types::Error::BadFormatWrite => ErrorInner::BadFormat(err),
+            txn_types::Error::KeyIsLocked(lock_info) => ErrorInner::KeyIsLocked(lock_info),
         }
     }
 }

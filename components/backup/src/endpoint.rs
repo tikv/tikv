@@ -25,8 +25,7 @@ use tikv::storage::Statistics;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
-use txn_types::Key;
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 use crate::metrics::*;
 use crate::*;

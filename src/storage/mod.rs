@@ -30,14 +30,13 @@ use futures::{future, Future};
 use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
 use tikv_util::collections::HashMap;
 use tikv_util::future_pool::FuturePool;
-use txn_types::{Key, KvPair, TimeStamp, Value};
+use txn_types::{Key, KvPair, TimeStamp, Value, Lock, TsSet,Mutation};
 
 use crate::storage::commands::{get_priority_tag, Command, CommandKind};
 use crate::storage::config::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::lock_manager::{DummyLockManager, LockManager};
 use crate::storage::metrics::*;
-use crate::storage::mvcc::{Lock, TsSet};
 use crate::storage::txn::scheduler::Scheduler as TxnScheduler;
 
 pub use self::commands::{Options, PointGetCommand};
@@ -51,7 +50,7 @@ pub use self::kv::{
 };
 pub use self::readpool_impl::{build_read_pool, build_read_pool_for_test};
 pub use self::txn::{Scanner, SnapshotStore, Store};
-pub use self::types::{Mutation, MvccInfo, ProcessResult, StorageCallback, TxnStatus};
+pub use self::types::{MvccInfo, ProcessResult, StorageCallback, TxnStatus};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;

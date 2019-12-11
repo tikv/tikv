@@ -39,7 +39,7 @@ use kvproto::{coprocessor as coppb, kvrpcpb};
 use tikv_util::deadline::Deadline;
 use tikv_util::time::Duration;
 
-use crate::storage::mvcc::TsSet;
+use txn_types::TsSet;
 use crate::storage::Statistics;
 
 pub const REQ_TYPE_DAG: i64 = 103;

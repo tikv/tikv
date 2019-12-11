@@ -144,6 +144,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio-threadpool",
+ "txn_types",
  "url 2.1.0",
  "uuid",
 ]
@@ -3008,7 +3009,6 @@ dependencies = [
  "test_sst_importer",
  "tikv_alloc",
  "tokio-sync",
- "txn_types",
  "uuid",
 ]
 
