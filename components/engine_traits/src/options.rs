@@ -1,4 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+use std::ops::Bound;
 use tikv_util::keybuilder::KeyBuilder;
 
 #[derive(Clone)]
@@ -101,8 +102,12 @@ impl IterOptions {
     }
 
     #[inline]
-    pub fn set_hint_min_ts(&mut self, ts: u64) {
-        self.hint_min_ts = Some(ts)
+    pub fn set_hint_min_ts(&mut self, bound_ts: Bound<u64>) {
+        match bound_ts {
+            Bound::Included(ts) => self.hint_min_ts = Some(ts),
+            Bound::Excluded(ts) => self.hint_min_ts = Some(ts + 1),
+            Bound::Unbounded => self.hint_min_ts = None,
+        }
     }
 
     #[inline]
@@ -116,8 +121,12 @@ impl IterOptions {
     }
 
     #[inline]
-    pub fn set_hint_max_ts(&mut self, ts: u64) {
-        self.hint_max_ts = Some(ts)
+    pub fn set_hint_max_ts(&mut self, bound_ts: Bound<u64>) {
+        match bound_ts {
+            Bound::Included(ts) => self.hint_max_ts = Some(ts),
+            Bound::Excluded(ts) => self.hint_max_ts = Some(ts - 1),
+            Bound::Unbounded => self.hint_max_ts = None,
+        }
     }
 
     #[inline]
@@ -203,5 +212,28 @@ impl Default for IterOptions {
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ops::Bound;
+
+    #[test]
+    fn test_hint_ts() {
+        let mut ops = IterOptions::default();
+        assert_eq!(ops.hint_min_ts(), None);
+        assert_eq!(ops.hint_max_ts(), None);
+
+        ops.set_hint_min_ts(Bound::Included(1));
+        ops.set_hint_max_ts(Bound::Included(10));
+        assert_eq!(ops.hint_min_ts(), Some(1));
+        assert_eq!(ops.hint_max_ts(), Some(10));
+
+        ops.set_hint_min_ts(Bound::Excluded(1));
+        ops.set_hint_max_ts(Bound::Excluded(10));
+        assert_eq!(ops.hint_min_ts(), Some(2));
+        assert_eq!(ops.hint_max_ts(), Some(9));
     }
 }

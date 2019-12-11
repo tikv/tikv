@@ -443,6 +443,7 @@ mod tests {
     use engine_rocks::RocksEngine;
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
+    use std::ops::Bound;
     use std::sync::Arc;
     use std::u64;
 
@@ -710,8 +711,8 @@ mod tests {
         // test set both hint_min_ts and hint_max_ts
         {
             let mut iopt = IterOption::default();
-            iopt.set_hint_min_ts(6);
-            iopt.set_hint_max_ts(8);
+            iopt.set_hint_min_ts(Bound::Included(6));
+            iopt.set_hint_max_ts(Bound::Included(8));
             let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
 
             assert_eq!(iter.seek_to_first(), true);
@@ -728,7 +729,7 @@ mod tests {
         // test set only hint_min_ts
         {
             let mut iopt = IterOption::default();
-            iopt.set_hint_min_ts(10);
+            iopt.set_hint_min_ts(Bound::Included(10));
             let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
 
             assert_eq!(iter.seek_to_first(), true);
@@ -745,7 +746,7 @@ mod tests {
         // test set only hint_max_ts
         {
             let mut iopt = IterOption::default();
-            iopt.set_hint_max_ts(7);
+            iopt.set_hint_max_ts(Bound::Included(7));
             let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
 
             assert_eq!(iter.seek_to_first(), true);
