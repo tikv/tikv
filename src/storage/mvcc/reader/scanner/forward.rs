@@ -13,36 +13,225 @@ use crate::storage::{Cursor, Lock, Snapshot, Statistics};
 
 use super::ScannerConfig;
 
-/// This struct can be used to scan keys starting from the given user key (greater than or equal).
-///
-/// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
-/// isolation level is SI, locks will be checked first.
-///
-/// Use `ScannerBuilder` to build `ForwardScanner`.
-pub struct ForwardScanner<S: Snapshot> {
-    cfg: ScannerConfig<S>,
-    lock_cursor: Cursor<S::Iter>,
-    write_cursor: Cursor<S::Iter>,
+pub trait ScanPolicy<S: Snapshot> {
+    type Output;
+
+    fn handle_lock(
+        &mut self,
+        current_user_key: Key,
+        ts: TimeStamp,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>>;
+
+    fn handle_write(
+        &mut self,
+        current_user_key: Key,
+        ts: TimeStamp,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>>;
+}
+
+pub enum HandleRes<T> {
+    Return(T),
+    Skip(Key),
+}
+
+pub struct LatestKvPolicy {
+    isolation_level: IsolationLevel,
+}
+
+impl LatestKvPolicy {
+    pub fn new(isolation_level: IsolationLevel) -> Self {
+        LatestKvPolicy { isolation_level }
+    }
+}
+
+impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
+    type Output = (Key, Value);
+
+    fn handle_lock(
+        &mut self,
+        current_user_key: Key,
+        ts: TimeStamp,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        let result = match self.isolation_level {
+            IsolationLevel::Si => {
+                // Only needs to check lock in SI
+                let lock = {
+                    let lock_value = cursors.lock.value(&mut statistics.lock);
+                    Lock::parse(lock_value)?
+                };
+                lock.check_ts_conflict(&current_user_key, ts, &cfg.bypass_locks)
+                    .map(|_| ())
+            }
+            IsolationLevel::Rc => Ok(()),
+        };
+        cursors.lock.next(&mut statistics.lock);
+        if result.is_err() {
+            cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+        }
+        result.map(|_| HandleRes::Skip(current_user_key))
+    }
+
+    fn handle_write(
+        &mut self,
+        current_user_key: Key,
+        _ts: TimeStamp,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
+        // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
+        let value: Option<Value> = loop {
+            let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
+            statistics.write.processed += 1;
+
+            match write.write_type {
+                WriteType::Put => {
+                    if cfg.omit_value {
+                        break Some(vec![]);
+                    }
+                    match write.short_value {
+                        Some(value) => {
+                            // Value is carried in `write`.
+                            break Some(value.to_vec());
+                        }
+                        None => {
+                            // Value is in the default CF.
+                            let start_ts = write.start_ts;
+                            cursors.ensure_default_cursor(cfg)?;
+                            let value = super::near_load_data_by_write(
+                                cursors.default.as_mut().unwrap(),
+                                &current_user_key,
+                                start_ts,
+                                statistics,
+                            )?;
+                            break Some(value);
+                        }
+                    }
+                }
+                WriteType::Delete => break None,
+                WriteType::Lock | WriteType::Rollback => {
+                    // Continue iterate next `write`.
+                }
+            }
+
+            cursors.write.next(&mut statistics.write);
+
+            if !cursors.write.valid()? {
+                // Key space ended. Needn't move write cursor to next key.
+                return Ok(HandleRes::Skip(current_user_key));
+            }
+            let current_key = cursors.write.key(&mut statistics.write);
+            if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
+                // Meet another key. Needn't move write cursor to next key.
+                return Ok(HandleRes::Skip(current_user_key));
+            }
+        };
+        cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+        Ok(match value {
+            Some(v) => HandleRes::Return((current_user_key, v)),
+            _ => HandleRes::Skip(current_user_key),
+        })
+    }
+}
+
+pub struct Cursors<S: Snapshot> {
+    lock: Cursor<S::Iter>,
+    write: Cursor<S::Iter>,
     /// `default cursor` is lazy created only when it's needed.
-    default_cursor: Option<Cursor<S::Iter>>,
+    default: Option<Cursor<S::Iter>>,
+}
+
+impl<S: Snapshot> Cursors<S> {
+    /// After `self.get()`, our write cursor may be pointing to current user key (if we
+    /// found a desired version), or next user key (if there is no desired version), or
+    /// out of bound.
+    ///
+    /// If it is pointing to current user key, we need to step it until we meet a new
+    /// key. We first try to `next()` a few times. If still not reaching another user
+    /// key, we `seek()`.
+    #[inline]
+    fn move_write_cursor_to_next_user_key(
+        &mut self,
+        current_user_key: &Key,
+        statistics: &mut Statistics,
+    ) -> Result<()> {
+        for i in 0..SEEK_BOUND {
+            if i > 0 {
+                self.write.next(&mut statistics.write);
+            }
+            if !self.write.valid()? {
+                // Key space ended. We are done here.
+                return Ok(());
+            }
+            {
+                let current_key = self.write.key(&mut statistics.write);
+                if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
+                    // Found another user key. We are done here.
+                    return Ok(());
+                }
+            }
+        }
+
+        // We have not found another user key for now, so we directly `seek()`.
+        // After that, we must pointing to another key, or out of bound.
+        // `current_user_key` must have reserved space here, so its clone has reserved space too.
+        // So no reallocation happens in `append_ts`.
+        self.write.internal_seek(
+            &current_user_key.clone().append_ts(TimeStamp::zero()),
+            &mut statistics.write,
+        )?;
+
+        Ok(())
+    }
+
+    /// Create the default cursor if it doesn't exist.
+    #[inline]
+    fn ensure_default_cursor(&mut self, cfg: &mut ScannerConfig<S>) -> Result<()> {
+        if self.default.is_some() {
+            return Ok(());
+        }
+        self.default = Some(cfg.create_cf_cursor(CF_DEFAULT)?);
+        Ok(())
+    }
+}
+
+pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
+    cfg: ScannerConfig<S>,
+    cursors: Cursors<S>,
     /// Is iteration started
     is_started: bool,
     statistics: Statistics,
+    scan_policy: P,
 }
 
-impl<S: Snapshot> ForwardScanner<S> {
+impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
     pub fn new(
         cfg: ScannerConfig<S>,
         lock_cursor: Cursor<S::Iter>,
         write_cursor: Cursor<S::Iter>,
-    ) -> ForwardScanner<S> {
+        scan_policy: P,
+    ) -> ForwardScanner<S, P> {
+        let cursors = Cursors {
+            lock: lock_cursor,
+            write: write_cursor,
+            default: None,
+        };
         ForwardScanner {
             cfg,
-            lock_cursor,
-            write_cursor,
+            cursors,
             statistics: Statistics::default(),
-            default_cursor: None,
             is_started: false,
+            scan_policy,
         }
     }
 
@@ -52,21 +241,21 @@ impl<S: Snapshot> ForwardScanner<S> {
     }
 
     /// Get the next key-value pair, in forward order.
-    pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
+    pub fn read_next(&mut self) -> Result<Option<P::Output>> {
         if !self.is_started {
             if self.cfg.lower_bound.is_some() {
                 // TODO: `seek_to_first` is better, however it has performance issues currently.
-                self.write_cursor.seek(
+                self.cursors.write.seek(
                     self.cfg.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
-                self.lock_cursor.seek(
+                self.cursors.lock.seek(
                     self.cfg.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.lock,
                 )?;
             } else {
-                self.write_cursor.seek_to_first(&mut self.statistics.write);
-                self.lock_cursor.seek_to_first(&mut self.statistics.lock);
+                self.cursors.write.seek_to_first(&mut self.statistics.write);
+                self.cursors.lock.seek_to_first(&mut self.statistics.lock);
             }
             self.is_started = true;
         }
@@ -88,14 +277,14 @@ impl<S: Snapshot> ForwardScanner<S> {
             //
             // `has_lock` indicates whether `current_user_key` has a corresponding `lock`. If
             // there is one, it is what current lock cursor pointing to.
-            let (current_user_key, has_write, has_lock) = {
-                let w_key = if self.write_cursor.valid()? {
-                    Some(self.write_cursor.key(&mut self.statistics.write))
+            let (mut current_user_key, has_write, has_lock) = {
+                let w_key = if self.cursors.write.valid()? {
+                    Some(self.cursors.write.key(&mut self.statistics.write))
                 } else {
                     None
                 };
-                let l_key = if self.lock_cursor.valid()? {
-                    Some(self.lock_cursor.key(&mut self.statistics.lock))
+                let l_key = if self.cursors.lock.valid()? {
+                    Some(self.cursors.lock.key(&mut self.statistics.lock))
                 } else {
                     None
                 };
@@ -140,71 +329,55 @@ impl<S: Snapshot> ForwardScanner<S> {
                     }
                 };
 
-                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
-                // the key or its clones without reallocation.
+                // // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
+                // // the key or its clones without reallocation.
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
-
-            // `result` stores intermediate values, including KeyLocked errors (but not other kind
-            // of errors). If there is KeyLocked errors, we should be able to continue scanning.
-            let mut result = Ok(None);
-
-            // `met_next_user_key` stores whether the write cursor has been already pointing to
-            // the next user key. If so, we don't need to compare it again when trying to step
-            // to the next user key later.
-            let mut met_next_user_key = false;
 
             let ts = self.cfg.ts;
 
             if has_lock {
-                match self.cfg.isolation_level {
-                    IsolationLevel::Si => {
-                        // Only needs to check lock in SI
-                        let lock = {
-                            let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
-                            Lock::parse(lock_value)?
-                        };
-                        result = lock
-                            .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
-                            .map(|_| None);
-                    }
-                    IsolationLevel::Rc => {}
-                }
-                self.lock_cursor.next(&mut self.statistics.lock);
+                current_user_key = match self.scan_policy.handle_lock(
+                    current_user_key,
+                    ts,
+                    &mut self.cfg,
+                    &mut self.cursors,
+                    &mut self.statistics,
+                )? {
+                    HandleRes::Return(output) => return Ok(Some(output)),
+                    HandleRes::Skip(key) => key,
+                };
             }
             if has_write {
-                // We don't need to read version if there is a lock error already.
-                if result.is_ok() {
-                    // Attempt to read specified version of the key. Note that we may get `None`
-                    // indicating that no desired version is found, or a DELETE version is found
-                    result = self.get(&current_user_key, ts, &mut met_next_user_key);
+                let is_current_user_key = self.move_write_cursor_to_ts(&current_user_key, ts)?;
+                if is_current_user_key {
+                    if let HandleRes::Return(output) = self.scan_policy.handle_lock(
+                        current_user_key,
+                        ts,
+                        &mut self.cfg,
+                        &mut self.cursors,
+                        &mut self.statistics,
+                    )? {
+                        return Ok(Some(output));
+                    }
                 }
+                // // We don't need to read version if there is a lock error already.
+                // if result.is_ok() {
+                //     // Attempt to read specified version of the key. Note that we may get `None`
+                //     // indicating that no desired version is found, or a DELETE version is found
+                //     result = self.get(&current_user_key, ts, &mut met_next_user_key);
+                // }
                 // Even if there is a lock error, we still need to step the cursor for future
                 // calls. However if we are already pointing at next user key, we don't need to
                 // move it any more. `met_next_user_key` eliminates a key compare.
-                if !met_next_user_key {
-                    self.move_write_cursor_to_next_user_key(&current_user_key)?;
-                }
-            }
-
-            // If we got something, it can be just used as the return value. Otherwise, we need
-            // to continue stepping the cursor.
-            if let Some(v) = result? {
-                return Ok(Some((current_user_key, v)));
             }
         }
     }
 
-    /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts`. This function
-    /// requires that the write cursor is currently pointing to the latest version of `user_key`.
-    #[inline]
-    fn get(
-        &mut self,
-        user_key: &Key,
-        ts: TimeStamp,
-        met_next_user_key: &mut bool,
-    ) -> Result<Option<Value>> {
-        assert!(self.write_cursor.valid()?);
+    /// DOc TODO
+    /// Returns if the write cursor points to the user key
+    fn move_write_cursor_to_ts(&mut self, user_key: &Key, ts: TimeStamp) -> Result<bool> {
+        assert!(self.cursors.write.valid()?);
 
         // The logic starting from here is similar to `PointGetter`.
 
@@ -216,18 +389,17 @@ impl<S: Snapshot> ForwardScanner<S> {
 
         for i in 0..SEEK_BOUND {
             if i > 0 {
-                self.write_cursor.next(&mut self.statistics.write);
-                if !self.write_cursor.valid()? {
+                self.cursors.write.next(&mut self.statistics.write);
+                if !self.cursors.write.valid()? {
                     // Key space ended.
-                    return Ok(None);
+                    return Ok(true);
                 }
             }
             {
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
+                let current_key = self.cursors.write.key(&mut self.statistics.write);
                 if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                     // Meet another key.
-                    *met_next_user_key = true;
-                    return Ok(None);
+                    return Ok(true);
                 }
                 if Key::decode_ts_from(current_key)? <= ts {
                     // Founded, don't need to seek again.
@@ -240,119 +412,30 @@ impl<S: Snapshot> ForwardScanner<S> {
         if needs_seek {
             // `user_key` must have reserved space here, so its clone has reserved space too. So no
             // reallocation happens in `append_ts`.
-            self.write_cursor
+            self.cursors
+                .write
                 .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
-            if !self.write_cursor.valid()? {
+            if !self.cursors.write.valid()? {
                 // Key space ended.
-                return Ok(None);
+                return Ok(true);
             }
-            let current_key = self.write_cursor.key(&mut self.statistics.write);
+            let current_key = self.cursors.write.key(&mut self.statistics.write);
             if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                 // Meet another key.
-                *met_next_user_key = true;
-                return Ok(None);
+                return Ok(true);
             }
         }
-
-        // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
-        // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
-        loop {
-            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
-            self.statistics.write.processed += 1;
-
-            match write.write_type {
-                WriteType::Put => {
-                    if self.cfg.omit_value {
-                        return Ok(Some(vec![]));
-                    }
-                    match write.short_value {
-                        Some(value) => {
-                            // Value is carried in `write`.
-                            return Ok(Some(value.to_vec()));
-                        }
-                        None => {
-                            // Value is in the default CF.
-                            let start_ts = write.start_ts;
-                            self.ensure_default_cursor()?;
-                            let value = super::near_load_data_by_write(
-                                &mut self.default_cursor.as_mut().unwrap(),
-                                user_key,
-                                start_ts,
-                                &mut self.statistics,
-                            )?;
-                            return Ok(Some(value));
-                        }
-                    }
-                }
-                WriteType::Delete => return Ok(None),
-                WriteType::Lock | WriteType::Rollback => {
-                    // Continue iterate next `write`.
-                }
-            }
-
-            self.write_cursor.next(&mut self.statistics.write);
-
-            if !self.write_cursor.valid()? {
-                // Key space ended.
-                return Ok(None);
-            }
-            let current_key = self.write_cursor.key(&mut self.statistics.write);
-            if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
-                // Meet another key.
-                *met_next_user_key = true;
-                return Ok(None);
-            }
-        }
-    }
-
-    /// After `self.get()`, our write cursor may be pointing to current user key (if we
-    /// found a desired version), or next user key (if there is no desired version), or
-    /// out of bound.
-    ///
-    /// If it is pointing to current user key, we need to step it until we meet a new
-    /// key. We first try to `next()` a few times. If still not reaching another user
-    /// key, we `seek()`.
-    #[inline]
-    fn move_write_cursor_to_next_user_key(&mut self, current_user_key: &Key) -> Result<()> {
-        for i in 0..SEEK_BOUND {
-            if i > 0 {
-                self.write_cursor.next(&mut self.statistics.write);
-            }
-            if !self.write_cursor.valid()? {
-                // Key space ended. We are done here.
-                return Ok(());
-            }
-            {
-                let current_key = self.write_cursor.key(&mut self.statistics.write);
-                if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
-                    // Found another user key. We are done here.
-                    return Ok(());
-                }
-            }
-        }
-
-        // We have not found another user key for now, so we directly `seek()`.
-        // After that, we must pointing to another key, or out of bound.
-        // `current_user_key` must have reserved space here, so its clone has reserved space too.
-        // So no reallocation happens in `append_ts`.
-        self.write_cursor.internal_seek(
-            &current_user_key.clone().append_ts(TimeStamp::zero()),
-            &mut self.statistics.write,
-        )?;
-
-        Ok(())
-    }
-
-    /// Create the default cursor if it doesn't exist.
-    #[inline]
-    fn ensure_default_cursor(&mut self) -> Result<()> {
-        if self.default_cursor.is_some() {
-            return Ok(());
-        }
-        self.default_cursor = Some(self.cfg.create_cf_cursor(CF_DEFAULT)?);
-        Ok(())
+        Ok(false)
     }
 }
+
+/// This struct can be used to scan keys starting from the given user key (greater than or equal).
+///
+/// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
+/// isolation level is SI, locks will be checked first.
+///
+/// Use `ScannerBuilder` to build `ForwardKvScanner`.
+pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
 
 #[cfg(test)]
 mod tests {
@@ -364,7 +447,7 @@ mod tests {
 
     use kvproto::kvrpcpb::Context;
 
-    /// Check whether everything works as usual when `ForwardScanner::get()` goes out of bound.
+    /// Check whether everything works as usual when `ForwardKvScanner::get()` goes out of bound.
     #[test]
     fn test_get_out_of_bound() {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -414,7 +497,7 @@ mod tests {
     }
 
     /// Check whether everything works as usual when
-    /// `ForwardScanner::move_write_cursor_to_next_user_key()` goes out of bound.
+    /// `ForwardKvScanner::move_write_cursor_to_next_user_key()` goes out of bound.
     ///
     /// Case 1. next() out of bound
     #[test]
@@ -477,7 +560,7 @@ mod tests {
     }
 
     /// Check whether everything works as usual when
-    /// `ForwardScanner::move_write_cursor_to_next_user_key()` goes out of bound.
+    /// `ForwardKvScanner::move_write_cursor_to_next_user_key()` goes out of bound.
     ///
     /// Case 2. seek() out of bound
     #[test]
