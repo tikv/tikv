@@ -772,6 +772,43 @@ impl TimeArgs {
     }
 }
 
+#[doc(hidden)]
+#[cfg(test)]
+impl TimeArgs {
+    // Create TimeArgs from values directly, for test usage only.
+    pub fn new_raw(
+        year: u32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+        micro: u32,
+        fsp: i8,
+        time_type: TimeType,
+    ) -> Self {
+        TimeArgs {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            micro,
+            fsp,
+            time_type,
+        }
+    }
+}
+
+#[doc(hidden)]
+#[cfg(test)]
+impl Time {
+    pub fn unchecked_new(config: TimeArgs) -> Self {
+        Self::unchecked_new_impl(config)
+    }
+}
+
 // Utility
 impl Time {
     fn from_slice(
@@ -894,7 +931,7 @@ impl Time {
         )
     }
 
-    fn unchecked_new(config: TimeArgs) -> Self {
+    fn unchecked_new_impl(config: TimeArgs) -> Self {
         let mut time = Time(0);
         let TimeArgs {
             year,
@@ -928,10 +965,10 @@ impl Time {
             config.fsp = 0;
         }
 
-        let unchecked_time = Self::unchecked_new(config.clone());
-        Ok(Self::unchecked_new(config.check(ctx).ok_or_else(|| {
-            Error::incorrect_datetime_value(unchecked_time)
-        })?))
+        let unchecked_time = Self::unchecked_new_impl(config.clone());
+        Ok(Self::unchecked_new_impl(config.check(ctx).ok_or_else(
+            || Error::incorrect_datetime_value(unchecked_time),
+        )?))
     }
 
     fn check_month_and_day(
