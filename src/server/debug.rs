@@ -38,13 +38,13 @@ use crate::raftstore::store::{
 use crate::server::gc_worker::GcWorker;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::{Engine, Iterator as EngineIterator};
-use keys::Key;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
 use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
+use txn_types::Key;
 
 const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
 

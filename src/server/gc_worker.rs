@@ -31,11 +31,11 @@ use crate::storage::kv::{
 };
 use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
 use crate::storage::{Callback, Error, ErrorInner, Result};
-use keys::Key;
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
+use txn_types::Key;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.

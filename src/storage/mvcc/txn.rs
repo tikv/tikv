@@ -9,9 +9,9 @@ use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
     is_short_value, Mutation, Options, Statistics, TxnStatus, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
-use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
+use txn_types::{Key, Value};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -831,8 +831,8 @@ mod tests {
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
     use crate::storage::{TestEngineBuilder, SHORT_VALUE_MAX_LEN};
-    use keys::TimeStamp;
     use kvproto::kvrpcpb::Context;
+    use txn_types::TimeStamp;
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();

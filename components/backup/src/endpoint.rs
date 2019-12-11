@@ -14,8 +14,6 @@ use external_storage::*;
 use futures::lazy;
 use futures::prelude::Future;
 use futures::sync::mpsc::*;
-use keys::Key;
-use keys::TimeStamp;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
@@ -27,6 +25,8 @@ use tikv::storage::Statistics;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
+use txn_types::Key;
+use txn_types::TimeStamp;
 
 use crate::metrics::*;
 use crate::*;

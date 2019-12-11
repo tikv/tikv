@@ -10,13 +10,13 @@ use engine::CfName;
 use engine::IterOption;
 use engine::CF_DEFAULT;
 use engine_traits::Peekable;
-use keys::{Key, Value};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
+use txn_types::{Key, Value};
 
 use super::metrics::*;
 use crate::raftstore::errors::Error as RaftServerError;

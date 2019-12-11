@@ -29,7 +29,6 @@ use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use keys::{self, Key, Value};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::{self, *};
@@ -44,6 +43,7 @@ use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
+use txn_types::{self, Key, Value};
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";

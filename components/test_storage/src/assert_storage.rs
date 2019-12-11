@@ -2,7 +2,6 @@
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 
-use keys::{Key, KvPair, TimeStamp, Value};
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE};
@@ -11,6 +10,7 @@ use tikv::storage::{
     self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, Mutation, TxnStatus,
 };
 use tikv_util::HandyRwLock;
+use txn_types::{Key, KvPair, TimeStamp, Value};
 
 use super::*;
 

@@ -1388,13 +1388,10 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "farmhash",
  "hex",
  "kvproto",
  "panic_hook",
  "slog",
- "tikv_alloc",
- "tikv_util",
 ]
 
 [[package]]
@@ -3011,6 +3008,7 @@ dependencies = [
  "test_sst_importer",
  "tikv_alloc",
  "tokio-sync",
+ "txn_types",
  "uuid",
 ]
 
@@ -3509,6 +3507,7 @@ dependencies = [
  "tokio-threadpool",
  "tokio-timer",
  "toml",
+ "txn_types",
  "url 2.1.0",
  "utime",
  "uuid",
@@ -3869,6 +3868,24 @@ checksum = "766345ed3891b291d01af307cd3ad2992a4261cb6c0c7e665cd3e01cf379dd24"
 dependencies = [
  "memchr",
  "unchecked-index",
+]
+
+[[package]]
+name = "txn_types"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "codec",
+ "derive-new",
+ "derive_more",
+ "farmhash",
+ "hex",
+ "kvproto",
+ "panic_hook",
+ "quick-error",
+ "slog",
+ "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]

@@ -4,8 +4,8 @@
 
 use std::cmp::Ordering;
 
-use keys::Key;
 use kvproto::kvrpcpb::IsolationLevel;
+use txn_types::Key;
 
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};

@@ -3,8 +3,8 @@
 use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
-use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
+use txn_types::{Key, Value};
 
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};

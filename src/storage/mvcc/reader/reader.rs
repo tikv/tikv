@@ -8,8 +8,8 @@ use crate::storage::mvcc::{default_not_found_error, WriteRef};
 use crate::storage::mvcc::{Result, TimeStamp};
 use engine::IterOption;
 use engine::{CF_LOCK, CF_WRITE};
-use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
+use txn_types::{Key, Value};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 

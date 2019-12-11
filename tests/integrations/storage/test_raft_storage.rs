@@ -3,7 +3,6 @@
 use std::thread;
 use std::time::Duration;
 
-use keys::{Key, TimeStamp};
 use kvproto::kvrpcpb::Context;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -17,6 +16,7 @@ use tikv::storage::{Engine, Mutation};
 use tikv::storage::{Error as StorageError, ErrorInner as SotrageErrorInner};
 use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
+use txn_types::{Key, TimeStamp};
 
 fn new_raft_storage() -> (
     Cluster<ServerCluster>,

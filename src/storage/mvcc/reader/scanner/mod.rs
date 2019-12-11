@@ -5,8 +5,8 @@ mod forward;
 mod txn_entry;
 
 use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
+use txn_types::{Key, Value};
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;

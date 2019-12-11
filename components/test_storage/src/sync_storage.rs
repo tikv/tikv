@@ -2,7 +2,6 @@
 
 use futures::Future;
 
-use keys::{Key, KvPair, TimeStamp, Value};
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
@@ -13,6 +12,7 @@ use tikv::storage::{
     TestStorageBuilder, TxnStatus,
 };
 use tikv_util::collections::HashMap;
+use txn_types::{Key, KvPair, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
 ///

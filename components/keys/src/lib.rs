@@ -13,11 +13,6 @@ use kvproto::metapb::Region;
 use std::mem;
 
 pub mod rewrite;
-mod timestamp;
-mod types;
-
-pub use timestamp::{TimeStamp, UnixSecs};
-pub use types::{Key, KvPair, Value};
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];

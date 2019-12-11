@@ -9,7 +9,7 @@ use crate::storage::mvcc::{
 };
 use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TimeStamp, TsSet};
 use crate::storage::{Snapshot, Statistics};
-use keys::{Key, KvPair, Value};
+use txn_types::{Key, KvPair, Value};
 
 use super::{Error, ErrorInner, Result};
 

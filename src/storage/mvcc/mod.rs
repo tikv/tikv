@@ -2,18 +2,14 @@
 
 //! Multi-version concurrency control functionality.
 
-mod lock;
 mod metrics;
 mod reader;
 mod txn;
-mod write;
 
-pub use self::lock::{Lock, LockType};
 pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
-pub use self::write::{Write, WriteRef, WriteType};
 pub use crate::new_txn;
-pub use keys::TimeStamp;
+pub use txn_types::{Lock, LockType, Write, WriteRef, WriteType};
 
 use std::error;
 use std::fmt;
@@ -22,78 +18,6 @@ use std::sync::Arc;
 use tikv_util::collections::HashSet;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
-
-const TS_SET_USE_VEC_LIMIT: usize = 8;
-
-/// A hybrid immutable set for timestamps.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TsSet {
-    /// When the set is empty, avoid the useless cloning of Arc.
-    Empty,
-    /// `Vec` is suitable when the set is small or the set is barely used, and it doesn't worth
-    /// converting a `Vec` into a `HashSet`.
-    Vec(Arc<Vec<TimeStamp>>),
-    /// `Set` is suitable when there are many timestamps **and** it will be queried multiple times.
-    Set(Arc<HashSet<TimeStamp>>),
-}
-
-impl Default for TsSet {
-    #[inline]
-    fn default() -> TsSet {
-        TsSet::Empty
-    }
-}
-
-impl TsSet {
-    /// Create a `TsSet` from the given vec of timestamps. It will select the proper internal
-    /// collection type according to the size.
-    #[inline]
-    pub fn new(ts: Vec<TimeStamp>) -> Self {
-        if ts.is_empty() {
-            TsSet::Empty
-        } else if ts.len() <= TS_SET_USE_VEC_LIMIT {
-            // If there are too few elements in `ts`, use Vec directly instead of making a Set.
-            TsSet::Vec(Arc::new(ts))
-        } else {
-            TsSet::Set(Arc::new(ts.into_iter().collect()))
-        }
-    }
-
-    pub fn from_u64s(ts: Vec<u64>) -> Self {
-        // This conversion is safe because TimeStamp is a transparent wrapper over u64.
-        let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
-        Self::new(ts)
-    }
-
-    pub fn vec_from_u64s(ts: Vec<u64>) -> Self {
-        // This conversion is safe because TimeStamp is a transparent wrapper over u64.
-        let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
-        Self::vec(ts)
-    }
-
-    /// Create a `TsSet` from the given vec of timestamps, but it will be forced to use `Vec` as the
-    /// internal collection type. When it's sure that the set will be queried at most once, use this
-    /// is better than `TsSet::new`, since both the querying on `Vec` and the conversion from `Vec`
-    /// to `HashSet` is O(N).
-    #[inline]
-    pub fn vec(ts: Vec<TimeStamp>) -> Self {
-        if ts.is_empty() {
-            TsSet::Empty
-        } else {
-            TsSet::Vec(Arc::new(ts))
-        }
-    }
-
-    /// Query whether the given timestamp is contained in the set.
-    #[inline]
-    pub fn contains(&self, ts: TimeStamp) -> bool {
-        match self {
-            TsSet::Empty => false,
-            TsSet::Vec(vec) => vec.contains(&ts),
-            TsSet::Set(set) => set.contains(&ts),
-        }
-    }
-}
 
 quick_error! {
     #[derive(Debug)]
@@ -117,8 +41,10 @@ quick_error! {
             description("key is locked (backoff or cleanup)")
             display("key is locked (backoff or cleanup) {:?}", info)
         }
-        BadFormatLock { description("bad format lock data") }
-        BadFormatWrite { description("bad format write data") }
+        BadFormat(err: txn_types::Error ) {
+            cause(err)
+            description(err.description())
+        }
         Committed { commit_ts: TimeStamp } {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
@@ -316,6 +242,17 @@ impl From<codec::Error> for ErrorInner {
     }
 }
 
+impl From<txn_types::Error> for ErrorInner {
+    fn from(err: txn_types::Error) -> Self {
+        match err {
+            txn_types::Error::Io(e) => Error::Io(e),
+            txn_types::Error::Codec(e) => Error::Codec(e),
+            txn_types::Error::BadFormatLock | txn_types::Error::BadFormatWrite => Error::BadFormat(err),
+            txn_types::Error::KeyIsLocked(lock_info) => Error::KeyIsLocked(lock_info),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Generates `DefaultNotFound` error or panic directly based on config.
@@ -345,8 +282,8 @@ pub mod tests {
     use super::*;
     use crate::storage::{Engine, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
     use engine::CF_WRITE;
-    use keys::Key;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use txn_types::Key;
 
     fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
         if !modifies.is_empty() {
