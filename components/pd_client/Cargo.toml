@@ -30,3 +30,7 @@ tokio-timer = "0.2"
 git = "https://github.com/pingcap/rust-prometheus.git"
 rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
 features = ["nightly", "push", "process"]
+
+[features]
+protobuf-codec = ["kvproto/protobuf-codec"]
+prost-codec = ["kvproto/prost-codec"]

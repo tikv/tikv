@@ -612,7 +612,7 @@ impl PdClient for RpcClient {
         let mut local = configpb::Local::default();
         local.set_component_id(id);
         let mut kind = configpb::ConfigKind::default();
-        kind.kind = Some(configpb::config_kind::Kind::Local(local));
+        kind.kind = Some(config_kind::Kind::Local(local));
         let mut req = configpb::UpdateRequest::default();
         req.set_header(self.get_config_header());
         req.set_kind(kind);
@@ -625,4 +625,14 @@ impl PdClient for RpcClient {
 
         Ok(resp)
     }
+}
+
+#[cfg(feature = "protobuf-codec")]
+mod config_kind {
+    pub type Kind = kvproto::configpb::ConfigKind_oneof_kind;
+}
+
+#[cfg(feature = "prost-codec")]
+mod config_kind {
+    pub type Kind = kvproto::configpb::config_kind::Kind;
 }
