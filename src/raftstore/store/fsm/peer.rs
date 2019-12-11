@@ -95,7 +95,6 @@ pub struct PeerFsm {
     group_state: GroupState,
     stopped: bool,
     has_ready: bool,
-    pub high_priority: bool,
     mailbox: Option<BasicMailbox<PeerFsm>>,
     pub receiver: Receiver<PeerMsg>,
 }
@@ -157,7 +156,6 @@ impl PeerFsm {
                 group_state: GroupState::Ordered,
                 stopped: false,
                 has_ready: false,
-                high_priority: false,
                 mailbox: None,
                 receiver: rx,
             }),
@@ -195,7 +193,6 @@ impl PeerFsm {
                 group_state: GroupState::Ordered,
                 stopped: false,
                 has_ready: false,
-                high_priority: false,
                 mailbox: None,
                 receiver: rx,
             }),
@@ -295,7 +292,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
                 PeerMsg::RaftCommand(cmd) => {
-                    if self.fsm.high_priority {
+                    if self.fsm.peer.high_priority {
                         self.ctx
                             .raft_metrics
                             .propose
