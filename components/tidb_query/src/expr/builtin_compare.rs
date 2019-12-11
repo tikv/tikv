@@ -467,7 +467,6 @@ mod tests {
     use crate::codec::Datum;
     use crate::expr::tests::{col_expr, datum_expr, str2dec};
     use crate::expr::{EvalContext, Expression, Flag, SqlMode};
-    use protobuf::RepeatedField;
     use std::sync::Arc;
     use std::{i64, u64};
     use tipb::{Expr, ExprType, ScalarFuncSig};
