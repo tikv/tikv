@@ -89,7 +89,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
                 write_cursor,
             )))
         } else {
-            let isolation_level = self.0.isolation_level.clone();
+            let isolation_level = self.0.isolation_level;
             Ok(Scanner::Forward(ForwardScanner::new(
                 self.0,
                 lock_cursor,
