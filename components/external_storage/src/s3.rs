@@ -90,13 +90,20 @@ impl ExternalStorage for S3Storage {
         reader.read_to_end(&mut content)?;
         let key = self.maybe_prefix_key(name);
         debug!("save file to s3 storage"; "key" => %key);
+        let get_var = |s: &String| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.clone())
+            }
+        };
         let req = PutObjectRequest {
             key,
             bucket: self.config.bucket.clone(),
             body: Some(content.into()),
-            acl: Some(self.config.acl.clone()),
-            server_side_encryption: Some(self.config.sse.clone()),
-            storage_class: Some(self.config.storage_class.clone()),
+            acl: get_var(&self.config.acl),
+            server_side_encryption: get_var(&self.config.sse),
+            storage_class: get_var(&self.config.storage_class),
             ..Default::default()
         };
         self.client
