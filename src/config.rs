@@ -1727,10 +1727,13 @@ fn from_change_value(v: ConfigValue) -> CfgResult<String> {
     Ok(s)
 }
 
-pub fn cmp_version(version: &configpb::Version, other: &configpb::Version) -> Ordering {
+/// Comparing tow `Version` with the assumption of `global` and `local`
+/// should be monotonically increased, if `global` or `local` of _current config_
+/// less than _incoming config_ means there are update in _incoming config_
+pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) -> Ordering {
     match (
-        Ord::cmp(&version.local, &other.local),
-        Ord::cmp(&version.global, &other.global),
+        Ord::cmp(&current.local, &incoming.local),
+        Ord::cmp(&current.global, &incoming.global),
     ) {
         (Ordering::Equal, Ordering::Equal) => Ordering::Equal,
         (Ordering::Less, _) | (_, Ordering::Less) => Ordering::Less,
@@ -1892,7 +1895,9 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use kvproto::configpb::Version;
     use slog::Level;
+    use std::cmp::Ordering;
     use toml;
 
     #[test]
@@ -2044,5 +2049,38 @@ mod tests {
             diff[0].value,
             toml::to_string(&incoming.refresh_config_interval).unwrap()
         );
+    }
+
+    #[test]
+    fn test_cmp_version() {
+        fn new_version((g1, l1): (u64, u64), (g2, l2): (u64, u64)) -> (Version, Version) {
+            let mut v1 = Version::default();
+            v1.set_global(g1);
+            v1.set_local(l1);
+            let mut v2 = Version::default();
+            v2.set_global(g2);
+            v2.set_local(l2);
+            (v1, v2)
+        }
+
+        let (v1, v2) = new_version((10, 10), (10, 10));
+        assert_eq!(cmp_version(&v1, &v2), Ordering::Equal);
+
+        // either global or local of v1 less than global or local of v2
+        // Ordering::Less shuold be returned
+        let (small, big) = (10, 11);
+        let (v1, v2) = new_version((small, 10), (big, 10));
+        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
+        let (v1, v2) = new_version((small, 20), (big, 10));
+        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
+        let (v1, v2) = new_version((small, 10), (big, 20));
+        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
+
+        let (v1, v2) = new_version((10, small), (10, big));
+        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
+        let (v1, v2) = new_version((20, small), (10, big));
+        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
+        let (v1, v2) = new_version((10, small), (20, big));
+        assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
     }
 }
