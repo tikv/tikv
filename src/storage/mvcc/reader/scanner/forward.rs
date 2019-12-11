@@ -14,22 +14,36 @@ use crate::storage::{Cursor, Lock, Snapshot, Statistics};
 
 use super::ScannerConfig;
 
+/// Defines the behavior of the scanner.
 pub trait ScanPolicy<S: Snapshot> {
+    /// The type that the scanner outputs.
     type Output;
 
+    /// Handles the lock that the scanner meets.
+    ///
+    /// If `HandleRes::Return(val)` is returned, `val` will be returned to the
+    /// caller of the scanner. Otherwise, `HandleRes::Skip(current_user_key)`
+    /// should be returned and the scanner will handle the write record.
+    ///
+    /// Note that the method should also take care of moving the cursors.
     fn handle_lock(
         &mut self,
         current_user_key: Key,
-        ts: TimeStamp,
         cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>>;
 
+    /// Handles the write record that the scanner meets.
+    ///
+    /// If `HandleRes::Return(val)` is returned, `val` will be returned to the
+    /// caller of the scanner. Otherwise, `HandleRes::Skip(current_user_key)`
+    /// should be returned and the scanner will continue scanning.
+    ///
+    /// Note that the method should also take care of moving the cursors.
     fn handle_write(
         &mut self,
         current_user_key: Key,
-        ts: TimeStamp,
         cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
@@ -49,13 +63,6 @@ pub struct Cursors<S: Snapshot> {
 }
 
 impl<S: Snapshot> Cursors<S> {
-    /// After `self.get()`, our write cursor may be pointing to current user key (if we
-    /// found a desired version), or next user key (if there is no desired version), or
-    /// out of bound.
-    ///
-    /// If it is pointing to current user key, we need to step it until we meet a new
-    /// key. We first try to `next()` a few times. If still not reaching another user
-    /// key, we `seek()`.
     #[inline]
     fn move_write_cursor_to_next_user_key(
         &mut self,
@@ -231,12 +238,9 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
-            let ts = self.cfg.ts;
-
             if has_lock {
                 current_user_key = match self.scan_policy.handle_lock(
                     current_user_key,
-                    ts,
                     &mut self.cfg,
                     &mut self.cursors,
                     &mut self.statistics,
@@ -246,11 +250,10 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 };
             }
             if has_write {
-                let is_current_user_key = self.move_write_cursor_to_ts(&current_user_key, ts)?;
+                let is_current_user_key = self.move_write_cursor_to_ts(&current_user_key)?;
                 if is_current_user_key {
                     if let HandleRes::Return(output) = self.scan_policy.handle_write(
                         current_user_key,
-                        ts,
                         &mut self.cfg,
                         &mut self.cursors,
                         &mut self.statistics,
@@ -258,25 +261,16 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                         return Ok(Some(output));
                     }
                 }
-                // // We don't need to read version if there is a lock error already.
-                // if result.is_ok() {
-                //     // Attempt to read specified version of the key. Note that we may get `None`
-                //     // indicating that no desired version is found, or a DELETE version is found
-                //     result = self.get(&current_user_key, ts, &mut met_next_user_key);
-                // }
-                // Even if there is a lock error, we still need to step the cursor for future
-                // calls. However if we are already pointing at next user key, we don't need to
-                // move it any more. `met_next_user_key` eliminates a key compare.
             }
         }
     }
 
-    /// DOc TODO
-    /// Returns if the write cursor points to the user key
-    fn move_write_cursor_to_ts(&mut self, user_key: &Key, ts: TimeStamp) -> Result<bool> {
+    /// Try to move the write cursor to the `ts` version of the given key.
+    /// Because it is possible that the cursor is moved to the next user key or
+    /// the end of key space, the method returns whether the write cursor still
+    /// points to the given user key.
+    fn move_write_cursor_to_ts(&mut self, user_key: &Key) -> Result<bool> {
         assert!(self.cursors.write.valid()?);
-
-        // The logic starting from here is similar to `PointGetter`.
 
         // Try to iterate to `${user_key}_${ts}`. We first `next()` for a few times,
         // and if we have not reached where we want, we use `seek()`.
@@ -298,7 +292,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Meet another key.
                     return Ok(false);
                 }
-                if Key::decode_ts_from(current_key)? <= ts {
+                if Key::decode_ts_from(current_key)? <= self.cfg.ts {
                     // Founded, don't need to seek again.
                     needs_seek = false;
                     break;
@@ -309,9 +303,10 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         if needs_seek {
             // `user_key` must have reserved space here, so its clone has reserved space too. So no
             // reallocation happens in `append_ts`.
-            self.cursors
-                .write
-                .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
+            self.cursors.write.seek(
+                &user_key.clone().append_ts(self.cfg.ts),
+                &mut self.statistics.write,
+            )?;
             if !self.cursors.write.valid()? {
                 // Key space ended.
                 return Ok(false);
@@ -326,15 +321,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
     }
 }
 
-pub struct LatestKvPolicy {
-    isolation_level: IsolationLevel,
-}
-
-impl LatestKvPolicy {
-    pub fn new(isolation_level: IsolationLevel) -> Self {
-        LatestKvPolicy { isolation_level }
-    }
-}
+/// `ForwardScanner` with this policy outputs the latest key value pairs.
+pub struct LatestKvPolicy;
 
 impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     type Output = (Key, Value);
@@ -342,24 +330,25 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     fn handle_lock(
         &mut self,
         current_user_key: Key,
-        ts: TimeStamp,
         cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
-        let result = match self.isolation_level {
+        let result = match cfg.isolation_level {
             IsolationLevel::Si => {
                 // Only needs to check lock in SI
                 let lock = {
                     let lock_value = cursors.lock.value(&mut statistics.lock);
                     Lock::parse(lock_value)?
                 };
-                lock.check_ts_conflict(&current_user_key, ts, &cfg.bypass_locks)
+                lock.check_ts_conflict(&current_user_key, cfg.ts, &cfg.bypass_locks)
                     .map(|_| ())
             }
             IsolationLevel::Rc => Ok(()),
         };
         cursors.lock.next(&mut statistics.lock);
+        // Even if there is a lock error, we still need to step the cursor for future
+        // calls.
         if result.is_err() {
             cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
         }
@@ -369,13 +358,10 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     fn handle_write(
         &mut self,
         current_user_key: Key,
-        _ts: TimeStamp,
         cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
-        // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
-        // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
         let value: Option<Value> = loop {
             let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
             statistics.write.processed += 1;
@@ -541,7 +527,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
     }
 }
 
-/// This struct can be used to scan keys starting from the given user key (greater than or equal).
+/// This type can be used to scan keys starting from the given user key (greater than or equal).
 ///
 /// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
 /// isolation level is SI, locks will be checked first.
