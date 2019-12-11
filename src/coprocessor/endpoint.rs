@@ -99,6 +99,11 @@ impl<E: Engine> Endpoint<E> {
             REQ_TYPE_DAG => {
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut is));
+                info!(
+                    "[test] dag request is received";
+                    "start_ts" => dag.get_start_ts(),
+                    "region_id" => req.get_context().get_region_id(),
+                );
                 let mut table_scan = false;
                 let mut is_desc_scan = false;
                 if let Some(scan) = dag.get_executors().iter().next() {
@@ -252,9 +257,16 @@ impl<E: Engine> Endpoint<E> {
 
                 tracker.on_finish_all_items();
 
+                let start_ts = tracker.req_ctx.txn_start_ts.unwrap();
+
                 future::result(result)
                     .or_else(|e| Ok::<_, Error>(make_error_response(e)))
-                    .map(|mut resp| {
+                    .map(move |mut resp| {
+                        info!(
+                            "[test] cop response";
+                            "start_ts" => start_ts,
+                            "resp" => ?resp,
+                        );
                         COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
                         resp.set_exec_details(exec_details);
                         resp
@@ -374,6 +386,11 @@ impl<E: Engine> Endpoint<E> {
                                 }
                                 Ok((Some(resp), finished)) => (resp, finished),
                             };
+                            info!(
+                                "[test] cop response";
+                                "start_ts" => tracker.req_ctx.txn_start_ts.unwrap(),
+                                "resp" => ?resp,
+                            );
                             COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
                             resp.set_exec_details(exec_details);
 
