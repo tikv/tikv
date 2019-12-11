@@ -317,19 +317,34 @@ impl ScalarFunc {
 
     #[inline]
     pub fn date_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
-        if lhs.invalid_zero() {
-            return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", lhs)))
-                .map(|_| None);
+        let lhs = self.children[0].eval_time(ctx, row)?;
+        let rhs = self.children[1].eval_time(ctx, row)?;
+        match (lhs, rhs) {
+            (None, None) => Ok(None),
+            (Some(one_arg), None) | (None, Some(one_arg)) => {
+                if one_arg.invalid_zero() {
+                    ctx.handle_invalid_time_error(Error::incorrect_datetime_value(one_arg))
+                        .map(|_| None)
+                } else {
+                    Ok(None)
+                }
+            }
+            (Some(lhs), Some(rhs)) => {
+                if lhs.invalid_zero() {
+                    return ctx
+                        .handle_invalid_time_error(Error::incorrect_datetime_value(lhs))
+                        .map(|_| None);
+                }
+
+                if rhs.invalid_zero() {
+                    return ctx
+                        .handle_invalid_time_error(Error::incorrect_datetime_value(rhs))
+                        .map(|_| None);
+                }
+
+                Ok(lhs.date_diff(*rhs))
+            }
         }
-        let rhs: Cow<'_, Time> = try_opt!(self.children[1].eval_time(ctx, row));
-        if rhs.invalid_zero() {
-            return ctx
-                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", rhs)))
-                .map(|_| None);
-        }
-        Ok(lhs.date_diff(rhs.into_owned()))
     }
 
     #[inline]
@@ -547,6 +562,7 @@ mod tests {
 
     use tipb::{Expr, ScalarFuncSig};
 
+    use crate::codec::mysql::time::{TimeArgs, TimeType};
     use crate::codec::mysql::{Duration, Time};
     use crate::codec::Datum;
     use crate::expr::tests::{datum_expr, scalar_func_expr};
@@ -1344,11 +1360,146 @@ mod tests {
             );
         }
 
-        let mut cfg = EvalConfig::new();
-        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
-            .set_sql_mode(SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES);
+        let invalid_zero_cases = vec![
+            (
+                Some(TimeArgs::new_raw(
+                    2018,
+                    2,
+                    1,
+                    23,
+                    59,
+                    59,
+                    999999,
+                    6,
+                    TimeType::DateTime,
+                )),
+                Some(TimeArgs::new_raw(
+                    2018,
+                    0,
+                    0,
+                    23,
+                    59,
+                    59,
+                    999999,
+                    6,
+                    TimeType::DateTime,
+                )),
+            ),
+            (
+                Some(TimeArgs::new_raw(
+                    2018,
+                    0,
+                    0,
+                    23,
+                    59,
+                    59,
+                    999999,
+                    6,
+                    TimeType::DateTime,
+                )),
+                Some(TimeArgs::new_raw(
+                    2018,
+                    2,
+                    1,
+                    23,
+                    59,
+                    59,
+                    999999,
+                    6,
+                    TimeType::DateTime,
+                )),
+            ),
+            (
+                Some(TimeArgs::new_raw(
+                    2018,
+                    0,
+                    0,
+                    23,
+                    59,
+                    59,
+                    999999,
+                    6,
+                    TimeType::DateTime,
+                )),
+                Some(TimeArgs::new_raw(
+                    2018,
+                    0,
+                    0,
+                    23,
+                    59,
+                    59,
+                    999999,
+                    6,
+                    TimeType::DateTime,
+                )),
+            ),
+            (
+                Some(TimeArgs::new_raw(
+                    2018,
+                    0,
+                    0,
+                    23,
+                    59,
+                    59,
+                    999999,
+                    6,
+                    TimeType::DateTime,
+                )),
+                None,
+            ),
+            (
+                None,
+                Some(TimeArgs::new_raw(
+                    2018,
+                    0,
+                    0,
+                    23,
+                    59,
+                    59,
+                    999999,
+                    6,
+                    TimeType::DateTime,
+                )),
+            ),
+        ];
 
-        test_err_case_two_arg(&mut ctx, ScalarFuncSig::DateDiff, Datum::Null, Datum::Null);
+        let modes = vec![
+            // Vec<(flag, sql_mode, result_is_ok, has_warnings)>
+            (Flag::empty(), SqlMode::empty(), true, false),
+            (
+                Flag::IN_UPDATE_OR_DELETE_STMT,
+                SqlMode::NO_ZERO_IN_DATE | SqlMode::STRICT_ALL_TABLES,
+                false,
+                false,
+            ),
+            (
+                Flag::IN_UPDATE_OR_DELETE_STMT,
+                SqlMode::NO_ZERO_IN_DATE,
+                true,
+                true,
+            ),
+        ];
+
+        for (lhs, rhs) in invalid_zero_cases {
+            for &(flag, sql_mode, is_ok, has_warnings) in &modes {
+                let mut cfg = EvalConfig::new();
+                cfg.set_flag(flag).set_sql_mode(sql_mode);
+
+                let mut ctx = EvalContext::new(Arc::new(cfg));
+
+                let arg0 = lhs.map(Time::unchecked_new);
+                let arg1 = rhs.map(Time::unchecked_new);
+
+                let result = expr_build(&mut ctx, ScalarFuncSig::DateDiff, &[]);
+                if is_ok {
+                    assert_eq!(result.unwrap(), Datum::Null);
+                } else {
+                    assert!(result.is_err());
+                }
+
+                assert!(!ctx.take_warnings().warnings.is_empty(), has_warnings);
+            }
+        }
     }
 
     #[test]
