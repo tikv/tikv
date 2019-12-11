@@ -72,12 +72,16 @@ pub fn tikv_version_info() -> String {
          \nGit Commit Hash:   {}\
          \nGit Commit Branch: {}\
          \nUTC Build Time:    {}\
-         \nRust Version:      {}",
+         \nRust Version:      {}\
+         \nEnable Features:   {}\
+         \nProfile:     {}",
         env!("CARGO_PKG_VERSION"),
         option_env!("TIKV_BUILD_GIT_HASH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_GIT_BRANCH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_TIME").unwrap_or(fallback),
         option_env!("TIKV_BUILD_RUSTC_VERSION").unwrap_or(fallback),
+        option_env!("TIKV_ENABLE_FEATURES").unwrap_or(fallback),
+        option_env!("TIKV_BUILD_PROFILE").unwrap_or(fallback),
     )
 }
 

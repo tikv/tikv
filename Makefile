@@ -90,6 +90,7 @@ export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${
 export TIKV_BUILD_GIT_TAG := $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
 
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
@@ -114,6 +115,7 @@ all: format build test
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
+build: export TIKV_BUILD_PROFILE=debug
 build:
 	cargo build --no-default-features --features "${ENABLE_FEATURES}"
 
@@ -127,6 +129,7 @@ build:
 # with RocksDB compiled with the "portable" option, for -march=x86-64 (an
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
+release: export TIKV_BUILD_PROFILE=release
 release:
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
 
@@ -154,6 +157,7 @@ fail_release:
 # The target used by CI/CD to build the distributable release artifacts.
 # Individual developers should only need to use the `dist_` rules when working
 # on the CI/CD system.
+dist_release: export TIKV_BUILD_PROFILE=dist_release
 dist_release:
 	make build_dist_release
 	@mkdir -p ${BIN_PATH}
