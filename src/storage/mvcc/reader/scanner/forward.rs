@@ -392,14 +392,14 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 self.cursors.write.next(&mut self.statistics.write);
                 if !self.cursors.write.valid()? {
                     // Key space ended.
-                    return Ok(true);
+                    return Ok(false);
                 }
             }
             {
                 let current_key = self.cursors.write.key(&mut self.statistics.write);
                 if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                     // Meet another key.
-                    return Ok(true);
+                    return Ok(false);
                 }
                 if Key::decode_ts_from(current_key)? <= ts {
                     // Founded, don't need to seek again.
@@ -417,15 +417,15 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
             if !self.cursors.write.valid()? {
                 // Key space ended.
-                return Ok(true);
+                return Ok(false);
             }
             let current_key = self.cursors.write.key(&mut self.statistics.write);
             if !Key::is_user_key_eq(current_key, user_key.as_encoded().as_slice()) {
                 // Meet another key.
-                return Ok(true);
+                return Ok(false);
             }
         }
-        Ok(false)
+        Ok(true)
     }
 }
 
