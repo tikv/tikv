@@ -2689,7 +2689,11 @@ impl ApplyFsm {
         }
         if let Some(timer) = channel_timer {
             let elapsed = duration_to_sec(timer.elapsed());
-            APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+            if apply_ctx.high_priority {
+                HIGH_PRIORITY_APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+            } else {
+                APPLY_TASK_WAIT_TIME_HISTOGRAM.observe(elapsed);
+            }
         }
     }
 }

@@ -17,17 +17,19 @@ lazy_static! {
             &["type", "status"]
         ).unwrap();
 
-    pub static ref PEER_APPEND_LOG_HISTOGRAM: Histogram =
-        register_histogram!(
+    pub static ref PEER_APPEND_LOG_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
             "tikv_raftstore_append_log_duration_seconds",
             "Bucketed histogram of peer appending log duration",
+            &["priority"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref PEER_COMMIT_LOG_HISTOGRAM: Histogram =
-        register_histogram!(
+    pub static ref PEER_COMMIT_LOG_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
             "tikv_raftstore_commit_log_duration_seconds",
             "Bucketed histogram of peer commits logs duration",
+            &["priority"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
@@ -41,6 +43,13 @@ lazy_static! {
     pub static ref APPLY_TASK_WAIT_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_wait_time_duration_secs",
+            "Bucketed histogram of apply task wait time duration",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref HIGH_PRIORITY_APPLY_TASK_WAIT_TIME_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_high_apply_wait_time_duration_secs",
             "Bucketed histogram of apply task wait time duration",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
@@ -114,6 +123,13 @@ lazy_static! {
     pub static ref REQUEST_WAIT_TIME_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_request_wait_time_duration_secs",
+            "Bucketed histogram of request wait time duration",
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        ).unwrap();
+
+    pub static ref HIGH_PRIORITY_REQUEST_WAIT_TIME_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_high_request_wait_time_duration_secs",
             "Bucketed histogram of request wait time duration",
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();

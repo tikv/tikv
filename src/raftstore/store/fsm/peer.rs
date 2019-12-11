@@ -295,11 +295,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
                 PeerMsg::RaftCommand(cmd) => {
-                    self.ctx
-                        .raft_metrics
-                        .propose
-                        .request_wait_time
-                        .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
+                    if self.fsm.high_priority {
+                        self.ctx
+                            .raft_metrics
+                            .propose
+                            .high_request_wait_time
+                            .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
+                    } else {
+                        self.ctx
+                            .raft_metrics
+                            .propose
+                            .request_wait_time
+                            .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
+                    }
                     self.propose_raft_command(cmd.request, cmd.callback)
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
@@ -1359,7 +1367,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if job.initialized {
             self.ctx.apply_router.schedule_priority_task(
                 job.region_id,
-                self.ctx.high_priority,
+                self.fsm.peer.high_priority,
                 ApplyTask::destroy(job.region_id),
             );
         }

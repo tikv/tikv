@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::local::LocalHistogram;
+use prometheus::local::{LocalHistogram, LocalHistogramVec};
 use std::sync::{Arc, Mutex};
 
 use tikv_util::collections::HashSet;
@@ -233,6 +233,7 @@ pub struct RaftProposeMetrics {
     pub transfer_leader: u64,
     pub conf_change: u64,
     pub request_wait_time: LocalHistogram,
+    pub high_request_wait_time: LocalHistogram,
 }
 
 impl Default for RaftProposeMetrics {
@@ -246,6 +247,7 @@ impl Default for RaftProposeMetrics {
             transfer_leader: 0,
             conf_change: 0,
             request_wait_time: REQUEST_WAIT_TIME_HISTOGRAM.local(),
+            high_request_wait_time: HIGH_PRIORITY_REQUEST_WAIT_TIME_HISTOGRAM.local(),
         }
     }
 }
@@ -297,6 +299,7 @@ impl RaftProposeMetrics {
             self.conf_change = 0;
         }
         self.request_wait_time.flush();
+        self.high_request_wait_time.flush();
     }
 }
 
@@ -396,8 +399,8 @@ pub struct RaftMetrics {
     pub message_dropped: RaftMessageDropMetrics,
     pub propose: RaftProposeMetrics,
     pub process_ready: LocalHistogram,
-    pub append_log: LocalHistogram,
-    pub commit_log: LocalHistogram,
+    pub append_log: LocalHistogramVec,
+    pub commit_log: LocalHistogramVec,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
 }

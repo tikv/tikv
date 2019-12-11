@@ -564,9 +564,16 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
         }
 
+        let priority = if self.poll_ctx.high_priority {
+            "high"
+        } else {
+            "normal"
+        };
+
         self.poll_ctx
             .raft_metrics
             .append_log
+            .with_label_values(&[priority])
             .observe(duration_to_sec(dur) as f64);
 
         slow_log!(
