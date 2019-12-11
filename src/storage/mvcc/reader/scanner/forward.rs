@@ -9,6 +9,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{WriteRef, WriteType};
 use crate::storage::mvcc::{Result, TimeStamp};
+use crate::storage::txn::TxnEntry;
 use crate::storage::{Cursor, Lock, Snapshot, Statistics};
 
 use super::ScannerConfig;
@@ -38,110 +39,6 @@ pub trait ScanPolicy<S: Snapshot> {
 pub enum HandleRes<T> {
     Return(T),
     Skip(Key),
-}
-
-pub struct LatestKvPolicy {
-    isolation_level: IsolationLevel,
-}
-
-impl LatestKvPolicy {
-    pub fn new(isolation_level: IsolationLevel) -> Self {
-        LatestKvPolicy { isolation_level }
-    }
-}
-
-impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
-    type Output = (Key, Value);
-
-    fn handle_lock(
-        &mut self,
-        current_user_key: Key,
-        ts: TimeStamp,
-        cfg: &mut ScannerConfig<S>,
-        cursors: &mut Cursors<S>,
-        statistics: &mut Statistics,
-    ) -> Result<HandleRes<Self::Output>> {
-        let result = match self.isolation_level {
-            IsolationLevel::Si => {
-                // Only needs to check lock in SI
-                let lock = {
-                    let lock_value = cursors.lock.value(&mut statistics.lock);
-                    Lock::parse(lock_value)?
-                };
-                lock.check_ts_conflict(&current_user_key, ts, &cfg.bypass_locks)
-                    .map(|_| ())
-            }
-            IsolationLevel::Rc => Ok(()),
-        };
-        cursors.lock.next(&mut statistics.lock);
-        if result.is_err() {
-            cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
-        }
-        result.map(|_| HandleRes::Skip(current_user_key))
-    }
-
-    fn handle_write(
-        &mut self,
-        current_user_key: Key,
-        _ts: TimeStamp,
-        cfg: &mut ScannerConfig<S>,
-        cursors: &mut Cursors<S>,
-        statistics: &mut Statistics,
-    ) -> Result<HandleRes<Self::Output>> {
-        // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
-        // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
-        let value: Option<Value> = loop {
-            let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
-            statistics.write.processed += 1;
-
-            match write.write_type {
-                WriteType::Put => {
-                    if cfg.omit_value {
-                        break Some(vec![]);
-                    }
-                    match write.short_value {
-                        Some(value) => {
-                            // Value is carried in `write`.
-                            break Some(value.to_vec());
-                        }
-                        None => {
-                            // Value is in the default CF.
-                            let start_ts = write.start_ts;
-                            cursors.ensure_default_cursor(cfg)?;
-                            let value = super::near_load_data_by_write(
-                                cursors.default.as_mut().unwrap(),
-                                &current_user_key,
-                                start_ts,
-                                statistics,
-                            )?;
-                            break Some(value);
-                        }
-                    }
-                }
-                WriteType::Delete => break None,
-                WriteType::Lock | WriteType::Rollback => {
-                    // Continue iterate next `write`.
-                }
-            }
-
-            cursors.write.next(&mut statistics.write);
-
-            if !cursors.write.valid()? {
-                // Key space ended. Needn't move write cursor to next key.
-                return Ok(HandleRes::Skip(current_user_key));
-            }
-            let current_key = cursors.write.key(&mut statistics.write);
-            if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
-                // Meet another key. Needn't move write cursor to next key.
-                return Ok(HandleRes::Skip(current_user_key));
-            }
-        };
-        cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
-        Ok(match value {
-            Some(v) => HandleRes::Return((current_user_key, v)),
-            _ => HandleRes::Skip(current_user_key),
-        })
-    }
 }
 
 pub struct Cursors<S: Snapshot> {
@@ -426,6 +323,221 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             }
         }
         Ok(true)
+    }
+}
+
+pub struct LatestKvPolicy {
+    isolation_level: IsolationLevel,
+}
+
+impl LatestKvPolicy {
+    pub fn new(isolation_level: IsolationLevel) -> Self {
+        LatestKvPolicy { isolation_level }
+    }
+}
+
+impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
+    type Output = (Key, Value);
+
+    fn handle_lock(
+        &mut self,
+        current_user_key: Key,
+        ts: TimeStamp,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        let result = match self.isolation_level {
+            IsolationLevel::Si => {
+                // Only needs to check lock in SI
+                let lock = {
+                    let lock_value = cursors.lock.value(&mut statistics.lock);
+                    Lock::parse(lock_value)?
+                };
+                lock.check_ts_conflict(&current_user_key, ts, &cfg.bypass_locks)
+                    .map(|_| ())
+            }
+            IsolationLevel::Rc => Ok(()),
+        };
+        cursors.lock.next(&mut statistics.lock);
+        if result.is_err() {
+            cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+        }
+        result.map(|_| HandleRes::Skip(current_user_key))
+    }
+
+    fn handle_write(
+        &mut self,
+        current_user_key: Key,
+        _ts: TimeStamp,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
+        // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
+        let value: Option<Value> = loop {
+            let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
+            statistics.write.processed += 1;
+
+            match write.write_type {
+                WriteType::Put => {
+                    if cfg.omit_value {
+                        break Some(vec![]);
+                    }
+                    match write.short_value {
+                        Some(value) => {
+                            // Value is carried in `write`.
+                            break Some(value.to_vec());
+                        }
+                        None => {
+                            // Value is in the default CF.
+                            let start_ts = write.start_ts;
+                            cursors.ensure_default_cursor(cfg)?;
+                            let value = super::near_load_data_by_write(
+                                cursors.default.as_mut().unwrap(),
+                                &current_user_key,
+                                start_ts,
+                                statistics,
+                            )?;
+                            break Some(value);
+                        }
+                    }
+                }
+                WriteType::Delete => break None,
+                WriteType::Lock | WriteType::Rollback => {
+                    // Continue iterate next `write`.
+                }
+            }
+
+            cursors.write.next(&mut statistics.write);
+
+            if !cursors.write.valid()? {
+                // Key space ended. Needn't move write cursor to next key.
+                return Ok(HandleRes::Skip(current_user_key));
+            }
+            let current_key = cursors.write.key(&mut statistics.write);
+            if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
+                // Meet another key. Needn't move write cursor to next key.
+                return Ok(HandleRes::Skip(current_user_key));
+            }
+        };
+        cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+        Ok(match value {
+            Some(v) => HandleRes::Return((current_user_key, v)),
+            _ => HandleRes::Skip(current_user_key),
+        })
+    }
+}
+
+pub struct LatestEntryPolicy {
+    isolation_level: IsolationLevel,
+    after_ts: TimeStamp,
+    output_delete: bool,
+}
+
+impl LatestEntryPolicy {
+    pub fn new(isolation_level: IsolationLevel, after_ts: TimeStamp, output_delete: bool) -> Self {
+        LatestEntryPolicy {
+            isolation_level,
+            after_ts,
+            output_delete,
+        }
+    }
+}
+
+impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
+    type Output = TxnEntry;
+
+    fn handle_lock(
+        &mut self,
+        current_user_key: Key,
+        ts: TimeStamp,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        let result = match self.isolation_level {
+            IsolationLevel::Si => {
+                // Only needs to check lock in SI
+                let lock = {
+                    let lock_value = cursors.lock.value(&mut statistics.lock);
+                    Lock::parse(lock_value)?
+                };
+                lock.check_ts_conflict(&current_user_key, ts, &cfg.bypass_locks)
+                    .map(|_| ())
+            }
+            IsolationLevel::Rc => Ok(()),
+        };
+        cursors.lock.next(&mut statistics.lock);
+        if result.is_err() {
+            cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+        }
+        result.map(|_| HandleRes::Skip(current_user_key))
+    }
+
+    fn handle_write(
+        &mut self,
+        current_user_key: Key,
+        _ts: TimeStamp,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
+        // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
+        let mut write_key = cursors.write.key(&mut statistics.write);
+        let entry: Option<TxnEntry> = loop {
+            if Key::decode_ts_from(write_key)? <= self.after_ts {
+                // There are no newer records of this key since `after_ts`.
+                break None;
+            }
+            let write_value = cursors.write.value(&mut statistics.write);
+            let write = WriteRef::parse(write_value)?;
+            statistics.write.processed += 1;
+
+            if write.write_type == WriteType::Put
+                || (write.write_type == WriteType::Delete && self.output_delete)
+            {
+                let entry_write = (write_key.to_vec(), write_value.to_vec());
+                let entry_default = if write.short_value.is_none() {
+                    let start_ts = write.start_ts;
+                    cursors.ensure_default_cursor(cfg)?;
+                    let default_cursor = cursors.default.as_mut().unwrap();
+                    let default_key = default_cursor.key(&mut statistics.data).to_vec();
+                    let default_value = super::near_load_data_by_write(
+                        default_cursor,
+                        &current_user_key,
+                        start_ts,
+                        statistics,
+                    )?;
+                    (default_key, default_value)
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+                break Some(TxnEntry::Commit {
+                    default: entry_default,
+                    write: entry_write,
+                });
+            }
+
+            cursors.write.next(&mut statistics.write);
+
+            if !cursors.write.valid()? {
+                // Key space ended. Needn't move write cursor to next key.
+                return Ok(HandleRes::Skip(current_user_key));
+            }
+            write_key = cursors.write.key(&mut statistics.write);
+            if !Key::is_user_key_eq(write_key, current_user_key.as_encoded().as_slice()) {
+                // Meet another key. Needn't move write cursor to next key.
+                return Ok(HandleRes::Skip(current_user_key));
+            }
+        };
+        cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+        Ok(match entry {
+            Some(entry) => HandleRes::Return(entry),
+            _ => HandleRes::Skip(current_user_key),
+        })
     }
 }
 
