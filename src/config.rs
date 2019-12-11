@@ -1696,7 +1696,7 @@ fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>
             if let ConfigValue::Module(change) = value {
                 entries.append(&mut helper(name, change)?);
             } else {
-                let mut e = configpb::ConfigEntry::new();
+                let mut e = configpb::ConfigEntry::default();
                 e.set_name(name);
                 e.set_value(from_change_value(value)?);
                 entries.push(e);
@@ -1819,9 +1819,9 @@ impl ConfigHandler {
         cfg: TiKvConfig,
     ) -> CfgResult<(configpb::Version, TiKvConfig)> {
         let cfg = toml::to_string(&cfg)?;
-        let version = configpb::Version::new();
+        let version = configpb::Version::default();
         let mut resp = pd_client.register_config(id, version, cfg)?;
-        match resp.get_status().code {
+        match resp.get_status().get_code() {
             StatusCode::Ok => {
                 let cfg: TiKvConfig = toml::from_str(resp.get_config())?;
                 Ok((resp.take_version(), cfg))
@@ -1838,7 +1838,7 @@ impl ConfigHandler {
     pub fn refresh_config(&mut self, pd_client: Arc<impl PdClient>) -> CfgResult<()> {
         let mut resp = pd_client.get_config(self.get_id(), self.version.clone())?;
         let version = resp.take_version();
-        match resp.get_status().code {
+        match resp.get_status().get_code() {
             StatusCode::NotChange => Ok(()),
             StatusCode::WrongVersion if cmp_version(&self.version, &version) == Ordering::Less => {
                 let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
@@ -1874,7 +1874,7 @@ impl ConfigHandler {
     ) -> CfgResult<()> {
         version.local += 1;
         let mut resp = pd_client.update_config(self.get_id(), version, entries)?;
-        match resp.get_status().code {
+        match resp.get_status().get_code() {
             StatusCode::Ok => {
                 self.version = resp.take_version();
                 Ok(())

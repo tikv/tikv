@@ -612,7 +612,7 @@ impl PdClient for RpcClient {
         let mut local = configpb::Local::default();
         local.set_component_id(id);
         let mut kind = configpb::ConfigKind::default();
-        kind.set_local(local);
+        kind.kind = Some(configpb::config_kind::Kind::Local(local));
         let mut req = configpb::UpdateRequest::default();
         req.set_header(self.get_config_header());
         req.set_kind(kind);
