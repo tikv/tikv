@@ -6,7 +6,7 @@ use crate::storage::mvcc::{default_not_found_error, Result};
 use engine::IterOption;
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, Value, Lock, Write, WriteType, WriteRef, TimeStamp};
+use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -155,7 +155,9 @@ impl<S: Snapshot> MvccReader<S> {
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: TimeStamp) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            return lock.check_ts_conflict(key, ts, &Default::default()).map_err(From::from);
+            return lock
+                .check_ts_conflict(key, ts, &Default::default())
+                .map_err(From::from);
         }
         Ok(())
     }
@@ -437,9 +439,9 @@ mod tests {
     use engine::rocks::{Writable, WriteBatch, DB};
     use engine::{ALL_CFS, CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::{Peer, Region};
-    use txn_types::{Mutation, LockType};
     use std::sync::Arc;
     use std::u64;
+    use txn_types::{LockType, Mutation};
 
     struct RegionEngine {
         db: Arc<DB>,

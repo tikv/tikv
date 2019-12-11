@@ -6,7 +6,7 @@ mod txn_entry;
 
 use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, Value, TimeStamp, TsSet};
+use txn_types::{Key, TimeStamp, TsSet, Value};
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;

@@ -9,7 +9,7 @@ mod txn;
 pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use crate::new_txn;
-pub use txn_types::{Lock, TimeStamp, LockType, Write, WriteRef, WriteType};
+pub use txn_types::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 
 use std::error;
 use std::fmt;
@@ -244,7 +244,9 @@ impl From<txn_types::Error> for ErrorInner {
         match err {
             txn_types::Error::Io(e) => ErrorInner::Io(e),
             txn_types::Error::Codec(e) => ErrorInner::Codec(e),
-            txn_types::Error::BadFormatLock | txn_types::Error::BadFormatWrite => ErrorInner::BadFormat(err),
+            txn_types::Error::BadFormatLock | txn_types::Error::BadFormatWrite => {
+                ErrorInner::BadFormat(err)
+            }
             txn_types::Error::KeyIsLocked(lock_info) => ErrorInner::KeyIsLocked(lock_info),
         }
     }

@@ -4,12 +4,12 @@ use super::metrics::*;
 use super::reader::MvccReader;
 use super::{ErrorInner, Result};
 use crate::storage::kv::{Modify, ScanMode, Snapshot};
-use crate::storage::{
-    Options, Statistics, TxnStatus, CF_DEFAULT, CF_LOCK, CF_WRITE,
-};
+use crate::storage::{Options, Statistics, TxnStatus, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
-use txn_types::{is_short_value, Key, Value, Lock, LockType, Write, WriteType, Mutation, TimeStamp};
+use txn_types::{
+    is_short_value, Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteType,
+};
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 

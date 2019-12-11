@@ -4,10 +4,10 @@ use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, Value, Write, WriteType, TimeStamp, WriteRef};
+use txn_types::{Key, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::{Result, Error};
+use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Cursor, Lock, Snapshot, Statistics};
 
 use super::ScannerConfig;
@@ -140,7 +140,8 @@ impl<S: Snapshot> BackwardScanner<S> {
                         };
                         result = lock
                             .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
-                            .map(|_| None).map_err(Into::into);
+                            .map(|_| None)
+                            .map_err(Into::into);
                     }
                     IsolationLevel::Rc => {}
                 }
@@ -211,7 +212,8 @@ impl<S: Snapshot> BackwardScanner<S> {
                 return Ok(self.handle_last_version(last_version, user_key)?);
             }
 
-            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write)).map_err(Error::from)?;
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))
+                .map_err(Error::from)?;
             self.statistics.write.processed += 1;
 
             match write.write_type {

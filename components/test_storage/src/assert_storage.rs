@@ -10,7 +10,7 @@ use tikv::storage::{
     self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
 };
 use tikv_util::HandyRwLock;
-use txn_types::{Key, KvPair, TimeStamp, Value, Mutation};
+use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 use super::*;
 

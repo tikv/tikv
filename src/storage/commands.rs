@@ -4,7 +4,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, RawGetRequest};
 use tikv_util::collections::HashMap;
-use txn_types::{Key, Lock, TimeStamp, Mutation};
+use txn_types::{Key, Lock, Mutation, TimeStamp};
 
 use crate::storage::metrics::{self, CommandPriority};
 

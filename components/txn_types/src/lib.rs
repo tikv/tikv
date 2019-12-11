@@ -12,7 +12,7 @@ use std::io;
 
 pub use lock::{Lock, LockType};
 pub use timestamp::{TimeStamp, TsSet};
-pub use types::{is_short_value, Key, KvPair, Value, Mutation, SHORT_VALUE_MAX_LEN};
+pub use types::{is_short_value, Key, KvPair, Mutation, Value, SHORT_VALUE_MAX_LEN};
 pub use write::{Write, WriteRef, WriteType};
 
 quick_error! {
@@ -38,15 +38,15 @@ quick_error! {
 }
 
 impl Error {
-pub fn maybe_clone(&self) -> Option<Error> {
-    match self {
-        Error::Codec(e) => e.maybe_clone().map(Error::Codec),
-        Error::BadFormatLock => Some(Error::BadFormatLock),
-        Error::BadFormatWrite => Some(Error::BadFormatWrite),
-        Error::KeyIsLocked(info) => Some(Error::KeyIsLocked(info.clone())),
-        Error::Io(_) => None,
+    pub fn maybe_clone(&self) -> Option<Error> {
+        match self {
+            Error::Codec(e) => e.maybe_clone().map(Error::Codec),
+            Error::BadFormatLock => Some(Error::BadFormatLock),
+            Error::BadFormatWrite => Some(Error::BadFormatWrite),
+            Error::KeyIsLocked(info) => Some(Error::KeyIsLocked(info.clone())),
+            Error::Io(_) => None,
+        }
     }
-}
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

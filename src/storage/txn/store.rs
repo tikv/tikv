@@ -9,7 +9,7 @@ use crate::storage::mvcc::{
 };
 use crate::storage::mvcc::{PointGetter, PointGetterBuilder};
 use crate::storage::{Snapshot, Statistics};
-use txn_types::{Key, KvPair, Value, TimeStamp, TsSet};
+use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
 
 use super::{Error, ErrorInner, Result};
 
@@ -134,7 +134,9 @@ impl TxnEntry {
                 } else {
                     let k = Key::from_encoded(write.0).truncate_ts()?;
                     let k = k.into_raw()?;
-                    let v = WriteRef::parse(&write.1).map_err(MvccError::from)?.to_owned();
+                    let v = WriteRef::parse(&write.1)
+                        .map_err(MvccError::from)?
+                        .to_owned();
                     let v = v.short_value.unwrap();
                     Ok((k, v))
                 }

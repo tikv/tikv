@@ -20,8 +20,8 @@ use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::time::UnixSecs;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 
 use super::*;

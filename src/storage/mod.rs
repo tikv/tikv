@@ -30,7 +30,7 @@ use futures::{future, Future};
 use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
 use tikv_util::collections::HashMap;
 use tikv_util::future_pool::FuturePool;
-use txn_types::{Key, KvPair, TimeStamp, Value, Lock, TsSet,Mutation};
+use txn_types::{Key, KvPair, Lock, Mutation, TimeStamp, TsSet, Value};
 
 use crate::storage::commands::{get_priority_tag, Command, CommandKind};
 use crate::storage::config::Config;
