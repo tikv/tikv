@@ -827,6 +827,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "kvproto",
  "rand 0.7.2",
  "slog",
  "slog-global",
@@ -1400,7 +1401,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#32be31591b03e9e7fda00ef5c67b330310701553"
+source = "git+https://github.com/pingcap/kvproto.git#c16783858504feffa04eb70af3215d3187e58a14"
 dependencies = [
  "bytes",
  "futures",
@@ -3233,6 +3234,7 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "engine",
+ "engine_rocks",
  "futures",
  "futures-cpupool",
  "grpcio",
@@ -3304,6 +3306,7 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "external_storage",
  "futures",
  "futures-cpupool",
  "grpcio",
@@ -3606,7 +3609,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#0820b784842f3ef6cecc8f520e8834d326a0dbeb"
+source = "git+https://github.com/pingcap/tipb.git#44f75c9bef33cef5c39e0e0e4fed71b15c735313"
 dependencies = [
  "bytes",
  "lazy_static",

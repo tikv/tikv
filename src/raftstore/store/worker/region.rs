@@ -14,7 +14,7 @@ use engine::rocks::Writable;
 use engine::WriteBatch;
 use engine::CF_RAFT;
 use engine::{util as engine_util, Engines, Mutable, Peekable};
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{Compat, RocksSnapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -322,7 +322,7 @@ impl SnapContext {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: Arc::clone(&self.engines.kv),
+            db: self.engines.kv.c().clone(),
             region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -502,16 +502,8 @@ impl SnapContext {
             if plain_file_used(cf) {
                 continue;
             }
-
-            let handle = rocks::util::get_cf_handle(&self.engines.kv, cf).unwrap();
-            if let Some(n) = rocks::util::get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
-                let options = self.engines.kv.get_options_cf(handle);
-                let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
-                // Leave enough buffer to tolerate heavy write workload,
-                // which may flush some memtables in a short time.
-                if n > u64::from(slowdown_trigger) / 2 {
-                    return true;
-                }
+            if rocks::util::ingest_maybe_slowdown_writes(&self.engines.kv, cf) {
+                return true;
             }
         }
         false
