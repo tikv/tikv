@@ -599,9 +599,9 @@ pub mod tests {
     use tikv::raftstore::store::util::new_peer;
     use tikv::storage::kv::Result as EngineResult;
     use tikv::storage::mvcc::tests::*;
-    use tikv::storage::SHORT_VALUE_MAX_LEN;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::time::Instant;
+    use txn_types::SHORT_VALUE_MAX_LEN;
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {

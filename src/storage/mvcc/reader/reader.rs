@@ -431,12 +431,13 @@ mod tests {
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use crate::storage::{Mutation, Options};
+    use crate::storage::Options;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
     use engine::{ALL_CFS, CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::{Peer, Region};
+    use txn_types::{Mutation, LockType};
     use std::sync::Arc;
     use std::u64;
 

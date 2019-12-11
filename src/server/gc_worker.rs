@@ -1288,11 +1288,12 @@ mod tests {
     use crate::raftstore::store::util::new_peer;
     use crate::storage::kv::Result as EngineResult;
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
+    use crate::storage::{Options, Storage, TestEngineBuilder, TestStorageBuilder};
     use futures::Future;
     use kvproto::metapb;
     use std::collections::BTreeMap;
     use std::sync::mpsc::{channel, Receiver, Sender};
+    use txn_types::Mutation;
 
     struct MockSafePointProvider {
         rx: Receiver<TimeStamp>,

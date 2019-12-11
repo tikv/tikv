@@ -1039,37 +1039,4 @@ pub mod tests {
             expect
         );
     }
-
-    #[test]
-    fn test_ts_set() {
-        let s = TsSet::new(vec![]);
-        assert_eq!(s, TsSet::Empty);
-        assert!(!s.contains(1.into()));
-
-        let s = TsSet::vec(vec![]);
-        assert_eq!(s, TsSet::Empty);
-
-        let s = TsSet::from_u64s(vec![1, 2]);
-        assert_eq!(s, TsSet::Vec(Arc::new(vec![1.into(), 2.into()])));
-        assert!(s.contains(1.into()));
-        assert!(s.contains(2.into()));
-        assert!(!s.contains(3.into()));
-
-        let s2 = TsSet::vec(vec![1.into(), 2.into()]);
-        assert_eq!(s2, s);
-
-        let big_ts_list: Vec<TimeStamp> =
-            (0..=TS_SET_USE_VEC_LIMIT as u64).map(Into::into).collect();
-        let s = TsSet::new(big_ts_list.clone());
-        assert_eq!(
-            s,
-            TsSet::Set(Arc::new(big_ts_list.clone().into_iter().collect()))
-        );
-        assert!(s.contains(1.into()));
-        assert!(s.contains((TS_SET_USE_VEC_LIMIT as u64).into()));
-        assert!(!s.contains((TS_SET_USE_VEC_LIMIT as u64 + 1).into()));
-
-        let s = TsSet::vec(big_ts_list.clone());
-        assert_eq!(s, TsSet::Vec(Arc::new(big_ts_list)));
-    }
 }

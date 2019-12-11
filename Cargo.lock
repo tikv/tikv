@@ -408,6 +408,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "toml",
+ "txn_types",
  "url 2.1.0",
  "vlog",
 ]
@@ -3224,6 +3225,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tipb",
+ "txn_types",
 ]
 
 [[package]]
@@ -3273,6 +3275,7 @@ dependencies = [
  "test_raftstore",
  "tikv",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]

@@ -828,9 +828,9 @@ mod tests {
     use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
-    use crate::storage::{TestEngineBuilder, SHORT_VALUE_MAX_LEN};
+    use crate::storage::TestEngineBuilder;
     use kvproto::kvrpcpb::Context;
-    use txn_types::TimeStamp;
+    use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();

@@ -877,7 +877,7 @@ mod tests {
         data.insert(
             Key::from_raw(b"zz"),
             Err(Error::from(ErrorInner::Mvcc(MvccError::from(
-                MvccErrorInner::BadFormatLock,
+                txn_types::Error::BadFormatLock,
             )))),
         );
 

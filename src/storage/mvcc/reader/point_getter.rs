@@ -270,9 +270,9 @@ mod tests {
 
     use engine_rocks::RocksSyncSnapshot;
     use kvproto::kvrpcpb::Context;
+    use txn_types::SHORT_VALUE_MAX_LEN;
 
     use crate::storage::mvcc::tests::*;
-    use crate::storage::SHORT_VALUE_MAX_LEN;
     use crate::storage::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {

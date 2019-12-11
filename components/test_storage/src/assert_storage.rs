@@ -7,10 +7,10 @@ use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngin
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{
-    self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, Mutation, TxnStatus,
+    self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
 };
 use tikv_util::HandyRwLock;
-use txn_types::{Key, KvPair, TimeStamp, Value};
+use txn_types::{Key, KvPair, TimeStamp, Value, Mutation};
 
 use super::*;
 

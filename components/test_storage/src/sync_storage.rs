@@ -8,11 +8,11 @@ use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    Engine, Mutation, Options, RegionInfoProvider, Result, Storage, TestEngineBuilder,
+    Engine, Options, RegionInfoProvider, Result, Storage, TestEngineBuilder,
     TestStorageBuilder, TxnStatus,
 };
 use tikv_util::collections::HashMap;
-use txn_types::{Key, KvPair, TimeStamp, Value};
+use txn_types::{Key, KvPair, TimeStamp, Value, Mutation};
 
 /// A builder to build a `SyncTestStorage`.
 ///
