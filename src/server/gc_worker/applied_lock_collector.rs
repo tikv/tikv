@@ -322,15 +322,14 @@ impl Runnable<LockCollectorTask> for LockCollectorRunner {
     }
 }
 
-#[derive(Clone)]
 pub struct AppliedLockCollector {
-    worker: Arc<Mutex<Worker<LockCollectorTask>>>,
+    worker: Mutex<Worker<LockCollectorTask>>,
     scheduler: Scheduler<LockCollectorTask>,
 }
 
 impl AppliedLockCollector {
     pub fn new(coprocessor_host: &mut CoprocessorHost) -> Result<Self> {
-        let worker = Arc::new(Mutex::new(WorkerBuilder::new("lock-collector").create()));
+        let worker = Mutex::new(WorkerBuilder::new("lock-collector").create());
 
         let scheduler = worker.lock().unwrap().scheduler();
 

@@ -1291,7 +1291,7 @@ pub struct GcWorker<E: Engine> {
     worker: Arc<Mutex<FutureWorker<GcTask>>>,
     worker_scheduler: FutureScheduler<GcTask>,
 
-    applied_lock_collector: Option<AppliedLockCollector>,
+    applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
 }
@@ -1399,7 +1399,7 @@ impl<E: Engine> GcWorker<E> {
         coprocessor_host: &mut CoprocessorHost,
     ) -> Result<()> {
         assert!(self.applied_lock_collector.is_none());
-        let collector = AppliedLockCollector::new(coprocessor_host)?;
+        let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);
         self.applied_lock_collector = Some(collector);
         Ok(())
     }
