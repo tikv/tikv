@@ -1,13 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use futures::Future;
+use futures::{Future, Sink};
 use futures_cpupool::CpuPool;
-use grpcio::{RpcContext, UnarySink};
+use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
 };
-
-use crate::server::Error;
 
 /// Service handles the RPC messages for the `Diagnostics` service.
 #[derive(Clone)]
@@ -27,14 +25,26 @@ impl Diagnostics for Service {
         &mut self,
         ctx: RpcContext<'_>,
         req: SearchLogRequest,
-        sink: UnarySink<SearchLogResponse>,
+        sink: ServerStreamingSink<SearchLogResponse>,
     ) {
-        let future = log::search(&self.log_file, req)
-            .map_err(|err| Error::Other(box_err!("Search log error: {:?}", err)))
-            .and_then(|res| sink.success(res).map_err(Error::from))
-            .map_err(|e| debug!("Diagnostics rpc failed"; "err" => ?e));
-        let f = self.pool.spawn(future);
-        ctx.spawn(f);
+        let log_file = self.log_file.to_owned();
+        let f = self
+            .pool
+            .spawn_fn(move || log::search(log_file, req))
+            .then(|r| match r {
+                Ok(resp) => Ok((resp, WriteFlags::default().buffer_hint(true))),
+                Err(e) => {
+                    error!("search log error"; "error" => ?e);
+                    Err(grpcio::Error::RpcFailure(RpcStatus::new(
+                        RpcStatusCode::UNKNOWN,
+                        Some(format!("{:?}", e)),
+                    )))
+                }
+            });
+        let future = sink.send_all(f.into_stream()).map(|_s| ()).map_err(|e| {
+            error!("search log RPC error"; "error" => ?e);
+        });
+        ctx.spawn(future);
     }
 
     fn server_info(
@@ -74,8 +84,8 @@ mod log {
         // filter conditions
         begin_time: i64,
         end_time: i64,
-        level: LogLevel,
-        filter: String,
+        level_flag: usize,
+        patterns: Vec<regex::Regex>,
     }
 
     #[derive(Debug)]
@@ -97,8 +107,8 @@ mod log {
             log_file: P,
             begin_time: i64,
             end_time: i64,
-            level: LogLevel,
-            filter: String,
+            levels: Vec<LogLevel>,
+            patterns: Vec<regex::Regex>,
         ) -> Result<Self, Error> {
             let log_path = log_file.as_ref();
             let log_name = match log_path.file_name() {
@@ -163,6 +173,9 @@ mod log {
                     search_files.push((file_start_time, file));
                 }
             }
+            let level_flag = levels
+                .into_iter()
+                .fold(0, |acc, x| acc | (1 << (x as usize)));
             // Sort by start time descending
             search_files.sort_by(|a, b| b.0.cmp(&a.0));
             let current_reader = search_files.pop().map(|file| BufReader::new(file.1));
@@ -171,8 +184,8 @@ mod log {
                 currrent_lines: current_reader.map(|reader| reader.lines()),
                 begin_time,
                 end_time,
-                level,
-                filter,
+                level_flag,
+                patterns,
             })
         }
     }
@@ -212,12 +225,22 @@ mod log {
                             if time < self.begin_time {
                                 continue;
                             }
-                            if self.level != LogLevel::All && level != self.level {
+                            if self.level_flag != 0
+                                && self.level_flag & (1 << (level as usize)) == 0
+                            {
                                 continue;
                             }
-                            // TODO: do we need to support regular expression search
-                            if !self.filter.is_empty() && !content.contains(&self.filter) {
-                                continue;
+                            if !self.patterns.is_empty() {
+                                let mut not_match = false;
+                                for pattern in self.patterns.iter() {
+                                    if !pattern.is_match(content) {
+                                        not_match = true;
+                                        break;
+                                    }
+                                }
+                                if not_match {
+                                    continue;
+                                }
                             }
                             let mut item = LogMessage::default();
                             item.set_time(time);
@@ -261,7 +284,7 @@ mod log {
             "warn" | "WARN" | "warning" | "WARNING" => LogLevel::Warn,
             "error" | "ERROR" => LogLevel::Error,
             "critical" | "CRITICAL" => LogLevel::Critical,
-            _ => LogLevel::Info,
+            _ => LogLevel::Unknown,
         };
         Ok((content, (timestamp, level)))
     }
@@ -296,30 +319,33 @@ mod log {
     }
 
     pub fn search(
-        log_file: &str,
+        log_file: String,
         mut req: SearchLogRequest,
     ) -> impl Future<Item = SearchLogResponse, Error = Error> {
         let begin_time = req.get_start_time();
         let end_time = req.get_end_time();
-        let level = req.get_level();
-        let filter = req.take_pattern();
-        let mut limit = req.get_limit();
-        // Default limit to 64k if there is no limit
-        if limit == 0 {
-            limit = 64 * 1000
+        let levels = req.take_levels();
+        let mut patterns = vec![];
+        for pattern in req.take_patterns().iter() {
+            let r = match regex::Regex::new(pattern) {
+                Ok(r) => r,
+                Err(e) => {
+                    return err(Error::InvalidRequest(format!(
+                        "illegal regular expression: {:?}",
+                        e
+                    )))
+                }
+            };
+            patterns.push(r);
         }
 
-        let iter = match LogIterator::new(log_file, begin_time, end_time, level, filter) {
+        let iter = match LogIterator::new(log_file, begin_time, end_time, levels, patterns) {
             Ok(iter) => iter,
             Err(e) => return err(e),
         };
 
         let mut resp = SearchLogResponse::default();
-        resp.set_messages(
-            iter.take(limit as usize)
-                .collect::<Vec<LogMessage>>()
-                .into(),
-        );
+        resp.set_messages(iter.collect::<Vec<LogMessage>>().into());
         ok(resp)
     }
 
@@ -523,9 +549,7 @@ mod log {
 
             // We use the timestamp as the identity of log item in following test cases
             // all content
-            let log_iter =
-                LogIterator::new(&log_file, 0, std::i64::MAX, LogLevel::All, "".to_string())
-                    .unwrap();
+            let log_iter = LogIterator::new(&log_file, 0, std::i64::MAX, vec![], vec![]).unwrap();
             let expected = vec![
                 "2019/08/23 18:09:53.387 +08:00",
                 "2019/08/23 18:09:54.387 +08:00",
@@ -554,8 +578,8 @@ mod log {
                 &log_file,
                 timestamp("2019/08/23 18:09:56.387 +08:00"),
                 timestamp("2019/08/23 18:10:03.387 +08:00"),
-                LogLevel::All,
-                "".to_string(),
+                vec![],
+                vec![],
             )
             .unwrap();
             let expected = vec![
@@ -580,8 +604,8 @@ mod log {
                 &log_file,
                 timestamp("2019/08/23 18:09:53.387 +08:00"),
                 timestamp("2019/08/23 18:09:58.387 +08:00"),
-                LogLevel::Info,
-                "".to_string(),
+                vec![LogLevel::Info],
+                vec![],
             )
             .unwrap();
 
@@ -597,8 +621,8 @@ mod log {
                 &log_file,
                 timestamp("2019/08/23 18:09:53.387 +08:00"),
                 std::i64::MAX,
-                LogLevel::Warn,
-                "".to_string(),
+                vec![LogLevel::Warn],
+                vec![],
             )
             .unwrap();
             let expected = vec![
@@ -619,8 +643,8 @@ mod log {
                 &log_file,
                 timestamp("2019/08/23 18:09:54.387 +08:00"),
                 std::i64::MAX,
-                LogLevel::Warn,
-                "test-filter".to_string(),
+                vec![LogLevel::Warn],
+                vec![regex::Regex::new(".*test-filter.*").unwrap()],
             )
             .unwrap();
             let expected = vec!["2019/08/23 18:09:58.387 +08:00"]
@@ -666,14 +690,14 @@ mod log {
             let mut req = SearchLogRequest::default();
             req.set_start_time(timestamp("2019/08/23 18:09:54.387 +08:00"));
             req.set_end_time(std::i64::MAX);
-            req.set_level(LogLevel::Warn);
-            req.set_pattern("test-filter".to_string());
+            req.set_levels(vec![LogLevel::Warn].into());
+            req.set_patterns(vec![".*test-filter.*".to_string()].into());
             let expected = vec!["2019/08/23 18:09:58.387 +08:00"]
                 .iter()
                 .map(|s| timestamp(s))
                 .collect::<Vec<i64>>();
             assert_eq!(
-                search(log_file.to_str().unwrap(), req)
+                search(log_file.to_str().unwrap().to_owned(), req)
                     .wait()
                     .unwrap()
                     .take_messages()
