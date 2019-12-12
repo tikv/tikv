@@ -1,11 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::convert::TryInto;
 use std::str;
-
-use rand_xorshift::XorShiftRng;
 
 use codec::prelude::NumberDecoder;
 use tidb_query_datatype::prelude::*;
@@ -63,24 +60,6 @@ pub struct ScalarFunc {
     children: Vec<Expression>,
     field_type: FieldType,
     implicit_args: Vec<Datum>,
-    cus_rng: CusRng,
-}
-
-#[derive(Clone)]
-struct CusRng {
-    rng: RefCell<Option<XorShiftRng>>,
-}
-
-impl std::fmt::Debug for CusRng {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "()")
-    }
-}
-
-impl PartialEq for CusRng {
-    fn eq(&self, other: &CusRng) -> bool {
-        self == other
-    }
 }
 
 impl Expression {
@@ -298,9 +277,6 @@ impl Expression {
                             children,
                             field_type,
                             implicit_args,
-                            cus_rng: CusRng {
-                                rng: RefCell::new(None),
-                            },
                         })
                     })
             }

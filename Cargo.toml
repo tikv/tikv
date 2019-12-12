@@ -27,12 +27,14 @@ prost-codec = [
   "raft/prost-codec",
   "engine/prost-codec",
   "tikv_util/prost-codec",
+  "sst_importer/prost-codec",
 ]
 protobuf-codec = [
   "tipb/protobuf-codec",
   "kvproto/protobuf-codec",
   "grpcio/protobuf-codec",
   "raft/protobuf-codec",
+  "sst_importer/protobuf-codec",
 ]
 
 [lib]
@@ -64,6 +66,7 @@ grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default
 hex = "0.3"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 keys = { path = "components/keys" }
+txn_types = { path = "components/txn_types" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 libc = "0.2"
@@ -173,6 +176,7 @@ members = [
   "components/backup",
   "components/keys",
   "components/sst_importer",
+  "components/txn_types",
   "cmd",
 ]
 default-members = ["cmd"]

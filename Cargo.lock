@@ -144,6 +144,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio-threadpool",
+ "txn_types",
  "url 2.1.0",
  "uuid",
 ]
@@ -407,6 +408,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "toml",
+ "txn_types",
  "url 2.1.0",
  "vlog",
 ]
@@ -827,6 +829,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "kvproto",
  "rand 0.7.2",
  "slog",
  "slog-global",
@@ -1389,19 +1392,17 @@ dependencies = [
  "codec",
  "derive_more",
  "failure",
- "farmhash",
  "hex",
  "kvproto",
  "panic_hook",
  "slog",
  "tikv_alloc",
- "tikv_util",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#32be31591b03e9e7fda00ef5c67b330310701553"
+source = "git+https://github.com/pingcap/kvproto.git#c16783858504feffa04eb70af3215d3187e58a14"
 dependencies = [
  "bytes",
  "futures",
@@ -3227,6 +3228,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tipb",
+ "txn_types",
 ]
 
 [[package]]
@@ -3277,6 +3279,7 @@ dependencies = [
  "test_raftstore",
  "tikv",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -3306,6 +3309,7 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "external_storage",
  "futures",
  "futures-cpupool",
  "grpcio",
@@ -3336,6 +3340,7 @@ dependencies = [
  "tipb_helper",
  "tokio-threadpool",
  "toml",
+ "txn_types",
  "uuid",
 ]
 
@@ -3511,6 +3516,7 @@ dependencies = [
  "tokio-threadpool",
  "tokio-timer",
  "toml",
+ "txn_types",
  "url 2.1.0",
  "utime",
  "uuid",
@@ -3608,7 +3614,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#0820b784842f3ef6cecc8f520e8834d326a0dbeb"
+source = "git+https://github.com/pingcap/tipb.git#44f75c9bef33cef5c39e0e0e4fed71b15c735313"
 dependencies = [
  "bytes",
  "lazy_static",
@@ -3871,6 +3877,24 @@ checksum = "766345ed3891b291d01af307cd3ad2992a4261cb6c0c7e665cd3e01cf379dd24"
 dependencies = [
  "memchr",
  "unchecked-index",
+]
+
+[[package]]
+name = "txn_types"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "codec",
+ "derive-new",
+ "derive_more",
+ "farmhash",
+ "hex",
+ "kvproto",
+ "panic_hook",
+ "quick-error",
+ "slog",
+ "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
