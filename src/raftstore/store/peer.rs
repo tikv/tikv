@@ -1356,22 +1356,19 @@ impl Peer {
                 // have no effect.
                 self.proposals.clear();
             }
-            let priority = if self.high_priority {
-                "high"
-            } else {
-                "normal"
-            };
+            let priority = if self.high_priority { "high" } else { "normal" };
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
                 if lease_to_be_updated {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
-                        ctx.raft_metrics.commit_log
+                        ctx.raft_metrics
+                            .commit_log
                             .with_label_values(&[priority])
                             .observe(duration_to_sec(
-                            (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
-                        ));
+                                (ctx.current_time.unwrap() - propose_time).to_std().unwrap(),
+                            ));
                         self.maybe_renew_leader_lease(propose_time, ctx, None);
                         lease_to_be_updated = false;
                     }

@@ -2787,9 +2787,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         }
         while self.msg_buf.len() < self.messages_per_tick {
             match normal.receiver.try_recv() {
-                Ok(msg) => {
-                    self.msg_buf.push(msg)
-                }
+                Ok(msg) => self.msg_buf.push(msg),
                 Err(TryRecvError::Empty) => {
                     expected_msg_count = Some(0);
                     break;
