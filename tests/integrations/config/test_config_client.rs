@@ -126,9 +126,9 @@ impl PdClient for MockPdClient {
         let mut status = Status::default();
         if let Some(cfg) = self.configs.lock().unwrap().get_mut(&id) {
             match cmp_version(&cfg.version, &version) {
-                Ordering::Less => {
+                Ordering::Equal => {
                     cfg.update.append(&mut entries);
-                    cfg.version = version;
+                    cfg.version.local += 1;
                     status.set_code(StatusCode::Ok);
                 }
                 _ => status.set_code(StatusCode::WrongVersion),
