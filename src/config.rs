@@ -1784,11 +1784,14 @@ impl ConfigHandler {
         id: String,
         controller: ConfigController,
         version: configpb::Version,
-        scheduler: FutureScheduler<PdTask>,
+        _scheduler: FutureScheduler<PdTask>,
     ) -> CfgResult<Self> {
-        if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
-            return Err(format!("failed to schedule refresh config task: {:?}", e).into());
-        }
+        // TODO: currently we can't handle RefreshConfig task, because
+        // PD have not implement such service yet.
+
+        // if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
+        //     return Err(format!("failed to schedule refresh config task: {:?}", e).into());
+        // }
         Ok(ConfigHandler {
             id,
             version,

@@ -20,8 +20,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tikv::config::TiKvConfig;
-use tikv::config::{ConfigController, ConfigHandler};
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -37,7 +36,6 @@ use tikv::server::status_server::StatusServer;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv::server::{create_raft_storage, Node, RaftKv, Server};
 use tikv::storage;
-
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
@@ -52,14 +50,23 @@ pub fn run_tikv(mut config: TiKvConfig) {
     initial_logger(&config);
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
+    // Print version information.
+    tikv::log_tikv_info();
+    info!(
+        "using config";
+        "config" => serde_json::to_string(&config).unwrap(),
+    );
+
+    config.write_into_metrics();
+    // Do some prepare works before start.
+    pre_start(&config);
+
     let security_mgr = Arc::new(
         SecurityManager::new(&config.security)
             .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e.description())),
     );
-    let pd_client = Arc::new(
-        RpcClient::new(&config.pd, Arc::clone(&security_mgr))
-            .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
-    );
+    let pd_client = RpcClient::new(&config.pd, Arc::clone(&security_mgr))
+        .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e));
     let cluster_id = pd_client
         .get_cluster_id()
         .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
@@ -72,29 +79,11 @@ pub fn run_tikv(mut config: TiKvConfig) {
         "cluster_id" => cluster_id
     );
 
-    let (_, config) = ConfigHandler::create(config.server.addr.clone(), pd_client.clone(), config)
-        .unwrap_or_else(|e| fatal!("failed to register config to pd: {}", e));
-
-    // Print version information.
-    tikv::log_tikv_info();
-    info!(
-        "using config";
-        "config" => serde_json::to_string(&config).unwrap(),
-    );
-
-    config.write_into_metrics();
-    // Do some prepare works before start.
-    pre_start(&config);
-
     let _m = Monitor::default();
     run_raft_server(pd_client, &config, security_mgr);
 }
 
-fn run_raft_server(
-    pd_client: Arc<RpcClient>,
-    cfg: &TiKvConfig,
-    security_mgr: Arc<SecurityManager>,
-) {
+fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
     let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
     let db_path = store_path.join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
@@ -124,6 +113,7 @@ fn run_raft_server(
     let compaction_listener = new_compaction_listener(router.clone());
 
     // Create pd client and pd worker
+    let pd_client = Arc::new(pd_client);
     let pd_worker = FutureWorker::new("pd-worker");
     let (mut worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
