@@ -2,14 +2,11 @@
 
 use std::fs;
 use std::io;
-use std::sync::atomic::Ordering;
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::*;
 
 use fail;
-use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
 use tikv::raftstore::store::*;
@@ -52,86 +49,6 @@ fn test_overlap_cleanup() {
     // Overlap snapshot should be deleted.
     assert_snapshot(&cluster.get_snap_dir(3), region_id, false);
     fail::remove(gen_snapshot_fp);
-}
-
-// When resolving remote address, all messages will be dropped and
-// report unreachable. However unreachable won't reset follower's
-// progress if it's in Snapshot state. So trying to send a snapshot
-// when the address is being resolved will leave follower's progress
-// stay in Snapshot forever.
-#[test]
-fn test_server_snapshot_on_resolve_failure() {
-    let _guard = crate::setup();
-    let mut cluster = new_server_cluster(1, 4);
-    configure_for_snapshot(&mut cluster);
-
-    let on_resolve_fp = "transport_snapshot_on_resolve";
-    let on_send_store_fp = "transport_on_send_store";
-
-    let pd_client = Arc::clone(&cluster.pd_client);
-    // Disable default max peer count check.
-    pd_client.disable_default_operator();
-    cluster.run();
-
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    pd_client.must_remove_peer(1, new_peer(4, 4));
-    cluster.must_put(b"k1", b"v1");
-
-    let ready_notify = Arc::default();
-    let (notify_tx, notify_rx) = mpsc::channel();
-    cluster.sim.write().unwrap().add_send_filter(
-        1,
-        Box::new(MessageTypeNotifier::new(
-            MessageType::MsgSnapshot,
-            notify_tx,
-            Arc::clone(&ready_notify),
-        )),
-    );
-
-    let (drop_snapshot_tx, drop_snapshot_rx) = mpsc::channel();
-    cluster
-        .sim
-        .write()
-        .unwrap()
-        .add_recv_filter(4, Box::new(DropSnapshotFilter::new(drop_snapshot_tx)));
-
-    pd_client.add_peer(1, new_peer(4, 5));
-
-    // The leader is trying to send snapshots, but the filter drops snapshots.
-    drop_snapshot_rx
-        .recv_timeout(Duration::from_secs(3))
-        .unwrap();
-
-    // "return(4)" those failure occurs if TiKV resolves or sends to store 4.
-    fail::cfg(on_resolve_fp, "return(4)").unwrap();
-    fail::cfg(on_send_store_fp, "return(4)").unwrap();
-
-    // We are ready to recv notify.
-    ready_notify.store(true, Ordering::SeqCst);
-    notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-
-    let engine4 = cluster.get_engine(4);
-    must_get_none(&engine4, b"k1");
-    cluster.sim.write().unwrap().clear_recv_filters(4);
-
-    // Remove the on_send_store_fp.
-    // Now it will resolve the store 4's address via heartbeat messages,
-    // so snapshots works fine.
-    //
-    // But keep the on_resolve_fp.
-    // Any snapshot messages that has been sent before will meet the
-    // injected resolve failure eventually.
-    // It perverts a race condition, remove the on_resolve_fp before snapshot
-    // messages meet the failpoint, that fails the test.
-    fail::remove(on_send_store_fp);
-
-    notify_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-    cluster.must_put(b"k2", b"v2");
-    must_get_equal(&engine4, b"k1", b"v1");
-    must_get_equal(&engine4, b"k2", b"v2");
-
-    // Clean up.
-    fail::remove(on_resolve_fp);
 }
 
 #[test]

@@ -2,6 +2,7 @@
 
 mod metrics;
 mod raft_client;
+mod raft_client2;
 
 pub mod config;
 pub mod debug;
