@@ -8,9 +8,9 @@ use std::{error, ptr, result};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
-use keys::{Key, Value};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
+use txn_types::{Key, Value};
 
 use crate::into_other::IntoOther;
 use crate::raftstore::coprocessor::SeekRegionCallback;
