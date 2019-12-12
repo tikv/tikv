@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Result;
+use crate::raftstore::coprocessor::Result;
 use tikv_util::config::ReadableSize;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

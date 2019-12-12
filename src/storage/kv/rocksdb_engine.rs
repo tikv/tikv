@@ -22,7 +22,7 @@ use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
 use txn_types::{Key, Value};
 
-use crate::storage::config::BlockCacheConfig;
+use crate::config::storage::BlockCacheConfig;
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -198,7 +198,7 @@ impl TestEngineBuilder {
             Some(p) => p.to_str().unwrap().to_owned(),
         };
         let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
-        let cfg_rocksdb = crate::config::DbConfig::default();
+        let cfg_rocksdb = crate::config::rocksdb::DbConfig::default();
         let cache = BlockCacheConfig::default().build_shared_cache();
         let cfs_opts = cfs
             .iter()

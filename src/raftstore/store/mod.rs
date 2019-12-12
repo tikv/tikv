@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub mod cmd_resp;
-pub mod config;
 pub mod fsm;
 pub mod msg;
 pub mod transport;
@@ -20,7 +19,6 @@ pub use self::bootstrap::{
     bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key, initial_region,
     prepare_bootstrap_cluster,
 };
-pub use self::config::Config;
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
     Callback, CasualMessage, PeerMsg, PeerTicks, RaftCommand, ReadCallback, ReadResponse,

@@ -1,57 +1,38 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-// use std::cmp::{self, Ord, Ordering};
+use std::cmp;
 use std::error::Error;
-// use std::fs;
-// use std::i32;
-// use std::io::Error as IoError;
-use std::io::Write;
-// use std::path::Path;
-// use std::sync::Arc;
-use std::time::Duration;
 use std::usize;
 
-// use kvproto::configpb::{self, StatusCode};
-
-// use configuration::{ConfigChange, ConfigValue, Configuration};
-use engine::rocks::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
-    TitanDBOptions,
-};
-// use slog;
 use sys_info;
 
-// use crate::import::Config as ImportConfig;
 use crate::raftstore::coprocessor::properties::{
     MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
 };
 use crate::raftstore::coprocessor::properties::{
     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
-// use crate::raftstore::coprocessor::Config as CopConfig;
-// use crate::raftstore::store::Config as RaftstoreConfig;
-// use crate::raftstore::store::PdTask;
-// use crate::server::gc_worker::GcConfig;
-// use crate::server::lock_manager::Config as PessimisticTxnConfig;
-// use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-// use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
-    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+    CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
+};
+use engine::rocks::{
+    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
+    TitanDBOptions,
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
-use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
+use tikv_util::config::{ReadableDuration, ReadableSize, GB, KB, MB};
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
-const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
+pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -820,7 +801,7 @@ impl DbConfig {
         ]
     }
 
-    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.defaultcf.validate()?;
         self.lockcf.validate()?;
         self.writecf.validate()?;
@@ -837,7 +818,7 @@ impl DbConfig {
         Ok(())
     }
 
-    fn write_into_metrics(&self) {
+    pub fn write_into_metrics(&self) {
         write_into_metrics!(self.defaultcf, CF_DEFAULT, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_GAUGE);
         write_into_metrics!(self.writecf, CF_WRITE, CONFIG_ROCKSDB_GAUGE);
@@ -1031,7 +1012,7 @@ impl RaftDbConfig {
         vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache))]
     }
 
-    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.defaultcf.validate()?;
         if self.enable_unordered_write {
             if self.titan.enabled {

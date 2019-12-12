@@ -6,6 +6,9 @@ use std::time::Duration;
 
 use super::RaftKv;
 use super::Result;
+use crate::config::raftstore::Config as StoreConfig;
+use crate::config::server::Config as ServerConfig;
+use crate::config::storage::Config as StorageConfig;
 use crate::config::ConfigController;
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
@@ -13,12 +16,9 @@ use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::fsm::store::StoreMeta;
 use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use crate::raftstore::store::PdTask;
-use crate::raftstore::store::{
-    self, initial_region, Config as StoreConfig, SnapManager, Transport,
-};
+use crate::raftstore::store::{self, initial_region, SnapManager, Transport};
 use crate::server::lock_manager::LockManager;
-use crate::server::Config as ServerConfig;
-use crate::storage::{config::Config as StorageConfig, Storage};
+use crate::storage::Storage;
 use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;

@@ -12,7 +12,7 @@ use kvproto::kvrpcpb::{Context, LockInfo};
 
 use engine::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
-use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
+use tikv::config::gc_worker::DEFAULT_GC_BATCH_KEYS;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 use tikv::storage::Engine;

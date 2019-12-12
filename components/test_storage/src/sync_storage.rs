@@ -3,8 +3,9 @@
 use futures::Future;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
-use tikv::storage::config::Config;
+use tikv::config::gc_worker::GcConfig;
+use tikv::config::storage::Config;
+use tikv::server::gc_worker::{AutoGcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{

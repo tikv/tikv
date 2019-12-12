@@ -20,7 +20,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tikv::config::{ConfigController, TiKvConfig};
+use tikv::config::{server::DEFAULT_CLUSTER_ID, ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -33,7 +33,6 @@ use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve;
 use tikv::server::service::{DebugService, DiagnosticsService};
 use tikv::server::status_server::StatusServer;
-use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv::server::{create_raft_storage, Node, RaftKv, Server};
 use tikv::storage;
 use tikv_util::check_environment_variables;
@@ -86,7 +85,7 @@ pub fn run_tikv(mut config: TiKvConfig) {
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
     let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
-    let db_path = store_path.join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
+    let db_path = store_path.join(Path::new(tikv::config::storage::DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
     let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
     let import_path = store_path.join("import");

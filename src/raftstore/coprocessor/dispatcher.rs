@@ -6,6 +6,7 @@ use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use std::mem;
 
+use crate::config::coprocessor::Config;
 use crate::raftstore::store::CasualRouter;
 
 use super::*;

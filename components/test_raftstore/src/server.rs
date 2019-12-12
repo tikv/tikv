@@ -15,6 +15,8 @@ use tempfile::{Builder, TempDir};
 
 use engine::Engines;
 use engine_rocks::RocksEngine;
+use tikv::config::lock_manager::Config as PessimisticTxnConfig;
+use tikv::config::server::Config;
 use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -24,12 +26,12 @@ use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
-use tikv::server::lock_manager::{Config as PessimisticTxnConfig, LockManager};
+use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::service::DebugService;
 use tikv::server::Result as ServerResult;
 use tikv::server::{
-    create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv, Server,
+    create_raft_storage, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv, Server,
     ServerTransport,
 };
 
@@ -138,7 +140,7 @@ impl Simulator for ServerCluster {
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
         let storage_read_pool = storage::build_read_pool_for_test(
-            &tikv::config::StorageReadPoolConfig::default_for_test(),
+            &tikv::config::read_pool::StorageReadPoolConfig::default_for_test(),
             raft_engine.clone(),
         );
 
@@ -188,7 +190,7 @@ impl Simulator for ServerCluster {
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = coprocessor::readpool_impl::build_read_pool_for_test(
-            &tikv::config::CoprReadPoolConfig::default_for_test(),
+            &tikv::config::read_pool::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         );
         let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);

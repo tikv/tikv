@@ -1,10 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::client::{self, Client};
-use super::config::Config;
 use super::metrics::*;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Result};
+use crate::config::lock_manager::Config;
 use crate::raftstore::coprocessor::{Coprocessor, ObserverContext, RoleObserver};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;

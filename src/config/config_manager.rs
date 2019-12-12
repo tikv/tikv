@@ -1,7 +1,18 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::{ConfigChange, ConfigValue, Configuration};
+use std::cmp::{Ord, Ordering};
+use std::error::Error;
+use std::sync::Arc;
+use std::time::Duration;
+
 use kvproto::configpb::{self, StatusCode};
+
+use super::TiKvConfig;
+use crate::raftstore::store::PdTask;
+use configuration::{ConfigChange, ConfigValue, Configuration};
+use pd_client::PdClient;
+use tikv_util::config::{ReadableDuration, ReadableSize};
+use tikv_util::worker::FutureScheduler;
 
 fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
     // This helper function translate nested module config to a list
@@ -224,6 +235,12 @@ impl ConfigHandler {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::config::TiKvConfig;
+    use crate::tikv_util::config::ReadableDuration;
+    use kvproto::configpb::Version;
+    use std::cmp::Ordering;
+
     #[test]
     fn test_config_change_to_config_entry() {
         let old = TiKvConfig::default();

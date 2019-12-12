@@ -10,8 +10,9 @@ use grpcio::{
 };
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;
+use tikv::config::server::Config;
 use tikv::raftstore::router::RaftStoreBlackHole;
-use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
+use tikv::server::{load_statistics::ThreadLoad, RaftClient};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 
 use super::{mock_kv_service, MockKv, MockKvService};

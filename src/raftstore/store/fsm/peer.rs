@@ -35,6 +35,7 @@ use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{escape, is_zero_duration};
 
+use crate::config::raftstore::Config;
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
@@ -54,8 +55,8 @@ use crate::raftstore::store::worker::{
 };
 use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
-    util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
-    SnapshotDeleter, StoreMsg,
+    util, CasualMessage, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey, SnapshotDeleter,
+    StoreMsg,
 };
 use keys::{self, enc_end_key, enc_start_key};
 

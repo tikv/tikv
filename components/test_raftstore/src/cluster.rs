@@ -20,12 +20,12 @@ use engine::Peekable;
 use engine::CF_DEFAULT;
 use engine_rocks::RocksEngine;
 use pd_client::PdClient;
+use tikv::config::storage::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv::config::TiKvConfig;
 use tikv::raftstore::store::fsm::{create_raft_batch_system, PeerFsm, RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
-use tikv::storage::config::DEFAULT_ROCKSDB_SUB_DIR;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::HandyRwLock;
 

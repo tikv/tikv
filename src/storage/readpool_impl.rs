@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use prometheus::local::*;
 
-use crate::config::StorageReadPoolConfig;
+use crate::config::read_pool::StorageReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::{FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;

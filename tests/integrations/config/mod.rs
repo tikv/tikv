@@ -11,14 +11,16 @@ use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
 use pd_client::Config as PdConfig;
+use tikv::config::coprocessor::Config as CopConfig;
+use tikv::config::gc_worker::GcConfig;
+use tikv::config::raftstore::Config as RaftstoreConfig;
+use tikv::config::read_pool::*;
+use tikv::config::rocksdb::*;
+use tikv::config::server::Config as ServerConfig;
+use tikv::config::server::GrpcCompressionType;
+use tikv::config::storage::{BlockCacheConfig, Config as StorageConfig};
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
-use tikv::raftstore::coprocessor::Config as CopConfig;
-use tikv::raftstore::store::Config as RaftstoreConfig;
-use tikv::server::config::GrpcCompressionType;
-use tikv::server::gc_worker::GcConfig;
-use tikv::server::Config as ServerConfig;
-use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 

@@ -22,7 +22,8 @@ use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
 
 use super::metrics::*;
-use super::{Config, Error, Result};
+use super::{Error, Result};
+use crate::config::server::Config;
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 

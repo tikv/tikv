@@ -235,7 +235,8 @@ mod tests {
     use txn_types::Key;
 
     use super::*;
-    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
+    use crate::config::coprocessor::Config;
+    use crate::raftstore::coprocessor::CoprocessorHost;
 
     /// Composes table record and index prefix: `t[table_id]`.
     // Port from TiDB

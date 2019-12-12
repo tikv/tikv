@@ -21,6 +21,7 @@ use kvproto::metapb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
 
+use crate::config::gc_worker::GcConfig;
 use crate::raftstore::router::ServerRaftStoreRouter;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
@@ -32,7 +33,6 @@ use crate::storage::kv::{
 use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
 use crate::storage::{Callback, Error, ErrorInner, Result};
 use pd_client::PdClient;
-use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 use txn_types::Key;

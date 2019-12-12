@@ -8,7 +8,8 @@ use kvproto::configpb::*;
 
 use pd_client::errors::Result;
 use pd_client::PdClient;
-use tikv::config::*;
+use tikv::config::config_manager::*;
+use tikv::config::TiKvConfig;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::FutureWorker;
 

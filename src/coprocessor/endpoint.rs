@@ -14,7 +14,7 @@ use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
 use tipb::{DagRequest, ExecType};
 
-use crate::server::Config;
+use crate::config::server::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
@@ -594,7 +594,7 @@ mod tests {
     use tipb::Executor;
     use tipb::Expr;
 
-    use crate::config::CoprReadPoolConfig;
+    use crate::config::read_pool::CoprReadPoolConfig;
     use crate::coprocessor::readpool_impl::build_read_pool_for_test;
     use crate::storage::kv::RocksEngine;
     use crate::storage::TestEngineBuilder;

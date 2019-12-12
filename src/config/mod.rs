@@ -1,5 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Configuration for the entire server.
+//!
+//! TiKV is configured through the `TiKvConfig` type, which is in turn
+//! made up of many other configuration types.
+
 pub mod config_manager;
 pub mod coprocessor;
 pub mod gc_worker;
@@ -9,62 +14,32 @@ pub mod read_pool;
 pub mod rocksdb;
 pub mod server;
 pub mod storage;
+pub use config_manager::{ConfigController, ConfigHandler};
 
-//! Configuration for the entire server.
-//!
-//! TiKV is configured through the `TiKvConfig` type, which is in turn
-//! made up of many other configuration types.
-
-// use std::cmp::{self, Ord, Ordering};
 use std::error::Error;
 use std::fs;
-use std::i32;
 use std::io::Error as IoError;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
 use std::usize;
 
-// use kvproto::configpb::{self, StatusCode};
-
-// use configuration::{ConfigChange, ConfigValue, Configuration};
-// use engine::rocks::{
-//     BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-//     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
-//     TitanDBOptions,
-// };
 use slog;
-use sys_info;
 
+use self::coprocessor::Config as CopConfig;
+use self::gc_worker::GcConfig;
+use self::lock_manager::Config as PessimisticTxnConfig;
+use self::raftstore::Config as RaftstoreConfig;
+use self::read_pool::ReadPoolConfig;
+use self::rocksdb::{DbConfig, RaftDbConfig, LAST_CONFIG_FILE};
+use self::server::Config as ServerConfig;
+use self::storage::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use crate::import::Config as ImportConfig;
-// use crate::raftstore::coprocessor::properties::{
-//     MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
-// };
-// use crate::raftstore::coprocessor::properties::{
-//     DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
-// };
-use crate::raftstore::coprocessor::Config as CopConfig;
-use crate::raftstore::store::Config as RaftstoreConfig;
-// use crate::raftstore::store::PdTask;
-use crate::server::gc_worker::GcConfig;
-use crate::server::lock_manager::Config as PessimisticTxnConfig;
-use crate::server::Config as ServerConfig;
-// use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-// use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
-// use engine::rocks::util::{
-//     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
-//     NoopSliceTransform,
-// };
-// use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-// use keys::region_raft_prefix_len;
-use pd_client::{Config as PdConfig, PdClient};
+use configuration::Configuration;
+use engine::rocks::util::db_exist;
+use pd_client::Config as PdConfig;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
-// use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
-// use tikv_util::worker::FutureScheduler;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
@@ -461,9 +436,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use kvproto::configpb::Version;
     use slog::Level;
-    use std::cmp::Ordering;
     use toml;
 
     #[test]

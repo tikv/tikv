@@ -30,6 +30,7 @@ use kvproto::raft_serverpb::{
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
 use uuid::Builder as UuidBuilder;
 
+use crate::config::raftstore::Config;
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
@@ -39,7 +40,7 @@ use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::util::KeysInfoFormatter;
-use crate::raftstore::store::{cmd_resp, util, Config};
+use crate::raftstore::store::{cmd_resp, util};
 use crate::raftstore::{Error, Result};
 use tikv_util::escape;
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
@@ -2946,7 +2947,8 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use uuid::Uuid;
 
-    use crate::raftstore::store::{Config, RegionTask};
+    use crate::config::raftstore::Config;
+    use crate::raftstore::store::RegionTask;
     use test_sst_importer::*;
     use tikv_util::worker::dummy_scheduler;
 

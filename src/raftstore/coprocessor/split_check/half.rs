@@ -182,7 +182,8 @@ mod tests {
 
     use super::super::size::tests::must_split_at;
     use super::*;
-    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
+    use crate::config::coprocessor::Config;
+    use crate::raftstore::coprocessor::CoprocessorHost;
 
     #[test]
     fn test_split_check() {

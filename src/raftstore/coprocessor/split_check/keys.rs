@@ -211,10 +211,11 @@ pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) ->
 #[cfg(test)]
 mod tests {
     use super::super::size::tests::must_split_at;
+    use crate::config::coprocessor::Config;
     use crate::raftstore::coprocessor::properties::{
         MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
     };
-    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
+    use crate::raftstore::coprocessor::CoprocessorHost;
     use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::mvcc::{TimeStamp, Write, WriteType};
     use engine::rocks;

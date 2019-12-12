@@ -13,7 +13,7 @@ use test_coprocessor::*;
 use test_storage::*;
 use tidb_query::codec::{datum, Datum};
 use tidb_query::expr::EvalContext;
-use tikv::server::Config;
+use tikv::config::server::Config;
 use tikv::storage::TestEngineBuilder;
 use tikv_util::codec::number::*;
 

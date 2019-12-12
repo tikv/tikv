@@ -4,7 +4,7 @@ use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
-use crate::raftstore::{coprocessor, Result};
+use crate::raftstore::Result;
 use configuration::Configuration;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
@@ -136,7 +136,8 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
+        // let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
+        let split_size = ReadableSize::mb(super::coprocessor::SPLIT_SIZE_MB);
         Config {
             sync_log: true,
             prevote: true,

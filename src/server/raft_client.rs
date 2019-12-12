@@ -8,7 +8,8 @@ use std::time::Instant;
 
 use super::load_statistics::ThreadLoad;
 use super::metrics::*;
-use super::{Config, Result};
+use super::Result;
+use crate::config::server::Config;
 use crate::raftstore::router::RaftStoreRouter;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};

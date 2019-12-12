@@ -31,6 +31,7 @@ use raft::{
 use time::Timespec;
 use uuid::Uuid;
 
+use crate::config::raftstore::Config;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
@@ -38,7 +39,7 @@ use crate::raftstore::store::fsm::{
 };
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::PdTask;
-use crate::raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
+use crate::raftstore::store::{Callback, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;

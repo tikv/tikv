@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-use crate::config::CoprReadPoolConfig;
+use crate::config::read_pool::CoprReadPoolConfig;
 use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::{Engine, FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;

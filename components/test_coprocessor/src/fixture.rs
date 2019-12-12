@@ -5,9 +5,9 @@ use super::*;
 use kvproto::kvrpcpb::Context;
 
 use tidb_query::codec::Datum;
-use tikv::config::CoprReadPoolConfig;
+use tikv::config::read_pool::CoprReadPoolConfig;
+use tikv::config::server::Config;
 use tikv::coprocessor::{readpool_impl, Endpoint};
-use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
 

@@ -1,6 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp;
+use std::error::Error;
+
 use tikv_util::config::ReadableSize;
+use tikv_util::future_pool;
 
 macro_rules! readpool_config {
     ($struct_name:ident, $test_mod_name:ident, $display_name:expr) => {

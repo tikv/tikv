@@ -1537,7 +1537,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::server::gc_worker::GcConfig;
+    use crate::config::gc_worker::GcConfig;
     use crate::storage::mvcc::{Lock, LockType};
     use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;

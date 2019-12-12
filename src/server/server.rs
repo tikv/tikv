@@ -31,7 +31,8 @@ use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
 use super::transport::ServerTransport;
-use super::{Config, Result};
+use super::Result;
+use crate::config::server::Config;
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
 const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
@@ -270,8 +271,9 @@ mod tests {
     use super::*;
 
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use super::super::{Config, Result};
-    use crate::config::CoprReadPoolConfig;
+    use super::super::Result;
+    use crate::config::read_pool::CoprReadPoolConfig;
+    use crate::config::server::Config;
     use crate::coprocessor::{self, readpool_impl};
     use crate::raftstore::store::transport::Transport;
     use crate::raftstore::store::*;

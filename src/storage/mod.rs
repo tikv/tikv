@@ -10,7 +10,6 @@
 //! [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
 mod commands;
-pub mod config;
 mod errors;
 pub mod kv;
 pub mod lock_manager;
@@ -32,8 +31,8 @@ use tikv_util::collections::HashMap;
 use tikv_util::future_pool::FuturePool;
 use txn_types::{Key, KvPair, Lock, Mutation, TimeStamp, TsSet, Value};
 
+use crate::config::storage::Config;
 use crate::storage::commands::{get_priority_tag, Command, CommandKind};
-use crate::storage::config::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::lock_manager::{DummyLockManager, LockManager};
 use crate::storage::metrics::*;
@@ -1538,7 +1537,7 @@ impl<E: Engine> TestStorageBuilder<E> {
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E, DummyLockManager>> {
         let read_pool = self::readpool_impl::build_read_pool_for_test(
-            &crate::config::StorageReadPoolConfig::default_for_test(),
+            &crate::config::read_pool::StorageReadPoolConfig::default_for_test(),
             self.engine.clone(),
         );
         Storage::from_engine(self.engine, &self.config, read_pool, None)

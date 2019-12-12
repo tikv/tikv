@@ -1504,7 +1504,7 @@ pub fn maybe_upgrade_from_2_to_3(
     raft_engine: &DB,
     kv_path: &str,
     kv_db_opts: DBOptions,
-    kv_cfg: &config::DbConfig,
+    kv_cfg: &config::rocksdb::DbConfig,
     cache: &Option<Cache>,
 ) -> Result<()> {
     use engine::WriteOptions;

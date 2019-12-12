@@ -1,17 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod client;
-mod config;
 pub mod deadlock;
 mod metrics;
 pub mod waiter_manager;
-
-pub use self::config::Config;
 pub use self::deadlock::Service as DeadlockService;
 
 use self::deadlock::{Detector, Scheduler as DetectorScheduler};
 use self::waiter_manager::{Scheduler as WaiterMgrScheduler, WaiterManager};
 
+use crate::config::lock_manager::Config;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
@@ -260,7 +258,7 @@ impl LockManagerTrait for LockManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raftstore::coprocessor::Config as CopConfig;
+    use crate::config::coprocessor::Config as CopConfig;
     use crate::server::resolve::Callback;
     use crate::storage::{
         mvcc::Error as MvccError, mvcc::ErrorInner as MvccErrorInner, txn::Error as TxnError,
