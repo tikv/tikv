@@ -864,7 +864,12 @@ mod latest_entry_tests {
         fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
             let write_key = Key::from_raw(&self.key).append_ts(self.commit_ts);
             let (key, value, short) = if is_short_value {
-                (vec![], vec![], Some(self.value.clone()))
+                let short = if wt == WriteType::Put {
+                    Some(self.value.clone())
+                } else {
+                    None
+                };
+                (vec![], vec![], short)
             } else {
                 (
                     Key::from_raw(&self.key)
@@ -1148,5 +1153,78 @@ mod latest_entry_tests {
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7.into())));
         assert_eq!(scanner.next_entry().unwrap(), None);
+    }
+
+    #[test]
+    fn test_output_delete_and_after_ts() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate put for [a] at 3.
+        must_prewrite_put(&engine, b"a", b"a_3", b"a", 3);
+        must_commit(&engine, b"a", 3, 3);
+
+        // Generate put for [a] at 7.
+        must_prewrite_put(&engine, b"a", b"a_7", b"a", 7);
+        must_commit(&engine, b"a", 7, 7);
+
+        // Generate put for [b] at 1.
+        must_prewrite_put(&engine, b"b", b"b_1", b"b", 1);
+        must_commit(&engine, b"b", 1, 1);
+
+        // Generate rollbacks for [b] at 2, 3, 4.
+        for ts in 2..5 {
+            must_rollback(&engine, b"b", ts);
+        }
+
+        // Generate delete for [b] at 10.
+        must_prewrite_delete(&engine, b"b", b"b", 10);
+        must_commit(&engine, b"b", 10, 10);
+
+        let entry_a_3 = EntryBuilder::default()
+            .key(b"a")
+            .value(b"a_3")
+            .start_ts(3.into())
+            .commit_ts(3.into())
+            .build_commit(WriteType::Put, true);
+        let entry_a_7 = EntryBuilder::default()
+            .key(b"a")
+            .value(b"a_7")
+            .start_ts(7.into())
+            .commit_ts(7.into())
+            .build_commit(WriteType::Put, true);
+        let entry_b_1 = EntryBuilder::default()
+            .key(b"b")
+            .value(b"b_1")
+            .start_ts(1.into())
+            .commit_ts(1.into())
+            .build_commit(WriteType::Put, true);
+        let entry_b_10 = EntryBuilder::default()
+            .key(b"b")
+            .start_ts(10.into())
+            .commit_ts(10.into())
+            .build_commit(WriteType::Delete, true);
+
+        let check = |ts: u64, after_ts: u64, output_delete, expected: Vec<&TxnEntry>| {
+            let snapshot = engine.snapshot(&Context::default()).unwrap();
+            let mut scanner = ScannerBuilder::new(snapshot, ts.into(), false)
+                .range(None, None)
+                .build_entry_scanner(after_ts.into(), output_delete)
+                .unwrap();
+            for entry in expected {
+                assert_eq!(scanner.next_entry().unwrap().as_ref(), Some(entry));
+            }
+            assert!(scanner.next_entry().unwrap().is_none());
+        };
+
+        // Scanning entries in (10, 15] should get None
+        check(15, 10, true, vec![]);
+        // Scanning entries without delete in (7, 10]  should get None
+        check(10, 7, false, vec![]);
+        // Scanning entries include delete in (7, 10]  should get entry_b_10
+        check(10, 7, true, vec![&entry_b_10]);
+        // Scanning entries include delete in (3, 10] should get a_7 and b_10
+        check(10, 3, true, vec![&entry_a_7, &entry_b_10]);
+        // Scanning entries in (0, 5] should get a_3 and b_1
+        check(5, 0, true, vec![&entry_a_3, &entry_b_1]);
     }
 }
