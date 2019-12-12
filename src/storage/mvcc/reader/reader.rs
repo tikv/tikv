@@ -438,6 +438,7 @@ mod tests {
     use engine::rocks::{Writable, WriteBatch, DB};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_rocks::RocksEngine;
+    use keys::NonZeroTimeStamp;
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use std::convert::TryInto;
@@ -530,12 +531,12 @@ mod tests {
             k: Key,
             pk: &[u8],
             start_ts: impl Into<TimeStamp>,
-            for_update_ts: impl Into<TimeStamp>,
+            for_update_ts: impl TryInto<NonZeroTimeStamp, Error: ::std::fmt::Debug>,
         ) {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into())
+            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.try_into().unwrap())
                 .unwrap();
             self.write(txn.into_modifies());
         }

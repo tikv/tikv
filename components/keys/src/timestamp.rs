@@ -108,18 +108,28 @@ impl From<NonZeroTimeStamp> for TimeStamp {
 }
 
 impl TryFrom<u64> for NonZeroTimeStamp {
-    type Error = ();
+    type Error = &'static str;
 
-    fn try_from(u: u64) -> Result<NonZeroTimeStamp, ()> {
-        NonZeroU64::new(u).map(|u| NonZeroTimeStamp(u)).ok_or(())
+    fn try_from(u: u64) -> Result<NonZeroTimeStamp, Self::Error> {
+        NonZeroU64::new(u)
+            .map(|u| NonZeroTimeStamp(u))
+            .ok_or("Conversion from 0 Timestamp to NonZeroTimeStamp")
     }
 }
 
 impl TryFrom<TimeStamp> for NonZeroTimeStamp {
-    type Error = ();
+    type Error = &'static str;
 
-    fn try_from(ts: TimeStamp) -> Result<NonZeroTimeStamp, ()> {
-        NonZeroU64::new(ts.0).map(|u| NonZeroTimeStamp(u)).ok_or(())
+    fn try_from(ts: TimeStamp) -> Result<NonZeroTimeStamp, Self::Error> {
+        NonZeroU64::new(ts.0)
+            .map(|u| NonZeroTimeStamp(u))
+            .ok_or("Conversion from 0 Timestamp to NonZeroTimeStamp")
+    }
+}
+
+impl fmt::Display for NonZeroTimeStamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
     }
 }
 

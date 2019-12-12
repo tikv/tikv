@@ -138,12 +138,18 @@ impl<E: Engine, L: LockManager> Drop for Storage<E, L> {
     }
 }
 
-macro_rules! recycle_or_ret {
-    ($id: ident, $exp: expr) => {
-        let $id = match $exp {
-            Some(i) => i,
-            None => return Ok(()),
-        };
+macro_rules! check_key_size {
+    ($key_iter: expr, $max_key_size: expr, $callback: ident) => {
+        for k in $key_iter {
+            let key_size = k.len();
+            if key_size > $max_key_size {
+                $callback(Err(Error::from(ErrorInner::KeyTooLarge(
+                    key_size,
+                    $max_key_size,
+                ))));
+                return Ok(());
+            }
+        }
     };
 }
 
@@ -481,37 +487,46 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             .flatten()
     }
 
-    /// Returns `callback` if all key sizes are OK, `None` otherwise.
-    fn check_key_size<'a, T>(
-        &self,
-        keys: impl ::std::iter::Iterator<Item = &'a Vec<u8>>,
-        callback: Callback<T>,
-    ) -> Option<Callback<T>> {
-        for k in keys {
-            let key_size = k.len();
-            if key_size > self.max_key_size {
-                callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                    key_size,
-                    self.max_key_size,
-                ))));
-                return None;
-            }
-        }
-        Some(callback)
-    }
-
     pub fn sched_txn_command<T: StorageCallbackType>(
         &self,
         cmd: TypedCommand<T>,
         callback: Callback<T>,
     ) -> Result<()> {
+        use crate::storage::txn::commands::{
+            AcquirePessimisticLock, CommandKind, Prewrite, PrewritePessimistic,
+        };
+
         let cmd: Command = cmd.into();
 
         if cmd.requires_pessimistic_txn() && !self.pessimistic_txn_enabled {
             callback(Err(Error::from(ErrorInner::PessimisticTxnNotEnabled)));
             return Ok(());
         }
-        recycle_or_ret!(callback, cmd.check_key_size(self.max_key_size, callback));
+
+        match &cmd.kind {
+            CommandKind::Prewrite(Prewrite { mutations, .. }) => {
+                check_key_size!(
+                    mutations.iter().map(|m| m.key().as_encoded()),
+                    self.max_key_size,
+                    callback
+                );
+            }
+            CommandKind::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
+                check_key_size!(
+                    mutations.iter().map(|(m, _)| m.key().as_encoded()),
+                    self.max_key_size,
+                    callback
+                );
+            }
+            CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
+                check_key_size!(
+                    keys.iter().map(|k| k.0.as_encoded()),
+                    self.max_key_size,
+                    callback
+                );
+            }
+            _ => {}
+        }
 
         fail_point!("storage_drop_message", |_| Ok(()));
         cmd.incr_cmd_metric();
@@ -721,10 +736,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         value: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        recycle_or_ret!(
-            callback,
-            self.check_key_size(Some(&key).into_iter(), callback)
-        );
+        check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
         self.engine.async_write(
             &ctx,
@@ -749,9 +761,10 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         let cf = Self::rawkv_cf(&cf)?;
 
-        recycle_or_ret!(
-            callback,
-            self.check_key_size(pairs.iter().map(|(ref k, _)| k), callback)
+        check_key_size!(
+            pairs.iter().map(|(ref k, _)| k),
+            self.max_key_size,
+            callback
         );
 
         let requests = pairs
@@ -775,10 +788,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        recycle_or_ret!(
-            callback,
-            self.check_key_size(Some(&key).into_iter(), callback)
-        );
+        check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
         self.engine.async_write(
             &ctx,
@@ -798,14 +808,12 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         end_key: Vec<u8>,
         callback: Callback<()>,
     ) -> Result<()> {
-        recycle_or_ret!(
-            callback,
-            self.check_key_size(
-                Some(&start_key)
-                    .into_iter()
-                    .chain(Some(&end_key).into_iter()),
-                callback
-            )
+        check_key_size!(
+            Some(&start_key)
+                .into_iter()
+                .chain(Some(&end_key).into_iter()),
+            self.max_key_size,
+            callback
         );
 
         let cf = Self::rawkv_cf(&cf)?;
@@ -829,8 +837,9 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Vec<u8>>,
         callback: Callback<()>,
     ) -> Result<()> {
+        check_key_size!(keys.iter(), self.max_key_size, callback);
+
         let cf = Self::rawkv_cf(&cf)?;
-        recycle_or_ret!(callback, self.check_key_size(keys.iter(), callback));
 
         let requests = keys
             .into_iter()

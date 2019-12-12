@@ -226,17 +226,17 @@ impl<S: Snapshot> MvccTxn<S> {
         primary: &[u8],
         should_not_exist: bool,
         lock_ttl: u64,
-        for_update_ts: TimeStamp,
+        for_update_ts: NonZeroTimeStamp,
     ) -> Result<()> {
         fn pessimistic_lock(
             primary: &[u8],
             start_ts: TimeStamp,
             lock_ttl: u64,
-            for_update_ts: TimeStamp,
+            for_update_ts: NonZeroTimeStamp,
         ) -> Lock {
             Lock::new(
                 LockType::Pessimistic,
-                for_update_ts.into(),
+                TransactionKind::Pessimistic(for_update_ts),
                 primary.to_vec(),
                 start_ts,
                 lock_ttl,
@@ -259,7 +259,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 .into());
             }
             // Overwrite the lock with small for_update_ts
-            if for_update_ts > lock.txn_kind.into() {
+            if lock.txn_kind.will_expire_before(for_update_ts) {
                 let lock = pessimistic_lock(primary, self.start_ts, lock_ttl, for_update_ts);
                 self.put_lock(key, &lock);
             } else {
@@ -275,7 +275,7 @@ impl<S: Snapshot> MvccTxn<S> {
             // the commit_ts of the data this transaction read. If exists a commit version
             // whose commit timestamp is larger than current `for_update_ts`, the
             // transaction should retry to get the latest data.
-            if commit_ts > for_update_ts {
+            if commit_ts > for_update_ts.into() {
                 MVCC_CONFLICT_COUNTER
                     .acquire_pessimistic_lock_conflict
                     .inc();
@@ -634,11 +634,15 @@ impl<S: Snapshot> MvccTxn<S> {
     }
 
     /// Delete any pessimistic lock with small for_update_ts belongs to this transaction.
-    pub fn pessimistic_rollback(&mut self, key: Key, for_update_ts: TimeStamp) -> Result<()> {
+    pub fn pessimistic_rollback(
+        &mut self,
+        key: Key,
+        for_update_ts: NonZeroTimeStamp,
+    ) -> Result<()> {
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.lock_type == LockType::Pessimistic
                 && lock.ts == self.start_ts
-                && TimeStamp::from(lock.txn_kind) <= for_update_ts
+                && lock.txn_kind.will_expire_before(for_update_ts)
             {
                 self.unlock_key(key);
             }
@@ -842,6 +846,7 @@ mod tests {
     use crate::storage::SHORT_VALUE_MAX_LEN;
     use keys::TimeStamp;
     use kvproto::kvrpcpb::Context;
+    use std::convert::TryInto;
 
     fn test_mvcc_txn_read_imp(k1: &[u8], k2: &[u8], v: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -2344,7 +2349,7 @@ mod tests {
 
         // Write a pessimistic lock.
         must_rollback(&engine, k, 10);
-        must_acquire_pessimistic_lock_impl(&engine, k, k, 50, lock_ttl, 50.into());
+        must_acquire_pessimistic_lock_impl(&engine, k, k, 50, lock_ttl, 50u64.try_into().unwrap());
 
         expected_lock_info.set_lock_version(50);
         expected_lock_info.set_lock_ttl(lock_ttl);

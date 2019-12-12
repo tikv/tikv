@@ -1,10 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::{
-    mvcc::{
-        ErrorInner, Mutation, Result, TsSet, FOR_UPDATE_TS_PREFIX, MIN_COMMIT_TS_PREFIX,
-        SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
-    },
+    mvcc::{ErrorInner, Mutation, Result, TsSet, SHORT_VALUE_PREFIX},
     SHORT_VALUE_MAX_LEN,
 };
 use byteorder::ReadBytesExt;
@@ -27,6 +24,10 @@ const FLAG_PUT: u8 = b'P';
 const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
 const FLAG_PESSIMISTIC: u8 = b'S';
+
+const FOR_UPDATE_TS_PREFIX: u8 = b'f';
+const TXN_SIZE_PREFIX: u8 = b't';
+const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> LockType {
@@ -57,9 +58,14 @@ impl LockType {
     }
 }
 
+/// Used in `Lock` to indicate the kind of transaction which the lock is part of.
+/// Note that this is not the kind of lock - a pessimistic lock may only be used
+/// in a pessimistic transaction, but a pessimistic transaction may include other
+/// kinds of locks.
 #[derive(new, PartialEq, Copy, Clone, Debug)]
 pub enum TransactionKind {
     Optimistic,
+    /// The field is the commit timestamp of data being read in this transaction.
     Pessimistic(NonZeroTimeStamp),
 }
 
@@ -77,6 +83,13 @@ impl TransactionKind {
             TransactionKind::Pessimistic(_) => true,
         }
     }
+
+    pub fn will_expire_before(self, ts: NonZeroTimeStamp) -> bool {
+        match self {
+            TransactionKind::Pessimistic(self_ts) if ts > self_ts => true,
+            _ => false,
+        }
+    }
 }
 
 impl From<TimeStamp> for TransactionKind {
@@ -84,15 +97,6 @@ impl From<TimeStamp> for TransactionKind {
         match ts.try_into() {
             Ok(ts) => TransactionKind::Pessimistic(ts),
             Err(_) => TransactionKind::Optimistic,
-        }
-    }
-}
-
-impl From<TransactionKind> for TimeStamp {
-    fn from(tk: TransactionKind) -> TimeStamp {
-        match tk {
-            TransactionKind::Optimistic => TimeStamp::zero(),
-            TransactionKind::Pessimistic(ts) => ts.into(),
         }
     }
 }

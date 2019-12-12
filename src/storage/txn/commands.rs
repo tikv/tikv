@@ -9,21 +9,20 @@ use keys::{Key, NonZeroTimeStamp, TimeStamp};
 use kvproto::kvrpcpb::*;
 use tikv_util::collections::HashMap;
 
-use crate::storage::errors::{Error, ErrorInner};
 use crate::storage::lock_manager::WaitTimeout;
 use crate::storage::metrics::{self, KV_COMMAND_COUNTER_VEC_STATIC};
 use crate::storage::mvcc::{Lock, Mutation};
 use crate::storage::txn::latch::{self, Latches};
 use crate::storage::types::{MvccInfo, StorageCallbackType, TxnStatus};
-use crate::storage::{Callback, Result};
+use crate::storage::Result;
 
 /// Store Transaction scheduler commands.
 ///
 /// Learn more about our transaction system at
 /// [Deep Dive TiKV: Distributed Transactions](https://tikv.org/deep-dive/distributed-transaction/)
 ///
-/// These are typically scheduled and used through the [`Storage`](Storage) with functions like
-/// [`Storage::async_prewrite`](Storage::async_prewrite) trait and are executed asyncronously.
+/// These are typically scheduled and used through the [`Storage`](Storage) using the `sched_txn_command`
+/// function and are executed asyncronously.
 // Logic related to these can be found in the `src/storage/txn/proccess.rs::process_write_impl` function.
 pub struct Command {
     pub ctx: Context,
@@ -109,7 +108,9 @@ impl From<PessimisticLockRequest> for TypedCommand<Vec<Result<()>>> {
             req.get_start_version().into(),
             req.get_lock_ttl(),
             req.get_is_first_lock(),
-            req.get_for_update_ts().into(),
+            req.get_for_update_ts()
+                .try_into()
+                .expect("Zero for_update_ts in pessimistic transaction"),
             req.get_wait_timeout().into(),
             req.take_context(),
         )
@@ -154,7 +155,9 @@ impl From<PessimisticRollbackRequest> for TypedCommand<Vec<Result<()>>> {
         PessimisticRollback::new(
             keys,
             req.get_start_version().into(),
-            req.get_for_update_ts().into(),
+            req.get_for_update_ts()
+                .try_into()
+                .expect("Zero for_update_ts in pessimistic transaction"),
             req.take_context(),
         )
     }
@@ -241,7 +244,7 @@ impl From<MvccGetByStartTsRequest> for TypedCommand<Option<(Key, MvccInfo)>> {
 macro_rules! command {
     (
         $(#[$outer_doc: meta])*
-        $cmd: ident : $cmd_ty: ty {
+        $cmd: ident -> $cmd_ty: ty {
             $($(#[$inner_doc:meta])* $arg: ident : $arg_ty: ty,)*
         }
     ) => {
@@ -272,7 +275,7 @@ command! {
     ///
     /// This prepares the system to commit the transaction. Later a [`Commit`](CommandKind::Commit)
     /// or a [`Rollback`](CommandKind::Rollback) should follow.
-    Prewrite: Vec<Result<()>> {
+    Prewrite -> Vec<Result<()>> {
         /// The set of mutations to apply.
         mutations: Vec<Mutation>,
         /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
@@ -349,7 +352,7 @@ command! {
     ///
     /// This prepares the system to commit the transaction. Later a [`Commit`](CommandKind::Commit)
     /// or a [`Rollback`](CommandKind::Rollback) should follow.
-    PrewritePessimistic: Vec<Result<()>> {
+    PrewritePessimistic -> Vec<Result<()>> {
         /// The set of mutations to apply; the bool = is pessimistic lock.
         mutations: Vec<(Mutation, bool)>,
         /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
@@ -368,7 +371,7 @@ command! {
     /// Acquire a Pessimistic lock on the keys.
     ///
     /// This can be rolled back with a [`PessimisticRollback`](CommandKind::PessimisticRollback) command.
-    AcquirePessimisticLock: Vec<Result<()>> {
+    AcquirePessimisticLock -> Vec<Result<()>> {
         /// The set of keys to lock.
         keys: Vec<(Key, bool)>,
         /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
@@ -377,7 +380,7 @@ command! {
         start_ts: TimeStamp,
         lock_ttl: u64,
         is_first_lock: bool,
-        for_update_ts: TimeStamp,
+        for_update_ts: NonZeroTimeStamp,
         /// Time to wait for lock released in milliseconds when encountering locks.
         wait_timeout: WaitTimeout,
     }
@@ -387,7 +390,7 @@ command! {
     /// Commit the transaction that started at `lock_ts`.
     ///
     /// This should be following a [`Prewrite`](CommandKind::Prewrite).
-    Commit: TxnStatus {
+    Commit -> TxnStatus {
         /// The keys affected.
         keys: Vec<Key>,
         /// The lock timestamp.
@@ -401,7 +404,7 @@ command! {
     /// Rollback mutations on a single key.
     ///
     /// This should be following a [`Prewrite`](CommandKind::Prewrite) on the given key.
-    Cleanup: () {
+    Cleanup -> () {
         key: Key,
         /// The transaction timestamp.
         start_ts: TimeStamp,
@@ -415,7 +418,7 @@ command! {
     /// Rollback from the transaction that was started at `start_ts`.
     ///
     /// This should be following a [`Prewrite`](CommandKind::Prewrite) on the given key.
-    Rollback: () {
+    Rollback -> () {
         keys: Vec<Key>,
         /// The transaction timestamp.
         start_ts: TimeStamp,
@@ -426,12 +429,12 @@ command! {
     /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
     ///
     /// This can roll back an [`AcquirePessimisticLock`](CommandKind::AcquirePessimisticLock) command.
-    PessimisticRollback: Vec<Result<()>> {
+    PessimisticRollback -> Vec<Result<()>> {
         /// The keys to be rolled back.
         keys: Vec<Key>,
         /// The transaction timestamp.
         start_ts: TimeStamp,
-        for_update_ts: TimeStamp,
+        for_update_ts: NonZeroTimeStamp,
     }
 }
 
@@ -441,7 +444,7 @@ command! {
     /// This is invoked on a transaction's primary lock. The lock may be generated by either
     /// [`AcquirePessimisticLock`](CommandKind::AcquirePessimisticLock) or
     /// [`Prewrite`](CommandKind::Prewrite).
-    TxnHeartBeat: TxnStatus {
+    TxnHeartBeat -> TxnStatus {
         /// The primary key of the transaction.
         primary_key: Key,
         /// The transaction's start_ts.
@@ -461,7 +464,7 @@ command! {
     /// This is invoked on a transaction's primary lock. The lock may be generated by either
     /// [`AcquirePessimisticLock`](CommandKind::AcquirePessimisticLock) or
     /// [`Prewrite`](CommandKind::Prewrite).
-    CheckTxnStatus: TxnStatus {
+    CheckTxnStatus -> TxnStatus {
         /// The primary key of the transaction.
         primary_key: Key,
         /// The lock's ts, namely the transaction's start_ts.
@@ -515,7 +518,7 @@ command! {
     ///
     /// During the GC operation, this should be called to clean up stale locks whose timestamp is
     /// before safe point.
-    ResolveLock: () {
+    ResolveLock -> () {
         /// Maps lock_ts to commit_ts. If a transaction was rolled back, it is mapped to 0.
         ///
         /// For example, let `txn_status` be `{ 100: 101, 102: 0 }`, then it means that the transaction
@@ -540,7 +543,7 @@ command! {
 
 command! {
     /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
-    ResolveLockLite: () {
+    ResolveLockLite -> () {
         /// The transaction timestamp.
         start_ts: TimeStamp,
         /// The transaction commit timestamp.
@@ -554,7 +557,7 @@ command! {
     /// **Testing functionality:** Latch the given keys for given duration.
     ///
     /// This means other write operations that involve these keys will be blocked.
-    Pause: () {
+    Pause -> () {
         /// The keys to hold latches on.
         keys: Vec<Key>,
         /// The amount of time in milliseconds to latch for.
@@ -564,14 +567,14 @@ command! {
 
 command! {
     /// Retrieve MVCC information for the given key.
-    MvccByKey: MvccInfo {
+    MvccByKey -> MvccInfo {
         key: Key,
     }
 }
 
 command! {
     /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
-    MvccByStartTs: Option<(Key, MvccInfo)> {
+    MvccByStartTs -> Option<(Key, MvccInfo)> {
         start_ts: TimeStamp,
     }
 }
@@ -763,54 +766,6 @@ impl Command {
             _ => {}
         }
         bytes
-    }
-
-    pub fn check_key_size<U>(
-        &self,
-        max_key_size: usize,
-        callback: Callback<U>,
-    ) -> Option<Callback<U>> {
-        fn check_key_size<'a, U>(
-            keys: impl ::std::iter::Iterator<Item = &'a Vec<u8>>,
-            max_key_size: usize,
-            callback: Callback<U>,
-        ) -> Option<Callback<U>> {
-            for k in keys {
-                let key_size = k.len();
-                if key_size > max_key_size {
-                    callback(Err(Error::from(ErrorInner::KeyTooLarge(
-                        key_size,
-                        max_key_size,
-                    ))));
-                    return None;
-                }
-            }
-            Some(callback)
-        }
-
-        match &self.kind {
-            CommandKind::Prewrite(Prewrite { mutations, .. }) => check_key_size(
-                mutations.iter().map(|m| m.key().as_encoded()),
-                max_key_size,
-                callback,
-            ),
-            CommandKind::PrewritePessimistic(PrewritePessimistic { mutations, .. }) => {
-                check_key_size(
-                    mutations.iter().map(|(m, _)| m.key().as_encoded()),
-                    max_key_size,
-                    callback,
-                )
-            }
-            CommandKind::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
-                check_key_size(
-                    keys.iter().map(|k| k.0.as_encoded()),
-                    max_key_size,
-                    callback,
-                )
-            }
-            // Nothing to check for the other commands.
-            _ => Some(callback),
-        }
     }
 
     pub fn requires_pessimistic_txn(&self) -> bool {

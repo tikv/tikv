@@ -504,6 +504,7 @@ mod tests {
     use crate::storage::txn::{commands, latch::*};
     use keys::Key;
     use kvproto::kvrpcpb::Context;
+    use std::convert::TryInto;
 
     #[test]
     fn test_command_latches() {
@@ -528,7 +529,7 @@ mod tests {
                 10.into(),
                 0,
                 false,
-                TimeStamp::default(),
+                20.try_into().unwrap(),
                 WaitTimeout::Default,
                 Context::default(),
             )
@@ -552,7 +553,7 @@ mod tests {
             commands::PessimisticRollback::new(
                 vec![Key::from_raw(b"k")],
                 10.into(),
-                20.into(),
+                20.try_into().unwrap(),
                 Context::default(),
             )
             .into(),
