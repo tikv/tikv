@@ -292,14 +292,13 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         }
 
         let mut pushed = if curr_batch_len == 0 {
-            match self
-                .fsm_receiver
-                .recv_timeout(Duration::from_millis(10))
-                .or_else(|_| {
-                    self.handler.pause();
-                    // Block if the batch is empty.
-                    self.fsm_receiver.recv()
-                }) {
+            match self.fsm_receiver.try_recv().or_else(|_| {
+                self.handler.pause();
+                // Block if the batch is empty.
+                self.fsm_receiver
+                    .recv_timeout(Duration::from_millis(10))
+                    .or_else(|_| self.fsm_receiver.recv())
+            }) {
                 Ok(fsm) => batch.push(fsm),
                 Err(_) => return,
             }
