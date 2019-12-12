@@ -1,11 +1,11 @@
 use test::{black_box, Bencher};
 
 use engine_rocks::RocksSyncSnapshot;
-use keys::Key;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use test_storage::SyncTestStorageBuilder;
 use tidb_query::codec::table;
-use tikv::storage::{Engine, Mutation, SnapshotStore, Statistics, Store};
+use tikv::storage::{Engine, SnapshotStore, Statistics, Store};
+use txn_types::{Key, Mutation};
 
 fn table_lookup_gen_data() -> (SnapshotStore<RocksSyncSnapshot>, Vec<Key>) {
     let store = SyncTestStorageBuilder::new().build().unwrap();

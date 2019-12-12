@@ -6,9 +6,9 @@ use crate::storage::{
     mvcc::{Lock, TimeStamp, Write},
     Callback, Command, Error as StorageError, Result,
 };
-use keys::{Key, Value};
 use kvproto::kvrpcpb::LockInfo;
 use std::fmt::Debug;
+use txn_types::{Key, Value};
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.
@@ -19,48 +19,6 @@ pub struct MvccInfo {
     pub writes: Vec<(TimeStamp, Write)>,
     /// start_ts and value
     pub values: Vec<(TimeStamp, Value)>,
-}
-
-/// A row mutation.
-#[derive(Debug, Clone)]
-pub enum Mutation {
-    /// Put `Value` into `Key`, overwriting any existing value.
-    Put((Key, Value)),
-    /// Delete `Key`.
-    Delete(Key),
-    /// Set a lock on `Key`.
-    Lock(Key),
-    /// Put `Value` into `Key` if `Key` does not yet exist.
-    ///
-    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
-    Insert((Key, Value)),
-}
-
-impl Mutation {
-    pub fn key(&self) -> &Key {
-        match self {
-            Mutation::Put((ref key, _)) => key,
-            Mutation::Delete(ref key) => key,
-            Mutation::Lock(ref key) => key,
-            Mutation::Insert((ref key, _)) => key,
-        }
-    }
-
-    pub fn into_key_value(self) -> (Key, Option<Value>) {
-        match self {
-            Mutation::Put((key, value)) => (key, Some(value)),
-            Mutation::Delete(key) => (key, None),
-            Mutation::Lock(key) => (key, None),
-            Mutation::Insert((key, value)) => (key, Some(value)),
-        }
-    }
-
-    pub fn is_insert(&self) -> bool {
-        match self {
-            Mutation::Insert(_) => true,
-            _ => false,
-        }
-    }
 }
 
 /// Represents the status of a transaction.

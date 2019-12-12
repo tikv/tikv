@@ -3,12 +3,11 @@
 use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
-use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
+use txn_types::{Key, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::write::{WriteRef, WriteType};
-use crate::storage::mvcc::{Result, TimeStamp};
+use crate::storage::mvcc::Result;
 use crate::storage::{Cursor, Lock, Snapshot, Statistics};
 
 use super::ScannerConfig;
@@ -352,7 +351,9 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         if result.is_err() {
             cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
         }
-        result.map(|_| HandleRes::Skip(current_user_key))
+        result
+            .map(|_| HandleRes::Skip(current_user_key))
+            .map_err(Into::into)
     }
 
     fn handle_write(
