@@ -708,60 +708,44 @@ mod tests {
 
         let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
 
-        // test set both hint_min_ts and hint_max_ts
-        {
+        let tests = vec![
+            // set nothing.
+            (
+                Bound::Unbounded,
+                Bound::Unbounded,
+                vec![2u64, 4, 6, 8, 10, 12],
+            ),
+            // test set both hint_min_ts and hint_max_ts.
+            (Bound::Included(6), Bound::Included(8), vec![6u64, 8]),
+            (Bound::Excluded(5), Bound::Included(8), vec![6u64, 8]),
+            (Bound::Included(6), Bound::Excluded(9), vec![6u64, 8]),
+            (Bound::Excluded(5), Bound::Excluded(9), vec![6u64, 8]),
+            // test set only hint_min_ts.
+            (Bound::Included(10), Bound::Unbounded, vec![10u64, 12]),
+            (Bound::Excluded(9), Bound::Unbounded, vec![10u64, 12]),
+            // test set only hint_max_ts.
+            (Bound::Unbounded, Bound::Included(7), vec![2u64, 4, 6, 8]),
+            (Bound::Unbounded, Bound::Excluded(8), vec![2u64, 4, 6, 8]),
+        ];
+
+        for (_, &(min, max, ref res)) in tests.iter().enumerate() {
             let mut iopt = IterOption::default();
-            iopt.set_hint_min_ts(Bound::Included(6));
-            iopt.set_hint_max_ts(Bound::Included(8));
+            iopt.set_hint_min_ts(min);
+            iopt.set_hint_max_ts(max);
+
             let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
 
-            assert_eq!(iter.seek_to_first(), true);
-            let ts = Key::decode_ts_from(iter.key()).unwrap();
-            assert_eq!(ts.into_inner(), 6);
+            for (i, expect_ts) in res.iter().enumerate() {
+                if i == 0 {
+                    assert_eq!(iter.seek_to_first(), true);
+                } else {
+                    assert_eq!(iter.next(), true);
+                }
 
-            assert_eq!(iter.next(), true);
-            let ts = Key::decode_ts_from(iter.key()).unwrap();
-            assert_eq!(ts.into_inner(), 8);
+                let ts = Key::decode_ts_from(iter.key()).unwrap();
+                assert_eq!(ts.into_inner(), *expect_ts);
+            }
 
-            assert_eq!(iter.next(), false);
-        }
-
-        // test set only hint_min_ts
-        {
-            let mut iopt = IterOption::default();
-            iopt.set_hint_min_ts(Bound::Included(10));
-            let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
-
-            assert_eq!(iter.seek_to_first(), true);
-            let ts = Key::decode_ts_from(iter.key()).unwrap();
-            assert_eq!(ts.into_inner(), 10);
-
-            assert_eq!(iter.next(), true);
-            let ts = Key::decode_ts_from(iter.key()).unwrap();
-            assert_eq!(ts.into_inner(), 12);
-
-            assert_eq!(iter.next(), false);
-        }
-
-        // test set only hint_max_ts
-        {
-            let mut iopt = IterOption::default();
-            iopt.set_hint_max_ts(Bound::Included(7));
-            let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
-
-            assert_eq!(iter.seek_to_first(), true);
-            let ts = Key::decode_ts_from(iter.key()).unwrap();
-            assert_eq!(ts.into_inner(), 2);
-
-            assert_eq!(iter.next(), true);
-            let ts = Key::decode_ts_from(iter.key()).unwrap();
-            assert_eq!(ts.into_inner(), 4);
-
-            assert_eq!(iter.next(), true);
-            let ts = Key::decode_ts_from(iter.key()).unwrap();
-            assert_eq!(ts.into_inner(), 6);
-
-            assert_eq!(iter.next(), true);
             assert_eq!(iter.next(), false);
         }
     }
