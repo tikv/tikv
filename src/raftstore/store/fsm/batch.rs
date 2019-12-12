@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
 use tikv_util::mpsc;
 use tikv_util::sys as sys_util;
+use tikv_util::time::Duration;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -294,7 +295,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             match self.fsm_receiver.try_recv().or_else(|_| {
                 self.handler.pause();
                 // Block if the batch is empty.
-                self.fsm_receiver.recv()
+                self.fsm_receiver.recv_timeout(Duration::from_millis(1))
             }) {
                 Ok(fsm) => batch.push(fsm),
                 Err(_) => return,
