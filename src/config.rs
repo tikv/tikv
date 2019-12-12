@@ -1816,7 +1816,6 @@ impl ConfigHandler {
     }
 }
 
-// FIXME: the usage of version and status_code need to consist with pd
 impl ConfigHandler {
     /// Register the local config to pd
     pub fn create(
@@ -1874,11 +1873,10 @@ impl ConfigHandler {
 
     fn update_config(
         &mut self,
-        mut version: configpb::Version,
+        version: configpb::Version,
         entries: Vec<configpb::ConfigEntry>,
         pd_client: Arc<impl PdClient>,
     ) -> CfgResult<()> {
-        version.local += 1;
         let mut resp = pd_client.update_config(self.get_id(), version, entries)?;
         match resp.get_status().get_code() {
             StatusCode::Ok => {
