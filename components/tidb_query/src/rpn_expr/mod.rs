@@ -430,6 +430,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
         ScalarFuncSig::Year => year_fn_meta(),
         ScalarFuncSig::DayOfMonth => day_of_month_fn_meta(),
+        ScalarFuncSig::Rand => rand_fn_meta(),
+        ScalarFuncSig::RandWithSeedFirstGen => rand_with_seed_first_gen_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
