@@ -232,8 +232,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     }
                 };
 
-                // // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
-                // // the key or its clones without reallocation.
+                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
+                // the key or its clones without reallocation.
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
