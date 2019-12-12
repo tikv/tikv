@@ -31,11 +31,11 @@ use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
-use keys::UnixSecs;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
+use tikv_util::time::UnixSecs;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;

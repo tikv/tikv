@@ -32,10 +32,10 @@ pub use self::util::RECONNECT_INTERVAL_SEC;
 use std::ops::Deref;
 
 use futures::Future;
-use keys::UnixSecs;
 use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb;
+use tikv_util::time::UnixSecs;
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;

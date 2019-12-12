@@ -5,12 +5,12 @@ mod forward;
 mod txn_entry;
 
 use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
+use txn_types::{Key, TimeStamp, TsSet, Value};
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
-use crate::storage::mvcc::{default_not_found_error, Result, TimeStamp, TsSet};
+use crate::storage::mvcc::{default_not_found_error, Result};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
     CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Scanner as StoreScanner, Snapshot,
