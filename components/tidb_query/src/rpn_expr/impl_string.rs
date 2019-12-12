@@ -4,7 +4,7 @@ use std::str;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
-use crate::rpn_expr::types::RpnStackNode;
+use crate::rpn_expr::types::RpnFnCallExtra;
 use crate::Result;
 use tidb_query_datatype::*;
 
@@ -198,23 +198,20 @@ pub fn right_utf8(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes
     }
 }
 
-#[rpn_fn(capture = [args])]
+#[rpn_fn(capture = [extra])]
 #[inline]
-pub fn upper(args: &[RpnStackNode<'_>], arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+pub fn upper(extra: &RpnFnCallExtra, arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     match arg.as_ref() {
-        Some(bytes) => match args[0] {
-            RpnStackNode::Scalar { field_type, .. } => {
-                if field_type.as_accessor().is_binary_string_like() {
-                    return Ok(Some(bytes.to_vec()));
-                }
-
-                match str::from_utf8(bytes) {
-                    Ok(s) => Ok(Some(s.to_uppercase().into_bytes())),
-                    Err(err) => Err(box_err!("invalid input value: {:?}", err)),
-                }
+        Some(bytes) => {
+            if extra.ret_field_type.as_accessor().is_binary_string_like() {
+                return Ok(Some(bytes.to_vec()));
             }
-            _ => Ok(None),
-        },
+
+            match str::from_utf8(bytes) {
+                Ok(s) => Ok(Some(s.to_uppercase().into_bytes())),
+                Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+            }
+        }
         _ => Ok(None),
     }
 }
@@ -1015,10 +1012,11 @@ mod tests {
                 .set_tp(FieldTypeTp::String)
                 .set_collation(Collation::Binary);
             let output = RpnFnScalarEvaluator::new()
-                .push_param_with_field_type(arg, ft)
-                .evaluate(ScalarFuncSig::Upper)
+                .push_param(arg)
+                .evaluate_raw(ft, ScalarFuncSig::Upper)
+                .0
                 .unwrap();
-            assert_eq!(output, exp);
+            assert_eq!(*output.as_bytes(), exp);
         }
     }
 
