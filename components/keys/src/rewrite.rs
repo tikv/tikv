@@ -39,7 +39,7 @@ pub fn rewrite_prefix_of_end_key(
     }
 
     if super::next_key_no_alloc(old_prefix) != src.split_last().map(|(&e, s)| (s, e)) {
-        // src is not the sucessor of old_prefix
+        // src is not the successor of old_prefix
         return Err(WrongPrefix);
     }
 

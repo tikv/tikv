@@ -14,7 +14,6 @@ use backup::Task;
 use engine::CF_DEFAULT;
 use engine::*;
 use external_storage::*;
-use keys::TimeStamp;
 use kvproto::backup::*;
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
@@ -32,6 +31,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::file::calc_crc32_bytes;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
+use txn_types::TimeStamp;
 
 struct TestSuite {
     cluster: Cluster<ServerCluster>,
