@@ -1010,20 +1010,6 @@ mod tests {
             (
                 ScalarFuncSig::IntervalInt,
                 vec![
-                    Datum::I64(201),
-                    Datum::I64(1),
-                    Datum::I64(23),
-                    Datum::I64(23),
-                    Datum::I64(23),
-                    Datum::I64(30),
-                    Datum::I64(44),
-                    Datum::I64(200),
-                ],
-                Datum::I64(7),
-            ),
-            (
-                ScalarFuncSig::IntervalInt,
-                vec![
                     Datum::I64(i64::MAX),
                     Datum::I64(i64::MIN),
                     Datum::I64(i64::MAX),
@@ -1091,20 +1077,6 @@ mod tests {
                     Datum::F64(200.0),
                 ],
                 Datum::I64(4),
-            ),
-            (
-                ScalarFuncSig::IntervalReal,
-                vec![
-                    Datum::F64(200.0),
-                    Datum::F64(1.0),
-                    Datum::F64(23.0),
-                    Datum::F64(23.0),
-                    Datum::F64(23.0),
-                    Datum::F64(30.0),
-                    Datum::F64(44.0),
-                    Datum::F64(200.0),
-                ],
-                Datum::I64(7),
             ),
             (
                 ScalarFuncSig::IntervalReal,
