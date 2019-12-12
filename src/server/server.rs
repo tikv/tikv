@@ -3,7 +3,7 @@
 use std::i32;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use engine::Engines;
@@ -31,7 +31,7 @@ use tikv_util::worker::Worker;
 use tikv_util::Either;
 
 use super::load_statistics::*;
-use super::raft_client::RaftClient;
+use super::raft_client2::RaftStreamPool;
 use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
@@ -147,21 +147,15 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
         info!("listening on addr"; "addr" => addr);
 
-        let raft_client = Arc::new(RwLock::new(RaftClient::new(
-            Arc::clone(&env),
-            Arc::clone(cfg),
-            Arc::clone(security_mgr),
-            raft_router.clone(),
-            Arc::clone(&thread_load),
-            stats_pool.sender().clone(),
-        )));
-
-        let trans = ServerTransport::new(
-            raft_client,
-            snap_worker.scheduler(),
-            raft_router.clone(),
+        let stream_pool = RaftStreamPool::new(
+            env.clone(),
+            cfg.clone(),
+            security_mgr.clone(),
             resolver,
+            raft_router.clone(),
+            snap_worker.scheduler(),
         );
+        let trans = ServerTransport::new(stream_pool);
 
         let svr = Server {
             env: Arc::clone(&env),
@@ -263,16 +257,22 @@ mod tests {
     use kvproto::raft_serverpb::RaftMessage;
     use tikv_util::security::SecurityConfig;
 
+    #[allow(clippy::type_complexity)]
     #[derive(Clone)]
     struct MockResolver {
         quick_fail: Arc<AtomicBool>,
         addr: Arc<Mutex<Option<String>>>,
+        delegate: Arc<Mutex<Option<Sender<(u64, ResolveCallback)>>>>,
     }
 
     impl StoreAddrResolver for MockResolver {
-        fn resolve(&self, _: u64, cb: ResolveCallback) -> Result<()> {
+        fn resolve(&self, store_id: u64, cb: ResolveCallback) -> Result<()> {
             if self.quick_fail.load(Ordering::SeqCst) {
                 return Err(box_err!("quick fail"));
+            }
+            if let Some(d) = self.delegate.lock().unwrap().as_ref() {
+                let _ = d.send((store_id, cb));
+                return Ok(());
             }
             let addr = self.addr.lock().unwrap();
             cb(addr
@@ -283,21 +283,25 @@ mod tests {
         }
     }
 
+    struct TestRaftStoreReceiver {
+        rx: Receiver<RaftMessage>,
+        significant_msg_receiver: Receiver<SignificantMsg>,
+    }
+
     #[derive(Clone)]
     struct TestRaftStoreRouter {
-        tx: Sender<usize>,
+        tx: Sender<RaftMessage>,
         significant_msg_sender: Sender<SignificantMsg>,
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
-        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
+        fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
+            self.tx.send(msg).unwrap();
             Ok(())
         }
 
         fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
-            Ok(())
+            unimplemented!()
         }
 
         fn significant_send(&self, _: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
@@ -306,13 +310,10 @@ mod tests {
         }
 
         fn casual_send(&self, _: u64, _: CasualMessage) -> RaftStoreResult<()> {
-            self.tx.send(1).unwrap();
-            Ok(())
+            unimplemented!()
         }
 
-        fn broadcast_unreachable(&self, _: u64) {
-            let _ = self.tx.send(1);
-        }
+        fn broadcast_unreachable(&self, _: u64) {}
     }
 
     fn is_unreachable_to(msg: &SignificantMsg, region_id: u64, to_peer_id: u64) -> bool {
@@ -322,9 +323,11 @@ mod tests {
         }
     }
 
-    #[test]
-    // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
-    fn test_peer_resolve() {
+    fn build_server() -> (
+        TestRaftStoreReceiver,
+        MockResolver,
+        Server<TestRaftStoreRouter, MockResolver>,
+    ) {
         let mut cfg = Config::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
@@ -345,16 +348,18 @@ mod tests {
         let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool);
 
         let addr = Arc::new(Mutex::new(None));
+        let resolver = MockResolver {
+            quick_fail,
+            addr,
+            delegate: Arc::default(),
+        };
         let mut server = Server::new(
             &cfg,
             &security_mgr,
             storage,
             cop,
             router,
-            MockResolver {
-                quick_fail: Arc::clone(&quick_fail),
-                addr: Arc::clone(&addr),
-            },
+            resolver.clone(),
             SnapManager::new("", None),
             None,
             None,
@@ -364,31 +369,152 @@ mod tests {
 
         server.start(cfg, security_mgr).unwrap();
 
+        (
+            TestRaftStoreReceiver {
+                rx,
+                significant_msg_receiver,
+            },
+            resolver,
+            server,
+        )
+    }
+
+    // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
+    #[test]
+    fn test_peer_resolve() {
+        let (receiver, resolver, mut server) = build_server();
         let mut trans = server.transport();
-        trans.report_unreachable(RaftMessage::new());
-        let mut resp = significant_msg_receiver.try_recv().unwrap();
-        assert!(is_unreachable_to(&resp, 0, 0), "{:?}", resp);
 
         let mut msg = RaftMessage::new();
         msg.set_region_id(1);
         trans.send(msg.clone()).unwrap();
         trans.flush();
-        resp = significant_msg_receiver.try_recv().unwrap();
+        let mut resp = receiver
+            .significant_msg_receiver
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
         assert!(is_unreachable_to(&resp, 1, 0), "{:?}", resp);
 
-        *addr.lock().unwrap() = Some(format!("{}", server.listening_addr()));
+        *resolver.addr.lock().unwrap() = Some(format!("{}", server.listening_addr()));
 
         trans.send(msg.clone()).unwrap();
         trans.flush();
-        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok());
+        assert!(receiver.rx.recv_timeout(Duration::from_secs(5)).is_ok());
 
         msg.mut_to_peer().set_store_id(2);
         msg.set_region_id(2);
-        quick_fail.store(true, Ordering::SeqCst);
+        resolver.quick_fail.store(true, Ordering::SeqCst);
         trans.send(msg.clone()).unwrap();
         trans.flush();
-        resp = significant_msg_receiver.try_recv().unwrap();
+        resp = receiver
+            .significant_msg_receiver
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap();
         assert!(is_unreachable_to(&resp, 2, 0), "{:?}", resp);
         server.stop().unwrap();
+    }
+
+    #[test]
+    fn test_buffer_full() {
+        let (receiver, resolver, mut server) = build_server();
+        let mut trans = server.transport();
+        *resolver.addr.lock().unwrap() = Some(format!("{}", server.listening_addr()));
+
+        let mut msg = RaftMessage::new();
+        msg.set_region_id(1);
+        trans.send(msg.clone()).unwrap();
+        let mut ans_msg = receiver.rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(ans_msg, msg);
+
+        // When it fits in buffer, it should not report error.
+        for id in 0..4096 {
+            let mut msg = msg.clone();
+            msg.mut_to_peer().set_id(id);
+            trans.send(msg).unwrap();
+        }
+        // And it should not flush.
+        assert!(receiver
+            .rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+        msg.mut_to_peer().set_id(4096);
+        assert!(trans.send(msg.clone()).is_err());
+
+        // When it can't fit in buffer, it should flush automatically.
+        for i in 0..4096 {
+            ans_msg = receiver
+                .rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap_or_else(|_| panic!("failed to fetch {}", i));
+            assert_eq!(i, ans_msg.get_to_peer().get_id());
+        }
+        assert!(receiver
+            .rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+
+        msg.mut_to_peer().set_id(4097);
+        trans.send(msg).unwrap();
+        assert!(receiver
+            .rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+        trans.flush();
+        msg = receiver.rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(msg.get_to_peer().get_id(), 4097);
+        server.stop().unwrap();
+    }
+
+    #[test]
+    fn test_reconnect() {
+        let (receiver1, resolver1, mut server1) = build_server();
+        let (receiver2, _resolver2, mut server2) = build_server();
+        let mut trans = server1.transport();
+
+        let (tx, rx) = mpsc::channel();
+        *resolver1.delegate.lock().unwrap() = Some(tx);
+        let mut msg = RaftMessage::new();
+        msg.set_region_id(1);
+        trans.send(msg.clone()).unwrap();
+        trans.flush();
+        receiver2
+            .rx
+            .recv_timeout(Duration::from_millis(300))
+            .unwrap_err();
+
+        let (_, cb) = rx.recv_timeout(Duration::from_millis(300)).unwrap();
+        cb(Ok(format!("{}", server2.listening_addr())));
+        let mut ans_msg = receiver2
+            .rx
+            .recv_timeout(Duration::from_millis(300))
+            .unwrap();
+        assert_eq!(ans_msg, msg);
+
+        for i in 0..10 {
+            msg.mut_to_peer().set_id(i);
+            trans.send(msg.clone()).unwrap();
+        }
+        trans.flush();
+        for i in 0..10 {
+            ans_msg = receiver2
+                .rx
+                .recv_timeout(Duration::from_millis(300))
+                .unwrap_or_else(|_| panic!("failed to fetch {}", i));
+            assert_eq!(i, ans_msg.get_to_peer().get_id());
+        }
+        assert!(receiver2
+            .rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+
+        server2.stop().unwrap();
+        let (_, cb) = rx.recv_timeout(Duration::from_millis(300)).unwrap();
+        msg.mut_to_peer().set_id(5000);
+        trans.send(msg.clone()).unwrap();
+        trans.flush();
+        cb(Ok(format!("{}", server1.listening_addr())));
+        ans_msg = receiver1.rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(ans_msg, msg);
+        server1.stop().unwrap();
     }
 }
