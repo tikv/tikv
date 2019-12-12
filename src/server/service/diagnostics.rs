@@ -107,7 +107,7 @@ mod log {
             log_file: P,
             begin_time: i64,
             end_time: i64,
-            levels: Vec<LogLevel>,
+            level_flag: usize,
             patterns: Vec<regex::Regex>,
         ) -> Result<Self, Error> {
             let log_path = log_file.as_ref();
@@ -173,9 +173,6 @@ mod log {
                     search_files.push((file_start_time, file));
                 }
             }
-            let level_flag = levels
-                .into_iter()
-                .fold(0, |acc, x| acc | (1 << (x as usize)));
             // Sort by start time descending
             search_files.sort_by(|a, b| b.0.cmp(&a.0));
             let current_reader = search_files.pop().map(|file| BufReader::new(file.1));
@@ -339,7 +336,10 @@ mod log {
             patterns.push(r);
         }
 
-        let iter = match LogIterator::new(log_file, begin_time, end_time, levels, patterns) {
+        let level_flag = levels
+            .into_iter()
+            .fold(0, |acc, x| acc | (1 << (x as usize)));
+        let iter = match LogIterator::new(log_file, begin_time, end_time, level_flag, patterns) {
             Ok(iter) => iter,
             Err(e) => return err(e),
         };
@@ -549,7 +549,7 @@ mod log {
 
             // We use the timestamp as the identity of log item in following test cases
             // all content
-            let log_iter = LogIterator::new(&log_file, 0, std::i64::MAX, vec![], vec![]).unwrap();
+            let log_iter = LogIterator::new(&log_file, 0, std::i64::MAX, 0, vec![]).unwrap();
             let expected = vec![
                 "2019/08/23 18:09:53.387 +08:00",
                 "2019/08/23 18:09:54.387 +08:00",
@@ -578,7 +578,7 @@ mod log {
                 &log_file,
                 timestamp("2019/08/23 18:09:56.387 +08:00"),
                 timestamp("2019/08/23 18:10:03.387 +08:00"),
-                vec![],
+                0,
                 vec![],
             )
             .unwrap();
@@ -604,7 +604,7 @@ mod log {
                 &log_file,
                 timestamp("2019/08/23 18:09:53.387 +08:00"),
                 timestamp("2019/08/23 18:09:58.387 +08:00"),
-                vec![LogLevel::Info],
+                1 << (LogLevel::Info as usize),
                 vec![],
             )
             .unwrap();
@@ -621,7 +621,7 @@ mod log {
                 &log_file,
                 timestamp("2019/08/23 18:09:53.387 +08:00"),
                 std::i64::MAX,
-                vec![LogLevel::Warn],
+                1 << (LogLevel::Warn as usize),
                 vec![],
             )
             .unwrap();
@@ -643,7 +643,7 @@ mod log {
                 &log_file,
                 timestamp("2019/08/23 18:09:54.387 +08:00"),
                 std::i64::MAX,
-                vec![LogLevel::Warn],
+                1 << (LogLevel::Warn as usize),
                 vec![regex::Regex::new(".*test-filter.*").unwrap()],
             )
             .unwrap();
@@ -690,7 +690,7 @@ mod log {
             let mut req = SearchLogRequest::default();
             req.set_start_time(timestamp("2019/08/23 18:09:54.387 +08:00"));
             req.set_end_time(std::i64::MAX);
-            req.set_levels(vec![LogLevel::Warn].into());
+            req.set_levels(vec![LogLevel::Warn.into()].into());
             req.set_patterns(vec![".*test-filter.*".to_string()].into());
             let expected = vec!["2019/08/23 18:09:58.387 +08:00"]
                 .iter()
