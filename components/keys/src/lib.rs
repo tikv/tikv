@@ -6,6 +6,8 @@
 extern crate derive_more;
 #[macro_use]
 extern crate failure;
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
 
 use byteorder::{BigEndian, ByteOrder};
 

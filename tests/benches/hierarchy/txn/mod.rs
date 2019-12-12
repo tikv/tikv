@@ -5,8 +5,8 @@ use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
 use tikv::storage::mvcc::{self, MvccTxn};
-use tikv::storage::{Mutation, Options};
-use txn_types::{Key, TimeStamp};
+use tikv::storage::Options;
+use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 

@@ -1395,6 +1395,7 @@ dependencies = [
  "kvproto",
  "panic_hook",
  "slog",
+ "tikv_alloc",
 ]
 
 [[package]]
@@ -3338,6 +3339,7 @@ dependencies = [
  "tipb_helper",
  "tokio-threadpool",
  "toml",
+ "txn_types",
  "uuid",
 ]
 
