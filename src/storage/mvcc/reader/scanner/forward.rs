@@ -22,7 +22,8 @@ pub trait ScanPolicy<S: Snapshot> {
     ///
     /// If `HandleRes::Return(val)` is returned, `val` will be returned to the
     /// caller of the scanner. Otherwise, `HandleRes::Skip(current_user_key)`
-    /// should be returned and the scanner will handle the write record.
+    /// should be returned. Then, the scanner will handle the write records
+    /// if the write cursor points to the same user key, or continue scanning.
     ///
     /// Note that the method should also take care of moving the cursors.
     fn handle_lock(
