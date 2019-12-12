@@ -264,7 +264,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         }
     }
 
-    /// Try to move the write cursor to the `ts` version of the given key.
+    /// Try to move the write cursor to the `self.cfg.ts` version of the given key.
     /// Because it is possible that the cursor is moved to the next user key or
     /// the end of key space, the method returns whether the write cursor still
     /// points to the given user key.
