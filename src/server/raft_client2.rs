@@ -14,7 +14,7 @@ use futures::try_ready;
 use futures::{Async, AsyncSink, Future, Poll, Sink};
 use grpcio::{ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment, WriteFlags};
 use kvproto::raft_serverpb::{Done, RaftMessage};
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 use raft::SnapshotStatus;
 use std::collections::VecDeque;
 use std::ffi::CString;

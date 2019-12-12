@@ -444,7 +444,7 @@ mod tests {
         let mut trans = server.transport();
         *resolver.addr.lock().unwrap() = Some(format!("{}", server.listening_addr()));
 
-        let mut msg = RaftMessage::new();
+        let mut msg = RaftMessage::default();
         msg.set_region_id(1);
         trans.send(msg.clone()).unwrap();
         let mut ans_msg = receiver.rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -497,7 +497,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         *resolver1.delegate.lock().unwrap() = Some(tx);
-        let mut msg = RaftMessage::new();
+        let mut msg = RaftMessage::default();
         msg.set_region_id(1);
         trans.send(msg.clone()).unwrap();
         trans.flush();
