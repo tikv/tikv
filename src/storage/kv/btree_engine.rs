@@ -9,8 +9,8 @@ use std::sync::{Arc, RwLock};
 
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use keys::{Key, Value};
 use kvproto::kvrpcpb::Context;
+use txn_types::{Key, Value};
 
 use crate::storage::kv::{
     Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError,
