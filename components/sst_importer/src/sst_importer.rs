@@ -235,26 +235,7 @@ impl SSTImporter {
             Bound::Excluded(_) => unreachable!(),
         };
         while iter.valid() {
-            let old_key = {
-                if rewrite_rule.new_timestamp != 0 {
-                    Cow::from(
-                        Key::from_encoded_slice(keys::origin_key(iter.key()))
-                            .truncate_ts()
-                            .map_err(|e| {
-                                Error::BadFormat(format!(
-                                    "key {}: {}",
-                                    hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
-                                    e
-                                ))
-                            })?
-                            .append_ts(TimeStamp::new(rewrite_rule.new_timestamp))
-                            .into_encoded(),
-                    )
-                } else {
-                    Cow::from(keys::origin_key(iter.key()))
-                }
-            };
-
+            let old_key = keys::origin_key(iter.key());
             if is_after_end_bound(&old_key, &range_end) {
                 break;
             }
@@ -267,20 +248,34 @@ impl SSTImporter {
             }
             key.truncate(new_prefix_data_key_len);
             key.extend_from_slice(&old_key[old_prefix.len()..]);
+            let mut value = Cow::Borrowed(iter.value());
 
-            if rewrite_rule.new_timestamp != 0 && meta.get_cf_name() == "write" {
-                let mut write = WriteRef::parse(iter.value()).map_err(|e| {
-                    Error::BadFormat(format!(
-                        "write {}: {}",
-                        hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
-                        e
-                    ))
-                })?;
-                write.start_ts = TimeStamp::new(rewrite_rule.new_timestamp);
-                sst_writer.put(&key, &write.to_bytes())?
-            } else {
-                sst_writer.put(&key, iter.value())?
-            };
+            if rewrite_rule.new_timestamp != 0 {
+                key = Key::from_encoded(key)
+                    .truncate_ts()
+                    .map_err(|e| {
+                        Error::BadFormat(format!(
+                            "key {}: {}",
+                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            e
+                        ))
+                    })?
+                    .append_ts(TimeStamp::new(rewrite_rule.new_timestamp))
+                    .into_encoded();
+                if meta.get_cf_name() == "write" {
+                    let mut write = WriteRef::parse(iter.value()).map_err(|e| {
+                        Error::BadFormat(format!(
+                            "write {}: {}",
+                            hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                            e
+                        ))
+                    })?;
+                    write.start_ts = TimeStamp::new(rewrite_rule.new_timestamp);
+                    value = Cow::Owned(write.to_bytes());
+                }
+            }
+
+            sst_writer.put(&key, &value)?;
             iter.next();
             if first_key.is_none() {
                 first_key = Some(keys::origin_key(&key).to_vec());
