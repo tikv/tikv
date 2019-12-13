@@ -124,7 +124,7 @@ dependencies = [
  "failure",
  "futures",
  "grpcio",
- "hex",
+ "hex 0.3.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -390,7 +390,7 @@ dependencies = [
  "futures",
  "futures-cpupool",
  "grpcio",
- "hex",
+ "hex 0.3.2",
  "keys",
  "kvproto",
  "libc",
@@ -743,7 +743,7 @@ name = "engine"
 version = "0.0.1"
 dependencies = [
  "engine_traits",
- "hex",
+ "hex 0.3.2",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -770,7 +770,7 @@ version = "0.0.1"
 dependencies = [
  "engine",
  "engine_traits",
- "hex",
+ "hex 0.3.2",
  "kvproto",
  "lazy_static",
  "prometheus",
@@ -795,7 +795,7 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
- "hex",
+ "hex 0.3.2",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "tikv_alloc",
@@ -1157,6 +1157,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "805026a5d0141ffc30abb3be3173848ad46a1b1664fe632428479619a3644d77"
 
 [[package]]
+name = "hex"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "023b39be39e3a2da62a94feb433e91e8bcd37676fbc8bea371daf52b7a769a3e"
+
+[[package]]
 name = "honggfuzz"
 version = "0.5.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1391,7 +1397,7 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "hex",
+ "hex 0.3.2",
  "kvproto",
  "panic_hook",
  "slog",
@@ -1438,6 +1444,18 @@ name = "libc"
 version = "0.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a31a0627fdf1f6a39ec0dd577e101440b7db22672c0901fe00a9a6fbb5c24e8"
+
+[[package]]
+name = "libflate"
+version = "0.1.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9135df43b1f5d0e333385cb6e7897ecd1a43d7d11b91ac003f4d2c2d2401fdd"
+dependencies = [
+ "adler32",
+ "crc32fast",
+ "rle-decode-fast",
+ "take_mut",
+]
 
 [[package]]
 name = "libfuzzer-sys"
@@ -1535,7 +1553,7 @@ dependencies = [
 name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
- "hex",
+ "hex 0.3.2",
  "kvproto",
  "slog",
  "slog-term",
@@ -2004,7 +2022,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "grpcio",
- "hex",
+ "hex 0.3.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -2117,21 +2135,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "procinfo"
-version = "0.4.2"
-source = "git+https://github.com/tikv/procinfo-rs#5125fc1a69496b73b26b3c08b6e8afc3c665a56e"
+name = "procfs"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "280f8596aef3877289d5586730d0b9a031218f5bea4422f3e9fdda5049c80626"
 dependencies = [
+ "bitflags",
  "byteorder",
+ "hex 0.4.0",
+ "lazy_static",
  "libc",
- "nom 2.2.1",
- "rustc_version",
+ "libflate",
 ]
 
 [[package]]
 name = "procinfo"
 version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ab1427f3d2635891f842892dda177883dca0639e05fe66796a62c9d2f23b49c"
+source = "git+https://github.com/tikv/procinfo-rs#5125fc1a69496b73b26b3c08b6e8afc3c665a56e"
 dependencies = [
  "byteorder",
  "libc",
@@ -2153,28 +2173,28 @@ dependencies = [
 [[package]]
 name = "prometheus"
 version = "0.8.0"
-source = "git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be#b668f3911d6569de2e1e8b2672fccec1cc8298be"
+source = "git+https://github.com/pingcap/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087#d919ccd35976b9b84b8d03c07138c1cc05a36087"
 dependencies = [
  "cfg-if",
  "fnv",
  "lazy_static",
  "libc",
- "procinfo 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "procfs",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "quick-error",
  "reqwest",
  "spin",
+ "thiserror",
 ]
 
 [[package]]
 name = "prometheus-static-metric"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-prometheus.git?rev=b668f3911d6569de2e1e8b2672fccec1cc8298be#b668f3911d6569de2e1e8b2672fccec1cc8298be"
+source = "git+https://github.com/pingcap/rust-prometheus.git?rev=d919ccd35976b9b84b8d03c07138c1cc05a36087#d919ccd35976b9b84b8d03c07138c1cc05a36087"
 dependencies = [
  "lazy_static",
- "proc-macro2 0.4.30",
- "quote 0.6.13",
- "syn 0.15.44",
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
 ]
 
 [[package]]
@@ -2253,7 +2273,7 @@ version = "2.8.0"
 source = "git+https://github.com/nrc/rust-protobuf?branch=v2.8#4df576feca3b10c01d55b0e7c634bfab30982087"
 dependencies = [
  "heck",
- "hex",
+ "hex 0.3.2",
 ]
 
 [[package]]
@@ -2687,6 +2707,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 
 [[package]]
+name = "rle-decode-fast"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
+
+[[package]]
 name = "rocksdb"
 version = "0.3.0"
 source = "git+https://github.com/pingcap/rust-rocksdb.git#4ad6d0a7b35d30e7c67f6cfdff7d97874f330123"
@@ -2998,7 +3024,7 @@ dependencies = [
  "external_storage",
  "futures",
  "grpcio",
- "hex",
+ "hex 0.3.2",
  "keys",
  "kvproto",
  "lazy_static",
@@ -3239,7 +3265,7 @@ dependencies = [
  "futures",
  "futures-cpupool",
  "grpcio",
- "hex",
+ "hex 0.3.2",
  "keys",
  "kvproto",
  "pd_client",
@@ -3312,7 +3338,7 @@ dependencies = [
  "futures",
  "futures-cpupool",
  "grpcio",
- "hex",
+ "hex 0.3.2",
  "keys",
  "kvproto",
  "panic_hook",
@@ -3353,6 +3379,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "thiserror"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc6b305ec0e323c7b6cfff6098a22516e0063d0bb7c3d88660a890217dca099a"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45ba8d810d9c48fc456b7ad54574e8bfb7c7918a57ad7a6e6a0985d7959e8597"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
+]
+
+[[package]]
 name = "thread_local"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3376,7 +3422,7 @@ dependencies = [
  "derive_more",
  "failure",
  "flate2",
- "hex",
+ "hex 0.3.2",
  "indexmap",
  "kvproto",
  "lazy_static",
@@ -3461,7 +3507,7 @@ dependencies = [
  "futures-cpupool",
  "futures-locks",
  "grpcio",
- "hex",
+ "hex 0.3.2",
  "hyper",
  "keys",
  "kvproto",
@@ -3477,7 +3523,7 @@ dependencies = [
  "panic_hook",
  "pd_client",
  "pprof",
- "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs)",
+ "procinfo",
  "prometheus",
  "prometheus-static-metric",
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3553,13 +3599,13 @@ dependencies = [
  "futures-cpupool",
  "fxhash",
  "grpcio",
- "hex",
+ "hex 0.3.2",
  "lazy_static",
  "libc",
  "log",
  "openssl",
  "panic_hook",
- "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs)",
+ "procinfo",
  "prometheus",
  "prometheus-static-metric",
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3887,7 +3933,7 @@ dependencies = [
  "derive-new",
  "derive_more",
  "farmhash",
- "hex",
+ "hex 0.3.2",
  "kvproto",
  "panic_hook",
  "quick-error",
