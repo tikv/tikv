@@ -539,6 +539,14 @@ impl<S: Snapshot> TxnEntryScanner for EntryScanner<S> {
     }
 }
 
+/// This type can be used to scan keys starting from the given user key (greater than or equal).
+///
+/// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
+/// isolation level is SI, locks will be checked first.
+///
+/// Use `ScannerBuilder` to build `ForwardKvScanner`.
+pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
+
 #[cfg(test)]
 mod latest_kv_tests {
     use super::super::ScannerBuilder;
