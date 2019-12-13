@@ -225,6 +225,7 @@ impl SSTImporter {
         // perform iteration and key rewrite.
         let mut sst_writer = E::SstWriterBuilder::new().build(path.save.to_str().unwrap())?;
         let mut key = keys::data_key(new_prefix);
+        let new_prefix_data_key_len = key.len();	
         let mut first_key = None;
 
         match range_start {
@@ -261,6 +262,7 @@ impl SSTImporter {
                     old_prefix.to_vec(),
                 ));
             }
+            key.truncate(new_prefix_data_key_len);
             key.extend_from_slice(&old_key[old_prefix.len()..]);
 
             if rewrite_rule.new_timestamp != 0 && meta.get_cf_name() == "write" {
@@ -777,8 +779,8 @@ mod tests {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer =
             new_sst_writer(ext_sst_dir.path().join("sample_write.sst").to_str().unwrap());
-        sst_writer.put(&get_encoded_key(b"t123_r01", 5), &get_write_value(WriteType::Delete, 1, None))?;
-        sst_writer.put(&get_encoded_key(b"t123_r01", 2), &get_write_value(WriteType::Put, 1, None))?;
+        sst_writer.put(&get_encoded_key(b"t123_r01", 5), &get_write_value(WriteType::Put, 1, None))?;
+        sst_writer.put(&get_encoded_key(b"t123_r02", 5), &get_write_value(WriteType::Delete, 1, None))?;
         sst_writer.put(&get_encoded_key(b"t123_r04", 4), &get_write_value(WriteType::Put, 3, None))?;
         sst_writer.put(&get_encoded_key(b"t123_r07", 8), &get_write_value(WriteType::Put, 7, None))?;
         sst_writer.put(&get_encoded_key(b"t123_r13", 8), &get_write_value(WriteType::Put, 7, Some(b"www".to_vec())))?;
@@ -964,7 +966,7 @@ mod tests {
             iter.as_std().collect::<Vec<_>>(),
             vec![
                 (get_encoded_key(b"t123_r01", 16), get_write_value(WriteType::Put, 16, None)),
-                (get_encoded_key(b"t123_r01", 16), get_write_value(WriteType::Delete, 16, None)),
+                (get_encoded_key(b"t123_r02", 16), get_write_value(WriteType::Delete, 16, None)),
                 (get_encoded_key(b"t123_r04", 16), get_write_value(WriteType::Put, 16, None)),
                 (get_encoded_key(b"t123_r07", 16), get_write_value(WriteType::Put, 16, None)),
                 (get_encoded_key(b"t123_r13", 16), get_write_value(WriteType::Put, 16, Some(b"www".to_vec()))),
