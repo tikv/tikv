@@ -136,7 +136,6 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        // let split_size = ReadableSize::mb(coprocessor::config::SPLIT_SIZE_MB);
         let split_size = ReadableSize::mb(super::coprocessor::SPLIT_SIZE_MB);
         Config {
             sync_log: true,
