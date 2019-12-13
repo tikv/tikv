@@ -26,7 +26,7 @@ use engine::rocks;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use keys::{self, Key};
+use keys;
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
@@ -43,6 +43,7 @@ use tikv::server::RaftKv;
 use tikv::storage::kv::Engine;
 use tikv_util::security::{SecurityConfig, SecurityManager};
 use tikv_util::{escape, unescape};
+use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";

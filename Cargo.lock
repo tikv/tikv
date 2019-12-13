@@ -144,6 +144,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio-threadpool",
+ "txn_types",
  "url 2.1.0",
  "uuid",
 ]
@@ -407,6 +408,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "toml",
+ "txn_types",
  "url 2.1.0",
  "vlog",
 ]
@@ -1389,19 +1391,17 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "farmhash",
  "hex",
  "kvproto",
  "panic_hook",
  "slog",
  "tikv_alloc",
- "tikv_util",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#c16783858504feffa04eb70af3215d3187e58a14"
+source = "git+https://github.com/pingcap/kvproto.git#705501101234770886dff3c7434de7c88fcc7188"
 dependencies = [
  "bytes",
  "futures",
@@ -3227,6 +3227,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tipb",
+ "txn_types",
 ]
 
 [[package]]
@@ -3277,6 +3278,7 @@ dependencies = [
  "test_raftstore",
  "tikv",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -3337,6 +3339,7 @@ dependencies = [
  "tipb_helper",
  "tokio-threadpool",
  "toml",
+ "txn_types",
  "uuid",
 ]
 
@@ -3513,6 +3516,7 @@ dependencies = [
  "tokio-threadpool",
  "tokio-timer",
  "toml",
+ "txn_types",
  "url 2.1.0",
  "utime",
  "uuid",
@@ -3873,6 +3877,24 @@ checksum = "766345ed3891b291d01af307cd3ad2992a4261cb6c0c7e665cd3e01cf379dd24"
 dependencies = [
  "memchr",
  "unchecked-index",
+]
+
+[[package]]
+name = "txn_types"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "codec",
+ "derive-new",
+ "derive_more",
+ "farmhash",
+ "hex",
+ "kvproto",
+ "panic_hook",
+ "quick-error",
+ "slog",
+ "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
