@@ -537,6 +537,28 @@ impl<S: Snapshot> TxnEntryScanner for EntryScanner<S> {
     fn take_statistics(&mut self) -> Statistics {
         std::mem::replace(&mut self.statistics, Statistics::default())
     }
+    result
+        .map(|_| HandleRes::Skip(current_user_key))
+        .map_err(Into::into)
+}
+
+/// This type can be used to scan keys starting from the given user key (greater than or equal).
+///
+/// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
+/// isolation level is SI, locks will be checked first.
+///
+/// Use `ScannerBuilder` to build `ForwardKvScanner`.
+pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
+
+pub type EntryScanner<S> = ForwardScanner<S, LatestEntryPolicy>;
+
+impl<S: Snapshot> TxnEntryScanner for EntryScanner<S> {
+    fn next_entry(&mut self) -> TxnResult<Option<TxnEntry>> {
+        Ok(self.read_next()?)
+    }
+    fn take_statistics(&mut self) -> Statistics {
+        std::mem::replace(&mut self.statistics, Statistics::default())
+    }
 }
 
 /// This type can be used to scan keys starting from the given user key (greater than or equal).
