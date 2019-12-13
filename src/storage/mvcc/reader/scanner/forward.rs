@@ -234,8 +234,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     }
                 };
 
-                // // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
-                // // the key or its clones without reallocation.
+                // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
+                // the key or its clones without reallocation.
                 (Key::from_encoded_slice(res.0), res.1, res.2)
             };
 
@@ -266,7 +266,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         }
     }
 
-    /// Try to move the write cursor to the `ts` version of the given key.
+    /// Try to move the write cursor to the `self.cfg.ts` version of the given key.
     /// Because it is possible that the cursor is moved to the next user key or
     /// the end of key space, the method returns whether the write cursor still
     /// points to the given user key.
