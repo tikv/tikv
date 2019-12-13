@@ -374,6 +374,10 @@ pub struct RaftMetrics {
     pub propose: RaftProposeMetrics,
     pub process_ready: LocalHistogram,
     pub append_log: LocalHistogram,
+    pub write_raft: LocalHistogram,
+    pub write_kv: LocalHistogram,
+    pub handle_control: LocalHistogram,
+    pub handle_normal: LocalHistogram,
     pub commit_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
@@ -388,6 +392,18 @@ impl Default for RaftMetrics {
             propose: Default::default(),
             process_ready: PEER_RAFT_PROCESS_DURATION
                 .with_label_values(&["ready"])
+                .local(),
+            write_raft: PEER_RAFT_PROCESS_DURATION
+                .with_label_values(&["write_raft"])
+                .local(),
+            write_kv: PEER_RAFT_PROCESS_DURATION
+                .with_label_values(&["write_kv"])
+                .local(),
+            handle_control: PEER_RAFT_PROCESS_DURATION
+                .with_label_values(&["handle_control"])
+                .local(),
+            handle_normal: PEER_RAFT_PROCESS_DURATION
+                .with_label_values(&["handle_normal"])
                 .local(),
             append_log: PEER_APPEND_LOG_HISTOGRAM.local(),
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
@@ -404,6 +420,10 @@ impl RaftMetrics {
         self.message.flush();
         self.propose.flush();
         self.process_ready.flush();
+        self.write_raft.flush();
+        self.write_kv.flush();
+        self.handle_control.flush();
+        self.handle_normal.flush();
         self.append_log.flush();
         self.commit_log.flush();
         self.message_dropped.flush();

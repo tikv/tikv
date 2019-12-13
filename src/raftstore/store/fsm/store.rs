@@ -480,6 +480,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         self.poll_ctx.raft_metrics.ready.has_ready_region += ready_cnt as u64;
         fail_point!("raft_before_save");
         if !self.poll_ctx.kv_wb.is_empty() {
+            let timer = tikv_util::time::Instant::now_coarse();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             self.poll_ctx
@@ -495,9 +496,14 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             } else {
                 self.poll_ctx.kv_wb.clear();
             }
+            self.poll_ctx
+                .raft_metrics
+                .write_raft
+                .observe(timer.elapsed_secs());
         }
         fail_point!("raft_between_save");
         if !self.poll_ctx.raft_wb.is_empty() {
+            let timer = tikv_util::time::Instant::now_coarse();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
             self.poll_ctx
@@ -513,6 +519,10 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             } else {
                 self.poll_ctx.raft_wb.clear();
             }
+            self.poll_ctx
+                .raft_metrics
+                .write_kv
+                .observe(timer.elapsed_secs());
         }
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
@@ -573,6 +583,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm) -> Option<usize> {
+        let timer = tikv_util::time::Instant::now_coarse();
         let mut expected_msg_count = None;
         while self.store_msg_buf.len() < self.messages_per_tick {
             match store.receiver.try_recv() {
@@ -593,10 +604,15 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             ctx: &mut self.poll_ctx,
         };
         delegate.handle_msgs(&mut self.store_msg_buf);
+        self.poll_ctx
+            .raft_metrics
+            .handle_control
+            .observe(timer.elapsed_secs());
         expected_msg_count
     }
 
     fn handle_normal(&mut self, peer: &mut PeerFsm) -> Option<usize> {
+        let timer = tikv_util::time::Instant::now_coarse();
         let mut expected_msg_count = None;
         if peer.have_pending_merge_apply_result() {
             expected_msg_count = Some(peer.receiver.len());
@@ -644,10 +660,15 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
         delegate.collect_ready(&mut self.pending_proposals);
+        self.poll_ctx
+            .raft_metrics
+            .handle_normal
+            .observe(timer.elapsed_secs());
         expected_msg_count
     }
 
     fn end(&mut self, peers: &mut [Box<PeerFsm>]) {
+        let timer = tikv_util::time::Instant::now_coarse();
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         }
@@ -661,7 +682,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         self.poll_ctx
             .raft_metrics
             .process_ready
-            .observe(duration_to_sec(self.timer.elapsed()) as f64);
+            .observe(timer.elapsed_secs());
         self.poll_ctx.raft_metrics.flush();
         self.poll_ctx.store_stat.flush();
     }
