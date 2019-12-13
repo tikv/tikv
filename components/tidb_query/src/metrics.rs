@@ -40,6 +40,6 @@ lazy_static::lazy_static! {
 }
 
 thread_local! {
-    pub static RUNNER_BUILDING_METRICS: TLSMetricGroup<LocalCoprExecutorCount> =
+    pub static EXECUTOR_COUNT_METRICS: TLSMetricGroup<LocalCoprExecutorCount> =
         TLSMetricGroup::new(LocalCoprExecutorCount::from(&COPR_EXECUTOR_COUNT));
 }

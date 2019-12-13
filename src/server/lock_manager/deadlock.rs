@@ -99,10 +99,11 @@ impl DetectTable {
     /// Returns the key hash which causes deadlock.
     pub fn detect(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) -> Option<u64> {
         let res = DETECTOR_HISTOGRAM_METRICS.with(|m| {
-            m.detect
-                .observe_closure_duration(|| self.detect_inner(txn_ts, lock_ts, lock_hash))
+            let res = m.detect
+                .observe_closure_duration(|| self.detect_inner(txn_ts, lock_ts, lock_hash));
+            m.may_flush_all();
+            res
         });
-        DETECTOR_HISTOGRAM_METRICS.with(|m| m.may_flush_all());
         res
     }
 
@@ -114,8 +115,8 @@ impl DetectTable {
     ) -> Option<u64> {
         TASK_COUNTER_METRICS.with(|m| {
             m.detect.inc();
+            m.may_flush_all()
         });
-        TASK_COUNTER_METRICS.with(|m| m.may_flush_all());
 
         self.now = Instant::now_coarse();
         self.active_expire();
