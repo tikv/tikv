@@ -2345,7 +2345,7 @@ impl Peer {
         send_msg.set_message(msg);
 
         if let Err(e) = trans.send(send_msg) {
-            warn!(
+            debug!(
                 "failed to send msg to other peer";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
