@@ -2,12 +2,11 @@
 
 use criterion::{black_box, BatchSize, Bencher, Criterion};
 use engine::CF_DEFAULT;
-use keys::Key;
 use kvproto::kvrpcpb::Context;
 use test_storage::SyncTestStorageBuilder;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
-use tikv::storage::Mutation;
+use txn_types::{Key, Mutation};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 

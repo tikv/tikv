@@ -5,11 +5,11 @@ use std::cmp::Ordering;
 use engine::rocks::{SeekKey, DB};
 use engine::CF_WRITE;
 use engine::{IterOption, Iterable};
-use keys::Key;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
 use tikv_util::keybuilder::KeyBuilder;
+use txn_types::Key;
 
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
@@ -228,11 +228,11 @@ mod tests {
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
     use engine::ALL_CFS;
-    use keys::Key;
     use tidb_query::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
+    use txn_types::Key;
 
     use super::*;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};

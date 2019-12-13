@@ -63,6 +63,7 @@ pub fn url_of_backend(backend: &StorageBackend) -> url::Url {
             }
             u.set_path(s3.get_prefix());
         }
+        Some(Backend::Gcs(_)) => unimplemented!(),
         None => {}
     }
     u
