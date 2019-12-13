@@ -2,7 +2,7 @@
 
 use prometheus::*;
 use prometheus_static_metric::*;
-use tikv_util::metrics::{TLSMetricGroup, TLSMetricGroupInner};
+use tikv_util::metrics::TLSMetricGroup;
 
 make_static_metric! {
     pub struct LocalTaskCounter: LocalIntCounter {
@@ -63,28 +63,9 @@ lazy_static! {
     .unwrap();
 }
 
-pub struct LockManagerMetrics {
-    pub task_counter: LocalTaskCounter,
-    pub error_counter: LocalErrorCounter,
-}
-
-impl LockManagerMetrics {
-    fn new() -> Self {
-        Self {
-            task_counter: LocalTaskCounter::from(&TASK_COUNTER_VEC),
-            error_counter: LocalErrorCounter::from(&ERROR_COUNTER_VEC),
-        }
-    }
-}
-
-impl TLSMetricGroupInner for LockManagerMetrics {
-    fn flush_all(&self) {
-        self.task_counter.flush();
-        self.error_counter.flush();
-    }
-}
-
 thread_local! {
-    pub static LOCK_MANAGER_METRICS: TLSMetricGroup<LockManagerMetrics> =
-        TLSMetricGroup::new(LockManagerMetrics::new());
+    pub static TASK_COUNTER_METRICS: TLSMetricGroup<LocalTaskCounter> =
+        TLSMetricGroup::new(LocalTaskCounter::from(&TASK_COUNTER_VEC));
+    pub static ERROR_COUNTER_METRICS: TLSMetricGroup<LocalErrorCounter> =
+        TLSMetricGroup::new(LocalErrorCounter::from(&TASK_COUNTER_VEC));
 }

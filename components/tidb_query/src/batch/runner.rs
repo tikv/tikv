@@ -125,7 +125,7 @@ pub fn build_executors<S: Storage + 'static>(
 
     match first_ed.get_tp() {
         ExecType::TypeTableScan => {
-            RUNNER_BUILDING_METRICS.with(|m| m.executor_count.batch_table_scan.inc());
+            RUNNER_BUILDING_METRICS.with(|m| m.batch_table_scan.inc());
 
             let mut descriptor = first_ed.take_tbl_scan();
             let columns_info = descriptor.take_columns().into();
@@ -141,7 +141,7 @@ pub fn build_executors<S: Storage + 'static>(
             );
         }
         ExecType::TypeIndexScan => {
-            RUNNER_BUILDING_METRICS.with(|m| m.executor_count.batch_index_scan.inc());
+            RUNNER_BUILDING_METRICS.with(|m| m.batch_index_scan.inc());
 
             let mut descriptor = first_ed.take_idx_scan();
             let columns_info = descriptor.take_columns().into();
@@ -170,7 +170,7 @@ pub fn build_executors<S: Storage + 'static>(
 
         let new_executor: Box<dyn BatchExecutor<StorageStats = S::Statistics>> = match ed.get_tp() {
             ExecType::TypeSelection => {
-                RUNNER_BUILDING_METRICS.with(|m| m.executor_count.batch_selection.inc());
+                RUNNER_BUILDING_METRICS.with(|m| m.batch_selection.inc());
 
                 Box::new(
                     BatchSelectionExecutor::new(
@@ -184,7 +184,7 @@ pub fn build_executors<S: Storage + 'static>(
             ExecType::TypeAggregation | ExecType::TypeStreamAgg
                 if ed.get_aggregation().get_group_by().is_empty() =>
             {
-                RUNNER_BUILDING_METRICS.with(|m| m.executor_count.batch_simple_aggr.inc());
+                RUNNER_BUILDING_METRICS.with(|m| m.batch_simple_aggr.inc());
 
                 Box::new(
                     BatchSimpleAggregationExecutor::new(
@@ -198,7 +198,7 @@ pub fn build_executors<S: Storage + 'static>(
             ExecType::TypeAggregation => {
                 if BatchFastHashAggregationExecutor::check_supported(&ed.get_aggregation()).is_ok()
                 {
-                    RUNNER_BUILDING_METRICS.with(|m| m.executor_count.batch_fast_hash_aggr.inc());
+                    RUNNER_BUILDING_METRICS.with(|m| m.batch_fast_hash_aggr.inc());
 
                     Box::new(
                         BatchFastHashAggregationExecutor::new(
@@ -210,7 +210,7 @@ pub fn build_executors<S: Storage + 'static>(
                         .collect_summary(summary_slot_index),
                     )
                 } else {
-                    RUNNER_BUILDING_METRICS.with(|m| m.executor_count.batch_slow_hash_aggr.inc());
+                    RUNNER_BUILDING_METRICS.with(|m| m.batch_slow_hash_aggr.inc());
 
                     Box::new(
                         BatchSlowHashAggregationExecutor::new(
@@ -224,7 +224,7 @@ pub fn build_executors<S: Storage + 'static>(
                 }
             }
             ExecType::TypeStreamAgg => {
-                RUNNER_BUILDING_METRICS.with(|m| m.executor_count.batch_stream_aggr.inc());
+                RUNNER_BUILDING_METRICS.with(|m| m.batch_stream_aggr.inc());
 
                 Box::new(
                     BatchStreamAggregationExecutor::new(
@@ -237,7 +237,7 @@ pub fn build_executors<S: Storage + 'static>(
                 )
             }
             ExecType::TypeLimit => {
-                RUNNER_BUILDING_METRICS.with(|m| m.executor_count.batch_limit.inc());
+                RUNNER_BUILDING_METRICS.with(|m| m.batch_limit.inc());
 
                 Box::new(
                     BatchLimitExecutor::new(executor, ed.get_limit().get_limit() as usize)?
@@ -245,7 +245,7 @@ pub fn build_executors<S: Storage + 'static>(
                 )
             }
             ExecType::TypeTopN => {
-                RUNNER_BUILDING_METRICS.with(|m| m.executor_count.batch_top_n.inc());
+                RUNNER_BUILDING_METRICS.with(|m| m.batch_top_n.inc());
 
                 let mut d = ed.take_top_n();
                 let order_bys = d.get_order_by().len();

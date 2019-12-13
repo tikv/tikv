@@ -355,8 +355,8 @@ impl FutureRunnable<Task> for WaiterManager {
                     },
                     timeout,
                 );
-                LOCK_MANAGER_METRICS.with(|m| m.task_counter.wait_for.inc());
-                LOCK_MANAGER_METRICS.with(|m| m.may_flush_all());
+                TASK_COUNTER_METRICS.with(|m| m.wait_for.inc());
+                TASK_COUNTER_METRICS.with(|m| m.may_flush_all());
             }
             Task::WakeUp {
                 lock_ts,
@@ -364,13 +364,13 @@ impl FutureRunnable<Task> for WaiterManager {
                 commit_ts,
             } => {
                 self.handle_wake_up(handle, lock_ts, hashes, commit_ts);
-                LOCK_MANAGER_METRICS.with(|m| m.task_counter.wake_up.inc());
-                LOCK_MANAGER_METRICS.with(|m| m.may_flush_all());
+                TASK_COUNTER_METRICS.with(|m| m.wake_up.inc());
+                TASK_COUNTER_METRICS.with(|m| m.may_flush_all());
             }
             Task::Dump { cb } => {
                 self.handle_dump(cb);
-                LOCK_MANAGER_METRICS.with(|m| m.task_counter.dump.inc());
-                LOCK_MANAGER_METRICS.with(|m| m.may_flush_all());
+                TASK_COUNTER_METRICS.with(|m| m.dump.inc());
+                TASK_COUNTER_METRICS.with(|m| m.may_flush_all());
             }
             Task::Deadlock {
                 start_ts,
