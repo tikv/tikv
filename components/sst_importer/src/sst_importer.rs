@@ -742,7 +742,7 @@ mod tests {
     }
 
     fn get_encoded_key(key: &[u8], ts: u64) -> Vec<u8> {
-        txn_types::Key::from_raw(key).append_ts(TimeStamp::new(ts)).into_encoded()
+        keys::data_key(txn_types::Key::from_raw(key).append_ts(TimeStamp::new(ts)).as_encoded())
     }
 
     fn get_write_value(write_type: WriteType, start_ts: u64, short_value: Option<Value>) -> Vec<u8> {
@@ -753,9 +753,9 @@ mod tests {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer =
             new_sst_writer(ext_sst_dir.path().join("sample_default.sst").to_str().unwrap());
-        sst_writer.put(&get_encoded_key(b"zt123_r01", 1), b"abc")?;
-        sst_writer.put(&get_encoded_key(b"zt123_r04", 3), b"xyz")?;
-        sst_writer.put(&get_encoded_key(b"zt123_r07", 7), b"pqrst")?;
+        sst_writer.put(&get_encoded_key(b"t123_r01", 1), b"abc")?;
+        sst_writer.put(&get_encoded_key(b"t123_r04", 3), b"xyz")?;
+        sst_writer.put(&get_encoded_key(b"t123_r07", 7), b"pqrst")?;
         // sst_writer.delete(b"t123_r10")?; // FIXME: can't handle DELETE ops yet.
         let sst_info = sst_writer.finish()?;
 
@@ -777,11 +777,11 @@ mod tests {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer =
             new_sst_writer(ext_sst_dir.path().join("sample_write.sst").to_str().unwrap());
-        sst_writer.put(&get_encoded_key(b"zt123_r01", 2), &get_write_value(WriteType::Put, 1, None))?;
-        sst_writer.put(&get_encoded_key(b"zt123_r01", 5), &get_write_value(WriteType::Delete, 1, None))?;
-        sst_writer.put(&get_encoded_key(b"zt123_r04", 4), &get_write_value(WriteType::Put, 3, None))?;
-        sst_writer.put(&get_encoded_key(b"zt123_r07", 8), &get_write_value(WriteType::Put, 7, None))?;
-        sst_writer.put(&get_encoded_key(b"zt123_r13", 8), &get_write_value(WriteType::Put, 7, Some(b"www".to_vec())))?;
+        sst_writer.put(&get_encoded_key(b"t123_r01", 5), &get_write_value(WriteType::Delete, 1, None))?;
+        sst_writer.put(&get_encoded_key(b"t123_r01", 2), &get_write_value(WriteType::Put, 1, None))?;
+        sst_writer.put(&get_encoded_key(b"t123_r04", 4), &get_write_value(WriteType::Put, 3, None))?;
+        sst_writer.put(&get_encoded_key(b"t123_r07", 8), &get_write_value(WriteType::Put, 7, None))?;
+        sst_writer.put(&get_encoded_key(b"t123_r13", 8), &get_write_value(WriteType::Put, 7, Some(b"www".to_vec())))?;
         let sst_info = sst_writer.finish()?;
 
         // make up the SST meta for downloading.
@@ -899,7 +899,7 @@ mod tests {
         
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_default().unwrap();
-        let range = importer
+        let _ = importer
             .download::<TestEngine>(
                 &meta,
                 &backend,
@@ -923,9 +923,9 @@ mod tests {
         assert_eq!(
             iter.as_std().collect::<Vec<_>>(),
             vec![
-                (get_encoded_key(b"zt123_r01", 1), b"abc".to_vec()),
-                (get_encoded_key(b"zt123_r04", 3), b"xyz".to_vec()),
-                (get_encoded_key(b"zt123_r07", 7), b"pqrst".to_vec()),
+                (get_encoded_key(b"t123_r01", 16), b"abc".to_vec()),
+                (get_encoded_key(b"t123_r04", 16), b"xyz".to_vec()),
+                (get_encoded_key(b"t123_r07", 16), b"pqrst".to_vec()),
             ]
         );
     }
@@ -939,7 +939,7 @@ mod tests {
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_write().unwrap();
-        let range = importer
+        let _ = importer
             .download::<TestEngine>(
                 &meta,
                 &backend,
@@ -963,11 +963,11 @@ mod tests {
         assert_eq!(
             iter.as_std().collect::<Vec<_>>(),
             vec![
-                (get_encoded_key(b"zt123_r01", 2), get_write_value(WriteType::Put, 1, None)),
-                (get_encoded_key(b"zt123_r01", 5), get_write_value(WriteType::Delete, 1, None)),
-                (get_encoded_key(b"zt123_r04", 4), get_write_value(WriteType::Put, 3, None)),
-                (get_encoded_key(b"zt123_r07", 8), get_write_value(WriteType::Put, 7, None)),
-                (get_encoded_key(b"zt123_r13", 8), get_write_value(WriteType::Put, 7, Some(b"www".to_vec()))),
+                (get_encoded_key(b"t123_r01", 16), get_write_value(WriteType::Put, 16, None)),
+                (get_encoded_key(b"t123_r01", 16), get_write_value(WriteType::Delete, 16, None)),
+                (get_encoded_key(b"t123_r04", 16), get_write_value(WriteType::Put, 16, None)),
+                (get_encoded_key(b"t123_r07", 16), get_write_value(WriteType::Put, 16, None)),
+                (get_encoded_key(b"t123_r13", 16), get_write_value(WriteType::Put, 16, Some(b"www".to_vec()))),
             ]
         );
     }
