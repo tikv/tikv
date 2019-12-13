@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -225,7 +226,7 @@ impl SSTImporter {
         // perform iteration and key rewrite.
         let mut sst_writer = E::SstWriterBuilder::new().build(path.save.to_str().unwrap())?;
         let mut key = keys::data_key(new_prefix);
-        let new_prefix_data_key_len = key.len();	
+        let new_prefix_data_key_len = key.len();
         let mut first_key = None;
 
         match range_start {
@@ -234,25 +235,27 @@ impl SSTImporter {
             Bound::Excluded(_) => unreachable!(),
         };
         while iter.valid() {
-            let mut k = Key::from_encoded_slice(keys::origin_key(iter.key()));
-
             let old_key = {
                 if rewrite_rule.new_timestamp != 0 {
-                    k = k
-                        .truncate_ts()
-                        .map(|k| k.append_ts(TimeStamp::new(rewrite_rule.new_timestamp)))
-                        .map_err(|e| {
-                            Error::BadFormat(format!(
-                                "key {}: {}",
-                                hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
-                                e
-                            ))
-                        })?;
+                    Cow::from(
+                        Key::from_encoded_slice(keys::origin_key(iter.key()))
+                            .truncate_ts()
+                            .map_err(|e| {
+                                Error::BadFormat(format!(
+                                    "key {}: {}",
+                                    hex::encode_upper(keys::origin_key(iter.key()).to_vec()),
+                                    e
+                                ))
+                            })?
+                            .append_ts(TimeStamp::new(rewrite_rule.new_timestamp))
+                            .into_encoded(),
+                    )
+                } else {
+                    Cow::from(keys::origin_key(iter.key()))
                 }
-                k.as_encoded()
             };
 
-            if is_after_end_bound(old_key, &range_end) {
+            if is_after_end_bound(&old_key, &range_end) {
                 break;
             }
             if !old_key.starts_with(old_prefix) {
@@ -744,17 +747,33 @@ mod tests {
     }
 
     fn get_encoded_key(key: &[u8], ts: u64) -> Vec<u8> {
-        keys::data_key(txn_types::Key::from_raw(key).append_ts(TimeStamp::new(ts)).as_encoded())
+        keys::data_key(
+            txn_types::Key::from_raw(key)
+                .append_ts(TimeStamp::new(ts))
+                .as_encoded(),
+        )
     }
 
-    fn get_write_value(write_type: WriteType, start_ts: u64, short_value: Option<Value>) -> Vec<u8> {
-        txn_types::Write::new(write_type, TimeStamp::new(start_ts), short_value).as_ref().to_bytes()
+    fn get_write_value(
+        write_type: WriteType,
+        start_ts: u64,
+        short_value: Option<Value>,
+    ) -> Vec<u8> {
+        txn_types::Write::new(write_type, TimeStamp::new(start_ts), short_value)
+            .as_ref()
+            .to_bytes()
     }
 
-    fn create_sample_external_sst_file_txn_default() -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+    fn create_sample_external_sst_file_txn_default(
+    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
-        let mut sst_writer =
-            new_sst_writer(ext_sst_dir.path().join("sample_default.sst").to_str().unwrap());
+        let mut sst_writer = new_sst_writer(
+            ext_sst_dir
+                .path()
+                .join("sample_default.sst")
+                .to_str()
+                .unwrap(),
+        );
         sst_writer.put(&get_encoded_key(b"t123_r01", 1), b"abc")?;
         sst_writer.put(&get_encoded_key(b"t123_r04", 3), b"xyz")?;
         sst_writer.put(&get_encoded_key(b"t123_r07", 7), b"pqrst")?;
@@ -775,15 +794,36 @@ mod tests {
         Ok((ext_sst_dir, backend, meta))
     }
 
-    fn create_sample_external_sst_file_txn_write() -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+    fn create_sample_external_sst_file_txn_write(
+    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
-        let mut sst_writer =
-            new_sst_writer(ext_sst_dir.path().join("sample_write.sst").to_str().unwrap());
-        sst_writer.put(&get_encoded_key(b"t123_r01", 5), &get_write_value(WriteType::Put, 1, None))?;
-        sst_writer.put(&get_encoded_key(b"t123_r02", 5), &get_write_value(WriteType::Delete, 1, None))?;
-        sst_writer.put(&get_encoded_key(b"t123_r04", 4), &get_write_value(WriteType::Put, 3, None))?;
-        sst_writer.put(&get_encoded_key(b"t123_r07", 8), &get_write_value(WriteType::Put, 7, None))?;
-        sst_writer.put(&get_encoded_key(b"t123_r13", 8), &get_write_value(WriteType::Put, 7, Some(b"www".to_vec())))?;
+        let mut sst_writer = new_sst_writer(
+            ext_sst_dir
+                .path()
+                .join("sample_write.sst")
+                .to_str()
+                .unwrap(),
+        );
+        sst_writer.put(
+            &get_encoded_key(b"t123_r01", 5),
+            &get_write_value(WriteType::Put, 1, None),
+        )?;
+        sst_writer.put(
+            &get_encoded_key(b"t123_r02", 5),
+            &get_write_value(WriteType::Delete, 1, None),
+        )?;
+        sst_writer.put(
+            &get_encoded_key(b"t123_r04", 4),
+            &get_write_value(WriteType::Put, 3, None),
+        )?;
+        sst_writer.put(
+            &get_encoded_key(b"t123_r07", 8),
+            &get_write_value(WriteType::Put, 7, None),
+        )?;
+        sst_writer.put(
+            &get_encoded_key(b"t123_r13", 8),
+            &get_write_value(WriteType::Put, 7, Some(b"www".to_vec())),
+        )?;
         let sst_info = sst_writer.finish()?;
 
         // make up the SST meta for downloading.
@@ -800,7 +840,11 @@ mod tests {
         Ok((ext_sst_dir, backend, meta))
     }
 
-    fn new_rewrite_rule(old_key_prefix: &[u8], new_key_prefix: &[u8], new_timestamp: u64) -> RewriteRule {
+    fn new_rewrite_rule(
+        old_key_prefix: &[u8],
+        new_key_prefix: &[u8],
+        new_timestamp: u64,
+    ) -> RewriteRule {
         let mut rule = RewriteRule::default();
         rule.set_old_key_prefix(old_key_prefix.to_vec());
         rule.set_new_key_prefix(new_key_prefix.to_vec());
@@ -898,7 +942,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir).unwrap();
-        
+
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_default().unwrap();
         let _ = importer
@@ -932,7 +976,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_download_sst_with_key_rewrite_ts_write() {
         // performs the download.
@@ -965,11 +1008,26 @@ mod tests {
         assert_eq!(
             iter.as_std().collect::<Vec<_>>(),
             vec![
-                (get_encoded_key(b"t123_r01", 16), get_write_value(WriteType::Put, 16, None)),
-                (get_encoded_key(b"t123_r02", 16), get_write_value(WriteType::Delete, 16, None)),
-                (get_encoded_key(b"t123_r04", 16), get_write_value(WriteType::Put, 16, None)),
-                (get_encoded_key(b"t123_r07", 16), get_write_value(WriteType::Put, 16, None)),
-                (get_encoded_key(b"t123_r13", 16), get_write_value(WriteType::Put, 16, Some(b"www".to_vec()))),
+                (
+                    get_encoded_key(b"t123_r01", 16),
+                    get_write_value(WriteType::Put, 16, None)
+                ),
+                (
+                    get_encoded_key(b"t123_r02", 16),
+                    get_write_value(WriteType::Delete, 16, None)
+                ),
+                (
+                    get_encoded_key(b"t123_r04", 16),
+                    get_write_value(WriteType::Put, 16, None)
+                ),
+                (
+                    get_encoded_key(b"t123_r07", 16),
+                    get_write_value(WriteType::Put, 16, None)
+                ),
+                (
+                    get_encoded_key(b"t123_r13", 16),
+                    get_write_value(WriteType::Put, 16, Some(b"www".to_vec()))
+                ),
             ]
         );
     }
