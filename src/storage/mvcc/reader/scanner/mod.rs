@@ -8,8 +8,8 @@ use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, TimeStamp, TsSet, Value};
 
-use self::backward::BackwardScanner;
-use self::forward::ForwardScanner;
+use self::backward::BackwardKvScanner;
+use self::forward::{ForwardKvScanner, ForwardScanner, LatestKvPolicy};
 use crate::storage::mvcc::{default_not_found_error, Result};
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
@@ -57,7 +57,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
-    /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardScanner` should scan.
+    /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardKvScanner` should scan.
     /// `None` means unbounded.
     ///
     /// Default is `(None, None)`.
@@ -83,7 +83,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
         let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         if self.0.desc {
-            Ok(Scanner::Backward(BackwardScanner::new(
+            Ok(Scanner::Backward(BackwardKvScanner::new(
                 self.0,
                 lock_cursor,
                 write_cursor,
@@ -93,6 +93,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
                 self.0,
                 lock_cursor,
                 write_cursor,
+                LatestKvPolicy,
             )))
         }
     }
@@ -115,8 +116,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
 }
 
 pub enum Scanner<S: Snapshot> {
-    Forward(ForwardScanner<S>),
-    Backward(BackwardScanner<S>),
+    Forward(ForwardKvScanner<S>),
+    Backward(BackwardKvScanner<S>),
 }
 
 impl<S: Snapshot> StoreScanner for Scanner<S> {
