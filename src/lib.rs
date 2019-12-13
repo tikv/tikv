@@ -80,7 +80,7 @@ pub fn tikv_version_info() -> String {
         option_env!("TIKV_BUILD_GIT_BRANCH").unwrap_or(fallback),
         option_env!("TIKV_BUILD_TIME").unwrap_or(fallback),
         option_env!("TIKV_BUILD_RUSTC_VERSION").unwrap_or(fallback),
-        option_env!("TIKV_ENABLE_FEATURES").unwrap_or(fallback),
+        option_env!("TIKV_ENABLE_FEATURES").unwrap_or(fallback).trim(),
         option_env!("TIKV_PROFILE").unwrap_or(fallback),
     )
 }

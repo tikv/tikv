@@ -157,7 +157,6 @@ fail_release:
 # The target used by CI/CD to build the distributable release artifacts.
 # Individual developers should only need to use the `dist_` rules when working
 # on the CI/CD system.
-dist_release: export TIKV_PROFILE=dist_release
 dist_release:
 	make build_dist_release
 	@mkdir -p ${BIN_PATH}
@@ -166,6 +165,7 @@ dist_release:
 
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
+build_dist_release: export TIKV_PROFILE=dist_release
 build_dist_release:
 	make x-build-dist
 ifeq ($(shell uname),Linux) # Macs don't have objcopy
