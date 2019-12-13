@@ -6,8 +6,9 @@ use super::metrics::*;
 use crate::storage::lock_manager::Lock;
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use crate::storage::types::ProcessResult;
-use crate::storage::{Error as StorageError, ErrorInner as StorageErrorInner, StorageCallback};
+use crate::storage::{
+    Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
+};
 use futures::Future;
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
@@ -417,9 +418,9 @@ fn extract_raw_key_from_process_result(pr: &ProcessResult) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::Key;
     use std::time::Duration;
     use test_util::KvGenerator;
+    use txn_types::Key;
 
     fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {

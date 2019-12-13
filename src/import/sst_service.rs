@@ -3,8 +3,9 @@
 use std::convert::TryFrom;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::util::compact_files_in_range;
+use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
 use engine::rocks::DB;
+use engine::CF_DEFAULT;
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -12,8 +13,8 @@ use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::Callback;
-use crate::server::transport::RaftStoreRouter;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::{RocksEngine, RocksIOLimiter};
 use engine_traits::IOLimiter;
@@ -167,7 +168,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         ctx.spawn(self.threads.spawn_fn(move || {
             let res = importer.download::<RocksEngine>(
                 req.get_sst(),
-                req.get_url(),
+                req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
@@ -202,6 +203,15 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let label = "ingest";
         let timer = Instant::now_coarse();
 
+        if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
+            && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
+        {
+            return send_rpc_error(
+                ctx,
+                sink,
+                Error::Engine(box_err!("too many sst files are ingesting.")),
+            );
+        }
         // Make ingest command.
         let mut ingest = Request::default();
         ingest.set_cmd_type(CmdType::IngestSst);

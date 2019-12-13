@@ -14,8 +14,8 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-prost-codec = ["tikv/prost-codec"]
-protobuf-codec = ["tikv/protobuf-codec"]
+prost-codec = ["tikv/prost-codec", "backup/prost-codec"]
+protobuf-codec = ["tikv/protobuf-codec", "backup/protobuf-codec"]
 
 [lib]
 name = "cmd"
@@ -37,6 +37,8 @@ futures = "0.1"
 futures-cpupool = "0.1"
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
 hex = "0.3"
+keys = { path = "../components/keys" }
+txn_types = { path = "../components/txn_types" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }

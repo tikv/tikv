@@ -29,25 +29,22 @@ use std::u64;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::{collections::HashMap, time::SlowTimer};
+use txn_types::Key;
 
 use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{self, LockManager};
+use crate::storage::metrics::{
+    self, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC, SCHED_CONTEX_GAUGE, SCHED_HISTOGRAM_VEC_STATIC,
+    SCHED_LATCH_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC, SCHED_TOO_BUSY_COUNTER_VEC,
+    SCHED_WRITING_BYTES_GAUGE,
+};
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{Executor, MsgScheduler, Task};
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
 use crate::storage::{
-    metrics::{
-        self, SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC, SCHED_CONTEX_GAUGE,
-        SCHED_HISTOGRAM_VEC_STATIC, SCHED_LATCH_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC,
-        SCHED_TOO_BUSY_COUNTER_VEC, SCHED_WRITING_BYTES_GAUGE,
-    },
-    types::ProcessResult,
-    Key,
-};
-use crate::storage::{
     Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner,
-    StorageCallback, TimeStamp,
+    ProcessResult, StorageCallback, TimeStamp,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -539,9 +536,8 @@ mod tests {
     use super::*;
     use crate::storage::mvcc;
     use crate::storage::txn::latch::*;
-    use crate::storage::{Key, Mutation, Options};
+    use crate::storage::{Mutation, Options};
     use kvproto::kvrpcpb::Context;
-    use tikv_util::collections::HashMap;
 
     #[test]
     fn test_command_latches() {

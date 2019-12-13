@@ -15,13 +15,13 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
 
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::Runnable;
 use tikv_util::DeferContext;
 
 use super::metrics::*;
-use super::transport::RaftStoreRouter;
 use super::{Config, Error, Result};
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;

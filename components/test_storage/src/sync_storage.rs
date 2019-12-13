@@ -2,17 +2,17 @@
 
 use futures::Future;
 
-use keys::TimeStamp;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::server::gc_worker::{AutoGCConfig, GCConfig, GCSafePointProvider, GCWorker};
+use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    Engine, Key, KvPair, Mutation, Options, RegionInfoProvider, Result, Storage, TxnStatus, Value,
+    Engine, Options, RegionInfoProvider, Result, Storage, TestEngineBuilder, TestStorageBuilder,
+    TxnStatus,
 };
-use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
 use tikv_util::collections::HashMap;
+use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
 ///
@@ -20,7 +20,7 @@ use tikv_util::collections::HashMap;
 pub struct SyncTestStorageBuilder<E: Engine> {
     engine: E,
     config: Option<Config>,
-    gc_config: Option<GCConfig>,
+    gc_config: Option<GcConfig>,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
@@ -47,7 +47,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         self
     }
 
-    pub fn gc_config(mut self, gc_config: GCConfig) -> Self {
+    pub fn gc_config(mut self, gc_config: GcConfig) -> Self {
         self.gc_config = Some(gc_config);
         self
     }
@@ -58,7 +58,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             builder = builder.config(config);
         }
         let mut gc_worker =
-            GCWorker::new(self.engine, None, None, self.gc_config.unwrap_or_default());
+            GcWorker::new(self.engine, None, None, self.gc_config.unwrap_or_default());
         gc_worker.start()?;
 
         Ok(SyncTestStorage {
@@ -73,14 +73,14 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
-    gc_worker: GCWorker<E>,
+    gc_worker: GcWorker<E>,
     store: Storage<E, DummyLockManager>,
 }
 
 impl<E: Engine> SyncTestStorage<E> {
-    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
         &mut self,
-        cfg: AutoGCConfig<S, R>,
+        cfg: AutoGcConfig<S, R>,
     ) {
         self.gc_worker.start_auto_gc(cfg).unwrap();
     }

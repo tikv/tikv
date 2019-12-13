@@ -8,14 +8,14 @@ use std::sync::mpsc::channel;
 use std::sync::Arc;
 use test_raftstore::*;
 use test_storage::*;
-use tikv::server::gc_worker::{AutoGCConfig, GCConfig};
+use tikv::server::gc_worker::{AutoGcConfig, GcConfig};
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use tikv::storage::{Engine, Key, Mutation, TimeStamp};
-use tikv::storage::{Error as StorageError, ErrorInner as SotrageErrorInner};
+use tikv::storage::{Engine, Error as StorageError, ErrorInner as StorageErrorInner};
 use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
+use txn_types::{Key, Mutation, TimeStamp};
 
 fn new_raft_storage() -> (
     Cluster<ServerCluster>,
@@ -106,7 +106,7 @@ fn test_raft_storage_rollback_before_prewrite() {
     assert!(ret.is_err());
     let err = ret.unwrap_err();
     match err {
-        StorageError(box SotrageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::WriteConflict { .. },
         ))))) => {}
         _ => {
@@ -145,7 +145,7 @@ fn test_raft_storage_store_not_match() {
     ctx.set_peer(peer);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
     let res = storage.get(ctx.clone(), &key, 20);
-    if let StorageError(box SotrageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+    if let StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
         box KvErrorInner::Request(ref e),
     ))))) = *res.as_ref().err().unwrap()
     {
@@ -268,7 +268,7 @@ fn test_auto_gc() {
         .storages
         .iter()
         .map(|(id, engine)| {
-            let mut config = GCConfig::default();
+            let mut config = GcConfig::default();
             // Do not skip GC
             config.ratio_threshold = 0.9;
             let storage = SyncTestStorageBuilder::from_engine(engine.clone())
@@ -285,7 +285,7 @@ fn test_auto_gc() {
     for (id, storage) in &mut storages {
         let tx = finish_signal_tx.clone();
 
-        let mut cfg = AutoGCConfig::new_test_cfg(
+        let mut cfg = AutoGcConfig::new_test_cfg(
             Arc::clone(&pd_client),
             region_info_accessors.remove(id).unwrap(),
             *id,

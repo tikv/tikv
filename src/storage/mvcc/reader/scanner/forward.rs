@@ -4,11 +4,11 @@ use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
+use txn_types::{Key, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::write::{WriteRef, WriteType};
-use crate::storage::mvcc::{Result, TimeStamp};
-use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
+use crate::storage::mvcc::{Error, Result};
+use crate::storage::{Cursor, Lock, Snapshot, Statistics};
 
 use super::ScannerConfig;
 
@@ -165,7 +165,8 @@ impl<S: Snapshot> ForwardScanner<S> {
                         };
                         result = lock
                             .check_ts_conflict(&current_user_key, ts, &self.cfg.bypass_locks)
-                            .map(|_| None);
+                            .map(|_| None)
+                            .map_err(Into::into);
                     }
                     IsolationLevel::Rc => {}
                 }
@@ -256,7 +257,8 @@ impl<S: Snapshot> ForwardScanner<S> {
         // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
         // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
         loop {
-            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))?;
+            let write = WriteRef::parse(self.write_cursor.value(&mut self.statistics.write))
+                .map_err(Error::from)?;
             self.statistics.write.processed += 1;
 
             match write.write_type {
@@ -359,7 +361,7 @@ mod tests {
     use super::*;
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
-    use crate::storage::{Engine, Key, TestEngineBuilder};
+    use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 

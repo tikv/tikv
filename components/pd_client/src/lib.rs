@@ -32,9 +32,9 @@ pub use self::util::RECONNECT_INTERVAL_SEC;
 use std::ops::Deref;
 
 use futures::Future;
-use keys::UnixSecs;
 use kvproto::metapb;
 use kvproto::pdpb;
+use tikv_util::time::UnixSecs;
 
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
@@ -149,9 +149,8 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Gets Region info which the key belongs to.
-    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
-        self.get_region(key)
-            .map(|region| RegionInfo::new(region, None))
+    fn get_region_info(&self, _key: &[u8]) -> Result<RegionInfo> {
+        unimplemented!();
     }
 
     /// Gets Region by Region id.

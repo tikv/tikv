@@ -31,3 +31,7 @@ default-features = false
 [dev-dependencies]
 tempfile = "3.0"
 test_sst_importer = { path = "../test_sst_importer" }
+
+[features]
+protobuf-codec = ["kvproto/protobuf-codec", "external_storage/protobuf-codec"]
+prost-codec = ["kvproto/prost-codec", "external_storage/prost-codec"]

@@ -27,12 +27,14 @@ prost-codec = [
   "raft/prost-codec",
   "engine/prost-codec",
   "tikv_util/prost-codec",
+  "sst_importer/prost-codec",
 ]
 protobuf-codec = [
   "tipb/protobuf-codec",
   "kvproto/protobuf-codec",
   "grpcio/protobuf-codec",
   "raft/protobuf-codec",
+  "sst_importer/protobuf-codec",
 ]
 
 [lib]
@@ -45,6 +47,7 @@ byteorder = "1.2"
 bytes = "0.4.12"
 chrono = "0.4"
 codec = { path = "components/codec" }
+configuration = { path = "components/configuration" }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
@@ -63,6 +66,7 @@ grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default
 hex = "0.3"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 keys = { path = "components/keys" }
+txn_types = { path = "components/txn_types" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 libc = "0.2"
@@ -94,7 +98,6 @@ sys-info = "0.5.7"
 tempfile = "3.0"
 test_util = { path = "components/test_util" }
 tidb_query = { path = "components/tidb_query" }
-
 tikv_alloc = { path = "components/tikv_alloc", default-features = false }
 tikv_util = { path = "components/tikv_util" }
 time = "0.1"
@@ -160,6 +163,7 @@ members = [
   "components/tikv_alloc",
   "components/match_template",
   "components/codec",
+  "components/configuration",
   "components/panic_hook",
   "components/tipb_helper",
   "components/log_wrappers",
@@ -172,6 +176,7 @@ members = [
   "components/backup",
   "components/keys",
   "components/sst_importer",
+  "components/txn_types",
   "cmd",
 ]
 default-members = ["cmd"]

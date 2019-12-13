@@ -8,7 +8,6 @@ use super::{Error, Result};
 use crate::raftstore::coprocessor::{Coprocessor, ObserverContext, RoleObserver};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
-use crate::storage::TimeStamp;
 use futures::{Future, Sink, Stream};
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
@@ -28,6 +27,7 @@ use tikv_util::security::SecurityManager;
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
+use txn_types::TimeStamp;
 
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
@@ -224,7 +224,12 @@ const LEADER_KEY: &[u8] = b"";
 
 /// Returns true if the region containing the LEADER_KEY.
 fn is_leader_region(region: &'_ Region) -> bool {
-    region.get_start_key() <= LEADER_KEY
+    // The key range of a new created region is empty which misleads the leader
+    // of the deadlock detector stepping down.
+    //
+    // If the peers of a region is not empty, the region info is complete.
+    !region.get_peers().is_empty()
+        && region.get_start_key() <= LEADER_KEY
         && (region.get_end_key().is_empty() || LEADER_KEY < region.get_end_key())
 }
 
