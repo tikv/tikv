@@ -115,7 +115,7 @@ pub trait TxnEntryScanner: Send {
 }
 
 /// A transaction entry in underlying storage.
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug)]
 pub enum TxnEntry {
     Prewrite { default: KvPair, lock: KvPair },
     Commit { default: KvPair, write: KvPair },
