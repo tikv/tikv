@@ -67,7 +67,7 @@ fn from_change_value(v: ConfigValue) -> CfgResult<String> {
     Ok(s)
 }
 
-/// Comparing tow `Version` with the assumption of `global` and `local`
+/// Comparing two `Version` with the assumption of `global` and `local`
 /// should be monotonically increased, if `global` or `local` of _current config_
 /// less than _incoming config_ means there are update in _incoming config_
 pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) -> Ordering {
@@ -85,7 +85,7 @@ type CfgResult<T> = Result<T, Box<dyn Error>>;
 
 /// ConfigController use to register each module's config manager,
 /// and dispatch the change of config to corresponding managers or
-/// return the change if the incoming change are unvalid.
+/// return the change if the incoming change is invalid.
 #[derive(Default)]
 pub struct ConfigController {
     current: TiKvConfig,
@@ -156,7 +156,6 @@ impl ConfigHandler {
     }
 }
 
-// FIXME: the usage of version and status_code need to consist with pd
 impl ConfigHandler {
     /// Register the local config to pd
     pub fn create(
@@ -214,11 +213,10 @@ impl ConfigHandler {
 
     fn update_config(
         &mut self,
-        mut version: configpb::Version,
+        version: configpb::Version,
         entries: Vec<configpb::ConfigEntry>,
         pd_client: Arc<impl PdClient>,
     ) -> CfgResult<()> {
-        version.local += 1;
         let mut resp = pd_client.update_config(self.get_id(), version, entries)?;
         match resp.get_status().get_code() {
             StatusCode::Ok => {
