@@ -14,73 +14,6 @@ use pd_client::PdClient;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::worker::FutureScheduler;
 
-fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
-    // This helper function translate nested module config to a list
-    // of name/value pair and seperated module by '.' in the name field,
-    // by recursive call helper function with an prefix which represent
-    // th prefix of current module. And also compatible the field name
-    // in config struct with the name in toml file.
-    fn helper(prefix: String, change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
-        let mut entries = Vec::with_capacity(change.len());
-        for (mut name, value) in change {
-            if name == "raft_store" {
-                name = "raftstore".to_owned();
-            } else {
-                name = name.replace("_", "-");
-            }
-            if !prefix.is_empty() {
-                let mut p = prefix.clone();
-                p.push_str(&format!(".{}", name));
-                name = p;
-            }
-            if let ConfigValue::Module(change) = value {
-                entries.append(&mut helper(name, change)?);
-            } else {
-                let mut e = configpb::ConfigEntry::default();
-                e.set_name(name);
-                e.set_value(from_change_value(value)?);
-                entries.push(e);
-            }
-        }
-        Ok(entries)
-    };
-    helper("".to_owned(), change)
-}
-
-fn from_change_value(v: ConfigValue) -> CfgResult<String> {
-    let s = match v {
-        ConfigValue::Duration(_) => {
-            let v: ReadableDuration = v.into();
-            toml::to_string(&v)?
-        }
-        ConfigValue::Size(_) => {
-            let v: ReadableSize = v.into();
-            toml::to_string(&v)?
-        }
-        ConfigValue::U64(ref v) => toml::to_string(v)?,
-        ConfigValue::F64(ref v) => toml::to_string(v)?,
-        ConfigValue::Usize(ref v) => toml::to_string(v)?,
-        ConfigValue::Bool(ref v) => toml::to_string(v)?,
-        ConfigValue::String(ref v) => toml::to_string(v)?,
-        _ => unreachable!(),
-    };
-    Ok(s)
-}
-
-/// Comparing two `Version` with the assumption of `global` and `local`
-/// should be monotonically increased, if `global` or `local` of _current config_
-/// less than _incoming config_ means there are update in _incoming config_
-pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) -> Ordering {
-    match (
-        Ord::cmp(&current.local, &incoming.local),
-        Ord::cmp(&current.global, &incoming.global),
-    ) {
-        (Ordering::Equal, Ordering::Equal) => Ordering::Equal,
-        (Ordering::Less, _) | (_, Ordering::Less) => Ordering::Less,
-        _ => Ordering::Greater,
-    }
-}
-
 type CfgResult<T> = Result<T, Box<dyn Error>>;
 
 /// ConfigController use to register each module's config manager,
@@ -229,6 +162,73 @@ impl ConfigHandler {
             }
         }
     }
+}
+
+/// Comparing two `Version` with the assumption of `global` and `local`
+/// should be monotonically increased, if `global` or `local` of _current config_
+/// less than _incoming config_ means there are update in _incoming config_
+pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) -> Ordering {
+    match (
+        Ord::cmp(&current.local, &incoming.local),
+        Ord::cmp(&current.global, &incoming.global),
+    ) {
+        (Ordering::Equal, Ordering::Equal) => Ordering::Equal,
+        (Ordering::Less, _) | (_, Ordering::Less) => Ordering::Less,
+        _ => Ordering::Greater,
+    }
+}
+
+fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
+    // This helper function translate nested module config to a list
+    // of name/value pair and seperated module by '.' in the name field,
+    // by recursive call helper function with an prefix which represent
+    // th prefix of current module. And also compatible the field name
+    // in config struct with the name in toml file.
+    fn helper(prefix: String, change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
+        let mut entries = Vec::with_capacity(change.len());
+        for (mut name, value) in change {
+            if name == "raft_store" {
+                name = "raftstore".to_owned();
+            } else {
+                name = name.replace("_", "-");
+            }
+            if !prefix.is_empty() {
+                let mut p = prefix.clone();
+                p.push_str(&format!(".{}", name));
+                name = p;
+            }
+            if let ConfigValue::Module(change) = value {
+                entries.append(&mut helper(name, change)?);
+            } else {
+                let mut e = configpb::ConfigEntry::default();
+                e.set_name(name);
+                e.set_value(from_change_value(value)?);
+                entries.push(e);
+            }
+        }
+        Ok(entries)
+    };
+    helper("".to_owned(), change)
+}
+
+fn from_change_value(v: ConfigValue) -> CfgResult<String> {
+    let s = match v {
+        ConfigValue::Duration(_) => {
+            let v: ReadableDuration = v.into();
+            toml::to_string(&v)?
+        }
+        ConfigValue::Size(_) => {
+            let v: ReadableSize = v.into();
+            toml::to_string(&v)?
+        }
+        ConfigValue::U64(ref v) => toml::to_string(v)?,
+        ConfigValue::F64(ref v) => toml::to_string(v)?,
+        ConfigValue::Usize(ref v) => toml::to_string(v)?,
+        ConfigValue::Bool(ref v) => toml::to_string(v)?,
+        ConfigValue::String(ref v) => toml::to_string(v)?,
+        _ => unreachable!(),
+    };
+    Ok(s)
 }
 
 #[cfg(test)]
