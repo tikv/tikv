@@ -3,11 +3,10 @@
 use super::timestamp::{TimeStamp, TsSet};
 use super::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use super::{Error, Result};
-use byteorder::ReadBytesExt;
 use derive_new::new;
 use kvproto::kvrpcpb::{LockInfo, Op};
-use tikv_util::codec::bytes::{self, BytesEncoder};
-use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use codec::number::MAX_VARINT64_LENGTH;
+use codec::prelude::{CompactByteDecoder, CompactByteEncoder, NumberDecoder, NumberEncoder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
@@ -71,12 +70,16 @@ pub struct Lock {
 impl Lock {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(
-            1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2,
+            1 + MAX_VARINT64_LENGTH
+                + self.primary.len()
+                + MAX_VARINT64_LENGTH
+                + SHORT_VALUE_MAX_LEN
+                + 2,
         );
         b.push(self.lock_type.to_u8());
-        b.encode_compact_bytes(&self.primary).unwrap();
-        b.encode_var_u64(self.ts.into_inner()).unwrap();
-        b.encode_var_u64(self.ttl).unwrap();
+        b.write_compact_bytes(&self.primary).unwrap();
+        b.write_var_u64(self.ts.into_inner()).unwrap();
+        b.write_var_u64(self.ttl).unwrap();
         if let Some(ref v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
             b.push(v.len() as u8);
@@ -84,15 +87,15 @@ impl Lock {
         }
         if !self.for_update_ts.is_zero() {
             b.push(FOR_UPDATE_TS_PREFIX);
-            b.encode_u64(self.for_update_ts.into_inner()).unwrap();
+            b.write_u64(self.for_update_ts.into_inner()).unwrap();
         }
         if self.txn_size > 0 {
             b.push(TXN_SIZE_PREFIX);
-            b.encode_u64(self.txn_size).unwrap();
+            b.write_u64(self.txn_size).unwrap();
         }
         if !self.min_commit_ts.is_zero() {
             b.push(MIN_COMMIT_TS_PREFIX);
-            b.encode_u64(self.min_commit_ts.into_inner()).unwrap();
+            b.write_u64(self.min_commit_ts.into_inner()).unwrap();
         }
         b
     }
@@ -102,13 +105,9 @@ impl Lock {
             return Err(Error::BadFormatLock);
         }
         let lock_type = LockType::from_u8(b.read_u8()?).ok_or(Error::BadFormatLock)?;
-        let primary = bytes::decode_compact_bytes(&mut b)?;
-        let ts = number::decode_var_u64(&mut b)?.into();
-        let ttl = if b.is_empty() {
-            0
-        } else {
-            number::decode_var_u64(&mut b)?
-        };
+        let primary = b.read_compact_bytes()?;
+        let ts = b.read_var_u64()?.into();
+        let ttl = if b.is_empty() { 0 } else { b.read_var_u64()? };
 
         if b.is_empty() {
             return Ok(Lock::new(
@@ -141,9 +140,9 @@ impl Lock {
                     short_value = Some(b[..len as usize].to_vec());
                     b = &b[len as usize..];
                 }
-                FOR_UPDATE_TS_PREFIX => for_update_ts = number::decode_u64(&mut b)?.into(),
-                TXN_SIZE_PREFIX => txn_size = number::decode_u64(&mut b)?,
-                MIN_COMMIT_TS_PREFIX => min_commit_ts = number::decode_u64(&mut b)?.into(),
+                FOR_UPDATE_TS_PREFIX => for_update_ts = b.read_var_u64()?.into(),
+                TXN_SIZE_PREFIX => txn_size = b.read_var_u64()?,
+                MIN_COMMIT_TS_PREFIX => min_commit_ts = b.read_var_u64()?.into(),
                 flag => panic!("invalid flag [{}] in lock", flag),
             }
         }

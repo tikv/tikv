@@ -11,9 +11,6 @@ pub enum ErrorInner {
 
     #[fail(display = "Data padding is incorrect")]
     BadPadding,
-
-    #[fail(display = "bad format key(length)")]
-    KeyLength,
 }
 
 impl ErrorInner {
@@ -31,7 +28,6 @@ impl ErrorInner {
 impl ErrorInner {
     pub fn maybe_clone(&self) -> Option<ErrorInner> {
         match *self {
-            ErrorInner::KeyLength => Some(ErrorInner::KeyLength),
             ErrorInner::BadPadding => Some(ErrorInner::BadPadding),
             ErrorInner::Io(_) => None,
         }

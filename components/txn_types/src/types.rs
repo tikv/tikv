@@ -1,9 +1,10 @@
 use super::timestamp::TimeStamp;
+use super::Error;
+
 use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
 use std::fmt::{self, Debug, Display, Formatter};
 
-use codec;
 use codec::byte::MemComparableByteCodec;
 use codec::number;
 use codec::prelude::{
@@ -55,7 +56,7 @@ impl Key {
 
     /// Gets and moves the raw representation of this key.
     #[inline]
-    pub fn into_raw(self) -> Result<Vec<u8>, codec::Error> {
+    pub fn into_raw(self) -> Result<Vec<u8>, Error> {
         let mut k = self.0;
         let (_read_bytes, written_bytes) =
             MemComparableByteCodec::try_decode_first_in_place(&mut k)?;
@@ -65,8 +66,9 @@ impl Key {
 
     /// Gets the raw representation of this key.
     #[inline]
-    pub fn to_raw(&self) -> Result<Vec<u8>, codec::Error> {
-        self.0.as_slice().read_comparable_bytes()
+    pub fn to_raw(&self) -> Result<Vec<u8>, Error> {
+        let raw = self.0.as_slice().read_comparable_bytes().unwrap();
+        Ok(raw)
     }
 
     /// Creates a key from encoded bytes vector.
@@ -108,7 +110,7 @@ impl Key {
     /// Preconditions: the caller must ensure this is actually a timestamped
     /// key.
     #[inline]
-    pub fn decode_ts(&self) -> Result<TimeStamp, codec::Error> {
+    pub fn decode_ts(&self) -> Result<TimeStamp, Error> {
         Ok(Self::decode_ts_from(&self.0)?)
     }
 
@@ -116,7 +118,7 @@ impl Key {
     ///
     /// Preconditions: the caller must ensure this is actually a timestamped key.
     #[inline]
-    pub fn truncate_ts(mut self) -> Result<Key, codec::Error> {
+    pub fn truncate_ts(mut self) -> Result<Key, Error> {
         let len = self.0.len();
         if len < number::U64_SIZE {
             // TODO: IMHO, this should be an assertion failure instead of
@@ -128,7 +130,7 @@ impl Key {
             // functions to convert between `TimestampedKey` and `Key`.
             // `TimestampedKey` is in a higher (MVCC) layer, while `Key` is
             // in the core storage engine layer.
-            Err(codec::ErrorInner::KeyLength.into())
+            Err(Error::KeyLength)
         } else {
             self.0.truncate(len - number::U64_SIZE);
             Ok(self)
@@ -137,9 +139,9 @@ impl Key {
 
     /// Split a ts encoded key, return the user key and timestamp.
     #[inline]
-    pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], TimeStamp), codec::Error> {
+    pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], TimeStamp), Error> {
         if key.len() < number::U64_SIZE {
-            Err(codec::ErrorInner::KeyLength.into())
+            Err(Error::KeyLength)
         } else {
             let pos = key.len() - number::U64_SIZE;
             let k = &key[..pos];
@@ -150,20 +152,20 @@ impl Key {
 
     /// Extract the user key from a ts encoded key.
     #[inline]
-    pub fn truncate_ts_for(key: &[u8]) -> Result<&[u8], codec::Error> {
+    pub fn truncate_ts_for(key: &[u8]) -> Result<&[u8], Error> {
         let len = key.len();
         if len < number::U64_SIZE {
-            return Err(codec::ErrorInner::KeyLength.into());
+            return Err(Error::KeyLength);
         }
         Ok(&key[..key.len() - number::U64_SIZE])
     }
 
     /// Decode the timestamp from a ts encoded key.
     #[inline]
-    pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp, codec::Error> {
+    pub fn decode_ts_from(key: &[u8]) -> Result<TimeStamp, Error> {
         let len = key.len();
         if len < number::U64_SIZE {
-            return Err(codec::ErrorInner::KeyLength.into());
+            return Err(Error::KeyLength);
         }
         let mut ts = &key[len - number::U64_SIZE..];
         Ok(ts.read_u64_desc()?.into())

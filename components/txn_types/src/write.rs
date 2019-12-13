@@ -4,8 +4,8 @@ use super::lock::LockType;
 use super::timestamp::TimeStamp;
 use super::types::{Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use super::{Error, Result};
-use codec::prelude::NumberDecoder;
-use tikv_util::codec::number::{NumberEncoder, MAX_VAR_U64_LEN};
+use codec::prelude::{NumberDecoder, NumberEncoder};
+use codec::number::MAX_VARINT64_LENGTH;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
@@ -171,9 +171,9 @@ impl WriteRef<'_> {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2);
+        let mut b = Vec::with_capacity(1 + MAX_VARINT64_LENGTH + SHORT_VALUE_MAX_LEN + 2);
         b.push(self.write_type.to_u8());
-        b.encode_var_u64(self.start_ts.into_inner()).unwrap();
+        b.write_var_u64(self.start_ts.into_inner()).unwrap();
         if let Some(v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
             b.push(v.len() as u8);

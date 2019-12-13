@@ -10,6 +10,7 @@ mod timestamp;
 mod types;
 mod write;
 
+use codec;
 use std::io;
 
 pub use lock::{Lock, LockType};
@@ -25,11 +26,11 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Codec(err: tikv_util::codec::Error) {
-            from()
+        Codec(err: codec::Error) {
             cause(err)
             description(err.description())
         }
+        KeyLength { description("bad format key(length)") }
         BadFormatLock { description("bad format lock data") }
         BadFormatWrite { description("bad format write data") }
         KeyIsLocked(info: kvproto::kvrpcpb::LockInfo) {
@@ -45,9 +46,17 @@ impl Error {
             Error::Codec(e) => e.maybe_clone().map(Error::Codec),
             Error::BadFormatLock => Some(Error::BadFormatLock),
             Error::BadFormatWrite => Some(Error::BadFormatWrite),
+            Error::KeyLength => Some(Error::KeyLength),
             Error::KeyIsLocked(info) => Some(Error::KeyIsLocked(info.clone())),
             Error::Io(_) => None,
         }
+    }
+}
+
+impl From<codec::Error> for Error {
+    #[inline]
+    fn from(e: codec::Error) -> Self {
+        e.into()
     }
 }
 

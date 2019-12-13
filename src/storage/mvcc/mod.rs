@@ -30,7 +30,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Codec(err: tikv_util::codec::Error) {
+        Codec(err: codec::Error) {
             from()
             cause(err)
             description(err.description())
@@ -40,6 +40,10 @@ quick_error! {
             display("key is locked (backoff or cleanup) {:?}", info)
         }
         BadFormat(err: txn_types::Error ) {
+            cause(err)
+            description(err.description())
+        }
+        KeyLength(err: txn_types::Error ) {
             cause(err)
             description(err.description())
         }
@@ -105,6 +109,7 @@ impl ErrorInner {
             ErrorInner::Engine(e) => e.maybe_clone().map(ErrorInner::Engine),
             ErrorInner::Codec(e) => e.maybe_clone().map(ErrorInner::Codec),
             ErrorInner::KeyIsLocked(info) => Some(ErrorInner::KeyIsLocked(info.clone())),
+            ErrorInner::KeyLength(e) => e.maybe_clone().map(ErrorInner::KeyLength),
             ErrorInner::BadFormat(e) => e.maybe_clone().map(ErrorInner::BadFormat),
             ErrorInner::TxnLockNotFound {
                 start_ts,
@@ -233,17 +238,12 @@ impl<T: Into<ErrorInner>> From<T> for Error {
     }
 }
 
-impl From<codec::Error> for ErrorInner {
-    fn from(err: codec::Error) -> Self {
-        box_err!("{}", err)
-    }
-}
-
 impl From<txn_types::Error> for ErrorInner {
     fn from(err: txn_types::Error) -> Self {
         match err {
             txn_types::Error::Io(e) => ErrorInner::Io(e),
             txn_types::Error::Codec(e) => ErrorInner::Codec(e),
+            txn_types::Error::KeyLength => ErrorInner::KeyLength(err),
             txn_types::Error::BadFormatLock | txn_types::Error::BadFormatWrite => {
                 ErrorInner::BadFormat(err)
             }

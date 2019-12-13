@@ -28,13 +28,20 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Codec(err: tikv_util::codec::Error) {
+        Codec(err: codec::Error) {
             from()
             cause(err)
             description(err.description())
         }
-        NewCodec(err: codec::Error) {
-            from()
+        KeyIsLocked(info: kvproto::kvrpcpb::LockInfo) {
+            description("key is locked (backoff or cleanup)")
+            display("key is locked (backoff or cleanup) {:?}", info)
+        }
+        BadFormat(err: txn_types::Error ) {
+            cause(err)
+            description(err.description())
+        }
+        KeyLength(err: txn_types::Error ) {
             cause(err)
             description(err.description())
         }
@@ -84,7 +91,9 @@ impl ErrorInner {
         match *self {
             ErrorInner::Engine(ref e) => e.maybe_clone().map(ErrorInner::Engine),
             ErrorInner::Codec(ref e) => e.maybe_clone().map(ErrorInner::Codec),
-            ErrorInner::NewCodec(ref e) => e.maybe_clone().map(ErrorInner::NewCodec),
+            ErrorInner::KeyIsLocked(ref info) => Some(ErrorInner::KeyIsLocked(info.clone())),
+            ErrorInner::KeyLength(ref e) => e.maybe_clone().map(ErrorInner::KeyLength),
+            ErrorInner::BadFormat(ref e) => e.maybe_clone().map(ErrorInner::BadFormat),
             ErrorInner::Mvcc(ref e) => e.maybe_clone().map(ErrorInner::Mvcc),
             ErrorInner::InvalidTxnTso {
                 start_ts,
@@ -143,6 +152,20 @@ impl From<ErrorInner> for Error {
     #[inline]
     fn from(e: ErrorInner) -> Self {
         Error(Box::new(e))
+    }
+}
+
+impl From<txn_types::Error> for ErrorInner {
+    fn from(err: txn_types::Error) -> Self {
+        match err {
+            txn_types::Error::Io(e) => ErrorInner::Io(e),
+            txn_types::Error::Codec(e) => ErrorInner::Codec(e),
+            txn_types::Error::KeyLength => ErrorInner::KeyLength(err),
+            txn_types::Error::BadFormatLock | txn_types::Error::BadFormatWrite => {
+                ErrorInner::BadFormat(err)
+            }
+            txn_types::Error::KeyIsLocked(lock_info) => ErrorInner::KeyIsLocked(lock_info),
+        }
     }
 }
 
