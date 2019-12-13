@@ -399,6 +399,11 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     }
 }
 
+/// The ScanPolicy for outputting `TxnEntry`.
+///
+/// The `ForwardScanner` with this policy only outputs records whose commit_ts
+/// is greater than `after_ts`. It also supports outputting delete records
+/// if `output_delete` is set to `true`.
 pub struct LatestEntryPolicy {
     after_ts: TimeStamp,
     output_delete: bool,
@@ -528,28 +533,7 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
 /// Use `ScannerBuilder` to build `ForwardKvScanner`.
 pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
 
-pub type EntryScanner<S> = ForwardScanner<S, LatestEntryPolicy>;
-
-impl<S: Snapshot> TxnEntryScanner for EntryScanner<S> {
-    fn next_entry(&mut self) -> TxnResult<Option<TxnEntry>> {
-        Ok(self.read_next()?)
-    }
-    fn take_statistics(&mut self) -> Statistics {
-        std::mem::replace(&mut self.statistics, Statistics::default())
-    }
-    result
-        .map(|_| HandleRes::Skip(current_user_key))
-        .map_err(Into::into)
-}
-
-/// This type can be used to scan keys starting from the given user key (greater than or equal).
-///
-/// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
-/// isolation level is SI, locks will be checked first.
-///
-/// Use `ScannerBuilder` to build `ForwardKvScanner`.
-pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
-
+/// This scanner is like `ForwardKvScanner` but outputs `TxnEntry`.
 pub type EntryScanner<S> = ForwardScanner<S, LatestEntryPolicy>;
 
 impl<S: Snapshot> TxnEntryScanner for EntryScanner<S> {
@@ -560,14 +544,6 @@ impl<S: Snapshot> TxnEntryScanner for EntryScanner<S> {
         std::mem::replace(&mut self.statistics, Statistics::default())
     }
 }
-
-/// This type can be used to scan keys starting from the given user key (greater than or equal).
-///
-/// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
-/// isolation level is SI, locks will be checked first.
-///
-/// Use `ScannerBuilder` to build `ForwardKvScanner`.
-pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
 
 #[cfg(test)]
 mod latest_kv_tests {
