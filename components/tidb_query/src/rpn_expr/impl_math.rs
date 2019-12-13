@@ -1,9 +1,12 @@
+use std::cell::RefCell;
+
 use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
+use crate::expr_util::rand::MySQLRng;
 use crate::Result;
 
 #[rpn_fn]
@@ -137,12 +140,6 @@ impl Ceil for CeilIntToInt {
     }
 }
 
-pub trait Floor {
-    type Input: Evaluable;
-    type Output: Evaluable;
-    fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
-}
-
 #[rpn_fn(capture = [ctx])]
 pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: &Option<T::Input>) -> Result<Option<T::Output>> {
     if let Some(arg) = arg {
@@ -150,6 +147,12 @@ pub fn floor<T: Floor>(ctx: &mut EvalContext, arg: &Option<T::Input>) -> Result<
     } else {
         Ok(None)
     }
+}
+
+pub trait Floor {
+    type Input: Evaluable;
+    type Output: Evaluable;
+    fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>>;
 }
 
 pub struct FloorReal;
@@ -161,6 +164,17 @@ impl Floor for FloorReal {
     #[inline]
     fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
         Ok(Some(Real::from(arg.floor())))
+    }
+}
+
+pub struct FloorIntToDec;
+
+impl Floor for FloorIntToDec {
+    type Input = Int;
+    type Output = Decimal;
+
+    fn floor(_ctx: &mut EvalContext, arg: &Self::Input) -> Result<Option<Self::Output>> {
+        Ok(Some(Decimal::from(*arg)))
     }
 }
 
@@ -349,6 +363,21 @@ fn pow(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
+fn rand() -> Result<Option<Real>> {
+    let res = MYSQL_RNG.with(|mysql_rng| mysql_rng.borrow_mut().gen());
+    Ok(Real::new(res).ok())
+}
+
+#[inline]
+#[rpn_fn]
+fn rand_with_seed_first_gen(seed: &Option<i64>) -> Result<Option<Real>> {
+    let mut rng = MySQLRng::new_with_seed(seed.unwrap_or(0));
+    let res = rng.gen();
+    Ok(Real::new(res).ok())
+}
+
+#[inline]
+#[rpn_fn]
 fn degrees(arg: &Option<Real>) -> Result<Option<Real>> {
     Ok(arg.and_then(|n| Real::new(n.to_degrees()).ok()))
 }
@@ -394,6 +423,10 @@ pub fn conv(
     } else {
         Ok(None)
     }
+}
+
+thread_local! {
+   static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
 
 #[cfg(test)]
@@ -712,6 +745,27 @@ mod tests {
     }
 
     #[test]
+    fn test_floor_int_to_dec() {
+        let tests_cases = vec![
+            (std::i64::MIN, "-9223372036854775808"),
+            (std::i64::MAX, "9223372036854775807"),
+            (123, "123"),
+            (-123, "-123"),
+        ];
+
+        for (input, expected) in tests_cases {
+            let expected = expected.parse::<Decimal>().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate::<Decimal>(ScalarFuncSig::FloorIntToDec)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+
+        test_unary_func_ok_none::<Int, Decimal>(ScalarFuncSig::FloorIntToDec);
+    }
+
+    #[test]
     fn test_floor_dec_to_dec() {
         let cases = vec![
             ("9223372036854775808", "9223372036854775808"),
@@ -1024,6 +1078,56 @@ mod tests {
                 .evaluate::<Real>(ScalarFuncSig::Pow)
                 .is_err());
         }
+    }
+
+    #[test]
+    fn test_rand() {
+        let got1 = RpnFnScalarEvaluator::new()
+            .evaluate::<Real>(ScalarFuncSig::Rand)
+            .unwrap()
+            .unwrap();
+        let got2 = RpnFnScalarEvaluator::new()
+            .evaluate::<Real>(ScalarFuncSig::Rand)
+            .unwrap()
+            .unwrap();
+
+        assert!(got1 < Real::from(1.0));
+        assert!(got1 >= Real::from(0.0));
+        assert!(got2 < Real::from(1.0));
+        assert!(got2 >= Real::from(0.0));
+        assert_ne!(got1, got2);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn test_rand_with_seed_first_gen() {
+        let tests: Vec<(i64, f64)> = vec![
+            (0, 0.15522042769493574),
+            (1, 0.40540353712197724),
+            (-1, 0.9050373219931845),
+            (622337, 0.3608469249315997),
+            (10000000009, 0.3472714008272359),
+            (-1845798578934, 0.5058874688166077),
+            (922337203685, 0.40536338501178043),
+            (922337203685477580, 0.5550739490939993),
+            (9223372036854775807, 0.9050373219931845),
+        ];
+
+        for (seed, exp) in tests {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(Some(seed))
+                .evaluate::<Real>(ScalarFuncSig::RandWithSeedFirstGen)
+                .unwrap()
+                .unwrap();
+            assert_eq!(got, Real::from(exp));
+        }
+
+        let none_case_got = RpnFnScalarEvaluator::new()
+            .push_param(ScalarValue::Int(None))
+            .evaluate::<Real>(ScalarFuncSig::RandWithSeedFirstGen)
+            .unwrap()
+            .unwrap();
+        assert_eq!(none_case_got, Real::from(0.15522042769493574));
     }
 
     #[test]

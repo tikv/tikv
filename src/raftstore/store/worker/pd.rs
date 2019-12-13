@@ -12,6 +12,7 @@ use tokio_core::reactor::Handle;
 
 use engine::rocks::util::*;
 use engine::rocks::DB;
+use engine_rocks::RocksEngine;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -28,11 +29,11 @@ use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
-use keys::UnixSecs;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
+use tikv_util::time::UnixSecs;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
@@ -45,7 +46,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -53,7 +54,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     },
     Heartbeat {
         term: u64,
@@ -338,7 +339,7 @@ impl<T: PdClient> Runner<T> {
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     ) {
         let router = self.router.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
@@ -379,7 +380,7 @@ impl<T: PdClient> Runner<T> {
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     ) {
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
@@ -955,7 +956,7 @@ fn send_admin_request(
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback,
+    callback: Callback<RocksEngine>,
 ) {
     let cmd_type = request.get_cmd_type();
 

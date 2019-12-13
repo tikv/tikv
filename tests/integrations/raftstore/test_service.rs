@@ -5,7 +5,6 @@ use std::sync::*;
 
 use futures::{future, Future, Stream};
 use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
-
 use kvproto::coprocessor::*;
 use kvproto::debugpb::DebugClient;
 use kvproto::kvrpcpb::*;
@@ -23,12 +22,11 @@ use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::keys;
 use tikv::raftstore::store::SnapManager;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv::storage::Key;
 use tikv_util::worker::FutureWorker;
 use tikv_util::HandyRwLock;
+use txn_types::Key;
 
 fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let count = 1;

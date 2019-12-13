@@ -9,6 +9,7 @@ pub use super::super::execute_stats::{ExecSummaryCollector, ExecuteStats, WithSu
 use tipb::FieldType;
 
 use crate::codec::batch::LazyBatchColumnVec;
+use crate::execute_stats::ExecSummaryCollectorEnabled;
 use crate::expr::EvalWarnings;
 use crate::storage::IntervalRange;
 use crate::Result;
@@ -47,15 +48,15 @@ pub trait BatchExecutor: Send {
 
     fn take_scanned_range(&mut self) -> IntervalRange;
 
-    fn with_summary_collector<C: ExecSummaryCollector + Send>(
+    fn collect_summary(
         self,
-        summary_collector: C,
-    ) -> WithSummaryCollector<C, Self>
+        output_index: usize,
+    ) -> WithSummaryCollector<ExecSummaryCollectorEnabled, Self>
     where
         Self: Sized,
     {
         WithSummaryCollector {
-            summary_collector,
+            summary_collector: ExecSummaryCollectorEnabled::new(output_index),
             inner: self,
         }
     }

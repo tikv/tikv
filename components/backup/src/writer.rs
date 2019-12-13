@@ -11,7 +11,6 @@ use engine_traits::{SstWriter, SstWriterBuilder};
 use external_storage::ExternalStorage;
 use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
-use tikv::raftstore::store::keys;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{self, box_err};
 
@@ -246,9 +245,8 @@ mod tests {
             .build()
             .unwrap();
         let db = rocks.get_rocksdb();
-        let storage =
-            external_storage::create_storage(&format!("local://{}", temp.path().display()))
-                .unwrap();
+        let backend = external_storage::make_local_backend(temp.path());
+        let storage = external_storage::create_storage(&backend).unwrap();
 
         // Test empty file.
         let mut writer = BackupWriter::new(db.clone(), "foo", None).unwrap();

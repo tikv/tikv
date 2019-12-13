@@ -5,7 +5,8 @@ use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
 use tikv::storage::mvcc::{self, MvccTxn};
-use tikv::storage::{Key, Mutation, Options, TimeStamp};
+use tikv::storage::Options;
+use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
@@ -22,7 +23,7 @@ where
     let option = Options::default();
 
     let snapshot = engine.snapshot(&ctx).unwrap();
-    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
     let kvs = KvGenerator::new(config.key_length, config.value_length).generate(DEFAULT_ITERATIONS);
     for (k, v) in &kvs {
         txn.prewrite(

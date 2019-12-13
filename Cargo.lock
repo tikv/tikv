@@ -144,6 +144,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio-threadpool",
+ "txn_types",
  "url 2.1.0",
  "uuid",
 ]
@@ -209,12 +210,6 @@ dependencies = [
  "regex-automata",
  "serde",
 ]
-
-[[package]]
-name = "build_const"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39092a32794787acd8525ee150305ff051b0aa6cc2abaf193924f5ab05425f39"
 
 [[package]]
 name = "byteorder"
@@ -396,6 +391,7 @@ dependencies = [
  "futures-cpupool",
  "grpcio",
  "hex",
+ "keys",
  "kvproto",
  "libc",
  "log",
@@ -412,8 +408,19 @@ dependencies = [
  "tikv",
  "tikv_util",
  "toml",
+ "txn_types",
  "url 2.1.0",
  "vlog",
+]
+
+[[package]]
+name = "coarsetime"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bac87404ed1c708d9cdd0094449e70aadc1ab73c291d2cf536e946a413594e5"
+dependencies = [
+ "lazy_static",
+ "libc",
 ]
 
 [[package]]
@@ -429,6 +436,22 @@ dependencies = [
  "rand 0.7.2",
  "static_assertions 1.1.0",
  "tikv_alloc",
+]
+
+[[package]]
+name = "configuration"
+version = "0.1.0"
+dependencies = [
+ "configuration_derive",
+]
+
+[[package]]
+name = "configuration_derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
 ]
 
 [[package]]
@@ -474,15 +497,6 @@ name = "core-foundation-sys"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7ca8a5221364ef15ce201e8ed2f609fc312682a8f4e0e3d4aa5879764e0fa3b"
-
-[[package]]
-name = "crc"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d663548de7f5cca343f1e0a48d14dcfb0e9eb4e079ec58883b7251539fa10aeb"
-dependencies = [
- "build_const",
-]
 
 [[package]]
 name = "crc32fast"
@@ -815,6 +829,7 @@ dependencies = [
 name = "external_storage"
 version = "0.0.1"
 dependencies = [
+ "kvproto",
  "rand 0.7.2",
  "slog",
  "slog-global",
@@ -1376,19 +1391,17 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "farmhash",
  "hex",
  "kvproto",
  "panic_hook",
  "slog",
  "tikv_alloc",
- "tikv_util",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#4c654046831d1f4d7db8e4d44f7a6d0b35c33168"
+source = "git+https://github.com/pingcap/kvproto.git#705501101234770886dff3c7434de7c88fcc7188"
 dependencies = [
  "bytes",
  "futures",
@@ -1458,7 +1471,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#79dee6393e290f6d5338b1b06fe6424fc4b7f3dd"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#4ad6d0a7b35d30e7c67f6cfdff7d97874f330123"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1475,7 +1488,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#79dee6393e290f6d5338b1b06fe6424fc4b7f3dd"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#4ad6d0a7b35d30e7c67f6cfdff7d97874f330123"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2676,9 +2689,8 @@ checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#79dee6393e290f6d5338b1b06fe6424fc4b7f3dd"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#4ad6d0a7b35d30e7c67f6cfdff7d97874f330123"
 dependencies = [
- "crc",
  "libc",
  "librocksdb_sys",
 ]
@@ -3206,6 +3218,7 @@ name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
  "futures",
+ "keys",
  "kvproto",
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3214,6 +3227,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tipb",
+ "txn_types",
 ]
 
 [[package]]
@@ -3221,6 +3235,7 @@ name = "test_raftstore"
 version = "0.0.1"
 dependencies = [
  "engine",
+ "engine_rocks",
  "futures",
  "futures-cpupool",
  "grpcio",
@@ -3263,6 +3278,7 @@ dependencies = [
  "test_raftstore",
  "tikv",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -3292,6 +3308,7 @@ dependencies = [
  "engine",
  "engine_rocks",
  "engine_traits",
+ "external_storage",
  "futures",
  "futures-cpupool",
  "grpcio",
@@ -3322,6 +3339,7 @@ dependencies = [
  "tipb_helper",
  "tokio-threadpool",
  "toml",
+ "txn_types",
  "uuid",
 ]
 
@@ -3371,6 +3389,7 @@ dependencies = [
  "panic_hook",
  "profiler",
  "prometheus",
+ "prometheus-static-metric",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
  "rand 0.6.5",
@@ -3425,6 +3444,7 @@ dependencies = [
  "bytes",
  "chrono",
  "codec",
+ "configuration",
  "crc32fast",
  "crc64fast",
  "criterion-papi",
@@ -3495,6 +3515,7 @@ dependencies = [
  "tokio-threadpool",
  "tokio-timer",
  "toml",
+ "txn_types",
  "url 2.1.0",
  "utime",
  "uuid",
@@ -3523,6 +3544,8 @@ dependencies = [
  "backtrace",
  "byteorder",
  "chrono",
+ "coarsetime",
+ "configuration",
  "crc32fast",
  "crossbeam",
  "fail",
@@ -3590,7 +3613,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#a594830fb004783d4fb7ec4fbdf184d05fd7ab13"
+source = "git+https://github.com/pingcap/tipb.git#44f75c9bef33cef5c39e0e0e4fed71b15c735313"
 dependencies = [
  "bytes",
  "lazy_static",
@@ -3853,6 +3876,24 @@ checksum = "766345ed3891b291d01af307cd3ad2992a4261cb6c0c7e665cd3e01cf379dd24"
 dependencies = [
  "memchr",
  "unchecked-index",
+]
+
+[[package]]
+name = "txn_types"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "codec",
+ "derive-new",
+ "derive_more",
+ "farmhash",
+ "hex",
+ "kvproto",
+ "panic_hook",
+ "quick-error",
+ "slog",
+ "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]

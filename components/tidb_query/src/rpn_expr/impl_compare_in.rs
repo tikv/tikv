@@ -168,8 +168,8 @@ fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<Compar
     let n = children.len();
     let mut tail_index = n - 1;
     // try to evaluate and remove all constant nodes except args[0].
-    for current_index in (n - 1)..0 {
-        let tree_node = &mut children[current_index];
+    for i in (1..n).rev() {
+        let tree_node = &mut children[i];
         let mut is_constant = true;
         match tree_node.get_tp() {
             ExprType::ScalarFunc | ExprType::ColumnRef => {
@@ -184,7 +184,7 @@ fn init_compare_in_data<T: InByHash + Extract>(expr: &mut Expr) -> Result<Compar
             }
         }
         if is_constant {
-            children.as_mut_slice().swap(current_index, tail_index);
+            children.as_mut_slice().swap(i, tail_index);
             tail_index -= 1;
         }
     }
@@ -235,10 +235,10 @@ mod tests {
     use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
     use crate::expr::EvalContext;
     use crate::rpn_expr::types::RpnFnMeta;
-    use crate::rpn_expr::RpnExpressionBuilder;
+    use crate::rpn_expr::{RpnExpressionBuilder, RpnExpressionNode};
 
     #[test]
-    fn test_in() {
+    fn test_in_constant() {
         // mapper to test compare_in_by_compare.
         fn by_compare_mapper(expr: &Expr) -> Result<RpnFnMeta> {
             match expr.get_sig() {
@@ -247,7 +247,7 @@ mod tests {
             }
         }
 
-        fn test_with_mapper<F>(mapper: F)
+        fn test_with_mapper<F>(mapper: F, by_hash: bool)
         where
             F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
         {
@@ -272,6 +272,12 @@ mod tests {
                 let exp =
                     RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node, mapper, 1)
                         .unwrap();
+                if by_hash {
+                    if let RpnExpressionNode::FnCall { args_len, .. } = exp[0] {
+                        // all constant args except base_val should be removed.
+                        assert_eq!(args_len, 1);
+                    }
+                }
                 let mut ctx = EvalContext::default();
                 let schema = &[FieldTypeTp::LongLong.into()];
                 let mut columns = LazyBatchColumnVec::empty();
@@ -285,8 +291,8 @@ mod tests {
             }
         }
 
-        test_with_mapper(map_expr_node_to_rpn_func);
-        test_with_mapper(by_compare_mapper);
+        test_with_mapper(map_expr_node_to_rpn_func, true);
+        test_with_mapper(by_compare_mapper, false);
     }
 
     #[test]
@@ -307,6 +313,9 @@ mod tests {
             2,
         )
         .unwrap();
+        if let RpnExpressionNode::FnCall { args_len, .. } = exp[0] {
+            assert_eq!(args_len, 3);
+        }
         let mut ctx = EvalContext::default();
         let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
         let mut columns = LazyBatchColumnVec::from(vec![
