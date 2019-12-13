@@ -26,7 +26,7 @@ make_static_metric! {
         },
     }
 
-    pub struct DetectorHistogramVec: Histogram {
+    pub struct DetectorHistogramVec: LocalHistogram {
         "type" => {
             monitor_membership_change,
             detect,
@@ -53,8 +53,7 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref DETECTOR_HISTOGRAM_VEC: DetectorHistogramVec = register_static_histogram_vec!(
-        DetectorHistogramVec,
+    pub static ref DETECTOR_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_lock_manager_detector_histogram",
         "Bucketed histogram of deadlock detector",
         &["type"],
@@ -68,4 +67,6 @@ thread_local! {
         TLSMetricGroup::new(LocalTaskCounter::from(&TASK_COUNTER_VEC));
     pub static ERROR_COUNTER_METRICS: TLSMetricGroup<LocalErrorCounter> =
         TLSMetricGroup::new(LocalErrorCounter::from(&TASK_COUNTER_VEC));
+    pub static DETECTOR_HISTOGRAM_METRICS: TLSMetricGroup<DetectorHistogramVec> =
+        TLSMetricGroup::new(DetectorHistogramVec::from(&DETECTOR_HISTOGRAM_VEC));
 }
