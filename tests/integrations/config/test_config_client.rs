@@ -197,7 +197,7 @@ fn test_update_not_support_config() {
 }
 
 #[test]
-fn test_update_to_unvalid() {
+fn test_update_to_invalid() {
     let pd_client = Arc::new(MockPdClient::new());
     let id = "localhost:1080";
 
@@ -207,7 +207,7 @@ fn test_update_to_unvalid() {
     // register config
     let mut cfg_handler = pd_client.clone().register(id, cfg);
 
-    // update unvalid config on pd side
+    // update invalid config on pd side
     pd_client.update_cfg(id, |cfg| {
         cfg.raft_store.store_max_batch_size = 0;
     });

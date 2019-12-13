@@ -1727,7 +1727,7 @@ fn from_change_value(v: ConfigValue) -> CfgResult<String> {
     Ok(s)
 }
 
-/// Comparing tow `Version` with the assumption of `global` and `local`
+/// Comparing two `Version` with the assumption of `global` and `local`
 /// should be monotonically increased, if `global` or `local` of _current config_
 /// less than _incoming config_ means there are update in _incoming config_
 pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) -> Ordering {
@@ -1745,7 +1745,7 @@ type CfgResult<T> = Result<T, Box<dyn Error>>;
 
 /// ConfigController use to register each module's config manager,
 /// and dispatch the change of config to corresponding managers or
-/// return the change if the incoming change are unvalid.
+/// return the change if the incoming change is invalid.
 #[derive(Default)]
 pub struct ConfigController {
     current: TiKvConfig,
