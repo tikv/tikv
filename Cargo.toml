@@ -28,6 +28,7 @@ prost-codec = [
   "engine/prost-codec",
   "tikv_util/prost-codec",
   "sst_importer/prost-codec",
+  "pd_client/prost-codec",
 ]
 protobuf-codec = [
   "tipb/protobuf-codec",
@@ -35,6 +36,7 @@ protobuf-codec = [
   "grpcio/protobuf-codec",
   "raft/protobuf-codec",
   "sst_importer/protobuf-codec",
+  "pd_client/protobuf-codec",
 ]
 
 [lib]
