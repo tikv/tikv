@@ -85,6 +85,8 @@ pub trait TxnEntryStore: Send {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        after_ts: TimeStamp,
+        output_delete: bool,
     ) -> Result<Self::Scanner>;
 }
 
@@ -113,7 +115,7 @@ pub trait TxnEntryScanner: Send {
 }
 
 /// A transaction entry in underlying storage.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum TxnEntry {
     Prewrite { default: KvPair, lock: KvPair },
     Commit { default: KvPair, write: KvPair },
@@ -290,6 +292,8 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        after_ts: TimeStamp,
+        output_delete: bool,
     ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
@@ -300,7 +304,7 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
                 .fill_cache(self.fill_cache)
                 .isolation_level(self.isolation_level)
                 .bypass_locks(self.bypass_locks.clone())
-                .build_entry_scanner()?;
+                .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
     }
