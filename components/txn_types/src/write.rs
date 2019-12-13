@@ -4,8 +4,8 @@ use super::lock::LockType;
 use super::timestamp::TimeStamp;
 use super::types::{Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use super::{Error, Result};
-use codec::prelude::{NumberDecoder, NumberEncoder};
 use codec::number::MAX_VARINT64_LENGTH;
+use codec::prelude::{NumberDecoder, NumberEncoder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {

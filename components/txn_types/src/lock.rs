@@ -3,10 +3,10 @@
 use super::timestamp::{TimeStamp, TsSet};
 use super::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use super::{Error, Result};
-use derive_new::new;
-use kvproto::kvrpcpb::{LockInfo, Op};
 use codec::number::MAX_VARINT64_LENGTH;
 use codec::prelude::{CompactByteDecoder, CompactByteEncoder, NumberDecoder, NumberEncoder};
+use derive_new::new;
+use kvproto::kvrpcpb::{LockInfo, Op};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
