@@ -35,7 +35,7 @@ pub fn initial_logger(config: &TiKvConfig) {
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
-        logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
+        logger::init_log(drainer, config.log_level, false, true, vec![]).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
         });
     } else {
@@ -49,7 +49,7 @@ pub fn initial_logger(config: &TiKvConfig) {
             });
 
         // use async drainer and init std log.
-        logger::init_log(drainer, config.log_level, true, true, vec![]).unwrap_or_else(|e| {
+        logger::init_log(drainer, config.log_level, false, true, vec![]).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
         });
     };
