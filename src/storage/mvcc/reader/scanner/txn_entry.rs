@@ -18,7 +18,7 @@ use super::ScannerConfig;
 ///
 /// Use `ScannerBuilder` to build `EntryScanner`.
 ///
-/// Note: The implementation is almost the same as `ForwardScanner`, made a few
+/// Note: The implementation is almost the same as `ForwardKvScanner`, made a few
 ///       adjustments to output content in each cf.
 pub struct Scanner<S: Snapshot> {
     cfg: ScannerConfig<S>,
