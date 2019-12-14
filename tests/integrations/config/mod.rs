@@ -257,6 +257,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: false,
+            enable_hash_skiplist: false,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -311,6 +312,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_hash_skiplist: false,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -365,6 +367,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_hash_skiplist: false,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -419,6 +422,7 @@ fn test_serde_custom_tikv_config() {
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
+            enable_hash_skiplist: false,
         },
         titan: titan_db_config.clone(),
     };
@@ -489,7 +493,8 @@ fn test_serde_custom_tikv_config() {
             titan: titan_cf_config.clone(),
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
-            enable_doubly_skiplist: true,
+            enable_doubly_skiplist: false,
+            enable_hash_skiplist: false,
         },
         titan: titan_db_config.clone(),
     };
@@ -536,7 +541,7 @@ fn test_serde_custom_tikv_config() {
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
-    let load = toml::from_str(&custom).unwrap();
+    let load : TiKvConfig = toml::from_str(&custom).unwrap();
     assert_eq!(value, load);
     let dump = toml::to_string_pretty(&load).unwrap();
     let load_from_dump = toml::from_str(&dump).unwrap();
