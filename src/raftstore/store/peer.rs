@@ -1746,6 +1746,7 @@ impl Peer {
                 self.batch_callback(cbs, term, e);
                 return;
             }
+
             match self.propose_normal(ctx, req) {
                 Err(e) => {
                     self.batch_callback(cbs, term, e);
@@ -1796,18 +1797,11 @@ impl Peer {
         req: &RaftCmdRequest,
     ) -> bool {
         if let Some(batch_req) = self.batch_raft_request.request.as_ref() {
-            let batch_term = batch_req.get_header().get_term();
-            let batch_epoch = batch_req.get_header().get_region_epoch();
-            let epoch = req.get_header().get_region_epoch();
-            let term = req.get_header().get_term();
-            if term != batch_term {
-                return true;
-            }
-            if epoch != batch_epoch {
+            if batch_req.get_header() != req.get_header() {
                 return true;
             }
             if f64::from(self.batch_raft_request.batch_size)
-                > ctx.cfg.raft_entry_max_size.0 as f64 * 0.3
+                > ctx.cfg.raft_entry_max_size.0 as f64 * 0.4
             {
                 return true;
             }
@@ -1865,11 +1859,9 @@ impl Peer {
                 }
             }
             Ok(RequestPolicy::ProposeTransferLeader) => {
-                self.propose_batch_request(ctx);
                 return self.propose_transfer_leader(ctx, req, cb);
             }
             Ok(RequestPolicy::ProposeConfChange) => {
-                self.propose_batch_request(ctx);
                 is_conf_change = true;
                 self.propose_conf_change(ctx, &req)
             }
