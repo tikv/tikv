@@ -135,10 +135,10 @@ impl ScalarFunc {
 
     #[inline]
     pub fn char_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        if self.children[0].field_type().is_binary_string_like() {
-            let input = try_opt!(self.children[0].eval_string(ctx, row));
-            return Ok(Some(input.len() as i64));
-        }
+        //        if self.children[0].field_type().is_binary_string_like() {
+        //            let input = try_opt!(self.children[0].eval_string(ctx, row));
+        //            return Ok(Some(input.len() as i64));
+        //        }
         let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         Ok(Some(input.chars().count() as i64))
     }

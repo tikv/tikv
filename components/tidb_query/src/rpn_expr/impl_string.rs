@@ -65,6 +65,23 @@ pub fn concat_ws(args: &[&Option<Bytes>]) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
+pub fn char_length(arg: &Option<Bytes>) -> Result<Option<i64>> {
+    match arg {
+        Some(input) => {
+            let input = match str::from_utf8(&input) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Err(box_err!("invalid input value: {:?}", e));
+                }
+            };
+            Ok(Some(input.chars().count() as i64))
+        }
+        None => Ok(None),
+    }
+}
+
+#[rpn_fn]
+#[inline]
 pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
     Ok(arg.as_ref().map(|bytes| {
         if bytes.is_empty() {
@@ -1335,6 +1352,28 @@ mod tests {
                 .evaluate::<Int>(ScalarFuncSig::Instr)
                 .unwrap();
             assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_char_length() {
+        let cases = vec![
+            (b"HELLO".to_vec(), 5),
+            (b"123".to_vec(), 3),
+            (b"".to_vec(), 0),
+            ("CAFÉ".as_bytes().to_vec(), 4),
+            ("数据库".as_bytes().to_vec(), 3),
+            ("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec(), 22),
+            ("قاعدة البيانات".as_bytes().to_vec(), 14),
+            // (Datum::Null, Datum::Null),
+        ];
+
+        for (arg, expected) in cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Int>(ScalarFuncSig::CharLength)
+                .unwrap();
+            assert_eq!(got, Some(expected))
         }
     }
 }
