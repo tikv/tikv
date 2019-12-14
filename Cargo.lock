@@ -3369,6 +3369,7 @@ dependencies = [
  "bitfield",
  "bitflags",
  "boolinator",
+ "bstr",
  "byteorder",
  "chrono",
  "chrono-tz",
