@@ -541,7 +541,7 @@ fn test_serde_custom_tikv_config() {
     };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
-    let load : TiKvConfig = toml::from_str(&custom).unwrap();
+    let load: TiKvConfig = toml::from_str(&custom).unwrap();
     assert_eq!(value, load);
     let dump = toml::to_string_pretty(&load).unwrap();
     let load_from_dump = toml::from_str(&dump).unwrap();
