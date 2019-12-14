@@ -6,8 +6,8 @@ use std::time::Duration;
 use std::{mem, thread, u64};
 
 use futures::future;
-use keys::{Key, Value};
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
+use txn_types::{Key, Value};
 
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};

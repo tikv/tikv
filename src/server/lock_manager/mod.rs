@@ -19,7 +19,6 @@ use crate::storage::{
     lock_manager::{Lock, LockManager as LockManagerTrait},
     ProcessResult, StorageCallback,
 };
-use keys::TimeStamp;
 use pd_client::PdClient;
 use spin::Mutex;
 use std::collections::hash_map::DefaultHasher;
@@ -30,6 +29,7 @@ use std::thread::JoinHandle;
 use tikv_util::collections::HashSet;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::FutureWorker;
+use txn_types::TimeStamp;
 
 const DETECTED_SLOTS_NUM: usize = 128;
 

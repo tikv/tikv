@@ -262,7 +262,8 @@ mod tests {
     use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::storage::mvcc::{TimeStamp, Write, WriteType};
-    use keys::{data_key, Key as MvccKey};
+    use keys::data_key;
+    use txn_types::Key;
 
     use super::*;
 
@@ -323,7 +324,7 @@ mod tests {
 
     fn mvcc_put(db: &DB, k: &[u8], v: &[u8], start_ts: TimeStamp, commit_ts: TimeStamp) {
         let cf = get_cf_handle(db, CF_WRITE).unwrap();
-        let k = MvccKey::from_encoded(data_key(k)).append_ts(commit_ts);
+        let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
         let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
         db.put_cf(cf, k.as_encoded(), &w.as_ref().to_bytes())
             .unwrap();
@@ -331,7 +332,7 @@ mod tests {
 
     fn delete(db: &DB, k: &[u8], commit_ts: TimeStamp) {
         let cf = get_cf_handle(db, CF_WRITE).unwrap();
-        let k = MvccKey::from_encoded(data_key(k)).append_ts(commit_ts);
+        let k = Key::from_encoded(data_key(k)).append_ts(commit_ts);
         db.delete_cf(cf, k.as_encoded()).unwrap();
     }
 
