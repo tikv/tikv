@@ -1082,7 +1082,6 @@ impl RaftBatchSystem {
             snap_mgr,
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,
-            cfg.clean_stale_peer_delay.0,
         );
         let timer = RegionRunner::new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));

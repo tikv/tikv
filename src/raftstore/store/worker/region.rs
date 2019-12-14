@@ -25,7 +25,6 @@ use crate::raftstore::store::peer_storage::{
 use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
 use crate::raftstore::store::{self, check_abort, ApplyOptions, SnapEntry, SnapKey, SnapManager};
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
-use tikv_util::time;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
@@ -100,7 +99,10 @@ struct StalePeerInfo {
     // below are stored as a value in PendingDeleteRanges
     pub region_id: u64,
     pub end_key: Vec<u8>,
-    pub timeout: time::Instant,
+    // Once the oldest snapshot sequence exceeds this, it ensures that no one is
+    // reading on this peer anymore. So we can safely call `delete_files_in_range`
+    // , which may break the consistency of snapshot, of this peer range.
+    pub stale_sequence: u64,
 }
 
 /// A structure records all ranges to be deleted with some delay.
@@ -168,7 +170,7 @@ impl PendingDeleteRanges {
     /// Inserts a new range waiting to be deleted.
     ///
     /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping range.
-    fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], timeout: time::Instant) {
+    fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], stale_sequence: u64) {
         if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
             panic!(
                 "[region {}] register deleting data in [{}, {}) failed due to overlap",
@@ -180,7 +182,7 @@ impl PendingDeleteRanges {
         let info = StalePeerInfo {
             region_id,
             end_key: end_key.to_owned(),
-            timeout,
+            stale_sequence,
         };
         self.ranges.insert(start_key.to_owned(), info);
     }
@@ -188,12 +190,18 @@ impl PendingDeleteRanges {
     /// Gets all timeout ranges info.
     pub fn timeout_ranges<'a>(
         &'a self,
-        now: time::Instant,
-    ) -> impl Iterator<Item = (u64, Vec<u8>, Vec<u8>)> + 'a {
+        oldest_sequence: u64,
+    ) -> impl Iterator<Item = (u64, &'a [u8], &'a [u8])> {
         self.ranges
             .iter()
-            .filter(move |&(_, info)| info.timeout <= now)
-            .map(|(start_key, info)| (info.region_id, start_key.clone(), info.end_key.clone()))
+            .filter(move |&(_, info)| info.stale_sequence < oldest_sequence)
+            .map(|(start_key, info)| {
+                (
+                    info.region_id,
+                    start_key.as_slice(),
+                    info.end_key.as_slice(),
+                )
+            })
     }
 
     pub fn len(&self) -> usize {
@@ -207,7 +215,6 @@ struct SnapContext {
     batch_size: usize,
     mgr: SnapManager,
     use_delete_range: bool,
-    clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
 }
 
@@ -380,26 +387,17 @@ impl SnapContext {
     }
 
     /// Cleans up the data within the range.
-    fn cleanup_range(
-        &self,
-        region_id: u64,
-        start_key: &[u8],
-        end_key: &[u8],
-        use_delete_files: bool,
-    ) {
-        if use_delete_files {
-            if let Err(e) =
-                engine_util::delete_all_files_in_range(&self.engines.kv, start_key, end_key)
-            {
-                error!(
-                    "failed to delete files in range";
-                    "region_id" => region_id,
-                    "start_key" => log_wrappers::Key(start_key),
-                    "end_key" => log_wrappers::Key(end_key),
-                    "err" => %e,
-                );
-                return;
-            }
+    fn cleanup_range(&self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
+        if let Err(e) = engine_util::delete_all_files_in_range(&self.engines.kv, start_key, end_key)
+        {
+            error!(
+                "failed to delete files in range";
+                "region_id" => region_id,
+                "start_key" => log_wrappers::Key(start_key),
+                "end_key" => log_wrappers::Key(end_key),
+                "err" => %e,
+            );
+            return;
         }
         if let Err(e) = engine_util::delete_all_in_range(
             &self.engines.kv,
@@ -429,23 +427,13 @@ impl SnapContext {
         let overlap_ranges = self
             .pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
-        let use_delete_files = false;
         for (region_id, s_key, e_key) in overlap_ranges {
-            self.cleanup_range(region_id, &s_key, &e_key, use_delete_files);
+            self.cleanup_range(region_id, &s_key, &e_key);
         }
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
-    fn insert_pending_delete_range(
-        &mut self,
-        region_id: u64,
-        start_key: &[u8],
-        end_key: &[u8],
-    ) -> bool {
-        if self.clean_stale_peer_delay.as_secs() == 0 {
-            return false;
-        }
-
+    fn insert_pending_delete_range(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
         self.cleanup_overlap_ranges(start_key, end_key);
 
         info!(
@@ -454,28 +442,28 @@ impl SnapContext {
             "start_key" => log_wrappers::Key(start_key),
             "end_key" => log_wrappers::Key(end_key),
         );
-        let timeout = time::Instant::now() + self.clean_stale_peer_delay;
-        self.pending_delete_ranges
-            .insert(region_id, start_key, end_key, timeout);
-        true
+
+        self.pending_delete_ranges.insert(
+            region_id,
+            start_key,
+            end_key,
+            self.engines.kv.get_latest_sequence_number(),
+        );
     }
 
     /// Cleans up timeouted ranges.
     fn clean_timeout_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
-        let now = time::Instant::now();
+        let stale_sequence = self.engines.kv.get_oldest_snapshot_sequence_number();
         let mut cleaned_range_keys = vec![];
         {
-            let use_delete_files = true;
-            for (region_id, start_key, end_key) in self.pending_delete_ranges.timeout_ranges(now) {
-                self.cleanup_range(
-                    region_id,
-                    start_key.as_slice(),
-                    end_key.as_slice(),
-                    use_delete_files,
-                );
-                cleaned_range_keys.push(start_key);
+            let now = Instant::now();
+            for (region_id, start_key, end_key) in
+                self.pending_delete_ranges.timeout_ranges(stale_sequence)
+            {
+                self.cleanup_range(region_id, start_key, end_key);
+                cleaned_range_keys.push(start_key.to_vec());
                 let elapsed = now.elapsed();
                 if elapsed >= CLEANUP_MAX_DURATION {
                     let len = cleaned_range_keys.len();
@@ -525,7 +513,6 @@ impl Runner {
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
-        clean_stale_peer_delay: Duration,
     ) -> Runner {
         Runner {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap-generator"))
@@ -536,7 +523,6 @@ impl Runner {
                 mgr,
                 batch_size,
                 use_delete_range,
-                clean_stale_peer_delay,
                 pending_delete_ranges: PendingDeleteRanges::default(),
             },
             pending_applies: VecDeque::new(),
@@ -587,7 +573,7 @@ impl Runnable<Task> for Runner {
                     .execute(move |_| ctx.handle_gen(region_id, raft_snap, kv_snap, notifier))
             }
             task @ Task::Apply { .. } => {
-                // to makes sure appling snapshots in order.
+                // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
                 self.handle_pending_applies();
                 if !self.pending_applies.is_empty() {
@@ -604,14 +590,8 @@ impl Runnable<Task> for Runner {
             } => {
                 // try to delay the range deletion because
                 // there might be a coprocessor request related to this range
-                if !self
-                    .ctx
+                self.ctx
                     .insert_pending_delete_range(region_id, &start_key, &end_key)
-                {
-                    self.ctx.cleanup_range(
-                        region_id, &start_key, &end_key, false, /* use_delete_files */
-                    );
-                }
             }
         }
     }
@@ -664,13 +644,11 @@ mod tests {
     use crate::raftstore::store::{SnapKey, SnapManager};
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Writable, WriteBatch};
-    use engine::Engines;
     use engine::{Mutable, Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
     use engine_rocks::RocksSnapshot;
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
-    use tikv_util::time;
     use tikv_util::timer::Timer;
     use tikv_util::worker::Worker;
 
@@ -683,18 +661,17 @@ mod tests {
         id: u64,
         s: &str,
         e: &str,
-        timeout: time::Instant,
+        stale_sequence: u64,
     ) {
-        pending_delete_ranges.insert(id, s.as_bytes(), e.as_bytes(), timeout);
+        pending_delete_ranges.insert(id, s.as_bytes(), e.as_bytes(), stale_sequence);
     }
 
     #[test]
     fn test_pending_delete_ranges() {
         let mut pending_delete_ranges = PendingDeleteRanges::default();
-        let delay = Duration::from_millis(100);
         let id = 0;
 
-        let timeout = time::Instant::now() + delay;
+        let timeout = 10;
         insert_range(&mut pending_delete_ranges, id, "a", "c", timeout);
         insert_range(&mut pending_delete_ranges, id, "m", "n", timeout);
         insert_range(&mut pending_delete_ranges, id, "x", "z", timeout);
@@ -702,13 +679,11 @@ mod tests {
         insert_range(&mut pending_delete_ranges, id + 1, "p", "t", timeout);
         assert_eq!(pending_delete_ranges.len(), 5);
 
-        thread::sleep(delay / 2);
-
         //  a____c    f____i    m____n    p____t    x____z
         //              g___________________q
         // when we want to insert [g, q), we first extract overlap ranges,
         // which are [f, i), [m, n), [p, t)
-        let timeout = time::Instant::now() + delay;
+        let timeout = 12;
         let overlap_ranges =
             pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
         assert_eq!(
@@ -723,33 +698,73 @@ mod tests {
         insert_range(&mut pending_delete_ranges, id + 2, "g", "q", timeout);
         assert_eq!(pending_delete_ranges.len(), 3);
 
-        thread::sleep(delay / 2);
-
         // at t1, [a, c) and [x, z) will timeout
-        let now = time::Instant::now();
-        let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
-        assert_eq!(
-            ranges,
-            [
-                (id, b"a".to_vec(), b"c".to_vec()),
-                (id, b"x".to_vec(), b"z".to_vec()),
-            ]
-        );
-        for (_, start_key, _) in ranges {
-            pending_delete_ranges.remove(&start_key);
+        {
+            let now = 11;
+            let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
+            assert_eq!(
+                ranges,
+                [
+                    (id, "a".as_bytes(), "c".as_bytes()),
+                    (id, "x".as_bytes(), "z".as_bytes()),
+                ]
+            );
+            for start_key in ranges
+                .into_iter()
+                .map(|(_, start, _)| start.to_vec())
+                .collect::<Vec<Vec<u8>>>()
+            {
+                pending_delete_ranges.remove(&start_key);
+            }
+            assert_eq!(pending_delete_ranges.len(), 1);
         }
-        assert_eq!(pending_delete_ranges.len(), 1);
-
-        thread::sleep(delay / 2);
 
         // at t2, [g, q) will timeout
-        let now = time::Instant::now();
-        let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
-        assert_eq!(ranges, [(id + 2, b"g".to_vec(), b"q".to_vec())]);
-        for (_, start_key, _) in ranges {
-            pending_delete_ranges.remove(&start_key);
+        {
+            let now = 14;
+            let ranges: Vec<_> = pending_delete_ranges.timeout_ranges(now).collect();
+            assert_eq!(ranges, [(id + 2, "g".as_bytes(), "q".as_bytes())]);
+            for start_key in ranges
+                .into_iter()
+                .map(|(_, start, _)| start.to_vec())
+                .collect::<Vec<Vec<u8>>>()
+            {
+                pending_delete_ranges.remove(&start_key);
+            }
+            assert_eq!(pending_delete_ranges.len(), 0);
         }
-        assert_eq!(pending_delete_ranges.len(), 0);
+    }
+
+    #[test]
+    fn test_stale_peer() {
+        let temp_dir = Builder::new().prefix("test_stale_peer").tempdir().unwrap();
+        let engine = get_test_db_for_regions(&temp_dir, None, None, None, None, &[1]).unwrap();
+
+        let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
+        let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+        let mut worker = Worker::new("region-worker");
+        let sched = worker.scheduler();
+        let runner = RegionRunner::new(engine.clone(), mgr, 0, true);
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(100), Event::CheckStalePeer);
+        worker.start_with_timer(runner, timer).unwrap();
+
+        engine.kv.put(b"k1", b"v1").unwrap();
+        let snap = engine.kv.snapshot();
+        engine.kv.put(b"k2", b"v2").unwrap();
+
+        sched
+            .schedule(Task::Destroy {
+                region_id: 1,
+                start_key: b"k1".to_vec(),
+                end_key: b"k2".to_vec(),
+            })
+            .unwrap();
+        drop(snap);
+
+        thread::sleep(Duration::from_millis(100));
+        assert!(engine.kv.get(b"k1").unwrap().is_none());
+        assert_eq!(engine.kv.get(b"k2").unwrap().unwrap(), b"v2");
     }
 
     #[test]
@@ -792,17 +807,11 @@ mod tests {
             }
         }
 
-        let shared_block_cache = false;
-        let engines = Engines::new(
-            Arc::clone(&engine.kv),
-            Arc::clone(&engine.kv),
-            shared_block_cache,
-        );
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let runner = RegionRunner::new(engines.clone(), mgr, 0, true, Duration::from_secs(0));
+        let runner = RegionRunner::new(engine.clone(), mgr, 0, true);
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(100), Event::CheckApply);
         worker.start_with_timer(runner, timer).unwrap();
@@ -813,8 +822,8 @@ mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    raft_snap: RocksSnapshot::new(engines.raft.clone()),
-                    kv_snap: RocksSnapshot::new(engines.kv.clone()),
+                    raft_snap: RocksSnapshot::new(engine.raft.clone()),
+                    kv_snap: RocksSnapshot::new(engine.kv.clone()),
                     notifier: tx,
                 })
                 .unwrap();

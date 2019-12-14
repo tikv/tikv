@@ -1529,9 +1529,10 @@ impl TiKvConfig {
             self.server.end_point_max_tasks = None;
         }
         if self.raft_store.clean_stale_peer_delay.as_secs() > 0 {
-            let delay_secs = self.raft_store.clean_stale_peer_delay.as_secs()
-                + self.server.end_point_request_max_handle_duration.as_secs();
-            self.raft_store.clean_stale_peer_delay = ReadableDuration::secs(delay_secs);
+            warn!(
+                "deprecated configuration, {} is no longer used and ignored.",
+                "raft_store.clean_stale_peer_delay",
+            );
         }
         // When shared block cache is enabled, if its capacity is set, it overrides individual
         // block cache sizes. Otherwise use the sum of block cache size of all column families

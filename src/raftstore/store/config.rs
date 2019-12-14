@@ -52,8 +52,7 @@ pub struct Config {
     pub region_split_check_diff: ReadableSize,
     /// Interval (ms) to check whether start compaction for a region.
     pub region_compact_check_interval: ReadableDuration,
-    // delay time before deleting a stale peer
-    pub clean_stale_peer_delay: ReadableDuration,
+
     /// Number of regions for each time checking.
     pub region_compact_check_step: u64,
     /// Minimum number of tombstones to trigger manual compaction.
@@ -121,7 +120,7 @@ pub struct Config {
     pub future_poll_size: usize,
     pub hibernate_regions: bool,
 
-    // Deprecated! These two configuration has been moved to Coprocessor.
+    // Deprecated! These configuration has been moved to Coprocessor.
     // They are preserved for compatibility check.
     #[doc(hidden)]
     #[serde(skip_serializing)]
@@ -129,6 +128,10 @@ pub struct Config {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub region_split_size: ReadableSize,
+    // Deprecated! The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number.
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    pub clean_stale_peer_delay: ReadableDuration,
 }
 
 impl Default for Config {
@@ -156,7 +159,6 @@ impl Default for Config {
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
             region_split_check_diff: split_size / 16,
-            clean_stale_peer_delay: ReadableDuration::minutes(10),
             region_compact_check_interval: ReadableDuration::minutes(5),
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,
@@ -197,6 +199,7 @@ impl Default for Config {
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),
             region_split_size: ReadableSize(0),
+            clean_stale_peer_delay: ReadableDuration::minutes(0),
         }
     }
 }
@@ -419,9 +422,6 @@ impl Config {
         metrics
             .with_label_values(&["region_compact_check_interval"])
             .set(self.region_compact_check_interval.as_secs() as f64);
-        metrics
-            .with_label_values(&["clean_stale_peer_delay"])
-            .set(self.clean_stale_peer_delay.as_secs() as f64);
         metrics
             .with_label_values(&["region_compact_check_step"])
             .set(self.region_compact_check_step as f64);

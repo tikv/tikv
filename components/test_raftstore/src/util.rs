@@ -134,7 +134,6 @@ pub fn new_store_cfg() -> Config {
         report_region_flow_interval: ReadableDuration::millis(100),
         raft_store_max_leader_lease: ReadableDuration::millis(250),
         raft_reject_transfer_leader_duration: ReadableDuration::secs(0),
-        clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
         merge_check_tick_interval: ReadableDuration::millis(100),
         ..Config::default()
