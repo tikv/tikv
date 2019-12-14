@@ -62,7 +62,7 @@ const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
 const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 const MAX_BLOCK_SIZE: usize = 32 * MB as usize;
-
+const DEFAULT_HASH_SKIPLIST_BUCKET: u64 = 1024 * 128;
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
     let (ratio, min, max) = match (is_raft_db, cf) {
@@ -190,6 +190,7 @@ macro_rules! cf_config {
             pub prop_size_index_distance: u64,
             pub prop_keys_index_distance: u64,
             pub enable_doubly_skiplist: bool,
+            pub enable_hash_skiplist: bool,
             pub titan: TitanCfConfig,
         }
 
@@ -301,6 +302,9 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "enable_doubly_skiplist"])
             .set(($cf.enable_doubly_skiplist as i32).into());
         $metrics
+            .with_label_values(&[$tag, "enable_hash_skiplist"])
+            .set(($cf.enable_hash_skiplist as i32).into());
+        $metrics
             .with_label_values(&[$tag, "titan_min_blob_size"])
             .set($cf.titan.min_blob_size.0 as f64);
         $metrics
@@ -373,6 +377,8 @@ macro_rules! build_cf_opt {
         cf_opts.set_force_consistency_checks($opt.force_consistency_checks);
         if $opt.enable_doubly_skiplist {
             cf_opts.set_doubly_skiplist();
+        } else if $opt.enable_hash_skiplist {
+            cf_opts.set_hash_skiplist(DEFAULT_HASH_SKIPLIST_BUCKET, 4);
         }
         cf_opts
     }};
@@ -424,6 +430,7 @@ impl Default for DefaultCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_hash_skiplist: false,
             titan: TitanCfConfig::default(),
         }
     }
@@ -491,6 +498,7 @@ impl Default for WriteCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_hash_skiplist: false,
             titan,
         }
     }
@@ -560,6 +568,7 @@ impl Default for LockCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_hash_skiplist: false,
             titan,
         }
     }
@@ -619,6 +628,7 @@ impl Default for RaftCfConfig {
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
+            enable_hash_skiplist: false,
             titan,
         }
     }
@@ -900,7 +910,8 @@ impl Default for RaftDefaultCfConfig {
             force_consistency_checks: false,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-            enable_doubly_skiplist: true,
+            enable_doubly_skiplist: false,
+            enable_hash_skiplist: true,
             titan: TitanCfConfig::default(),
         }
     }
