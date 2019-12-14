@@ -140,9 +140,9 @@ impl Lock {
                     short_value = Some(b[..len as usize].to_vec());
                     b = &b[len as usize..];
                 }
-                FOR_UPDATE_TS_PREFIX => for_update_ts = b.read_var_u64()?.into(),
-                TXN_SIZE_PREFIX => txn_size = b.read_var_u64()?,
-                MIN_COMMIT_TS_PREFIX => min_commit_ts = b.read_var_u64()?.into(),
+                FOR_UPDATE_TS_PREFIX => for_update_ts = b.read_u64()?.into(),
+                TXN_SIZE_PREFIX => txn_size = b.read_u64()?,
+                MIN_COMMIT_TS_PREFIX => min_commit_ts = b.read_u64()?.into(),
                 flag => panic!("invalid flag [{}] in lock", flag),
             }
         }
