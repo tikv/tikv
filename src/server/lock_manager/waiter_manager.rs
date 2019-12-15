@@ -57,9 +57,9 @@ impl Delay {
     }
 
     /// Resets the instance to an earlier deadline.
-    fn reset(&self, timeout: Instant) {
-        if timeout < self.deadline {
-            self.inner.borrow_mut().timer.reset(timeout);
+    fn reset(&self, deadline: Instant) {
+        if deadline < self.deadline {
+            self.inner.borrow_mut().timer.reset(deadline);
         }
     }
 
@@ -194,9 +194,8 @@ impl Waiter {
             })
     }
 
-    fn reset_timeout(&self, timeout: u64) {
-        let timeout = Instant::now() + Duration::from_millis(timeout);
-        self.delay.reset(timeout);
+    fn reset_timeout(&self, deadline: Instant) {
+        self.delay.reset(deadline);
     }
 
     /// `Notify` consumes the `Waiter` to notify the corresponding transaction
@@ -466,12 +465,14 @@ impl WaiterManager {
 
     fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
         let mut wait_table = self.wait_table.borrow_mut();
+        let now = Instant::now();
         for hash in hashes {
             let lock = Lock { ts: lock_ts, hash };
             // Notify the oldest waiter immediately.
             wait_table
                 .remove_oldest_waiter(lock)
                 .and_then(|mut waiter| {
+                    info!("wake up oldest"; "start_ts" => waiter.start_ts);
                     self.detector_scheduler
                         .clean_up_wait_for(waiter.start_ts, waiter.lock);
                     waiter.conflict_with(commit_ts);
@@ -480,9 +481,10 @@ impl WaiterManager {
                 });
             // Others will be waked up after `wake_up_delay_duration`.
             wait_table.get_mut(&lock).and_then(|waiters| {
+                info!("wake up others"; "len" => waiters.len());
                 waiters.iter_mut().for_each(|waiter| {
                     waiter.conflict_with(commit_ts);
-                    waiter.reset_timeout(self.wake_up_delay_duration);
+                    waiter.reset_timeout(now + Duration::from_millis(self.wake_up_delay_duration));
                 });
                 Some(())
             });
@@ -781,7 +783,7 @@ mod tests {
 
         // The timeout handler should be invoked after timeout.
         let (waiter, _, _) = new_test_waiter(10.into(), 20.into(), 20);
-        waiter.reset_timeout(100);
+        waiter.reset_timeout(Instant::now() + Duration::from_millis(100));
         let (tx, rx) = mpsc::sync_channel(1);
         let f = waiter.on_timeout(move || tx.send(1).unwrap());
         assert_elapsed(|| core.run(f).unwrap(), 100, 200);
@@ -789,7 +791,7 @@ mod tests {
 
         // The timeout handler shouldn't be invoked after waiter has been notified.
         let (waiter, _, _) = new_test_waiter(10.into(), 20.into(), 20);
-        waiter.reset_timeout(100);
+        waiter.reset_timeout(Instant::now() + Duration::from_millis(100));
         let (tx, rx) = mpsc::sync_channel(1);
         let f = waiter.on_timeout(move || tx.send(1).unwrap());
         waiter.notify();
