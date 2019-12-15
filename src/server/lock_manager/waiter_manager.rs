@@ -208,11 +208,12 @@ impl Waiter {
 
     /// Changes the `ProcessResult` to `WriteConflict`.
     /// It may be invoked more than once.
-    fn conflict_with(&mut self, commit_ts: TimeStamp) {
+    fn conflict_with(&mut self, lock_ts: TimeStamp, commit_ts: TimeStamp) {
+        self.lock.ts = lock_ts;
         let (key, primary) = self.extract_key_info();
         let mvcc_err = MvccError::from(MvccErrorInner::WriteConflict {
             start_ts: self.start_ts,
-            conflict_start_ts: self.lock.ts,
+            conflict_start_ts: lock_ts,
             conflict_commit_ts: commit_ts,
             key,
             primary,
@@ -266,7 +267,8 @@ impl Waiter {
 type Waiters = Vec<Waiter>;
 
 struct WaitTable {
-    wait_table: HashMap<Lock, Waiters>,
+    // Map lock hash to waiters.
+    wait_table: HashMap<u64, Waiters>,
     waiter_count: Arc<AtomicUsize>,
 }
 
@@ -284,12 +286,12 @@ impl WaitTable {
     }
 
     fn get_mut(&mut self, lock: &Lock) -> Option<&mut Waiters> {
-        self.wait_table.get_mut(&lock)
+        self.wait_table.get_mut(&lock.hash)
     }
 
     /// Returns the duplicated `Waiter` if there is.
     fn add_waiter(&mut self, waiter: Waiter) -> Option<Waiter> {
-        let waiters = self.wait_table.entry(waiter.lock).or_default();
+        let waiters = self.wait_table.entry(waiter.lock.hash).or_default();
         let old_idx = waiters.iter().position(|w| w.start_ts == waiter.start_ts);
         waiters.push(waiter);
         let old = waiters.swap_remove(old_idx?);
@@ -299,21 +301,21 @@ impl WaitTable {
     }
 
     fn remove_waiter(&mut self, lock: Lock, waiter_ts: TimeStamp) -> Option<Waiter> {
-        let waiters = self.wait_table.get_mut(&lock)?;
+        let waiters = self.wait_table.get_mut(&lock.hash)?;
         let idx = waiters
             .iter()
             .position(|waiter| waiter.start_ts == waiter_ts)?;
         let waiter = waiters.swap_remove(idx);
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
         if waiters.is_empty() {
-            self.wait_table.remove(&lock);
+            self.wait_table.remove(&lock.hash);
         }
         Some(waiter)
     }
 
     /// Removes the `Waiter` with the smallest start ts.
     fn remove_oldest_waiter(&mut self, lock: Lock) -> Option<Waiter> {
-        let waiters = self.wait_table.get_mut(&lock)?;
+        let waiters = self.wait_table.get_mut(&lock.hash)?;
         let oldest_idx = waiters
             .iter()
             .enumerate()
@@ -322,7 +324,7 @@ impl WaitTable {
         let oldest = waiters.swap_remove(oldest_idx);
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
         if waiters.is_empty() {
-            self.wait_table.remove(&lock);
+            self.wait_table.remove(&lock.hash);
         }
         Some(oldest)
     }
@@ -465,26 +467,27 @@ impl WaiterManager {
 
     fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
         let mut wait_table = self.wait_table.borrow_mut();
-        let now = Instant::now();
+        let new_timeout = Instant::now() + Duration::from_millis(self.wake_up_delay_duration);
         for hash in hashes {
             let lock = Lock { ts: lock_ts, hash };
-            // Notify the oldest waiter immediately.
+            // Notify the oldest one immediately.
             wait_table
                 .remove_oldest_waiter(lock)
                 .and_then(|mut waiter| {
-                    info!("wake up oldest"; "start_ts" => waiter.start_ts);
                     self.detector_scheduler
                         .clean_up_wait_for(waiter.start_ts, waiter.lock);
-                    waiter.conflict_with(commit_ts);
+                    waiter.conflict_with(lock_ts, commit_ts);
                     waiter.notify();
                     Some(())
                 });
             // Others will be waked up after `wake_up_delay_duration`.
+            //
+            // NOTE: Actually these waiters are waiting for an unknown transaction.
+            // If there is a deadlock between them, it will be detected after timeout.
             wait_table.get_mut(&lock).and_then(|waiters| {
-                info!("wake up others"; "len" => waiters.len());
                 waiters.iter_mut().for_each(|waiter| {
-                    waiter.conflict_with(commit_ts);
-                    waiter.reset_timeout(now + Duration::from_millis(self.wake_up_delay_duration));
+                    waiter.conflict_with(lock_ts, commit_ts);
+                    waiter.reset_timeout(new_timeout);
                 });
                 Some(())
             });
@@ -677,7 +680,7 @@ mod tests {
         );
 
         let (mut waiter, mut lock_info, _) = new_test_waiter(10.into(), 20.into(), 20);
-        waiter.conflict_with(30.into());
+        waiter.conflict_with(20.into(), 30.into());
         assert_eq!(
             waiter.extract_key_info(),
             (lock_info.take_key(), lock_info.take_primary_lock())
@@ -752,13 +755,15 @@ mod tests {
         // A waiter can conflict with other transactions more than once.
         for conflict_times in 1..=3 {
             let waiter_ts = TimeStamp::new(10);
-            let (mut waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
-            let mut commit_ts = TimeStamp::new(30);
+            let mut lock_ts = TimeStamp::new(20);
+            let (mut waiter, mut lock_info, f) = new_test_waiter(waiter_ts, lock_ts, 20);
+            let mut conflict_commit_ts = TimeStamp::new(30);
             for _ in 0..conflict_times {
-                waiter.conflict_with(*commit_ts.incr());
+                waiter.conflict_with(*lock_ts.incr(), *conflict_commit_ts.incr());
+                lock_info.set_lock_version(lock_ts.into_inner());
             }
             waiter.notify();
-            expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, commit_ts);
+            expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, conflict_commit_ts);
         }
 
         // Deadlock
@@ -771,7 +776,7 @@ mod tests {
         // Conflict then deadlock.
         let waiter_ts = TimeStamp::new(10);
         let (mut waiter, lock_info, f) = new_test_waiter(waiter_ts, 20.into(), 20);
-        waiter.conflict_with(30.into());
+        waiter.conflict_with(20.into(), 30.into());
         waiter.deadlock_with(111);
         waiter.notify();
         expect_deadlock(f.wait().unwrap(), waiter_ts, lock_info, 111);
@@ -1022,7 +1027,7 @@ mod tests {
         }
 
         // Multiple waiters are waiting for one lock.
-        let lock = Lock {
+        let mut lock = Lock {
             ts: 10.into(),
             hash: 10,
         };
@@ -1044,18 +1049,23 @@ mod tests {
         waiters_info.sort_by_key(|(ts, _, _)| *ts);
         let mut commit_ts = 30.into();
         // Each waiter should be waked up immediately in order.
-        for (waiter_ts, lock_info, f) in waiters_info.drain(..waiters_info.len() - 1) {
+        for (waiter_ts, mut lock_info, f) in waiters_info.drain(..waiters_info.len() - 1) {
             scheduler.wake_up(lock.ts, vec![lock.hash], commit_ts);
+            lock_info.set_lock_version(lock.ts.into_inner());
             assert_elapsed(
                 || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, commit_ts),
                 0,
                 100,
             );
+            // Now the lock is held by the waked up transaction.
+            lock.ts = waiter_ts;
             commit_ts.incr();
         }
         // Last waiter isn't waked up by other transactions. It will be waked up after
         // wake_up_delay_duration.
-        let (waiter_ts, lock_info, f) = waiters_info.pop().unwrap();
+        let (waiter_ts, mut lock_info, f) = waiters_info.pop().unwrap();
+        // It conflicts with the last transaction.
+        lock_info.set_lock_version(lock.ts.into_inner() - 1);
         assert_elapsed(
             || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, *commit_ts.decr()),
             wake_up_delay_duration,
