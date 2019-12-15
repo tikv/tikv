@@ -11,6 +11,7 @@ use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
 use tokio_timer::timer::Handle;
 
+use kvproto::configpb;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
@@ -1205,6 +1206,44 @@ impl PdClient for TestPdClient {
         let mut resp = pdpb::GetOperatorResponse::default();
         resp.set_header(header);
         resp.set_region_id(region_id);
+        Ok(resp)
+    }
+
+    fn register_config(
+        &self,
+        _id: String,
+        version: configpb::Version,
+        cfg: String,
+    ) -> Result<configpb::CreateResponse> {
+        let mut status = configpb::Status::default();
+        status.set_code(configpb::StatusCode::Ok);
+        let mut resp = configpb::CreateResponse::default();
+        resp.set_status(status);
+        resp.set_config(cfg);
+        resp.set_version(version);
+        Ok(resp)
+    }
+
+    fn get_config(&self, _id: String, version: configpb::Version) -> Result<configpb::GetResponse> {
+        let mut status = configpb::Status::default();
+        status.set_code(configpb::StatusCode::NotChange);
+        let mut resp = configpb::GetResponse::default();
+        resp.set_version(version);
+        resp.set_status(status);
+        Ok(resp)
+    }
+
+    fn update_config(
+        &self,
+        _id: String,
+        version: configpb::Version,
+        _entries: Vec<configpb::ConfigEntry>,
+    ) -> Result<configpb::UpdateResponse> {
+        let mut status = configpb::Status::default();
+        status.set_code(configpb::StatusCode::Ok);
+        let mut resp = configpb::UpdateResponse::default();
+        resp.set_version(version);
+        resp.set_status(status);
         Ok(resp)
     }
 }
