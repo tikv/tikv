@@ -952,7 +952,6 @@ mod tests {
 
     #[test]
     fn test_upper() {
-        // Test non-binary string case
         let cases = vec![
             (Some(b"hello".to_vec()), Some(b"HELLO".to_vec())),
             (Some(b"123".to_vec()), Some(b"123".to_vec())),
@@ -976,47 +975,24 @@ mod tests {
         ];
 
         for (arg, exp) in cases {
+            // Test binary string case
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg)
+                .push_param(arg.clone())
                 .evaluate(ScalarFuncSig::Upper)
                 .unwrap();
             assert_eq!(output, exp);
-        }
 
-        // Test binary string case
-        let cases = vec![
-            (Some(b"hello".to_vec()), Some(b"hello".to_vec())),
-            (Some(b"123".to_vec()), Some(b"123".to_vec())),
-            (
-                Some("café".as_bytes().to_vec()),
-                Some("café".as_bytes().to_vec()),
-            ),
-            (
-                Some("数据库".as_bytes().to_vec()),
-                Some("数据库".as_bytes().to_vec()),
-            ),
-            (
-                Some("ночь на окраине москвы".as_bytes().to_vec()),
-                Some("ночь на окраине москвы".as_bytes().to_vec()),
-            ),
-            (
-                Some("قاعدة البيانات".as_bytes().to_vec()),
-                Some("قاعدة البيانات".as_bytes().to_vec()),
-            ),
-            (None, None),
-        ];
-
-        for (arg, exp) in cases {
+            // Test non-binary string case
             let mut ft = FieldType::default();
             ft.as_mut_accessor()
                 .set_tp(FieldTypeTp::String)
                 .set_collation(Collation::Binary);
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg)
-                .evaluate_raw(ft, ScalarFuncSig::Upper)
-                .0
+                .push_param(arg.clone())
+                .return_field_type(ft)
+                .evaluate(ScalarFuncSig::Upper)
                 .unwrap();
-            assert_eq!(*output.as_bytes(), exp);
+            assert_eq!(output, arg);
         }
     }
 
