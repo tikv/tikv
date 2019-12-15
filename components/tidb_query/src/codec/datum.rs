@@ -829,9 +829,22 @@ pub fn decode(data: &mut BytesSlice<'_>) -> Result<Vec<Datum>> {
     Ok(res)
 }
 
+// Helper macro to encode uint like datum.
+macro_rules! write_uint {
+    ($writer:expr, $value:expr, $comparable:expr $(,)?) => {
+        if $comparable {
+            $writer.write_u8(UINT_FLAG)?;
+            $writer.write_u64($value)?;
+        } else {
+            $writer.write_u8(VAR_UINT_FLAG)?;
+            $writer.write_var_u64($value)?;
+        }
+    };
+}
+
 /// `DatumEncoder` encodes the datum.
 pub trait DatumEncoder:
-    DecimalEncoder + JsonEncoder + CompactByteEncoder + MemComparableByteEncoder
+    NumberEncoder + DecimalEncoder + JsonEncoder + CompactByteEncoder + MemComparableByteEncoder
 {
     /// Encode values to buf slice.
     fn write_datum(
@@ -857,15 +870,7 @@ pub trait DatumEncoder:
                         self.write_var_i64(i)?;
                     }
                 }
-                Datum::U64(u) => {
-                    if comparable {
-                        self.write_u8(UINT_FLAG)?;
-                        self.write_u64(u)?;
-                    } else {
-                        self.write_u8(VAR_UINT_FLAG)?;
-                        self.write_var_u64(u)?;
-                    }
-                }
+                Datum::U64(u) => write_uint!(self, u, comparable),
                 Datum::Bytes(ref bs) => {
                     if comparable {
                         self.write_u8(BYTES_FLAG)?;
