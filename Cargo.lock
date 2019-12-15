@@ -3407,6 +3407,7 @@ dependencies = [
  "tipb",
  "tipb_helper",
  "twoway",
+ "uuid",
 ]
 
 [[package]]
