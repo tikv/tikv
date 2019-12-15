@@ -144,6 +144,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio-threadpool",
+ "txn_types",
  "url 2.1.0",
  "uuid",
 ]
@@ -244,6 +245,15 @@ checksum = "7d64d04786e0f528460fc884753cf8dddcc466be308f6026f8e355c41a0e4101"
 dependencies = [
  "lazy_static",
  "ppv-lite86",
+]
+
+[[package]]
+name = "cache-size"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9c0e5b187b377be086db3ee0de5cbf7bfb4a8c590b639af4d3facbdd07586ae"
+dependencies = [
+ "raw-cpuid",
 ]
 
 [[package]]
@@ -407,6 +417,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "toml",
+ "txn_types",
  "url 2.1.0",
  "vlog",
 ]
@@ -716,6 +727,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "doc-comment"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
+
+[[package]]
 name = "dtoa"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -754,7 +771,7 @@ dependencies = [
  "serde_derive",
  "slog",
  "slog-global",
- "sys-info",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
@@ -781,7 +798,7 @@ dependencies = [
  "slog",
  "slog-global",
  "static_assertions 1.1.0",
- "sys-info",
+ "sysinfo",
  "tempfile",
  "tikv_alloc",
  "tikv_util",
@@ -1149,6 +1166,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hermit-abi"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "307c3c9f937f38e3534b1d6447ecf090cafcc9744e4a6360e8b037b2cf5af120"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "hex"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1316,6 +1342,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipnetwork"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a69dd5e3613374e74da81c251750153abe3bd0ad17641ea63d43d1e21d0dbd4d"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "itertools"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1389,19 +1424,17 @@ dependencies = [
  "byteorder",
  "derive_more",
  "failure",
- "farmhash",
  "hex",
  "kvproto",
  "panic_hook",
  "slog",
  "tikv_alloc",
- "tikv_util",
 ]
 
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#c16783858504feffa04eb70af3215d3187e58a14"
+source = "git+https://github.com/pingcap/kvproto.git#705501101234770886dff3c7434de7c88fcc7188"
 dependencies = [
  "bytes",
  "futures",
@@ -1863,10 +1896,11 @@ dependencies = [
 
 [[package]]
 name = "num_cpus"
-version = "1.10.1"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcef43580c035376c0705c42792c294b66974abbfd2789b511784023f71f3273"
+checksum = "76dac5ed2a876980778b8b85f75a71b6cbf0db0b1232ee12f826bccb00d09d72"
 dependencies = [
+ "hermit-abi",
  "libc",
 ]
 
@@ -2057,6 +2091,36 @@ name = "pkg-config"
 version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72d5370d90f49f70bd033c3d75e87fc529fbfff9d6f7cccef07d6170079d91ea"
+
+[[package]]
+name = "pnet_base"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7d818b94d0897cd22f7a18f6c2a94f7ae1dfcedc194bf1665880f6c1155e051"
+
+[[package]]
+name = "pnet_datalink"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "557ff7deb5ad2b35ac17a495d629d64dfeacf02e7f4834974dceb5e2cc544d55"
+dependencies = [
+ "ipnetwork",
+ "libc",
+ "pnet_base",
+ "pnet_sys",
+ "winapi 0.2.8",
+]
+
+[[package]]
+name = "pnet_sys"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab2f8311f738773513fc8192a77e8f77461d97333184c23597a23cb9eb0bd0eb"
+dependencies = [
+ "libc",
+ "winapi 0.2.8",
+ "ws2_32-sys",
+]
 
 [[package]]
 name = "pprof"
@@ -2563,6 +2627,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e18c91676f670f6f0312764c759405f13afb98d5d73819840cf72a518487bff"
 dependencies = [
  "rand_core 0.5.1",
+]
+
+[[package]]
+name = "raw-cpuid"
+version = "7.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4a349ca83373cfa5d6dbb66fd76e58b2cca08da71a5f6400de0a0a6a9bceeaf"
+dependencies = [
+ "bitflags",
+ "cc",
+ "rustc_version",
 ]
 
 [[package]]
@@ -3150,13 +3225,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "sys-info"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0079fe39cec2c8215e21b0bc4ccec9031004c160b88358f531b601e96b77f0df"
+name = "sysinfo"
+version = "0.9.6"
+source = "git+https://github.com/tikv/sysinfo.git?branch=tikv#aa98faff1c586984857506c8add248ee304a7f81"
 dependencies = [
- "cc",
+ "cache-size",
+ "cfg-if",
+ "doc-comment",
  "libc",
+ "num_cpus",
+ "pnet_datalink",
+ "rayon",
+ "walkdir",
+ "winapi 0.3.8",
 ]
 
 [[package]]
@@ -3227,6 +3308,7 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tipb",
+ "txn_types",
 ]
 
 [[package]]
@@ -3277,6 +3359,7 @@ dependencies = [
  "test_raftstore",
  "tikv",
  "tikv_util",
+ "txn_types",
 ]
 
 [[package]]
@@ -3337,6 +3420,7 @@ dependencies = [
  "tipb_helper",
  "tokio-threadpool",
  "toml",
+ "txn_types",
  "uuid",
 ]
 
@@ -3366,6 +3450,7 @@ dependencies = [
  "bitfield",
  "bitflags",
  "boolinator",
+ "bstr",
  "byteorder",
  "chrono",
  "chrono-tz",
@@ -3495,7 +3580,7 @@ dependencies = [
  "slog_derive",
  "spin",
  "sst_importer",
- "sys-info",
+ "sysinfo",
  "tempfile",
  "test_sst_importer",
  "test_util",
@@ -3512,6 +3597,7 @@ dependencies = [
  "tokio-threadpool",
  "tokio-timer",
  "toml",
+ "txn_types",
  "url 2.1.0",
  "utime",
  "uuid",
@@ -3872,6 +3958,24 @@ checksum = "766345ed3891b291d01af307cd3ad2992a4261cb6c0c7e665cd3e01cf379dd24"
 dependencies = [
  "memchr",
  "unchecked-index",
+]
+
+[[package]]
+name = "txn_types"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "codec",
+ "derive-new",
+ "derive_more",
+ "farmhash",
+ "hex",
+ "kvproto",
+ "panic_hook",
+ "quick-error",
+ "slog",
+ "tikv_alloc",
+ "tikv_util",
 ]
 
 [[package]]
