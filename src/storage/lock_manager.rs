@@ -2,7 +2,7 @@
 
 use crate::storage::{types::ProcessResult, StorageCallback, TimeStamp};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Lock {
     pub ts: TimeStamp,
     pub hash: u64,
