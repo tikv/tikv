@@ -38,7 +38,7 @@ pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {
     for _ in 1..300 {
         let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
         if let (Some(value), Some(res)) = (value, res.as_ref()) {
-            assert_eq!(value, res.as_ref());
+            assert_eq!(value, &res[..]);
             return;
         }
         if value.is_none() && res.is_none() {
