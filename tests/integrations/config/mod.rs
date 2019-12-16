@@ -22,6 +22,8 @@ use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
+mod test_config_client;
+
 #[test]
 fn test_toml_serde() {
     let value = TiKvConfig::default();

@@ -12,7 +12,7 @@ use crate::raftstore::{Error, Result};
 use engine::Engines;
 use engine::Peekable;
 use engine::CF_RAFT;
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -1337,9 +1337,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
         if job.initialized {
-            self.ctx
-                .apply_router
-                .schedule_task(job.region_id, ApplyTask::destroy(job.region_id));
+            // When initialized is true and async_remove is false, applyfsm doesn't need to
+            // send destroy msg to peerfsm because peerfsm has already destroyed.
+            // In this case, if applyfsm sends destroy msg, peerfsm may be destroyed twice
+            // because there are some msgs in channel so peerfsm still need to handle them (e.g. callback)
+            self.ctx.apply_router.schedule_task(
+                job.region_id,
+                ApplyTask::destroy(job.region_id, job.async_remove),
+            );
         }
         if job.async_remove {
             info!(
@@ -1355,6 +1360,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn destroy_peer(&mut self, merged_by_target: bool) {
+        fail_point!("destroy_peer");
         info!(
             "starts destroy";
             "region_id" => self.fsm.region_id(),
@@ -1389,10 +1395,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if let Some(reader) = meta.readers.remove(&region_id) {
             reader.mark_invalid();
         }
-
-        self.ctx
-            .apply_router
-            .schedule_task(region_id, ApplyTask::destroy(region_id));
 
         // Trigger region change observer
         self.ctx.coprocessor_host.on_region_changed(
@@ -1506,7 +1508,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
             if my_peer_id == peer.get_id() {
-                self.destroy_peer(false)
+                self.destroy_peer(false);
             } else {
                 panic!(
                     "{} trying to remove unknown peer {:?}",
@@ -2129,8 +2131,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "peer_id" => self.fsm.peer_id(),
             "merge_state" => ?self.fsm.peer.pending_merge_state,
         );
-        if let Some(job) = self.fsm.peer.maybe_destroy() {
-            self.handle_destroy_peer(job);
+        match self.fsm.peer.maybe_destroy() {
+            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
+            Some(job) => {
+                self.handle_destroy_peer(job);
+            }
         }
     }
 
@@ -2384,7 +2389,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback) {
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<RocksEngine>) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -2618,7 +2623,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         region_epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
     ) {
         if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
             cb.invoke_with_response(new_error(e));

@@ -265,7 +265,7 @@ impl Waiter {
 }
 
 // NOTE: Now we assume `Waiters` is not very long.
-// Maybe needs to use `BinaryHeap` or `VecDeque` instead.
+// Maybe needs to use `BinaryHeap` or sorted `VecDeque` instead.
 type Waiters = Vec<Waiter>;
 
 struct WaitTable {

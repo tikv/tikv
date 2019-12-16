@@ -18,6 +18,10 @@
 ## timestamp appended to its name and a new file will be created.
 # log-rotation-timespan = "24h"
 
+## The interval at which to refresh the local config
+## Set it small are good to debug and tuning.
+# refresh-config-interval = "30s"
+
 [readpool.storage]
 ## Size of the thread pool for high-priority operations.
 # high-concurrency = 4
