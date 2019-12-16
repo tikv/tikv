@@ -13,7 +13,6 @@ use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
     WriteFlags,
 };
-use keys::TimeStamp;
 use kvproto::deadlock::*;
 use kvproto::metapb::Region;
 use pd_client::{PdClient, INVALID_ID};
@@ -28,6 +27,7 @@ use tikv_util::security::SecurityManager;
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
+use txn_types::TimeStamp;
 
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {

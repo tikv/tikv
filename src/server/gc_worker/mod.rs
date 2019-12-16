@@ -16,7 +16,7 @@ use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_rocks::RocksIOLimiter;
+use engine_rocks::{RocksEngine, RocksIOLimiter};
 use engine_traits::IOLimiter;
 use futures::sink::Sink;
 use futures::sync::mpsc as future_mpsc;
@@ -39,13 +39,13 @@ use crate::storage::kv::{
 };
 use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTxn, TimeStamp};
 use crate::storage::{Callback, Error, ErrorInner, Result};
-use keys::Key;
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{
     FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
 };
+use txn_types::Key;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -398,8 +398,7 @@ impl<E: Engine> GcRunner<E> {
             Some(ScanMode::Forward),
             TimeStamp::zero(),
             !ctx.get_not_fill_cache(),
-        )
-        .unwrap();
+        );
         for k in keys {
             let gc_info = txn.gc(k.clone(), safe_point)?;
 
@@ -589,7 +588,7 @@ impl<E: Engine> GcRunner<E> {
         let mut fake_region = metapb::Region::default();
         // Add a peer to pass initialized check.
         fake_region.mut_peers().push(metapb::Peer::default());
-        let snap = RegionSnapshot::from_raw(db, fake_region);
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, fake_region);
         let lock_scanner = LockScanner::new(snap, max_ts);
 
         let future = sender
@@ -1563,11 +1562,9 @@ mod tests {
     use super::*;
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
-    use crate::storage::kv::{Callback as EngineCallback, Modify, Result as EngineResult};
+    use crate::storage::kv::{self, Callback as EngineCallback, Modify, Result as EngineResult};
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{
-        Mutation, Options, RocksEngine, Storage, TestEngineBuilder, TestStorageBuilder,
-    };
+    use crate::storage::{Options, Storage, TestEngineBuilder, TestStorageBuilder};
     use futures::Future;
     use kvproto::kvrpcpb::Op;
     use kvproto::metapb;
@@ -1575,6 +1572,7 @@ mod tests {
     use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
     use tikv_util::codec::number::NumberEncoder;
+    use txn_types::Mutation;
 
     fn take_callback(t: &mut GcTask) -> Callback<()> {
         let callback = match t {
@@ -1683,11 +1681,11 @@ mod tests {
     /// bypasses Raft layer, so they needs to know how data is actually represented in db. This
     /// wrapper allows test engines write 'z'-prefixed keys to db.
     #[derive(Clone)]
-    struct PrefixedEngine(RocksEngine);
+    struct PrefixedEngine(kv::RocksEngine);
 
     impl Engine for PrefixedEngine {
         // Use RegionSnapshot which can remove the z prefix internally.
-        type Snap = RegionSnapshot;
+        type Snap = RegionSnapshot<RocksEngine>;
 
         fn async_write(
             &self,

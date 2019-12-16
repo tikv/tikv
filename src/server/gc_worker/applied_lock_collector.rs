@@ -1,9 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use keys::{origin_key, Key};
+use keys::origin_key;
 use std::fmt::{self, Debug, Display};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use txn_types::Key;
 
 use engine::{CfName, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
@@ -16,7 +17,7 @@ use crate::raftstore::coprocessor::{
 use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
 
 // TODO: Use new error type for GCWorker instead of storege::Error.
-use super::{Error, Result};
+use super::{Error, ErrorInner, Result};
 
 const MAX_COLLECT_SIZE: usize = 1024;
 
@@ -150,7 +151,7 @@ impl QueryObserver for LockObserver {
                         "value" => hex::encode_upper(put_request.get_value()),
                         "err" => ?e
                     );
-                    self.send(LockObserverMsg::Err(e.into()));
+                    self.send(LockObserverMsg::Err(ErrorInner::Mvcc(e.into()).into()));
                     return;
                 }
             };
@@ -184,7 +185,7 @@ impl ApplySnapshotObserver for LockObserver {
             .map(|(key, value)| {
                 Lock::parse(value)
                     .map(|lock| (key, lock))
-                    .map_err(From::from)
+                    .map_err(|e| ErrorInner::Mvcc(e.into()).into())
             })
             .filter(|result| result.is_err() || result.as_ref().unwrap().1.ts <= max_ts)
             .map(|result| {

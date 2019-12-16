@@ -418,9 +418,9 @@ fn extract_raw_key_from_process_result(pr: &ProcessResult) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use keys::Key;
     use std::time::Duration;
     use test_util::KvGenerator;
+    use txn_types::Key;
 
     fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {

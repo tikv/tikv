@@ -2,17 +2,17 @@
 
 use futures::Future;
 
-use keys::{Key, KvPair, TimeStamp, Value};
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    Engine, Mutation, Options, RegionInfoProvider, Result, Storage, TestEngineBuilder,
-    TestStorageBuilder, TxnStatus,
+    Engine, Options, RegionInfoProvider, Result, Storage, TestEngineBuilder, TestStorageBuilder,
+    TxnStatus,
 };
 use tikv_util::collections::HashMap;
+use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
 ///

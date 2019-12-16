@@ -38,13 +38,13 @@ use crate::raftstore::store::{
 use crate::server::gc_worker::GcWorker;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::{Engine, Iterator as EngineIterator};
-use keys::Key;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
 use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
+use txn_types::Key;
 
 const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
 
@@ -1456,7 +1456,7 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
     Ok(())
 }
 
-fn divide_db(db: &DB, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db(db: &Arc<DB>, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
     let mut region = Region::default();
     region.mut_peers().push(Peer::default());
@@ -1472,7 +1472,7 @@ fn divide_db(db: &DB, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
     divide_db_cf(db, parts, cf)
 }
 
-fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> crate::raftstore::Result<Vec<Vec<u8>>> {
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
     let collection = engine::util::get_range_properties_cf(db, cf, &start, &end)?;

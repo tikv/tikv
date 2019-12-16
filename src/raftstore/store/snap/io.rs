@@ -3,12 +3,12 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader};
 use std::{fs, usize};
 
-use engine::rocks::util::get_cf_handle;
-use engine::rocks::{IngestExternalFileOptions, Writable, WriteBatch, DB};
 use engine::CfName;
 use engine_rocks::{RocksSnapshot, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::IOLimiter;
+use engine_traits::{ImportExt, IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
+use engine_traits::{Mutable, WriteBatch};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 
 use super::Error;
@@ -27,13 +27,16 @@ pub struct BuildStatistics {
 /// Build a snapshot file for the given column family in plain format.
 /// If there are no key-value pairs fetched, no files will be created at `path`,
 /// otherwise the file will be created and synchronized.
-pub fn build_plain_cf_file(
+pub fn build_plain_cf_file<S>(
     path: &str,
-    snap: &RocksSnapshot,
+    snap: &S,
     cf: &str,
     start_key: &[u8],
     end_key: &[u8],
-) -> Result<BuildStatistics, Error> {
+) -> Result<BuildStatistics, Error>
+where
+    S: SnapshotTrait,
+{
     let mut file = box_try!(OpenOptions::new().write(true).create_new(true).open(path));
     let mut stats = BuildStatistics::default();
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
@@ -99,28 +102,26 @@ pub fn build_sst_cf_file<L: IOLimiter>(
 
 /// Apply the given snapshot file into a column family. `callback` will be invoked for each batch of
 /// key value pairs written to db.
-pub fn apply_plain_cf_file<F>(
+pub fn apply_plain_cf_file<E, F>(
     path: &str,
     stale_detector: &impl StaleDetector,
-    db: &DB,
+    db: &E,
     cf: &str,
     batch_size: usize,
     mut callback: F,
 ) -> Result<(), Error>
 where
+    E: KvEngine,
     F: for<'r> FnMut(&'r [(Vec<u8>, Vec<u8>)]),
 {
     let mut decoder = BufReader::new(box_try!(File::open(path)));
-    let cf_handle = box_try!(get_cf_handle(&db, cf));
 
-    let mut write_to_wb = |batch: &mut Vec<_>, wb: &WriteBatch| {
+    let mut write_to_wb = |batch: &mut Vec<_>, wb: &E::WriteBatch| {
         callback(batch);
-        batch
-            .drain(..)
-            .try_for_each(|(k, v)| wb.put_cf(cf_handle, &k, &v))
+        batch.drain(..).try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))
     };
 
-    let wb = WriteBatch::default();
+    let wb = db.write_batch();
     // Collect keys to a vec rather than wb so that we can invoke the callback less times.
     let mut batch = Vec::with_capacity(1024);
     let mut batch_data_size = 0;
@@ -149,11 +150,14 @@ where
     }
 }
 
-pub fn apply_sst_cf_file(path: &str, db: &DB, cf: &str) -> Result<(), Error> {
-    let cf_handle = box_try!(get_cf_handle(&db, cf));
-    let mut ingest_opt = IngestExternalFileOptions::new();
+pub fn apply_sst_cf_file<E>(path: &str, db: &E, cf: &str) -> Result<(), Error>
+where
+    E: KvEngine,
+{
+    let cf_handle = box_try!(db.cf_handle(cf));
+    let mut ingest_opt = <E as ImportExt>::IngestExternalFileOptions::new();
     ingest_opt.move_files(true);
-    box_try!(db.ingest_external_file_optimized(cf_handle, &ingest_opt, &[path]));
+    box_try!(db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
     Ok(())
 }
 
@@ -177,7 +181,7 @@ mod tests {
     use crate::raftstore::store::snap::tests::*;
     use crate::raftstore::store::snap::SNAPSHOT_CFS;
     use engine::CF_DEFAULT;
-    use engine_rocks::RocksIOLimiter;
+    use engine_rocks::{Compat, RocksIOLimiter};
     use tempfile::Builder;
 
     struct TestStaleDetector;
@@ -226,7 +230,7 @@ mod tests {
                     apply_plain_cf_file(
                         &plain_file_path.to_str().unwrap(),
                         &detector,
-                        &db1,
+                        db1.c(),
                         cf,
                         16,
                         |v| {
@@ -295,7 +299,7 @@ mod tests {
                     .tempdir()
                     .unwrap();
                 let db1 = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
-                apply_sst_cf_file(&sst_file_path.to_str().unwrap(), &db1, CF_DEFAULT).unwrap();
+                apply_sst_cf_file(&sst_file_path.to_str().unwrap(), db1.c(), CF_DEFAULT).unwrap();
                 assert_eq_db(&db, &db1);
             }
         }

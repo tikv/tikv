@@ -8,9 +8,9 @@ use std::{error, ptr, result};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
-use keys::{Key, Value};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
+use txn_types::{Key, Value};
 
 use crate::into_other::IntoOther;
 use crate::raftstore::coprocessor::{RegionInfo, RegionInfoCallback, SeekRegionCallback};
@@ -54,6 +54,23 @@ pub enum Modify {
     Put(CfName, Key, Value),
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
+}
+
+impl Modify {
+    pub fn size(&self) -> usize {
+        let cf = match self {
+            Modify::Delete(cf, _) => cf,
+            Modify::Put(cf, ..) => cf,
+            Modify::DeleteRange(..) => unreachable!(),
+        };
+        let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
+
+        match self {
+            Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
+            Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
+            Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
 }
 
 pub trait Engine: Send + Clone + 'static {
