@@ -323,7 +323,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         })
     }
 
-    pub fn handle_request(&mut self) -> Result<SelectResponse> {
+    pub async fn handle_request(&mut self) -> Result<SelectResponse> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();

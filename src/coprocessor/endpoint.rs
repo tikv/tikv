@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::future::Future as StdFuture;
 use std::marker::PhantomData;
 use std::time::Duration;
 
@@ -320,7 +319,7 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` to process the request and produce a result.
     // TODO: Convert to use async / await.
     async fn handle_unary_request_impl(
-        tracker: Box<Tracker>,
+        mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
         tracker.req_ctx.deadline.check()?;
@@ -328,63 +327,39 @@ impl<E: Engine> Endpoint<E> {
             with_tls_engine(|engine| Self::async_snapshot_new(engine, &tracker.req_ctx.context))
         }
         .await?;
+        // When snapshot is retrieved, deadline may exceed.
+        tracker.req_ctx.deadline.check()?;
 
-        Ok(Default::default())
-        /*
-        // When this function is being executed, it may be queued for a long time, so that
-        // deadline may exceed.
-        future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
-            // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
-            // exists.
-            .and_then(move |_| unsafe {
-                with_tls_engine(|engine| {
-                    Self::async_snapshot(engine, &tracker.req_ctx.context)
-                        .map(|snapshot| (tracker, snapshot))
-                })
-            })
-            .and_then(move |(tracker, snapshot)| {
-                // When snapshot is retrieved, deadline may exceed.
-                future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
-                    .map(|_| (tracker, snapshot))
-            })
-            .and_then(move |(tracker, snapshot)| {
-                let builder = if tracker.req_ctx.cache_match_version.is_some()
-                    && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
-                {
-                    // Build a cached request handler instead if cache version is matching.
-                    CachedRequestHandler::builder()
-                } else {
-                    handler_builder
-                };
+        let mut handler = if tracker.req_ctx.cache_match_version.is_some()
+            && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
+        {
+            // Build a cached request handler instead if cache version is matching.
+            CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
+        } else {
+            handler_builder(snapshot, &tracker.req_ctx)?
+        };
 
-                future::result(builder(snapshot, &tracker.req_ctx))
-                    .map(|handler| (tracker, handler))
-            })
-            .and_then(|(mut tracker, mut handler)| {
-                tracker.on_begin_all_items();
-                tracker.on_begin_item();
+        tracker.on_begin_all_items();
+        tracker.on_begin_item();
+        // There might be errors when handling requests. In this case, we still need its
+        // execution metrics.
+        let result = handler.handle_request().await;
 
-                // There might be errors when handling requests. In this case, we still need its
-                // execution metrics.
-                let result = handler.handle_request();
+        let mut storage_stats = Statistics::default();
+        handler.collect_scan_statistics(&mut storage_stats);
 
-                let mut storage_stats = Statistics::default();
-                handler.collect_scan_statistics(&mut storage_stats);
+        tracker.on_finish_item(Some(storage_stats));
+        let exec_details = tracker.get_item_exec_details();
 
-                tracker.on_finish_item(Some(storage_stats));
-                let exec_details = tracker.get_item_exec_details();
-
-                tracker.on_finish_all_items();
-
-                future::result(result)
-                    .or_else(|e| Ok::<_, Error>(make_error_response(e)))
-                    .map(|mut resp| {
-                        COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
-                        resp.set_exec_details(exec_details);
-                        resp
-                    })
-            })
-            */
+        tracker.on_finish_all_items();
+        match result {
+            Ok(mut resp) => {
+                COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
+                resp.set_exec_details(exec_details);
+                Ok(resp)
+            }
+            Err(e) => Ok(make_error_response(e)),
+        }
     }
 
     /// Handle a unary request and run on the read pool.
@@ -659,8 +634,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl RequestHandler for UnaryFixture {
-        fn handle_request(&mut self) -> Result<coppb::Response> {
+        async fn handle_request(&mut self) -> Result<coppb::Response> {
             thread::sleep(Duration::from_millis(self.handle_duration_millis));
             self.result.take().unwrap()
         }

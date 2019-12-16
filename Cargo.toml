@@ -43,6 +43,7 @@ protobuf-codec = [
 name = "tikv"
 
 [dependencies]
+async-trait = "0.1"
 backtrace = "0.3.9"
 bitflags = "1.0.1"
 byteorder = "1.2"

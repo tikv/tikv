@@ -75,6 +75,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b6dd385bb33043b833ba049048d57bdbb4d654a121ed68c71871ca51ff67070"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3506,6 +3517,7 @@ dependencies = [
  "engine_traits",
  "external_storage",
  "futures 0.1.29",
+ "futures 0.3.1",
  "futures-cpupool",
  "grpcio",
  "hex",
@@ -3635,6 +3647,7 @@ dependencies = [
 name = "tikv"
 version = "4.0.0-alpha"
 dependencies = [
+ "async-trait",
  "backtrace",
  "bitflags",
  "byteorder",
