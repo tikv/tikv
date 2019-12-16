@@ -27,6 +27,7 @@ quick_error! {
             description(err.description())
         }
         Codec(err: codec::Error) {
+            from()
             cause(err)
             description(err.description())
         }
@@ -50,13 +51,6 @@ impl Error {
             Error::KeyIsLocked(info) => Some(Error::KeyIsLocked(info.clone())),
             Error::Io(_) => None,
         }
-    }
-}
-
-impl From<codec::Error> for Error {
-    #[inline]
-    fn from(e: codec::Error) -> Self {
-        e.into()
     }
 }
 
