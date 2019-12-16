@@ -1,4 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+use std::ops::Bound;
 use tikv_util::keybuilder::KeyBuilder;
 
 #[derive(Clone)]
@@ -52,6 +53,10 @@ pub struct IterOptions {
     upper_bound: Option<KeyBuilder>,
     prefix_same_as_start: bool,
     fill_cache: bool,
+    // hint for we will only scan data with commit ts >= hint_min_ts
+    hint_min_ts: Option<u64>,
+    // hint for we will only scan data with commit ts <= hint_max_ts
+    hint_max_ts: Option<u64>,
     // only supported when Titan enabled, otherwise it doesn't take effect.
     key_only: bool,
     seek_mode: SeekMode,
@@ -68,6 +73,8 @@ impl IterOptions {
             upper_bound,
             prefix_same_as_start: false,
             fill_cache,
+            hint_min_ts: None,
+            hint_max_ts: None,
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
         }
@@ -92,6 +99,34 @@ impl IterOptions {
     #[inline]
     pub fn set_fill_cache(&mut self, v: bool) {
         self.fill_cache = v;
+    }
+
+    #[inline]
+    pub fn set_hint_min_ts(&mut self, bound_ts: Bound<u64>) {
+        match bound_ts {
+            Bound::Included(ts) => self.hint_min_ts = Some(ts),
+            Bound::Excluded(ts) => self.hint_min_ts = Some(ts + 1),
+            Bound::Unbounded => self.hint_min_ts = None,
+        }
+    }
+
+    #[inline]
+    pub fn hint_min_ts(&self) -> Option<u64> {
+        self.hint_min_ts
+    }
+
+    #[inline]
+    pub fn hint_max_ts(&self) -> Option<u64> {
+        self.hint_max_ts
+    }
+
+    #[inline]
+    pub fn set_hint_max_ts(&mut self, bound_ts: Bound<u64>) {
+        match bound_ts {
+            Bound::Included(ts) => self.hint_max_ts = Some(ts),
+            Bound::Excluded(ts) => self.hint_max_ts = Some(ts - 1),
+            Bound::Unbounded => self.hint_max_ts = None,
+        }
     }
 
     #[inline]
@@ -172,8 +207,33 @@ impl Default for IterOptions {
             upper_bound: None,
             prefix_same_as_start: false,
             fill_cache: true,
+            hint_min_ts: None,
+            hint_max_ts: None,
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ops::Bound;
+
+    #[test]
+    fn test_hint_ts() {
+        let mut ops = IterOptions::default();
+        assert_eq!(ops.hint_min_ts(), None);
+        assert_eq!(ops.hint_max_ts(), None);
+
+        ops.set_hint_min_ts(Bound::Included(1));
+        ops.set_hint_max_ts(Bound::Included(10));
+        assert_eq!(ops.hint_min_ts(), Some(1));
+        assert_eq!(ops.hint_max_ts(), Some(10));
+
+        ops.set_hint_min_ts(Bound::Excluded(1));
+        ops.set_hint_max_ts(Bound::Excluded(10));
+        assert_eq!(ops.hint_min_ts(), Some(2));
+        assert_eq!(ops.hint_max_ts(), Some(9));
     }
 }

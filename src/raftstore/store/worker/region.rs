@@ -502,16 +502,8 @@ impl SnapContext {
             if plain_file_used(cf) {
                 continue;
             }
-
-            let handle = rocks::util::get_cf_handle(&self.engines.kv, cf).unwrap();
-            if let Some(n) = rocks::util::get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
-                let options = self.engines.kv.get_options_cf(handle);
-                let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
-                // Leave enough buffer to tolerate heavy write workload,
-                // which may flush some memtables in a short time.
-                if n > u64::from(slowdown_trigger) / 2 {
-                    return true;
-                }
+            if rocks::util::ingest_maybe_slowdown_writes(&self.engines.kv, cf) {
+                return true;
             }
         }
         false
@@ -566,6 +558,7 @@ impl Runner {
 
     /// Tries to apply pending tasks if there is some.
     fn handle_pending_applies(&mut self) {
+        fail_point!("apply_pending_snapshot", |_| {});
         while !self.pending_applies.is_empty() {
             // should not handle too many applies than the number of files that can be ingested.
             // check level 0 every time because we can not make sure how does the number of level 0 files change.
