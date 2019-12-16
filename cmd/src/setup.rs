@@ -3,14 +3,13 @@
 use std::borrow::ToOwned;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use chrono;
 use clap::ArgMatches;
 
 use tikv::config::{check_critical_config, persist_critical_config, MetricConfig, TiKvConfig};
 use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
 
-use chrono::Utc;
+use chrono::Local;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -35,7 +34,7 @@ macro_rules! fatal {
 // number while rotate by size.
 fn rename_by_timestamp(path: &Path) -> io::Result<PathBuf> {
     let mut new_path = path.to_path_buf().into_os_string();
-    new_path.push(format!("{}", Utc::now().format("%Y-%m-%d-%H:%M:%S%.f")));
+    new_path.push(format!("{}", Local::now().format("%Y-%m-%d-%H:%M:%S%.f")));
     Ok(PathBuf::from(new_path))
 }
 
