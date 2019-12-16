@@ -27,7 +27,7 @@ quick_error! {
             description(err.description())
         }
         Codec(err: codec::Error) {
-            from()
+            from(err: codec::Error) -> (err.into())
             cause(err)
             description(err.description())
         }
