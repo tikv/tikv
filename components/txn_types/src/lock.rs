@@ -106,6 +106,9 @@ impl Lock {
         }
         let lock_type = LockType::from_u8(b.read_u8()?).ok_or(Error::BadFormatLock)?;
         let primary = b.read_compact_bytes()?;
+        if b.is_empty() {
+            return Err(Error::BadFormatLock);
+        }
         let ts = b.read_var_u64()?.into();
         let ttl = if b.is_empty() { 0 } else { b.read_var_u64()? };
 
