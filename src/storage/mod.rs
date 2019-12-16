@@ -27,17 +27,16 @@ use engine::{
     CfName, IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_KEY_PREFIX_LEN,
 };
 use futures::{future, Future};
-use keys::{Key, KvPair, TimeStamp, Value};
 use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
 use tikv_util::collections::HashMap;
 use tikv_util::future_pool::FuturePool;
+use txn_types::{Key, KvPair, Lock, Mutation, TimeStamp, TsSet, Value};
 
 use crate::storage::commands::{get_priority_tag, Command, CommandKind};
 use crate::storage::config::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::lock_manager::{DummyLockManager, LockManager};
 use crate::storage::metrics::*;
-use crate::storage::mvcc::{Lock, TsSet};
 use crate::storage::txn::scheduler::Scheduler as TxnScheduler;
 
 pub use self::commands::{Options, PointGetCommand};
@@ -51,22 +50,10 @@ pub use self::kv::{
 };
 pub use self::readpool_impl::{build_read_pool, build_read_pool_for_test};
 pub use self::txn::{Scanner, SnapshotStore, Store};
-pub use self::types::{Mutation, MvccInfo, ProcessResult, StorageCallback, TxnStatus};
+pub use self::types::{MvccInfo, ProcessResult, StorageCallback, TxnStatus};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
-
-// Short value max len must <= 255.
-pub const SHORT_VALUE_MAX_LEN: usize = 255;
-
-const SHORT_VALUE_PREFIX: u8 = b'v';
-const FOR_UPDATE_TS_PREFIX: u8 = b'f';
-const TXN_SIZE_PREFIX: u8 = b't';
-const MIN_COMMIT_TS_PREFIX: u8 = b'c';
-
-pub fn is_short_value(value: &[u8]) -> bool {
-    value.len() <= SHORT_VALUE_MAX_LEN
-}
 
 /// [`Storage`] implements transactional KV APIs and raw KV APIs on a given [`Engine`]. An [`Engine`]
 /// provides low level KV functionality. [`Engine`] has multiple implementations. When a TiKV server
