@@ -145,16 +145,16 @@ impl Display for Task {
 /// `Waiter` contains the context of the pessimistic transaction. Each `Waiter`
 /// has a timeout. Transaction will be notified when the lock is released
 /// or the corresponding waiter times out.
-struct Waiter {
-    start_ts: TimeStamp,
-    cb: StorageCallback,
+pub(crate) struct Waiter {
+    pub(crate) start_ts: TimeStamp,
+    pub(crate) cb: StorageCallback,
     /// The result of `Command::AcquirePessimisticLock`.
     ///
     /// It contains a `KeyIsLocked` error at the beginning. It will be changed
     /// to `WriteConflict` error if the lock is released or `Deadlock` error if
     /// it causes deadlock.
-    pr: ProcessResult,
-    lock: Lock,
+    pub(crate) pr: ProcessResult,
+    pub(crate) lock: Lock,
     delay: Delay,
     _lifetime_timer: HistogramTimer,
 }
@@ -550,7 +550,7 @@ impl FutureRunnable<Task> for WaiterManager {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use tikv_util::future::paired_future_callback;
     use tikv_util::worker::FutureWorker;
@@ -572,7 +572,7 @@ mod tests {
         }
     }
 
-    fn assert_elapsed<F: FnOnce()>(f: F, min: u64, max: u64) {
+    pub(crate) fn assert_elapsed<F: FnOnce()>(f: F, min: u64, max: u64) {
         let now = Instant::now();
         f();
         let elapsed = now.elapsed();
@@ -638,13 +638,17 @@ mod tests {
     }
 
     // Make clippy happy.
-    type WaiterCtx = (
+    pub(crate) type WaiterCtx = (
         Waiter,
         LockInfo,
         tokio_sync::oneshot::Receiver<Result<Vec<Result<(), StorageError>>, StorageError>>,
     );
 
-    fn new_test_waiter(waiter_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) -> WaiterCtx {
+    pub(crate) fn new_test_waiter(
+        waiter_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        lock_hash: u64,
+    ) -> WaiterCtx {
         let raw_key = b"foo".to_vec();
         let primary = b"bar".to_vec();
         let mut info = LockInfo::default();
@@ -689,7 +693,10 @@ mod tests {
         );
     }
 
-    fn expect_key_is_locked<T: Debug>(res: Result<T, StorageError>, lock_info: LockInfo) {
+    pub(crate) fn expect_key_is_locked<T: Debug>(
+        res: Result<T, StorageError>,
+        lock_info: LockInfo,
+    ) {
         match res {
             Err(StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
                 MvccError(box MvccErrorInner::KeyIsLocked(res)),
@@ -698,7 +705,7 @@ mod tests {
         }
     }
 
-    fn expect_write_conflict<T: Debug>(
+    pub(crate) fn expect_write_conflict<T: Debug>(
         res: Result<T, StorageError>,
         waiter_ts: TimeStamp,
         mut lock_info: LockInfo,
@@ -724,7 +731,7 @@ mod tests {
         }
     }
 
-    fn expect_deadlock<T: Debug>(
+    pub(crate) fn expect_deadlock<T: Debug>(
         res: Result<T, StorageError>,
         waiter_ts: TimeStamp,
         mut lock_info: LockInfo,
