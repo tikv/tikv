@@ -1,11 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::{Duration, Instant};
+
 use futures::{Future, Sink};
 use futures_cpupool::CpuPool;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
+    ServerInfoType,
 };
+use tokio_timer::Delay;
+
+use crate::server::{Error, Result};
 
 /// Service handles the RPC messages for the `Diagnostics` service.
 #[derive(Clone)]
@@ -49,11 +55,398 @@ impl Diagnostics for Service {
 
     fn server_info(
         &mut self,
-        _ctx: RpcContext<'_>,
-        _req: ServerInfoRequest,
-        _sink: UnarySink<ServerInfoResponse>,
+        ctx: RpcContext<'_>,
+        req: ServerInfoRequest,
+        sink: UnarySink<ServerInfoResponse>,
     ) {
-        unimplemented!()
+        let (load, when) = match req.get_tp() {
+            ServerInfoType::LoadInfo | ServerInfoType::All => {
+                let load = (sysinfo::NICLoad::snapshot(), sysinfo::IOLoad::snapshot());
+                let when = Instant::now() + Duration::from_millis(500);
+                (Some(load), when)
+            }
+            _ => (None, Instant::now()),
+        };
+
+        let collect = Delay::new(when)
+            .and_then(move |_| Ok(load))
+            .map_err(|e| box_err!("Unexpected delay error: {:?}", e))
+            .and_then(move |load| -> Result<ServerInfoResponse> {
+                let mut server_infos = Vec::new();
+                match req.get_tp() {
+                    ServerInfoType::HardwareInfo => sys::hardware_info(&mut server_infos),
+                    ServerInfoType::LoadInfo => sys::load_info(load.unwrap(), &mut server_infos),
+                    ServerInfoType::SystemInfo => sys::system_info(&mut server_infos),
+                    ServerInfoType::All => {
+                        sys::hardware_info(&mut server_infos);
+                        sys::load_info(load.unwrap(), &mut server_infos);
+                        sys::system_info(&mut server_infos);
+                    }
+                };
+                // Sort pairs by key to make result stable
+                server_infos
+                    .sort_by(|a, b| (a.get_tp(), a.get_name()).cmp(&(b.get_tp(), b.get_name())));
+                let mut resp = ServerInfoResponse::default();
+                resp.set_items(server_infos.into());
+                Ok(resp)
+            });
+        let f = self
+            .pool
+            .spawn(collect)
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map_err(|e| debug!("Diagnostics rpc failed"; "err" => ?e));
+        ctx.spawn(f);
+    }
+}
+
+mod sys {
+    use std::collections::HashMap;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    use std::string::ToString;
+
+    use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
+    use sysinfo::{ProcessorExt, SystemExt};
+
+    fn cpu_load_info(collector: &mut Vec<ServerInfoItem>) {
+        let mut system = sysinfo::System::new();
+        system.refresh_all();
+        // CPU
+        let processor = system.get_processor_list();
+        for p in processor {
+            let mut pair = ServerInfoPair::default();
+            pair.set_key("usage".to_string());
+            pair.set_value(p.get_cpu_usage().to_string());
+            let mut item = ServerInfoItem::default();
+            item.set_tp("cpu".to_string());
+            item.set_name(p.get_name().to_string());
+            item.set_pairs(vec![pair].into());
+            collector.push(item);
+        }
+        // CPU load
+        {
+            let load = sysinfo::get_avg_load();
+            let infos = vec![
+                ("load1", load.one),
+                ("load5", load.five),
+                ("load15", load.fifteen),
+            ];
+            let mut pairs = vec![];
+            for info in infos.iter() {
+                let mut pair = ServerInfoPair::default();
+                pair.set_key(info.0.to_string());
+                pair.set_value(info.1.to_string());
+                pairs.push(pair);
+            }
+            let mut item = ServerInfoItem::default();
+            item.set_tp("cpu".to_string());
+            item.set_name("cpu".to_string());
+            item.set_pairs(pairs.into());
+            collector.push(item);
+        }
+        // https://www.kernel.org/doc/Documentation/filesystems/proc.txt
+        // We ignore the error because some operating systems don't contain procfs.
+        if let Ok(file) = File::open("/proc/stat") {
+            let names = vec![
+                "user",
+                "nice",
+                "system",
+                "idle",
+                "iowait",
+                "irq",
+                "softirq",
+                "steal",
+                "guest",
+                "guest_nice",
+            ];
+            for line in BufReader::new(file).lines() {
+                if let Ok(line) = line {
+                    if !line.starts_with("cpu") {
+                        continue;
+                    }
+                    let mut parts = line.split_whitespace();
+                    let name = if let Some(name) = parts.nth(0) {
+                        name
+                    } else {
+                        continue;
+                    };
+                    let mut pairs = vec![];
+                    for (val, name) in parts.zip(&names) {
+                        let mut pair = ServerInfoPair::default();
+                        pair.set_key(name.to_string());
+                        pair.set_value(val.to_string());
+                        pairs.push(pair);
+                    }
+                    let mut item = ServerInfoItem::default();
+                    item.set_tp("cpu".to_string());
+                    item.set_name(name.to_string());
+                    item.set_pairs(pairs.into());
+                    collector.push(item);
+                }
+            }
+        }
+    }
+
+    fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
+        let mut system = sysinfo::System::new();
+        system.refresh_all();
+        let total_memory = system.get_total_memory();
+        let used_memory = system.get_used_memory();
+        let free_memory = system.get_free_memory();
+        let total_swap = system.get_total_swap();
+        let used_swap = system.get_used_swap();
+        let free_swap = system.get_free_swap();
+        let used_memory_pct = (used_memory as f64) / (total_memory as f64);
+        let free_memory_pct = (free_memory as f64) / (total_memory as f64);
+        let used_swap_pct = (used_swap as f64) / (total_swap as f64);
+        let free_swap_pct = (free_swap as f64) / (total_swap as f64);
+        let infos = vec![
+            ("total-memory", total_memory.to_string()),
+            ("used-memory", used_memory.to_string()),
+            ("free-memory", free_memory.to_string()),
+            ("total-swap", total_swap.to_string()),
+            ("used-swap", used_swap.to_string()),
+            ("free-swap", free_swap.to_string()),
+            ("used-memory-percent", format!("{:.2}", used_memory_pct)),
+            ("free-memory-percent", format!("{:.2}", free_memory_pct)),
+            ("used-swap-percent", format!("{:.2}", used_swap_pct)),
+            ("free-swap-percent", format!("{:.2}", free_swap_pct)),
+        ];
+        let mut pairs = vec![];
+        for info in infos.into_iter() {
+            let mut pair = ServerInfoPair::default();
+            pair.set_key(info.0.to_string());
+            pair.set_value(info.1);
+            pairs.push(pair);
+        }
+        let mut item = ServerInfoItem::default();
+        item.set_tp("memory".to_string());
+        item.set_name("memory".to_string());
+        item.set_pairs(pairs.into());
+        collector.push(item);
+    }
+
+    fn nic_load_info(
+        prev_nic: HashMap<String, sysinfo::NICLoad>,
+        collector: &mut Vec<ServerInfoItem>,
+    ) {
+        let current = sysinfo::NICLoad::snapshot();
+        let rate = |cur, prev| (cur - prev) as f64 / 0.5;
+        for (name, cur) in current.into_iter() {
+            let prev = match prev_nic.get(&name) {
+                Some(p) => p,
+                None => continue,
+            };
+            let infos = vec![
+                ("rx-bytes/s", rate(cur.rx_bytes, prev.rx_bytes)),
+                ("tx-bytes/s", rate(cur.tx_bytes, prev.tx_bytes)),
+                ("rx-packets/s", rate(cur.rx_packets, prev.rx_packets)),
+                ("tx-packets/s", rate(cur.tx_packets, prev.tx_packets)),
+                ("rx-errors/s", rate(cur.rx_errors, prev.rx_errors)),
+                ("tx-errors/s", rate(cur.tx_errors, prev.tx_errors)),
+                ("rx-comp/s", rate(cur.rx_compressed, prev.rx_compressed)),
+                ("tx-comp/s", rate(cur.tx_compressed, prev.tx_compressed)),
+            ];
+            let mut pairs = vec![];
+            for info in infos.into_iter() {
+                let mut pair = ServerInfoPair::default();
+                pair.set_key(info.0.to_string());
+                pair.set_value(format!("{:.2}", info.1));
+                pairs.push(pair);
+            }
+            let mut item = ServerInfoItem::default();
+            item.set_tp("net".to_string());
+            item.set_name(name);
+            item.set_pairs(pairs.into());
+            collector.push(item);
+        }
+    }
+
+    fn io_load_info(
+        prev_io: HashMap<String, sysinfo::IOLoad>,
+        collector: &mut Vec<ServerInfoItem>,
+    ) {
+        let current = sysinfo::IOLoad::snapshot();
+        let rate = |cur, prev| (cur - prev) as f64 / 0.5;
+        for (name, cur) in current.into_iter() {
+            let prev = match prev_io.get(&name) {
+                Some(p) => p,
+                None => continue,
+            };
+            let infos = vec![
+                ("read_io/s", rate(cur.read_io, prev.read_io)),
+                ("read_merges/s", rate(cur.read_merges, prev.read_merges)),
+                (
+                    "read_sectors/s",
+                    rate(cur.read_sectors, prev.read_sectors) * 512f64,
+                ),
+                ("read_ticks/s", rate(cur.read_ticks, prev.read_ticks)),
+                ("write_io/s", rate(cur.write_io, prev.write_io)),
+                ("write_merges/s", rate(cur.write_merges, prev.write_merges)),
+                (
+                    "write_sectors/s",
+                    rate(cur.write_sectors, prev.write_sectors) * 512f64,
+                ),
+                ("write_ticks/s", rate(cur.write_ticks, prev.write_ticks)),
+                ("in_flight/s", rate(cur.in_flight, prev.in_flight)),
+                ("io_ticks/s", rate(cur.io_ticks, prev.io_ticks)),
+                (
+                    "time_in_queue/s",
+                    rate(cur.time_in_queue, prev.time_in_queue),
+                ),
+            ];
+            let mut pairs = vec![];
+            for info in infos.into_iter() {
+                let mut pair = ServerInfoPair::default();
+                pair.set_key(info.0.to_string());
+                pair.set_value(format!("{:.2}", info.1));
+                pairs.push(pair);
+            }
+            let mut item = ServerInfoItem::default();
+            item.set_tp("io".to_string());
+            item.set_name(name);
+            item.set_pairs(pairs.into());
+            collector.push(item);
+        }
+    }
+
+    /// load_info collects CPU/Memory/IO/Network load information
+    pub fn load_info(
+        (prev_nic, prev_io): (
+            HashMap<String, sysinfo::NICLoad>,
+            HashMap<String, sysinfo::IOLoad>,
+        ),
+        collector: &mut Vec<ServerInfoItem>,
+    ) {
+        cpu_load_info(collector);
+        mem_load_info(collector);
+        nic_load_info(prev_nic, collector);
+        io_load_info(prev_io, collector);
+    }
+
+    pub fn hardware_info(_collector: &mut Vec<ServerInfoItem>) {
+        unimplemented!();
+    }
+
+    pub fn system_info(_collector: &mut Vec<ServerInfoItem>) {
+        unimplemented!();
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn test_load_info() {
+            let prev_nic = sysinfo::NICLoad::snapshot();
+            let prev_io = sysinfo::IOLoad::snapshot();
+            let mut collector = vec![];
+            load_info((prev_nic, prev_io), &mut collector);
+            let tps = vec!["cpu", "memory", "net", "io"];
+            for tp in tps.into_iter() {
+                assert!(
+                    collector.iter().any(|x| x.get_tp() == tp),
+                    "expect collect {}, but collect nothing",
+                    tp
+                );
+            }
+
+            let mut cpu_info = collector.iter().filter(|x| x.get_tp() == "cpu");
+            // core usage
+            let core_usage = cpu_info.next().unwrap();
+            assert_eq!(
+                core_usage
+                    .get_pairs()
+                    .iter()
+                    .map(|x| x.get_key())
+                    .collect::<Vec<&str>>(),
+                vec!["usage"]
+            );
+            // load1/5/15
+            let cpu_load = cpu_info.find(|x| x.get_name() == "cpu").unwrap();
+            let keys = cpu_load
+                .get_pairs()
+                .iter()
+                .map(|x| x.get_key())
+                .collect::<Vec<&str>>();
+            assert_eq!(keys, vec!["load1", "load5", "load15"]);
+            // cpu_stat
+            #[cfg(linux)]
+            {
+                let cpu_stat = cpu_info.next().unwrap();
+                let keys = cpu_load
+                    .get_pairs()
+                    .iter()
+                    .map(|x| x.get_key())
+                    .collect::<Vec<&str>>();
+                assert_eq!(
+                    keys,
+                    vec![
+                        "user",
+                        "nice",
+                        "system",
+                        "idle",
+                        "iowait",
+                        "irq",
+                        "softirq",
+                        "steal",
+                        "guest",
+                        "guest_nice",
+                    ]
+                );
+            }
+            // mem
+            let item = collector
+                .iter()
+                .find(|x| x.get_tp() == "memory" && x.get_name() == "memory");
+            let keys = item
+                .unwrap()
+                .get_pairs()
+                .iter()
+                .map(|x| x.get_key())
+                .collect::<Vec<&str>>();
+            assert_eq!(
+                keys,
+                vec![
+                    "total-memory",
+                    "used-memory",
+                    "free-memory",
+                    "total-swap",
+                    "used-swap",
+                    "free-swap",
+                    "used-memory-percent",
+                    "free-memory-percent",
+                    "used-swap-percent",
+                    "free-swap-percent",
+                ]
+            );
+            #[cfg(linux)]
+            {
+                // io
+                let item = collector.iter().find(|x| x.get_tp() == "io");
+                let keys = item
+                    .unwrap()
+                    .get_pairs()
+                    .iter()
+                    .map(|x| x.get_key())
+                    .collect::<Vec<&str>>();
+                assert_eq!(
+                    keys,
+                    vec![
+                        "read_io/s",
+                        "read_merges/s",
+                        "read_sectors/s",
+                        "read_ticks/s",
+                        "write_io/s",
+                        "write_merges/s",
+                        "write_sectors/s",
+                        "write_ticks/s",
+                        "in_flight/s",
+                        "io_ticks/s",
+                        "time_in_queue/s",
+                    ]
+                );
+            }
+        }
     }
 }
 
@@ -163,15 +556,14 @@ mod log {
                     Ok((file_start_time, file_end_time)) => (file_start_time, file_end_time),
                     Err(_) => continue,
                 };
-                if (begin_time <= file_start_time && end_time >= file_start_time)
-                    || (end_time >= file_end_time && begin_time <= file_end_time)
-                {
-                    if let Err(err) = file.seek(SeekFrom::Start(0)) {
-                        warn!("seek file failed: {}, err: {}", file_name, err);
-                        continue;
-                    }
-                    search_files.push((file_start_time, file));
+                if begin_time > file_end_time || end_time < file_start_time {
+                    continue;
                 }
+                if let Err(err) = file.seek(SeekFrom::Start(0)) {
+                    warn!("seek file failed: {}, err: {}", file_name, err);
+                    continue;
+                }
+                search_files.push((file_start_time, file));
             }
             // Sort by start time descending
             search_files.sort_by(|a, b| b.0.cmp(&a.0));
@@ -315,8 +707,8 @@ mod log {
         Ok((file_start_time, file_end_time))
     }
 
-    pub fn search(
-        log_file: String,
+    pub fn search<P: AsRef<Path>>(
+        log_file: P,
         mut req: SearchLogRequest,
     ) -> impl Future<Item = SearchLogResponse, Error = Error> {
         let begin_time = req.get_start_time();
@@ -590,6 +982,26 @@ mod log {
                 "2019/08/23 18:10:01.387 +08:00",
                 "2019/08/23 18:10:02.387 +08:00",
                 "2019/08/23 18:10:03.387 +08:00",
+            ]
+            .iter()
+            .map(|s| timestamp(s))
+            .collect::<Vec<i64>>();
+            assert_eq!(
+                log_iter.map(|m| m.get_time()).collect::<Vec<i64>>(),
+                expected
+            );
+            let log_iter = LogIterator::new(
+                &log_file,
+                timestamp("2019/08/23 18:09:56.387 +08:00"),
+                timestamp("2019/08/23 18:09:58.387 +08:00"),
+                0,
+                vec![],
+            )
+            .unwrap();
+            let expected = vec![
+                "2019/08/23 18:09:56.387 +08:00",
+                "2019/08/23 18:09:57.387 +08:00",
+                "2019/08/23 18:09:58.387 +08:00",
             ]
             .iter()
             .map(|s| timestamp(s))
