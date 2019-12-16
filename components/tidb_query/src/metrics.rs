@@ -3,7 +3,7 @@
 use prometheus::*;
 use prometheus_static_metric::make_static_metric;
 
-use tikv_util::metrics::{TLSMetricGroup, TLSMetricGroupInner};
+use tikv_util::metrics::TLSMetricGroup;
 
 make_static_metric! {
     pub label_enum ExecutorName {
@@ -39,25 +39,7 @@ lazy_static::lazy_static! {
     .unwrap();
 }
 
-pub struct RunnerBuildingMetrics {
-    pub executor_count: LocalCoprExecutorCount,
-}
-
-impl RunnerBuildingMetrics {
-    fn new() -> Self {
-        Self {
-            executor_count: LocalCoprExecutorCount::from(&COPR_EXECUTOR_COUNT),
-        }
-    }
-}
-
-impl TLSMetricGroupInner for RunnerBuildingMetrics {
-    fn flush_all(&self) {
-        self.executor_count.flush();
-    }
-}
-
 thread_local! {
-    pub static RUNNER_BUILDING_METRICS: TLSMetricGroup<RunnerBuildingMetrics> =
-        TLSMetricGroup::new(RunnerBuildingMetrics::new());
+    pub static EXECUTOR_COUNT_METRICS: TLSMetricGroup<LocalCoprExecutorCount> =
+        TLSMetricGroup::new(LocalCoprExecutorCount::from(&COPR_EXECUTOR_COUNT));
 }
