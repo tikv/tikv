@@ -3,6 +3,9 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Error, ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use chrono::{DateTime, Local};
 
 use crate::config::{ReadableDuration, ReadableSize};
 
@@ -23,21 +26,30 @@ fn open_log_file(path: impl AsRef<Path>) -> io::Result<File> {
 
 /// A trait that describes a file rotation operation.
 pub trait Rotator: Send {
+    /// Check if the option is enabled in configuration.
+    /// Return true if the `rotator` is valid.
+    fn is_enabled(&self) -> bool;
+
+    /// Call by operator, initializes the states of rotators.
+    fn prepare(&mut self, file: &File) -> io::Result<()>;
+
     /// Return if the file need to be rotated.
-    fn should_rotate(&self, file: &File) -> io::Result<bool>;
+    fn should_rotate(&self) -> io::Result<bool>;
+
+    /// Call by operator, update rotators' state while the operator try to write some data.
+    fn update_in_write(&mut self, data: &[u8]) -> io::Result<()>;
+
+    /// Call by operator, update rotators' state while the operator try to flush the stream.
+    fn update_in_flush(&mut self) -> io::Result<()>;
 
     /// Execute rotation and return a renamed file path.
-    fn rotate(&mut self, file: &mut File, old_path: &Path, new_path: &Path) -> io::Result<()> {
+    fn rotate(&self, file: &mut File, old_path: &Path, new_path: &Path) -> io::Result<()> {
         file.flush()?;
         fs::rename(old_path, new_path)?;
 
         *file = open_log_file(old_path)?;
         Ok(())
     }
-
-    /// Check if the option is enabled in configuration.
-    /// Return true if the `rotator` is valid.
-    fn is_enabled(&self) -> bool;
 }
 
 /// This `FileLogger` will iterate over a series of `Rotators`,
@@ -84,12 +96,18 @@ where
         self
     }
 
-    pub fn build(self) -> io::Result<RotatingFileLogger<N>> {
+    pub fn build(mut self) -> io::Result<RotatingFileLogger<N>> {
+        let file = open_log_file(&self.path)?;
+
+        for rotator in self.rotators.iter_mut() {
+            rotator.prepare(&file)?;
+        }
+
         Ok(RotatingFileLogger {
             rotators: self.rotators,
-            file: open_log_file(&self.path)?,
             path: self.path,
             rename: self.rename,
+            file,
         })
     }
 }
@@ -99,14 +117,24 @@ where
     N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
 {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        // Updates all roators' states.
+        for rotator in self.rotators.iter_mut() {
+            rotator.update_in_write(bytes)?;
+        }
         self.file.write(bytes)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        for rotator in self.rotators.iter_mut() {
-            if rotator.should_rotate(&self.file)? {
+        for rotator in self.rotators.iter() {
+            if rotator.should_rotate()? {
                 let new_path = (self.rename)(&self.path)?;
                 rotator.rotate(&mut self.file, &self.path, &new_path)?;
+
+                // Updates all roators' states.
+                for rotator in self.rotators.iter_mut() {
+                    rotator.update_in_flush()?;
+                }
+
                 break;
             }
         }
@@ -125,53 +153,91 @@ where
 
 pub struct RotateByTime {
     rotation_timespan: ReadableDuration,
+    next_rotation_time: Option<SystemTime>,
 }
 
 impl RotateByTime {
     pub fn new(rotation_timespan: ReadableDuration) -> Self {
-        Self { rotation_timespan }
+        Self {
+            rotation_timespan,
+            next_rotation_time: None,
+        }
+    }
+
+    fn next_rotation_time(begin: SystemTime, duration: Duration) -> io::Result<SystemTime> {
+        begin
+            .checked_add(duration)
+            .ok_or_else(|| Error::new(ErrorKind::Other, "Next rotation time is out of range."))
     }
 }
 
 impl Rotator for RotateByTime {
-    fn should_rotate(&self, file: &File) -> io::Result<bool> {
-        let metadata = file.metadata()?;
-        // Calculates how long the file has been written.
-        let file_life = metadata
-            .modified()?
-            // TODO: change it to `created()`, however, in some Linux distros it isn't supported.
-            .duration_since(metadata.accessed()?)
-            .map_err(|_| {
-                io::Error::new(
-                    ErrorKind::Other,
-                    "File accessed time is later than last-modified time",
-                )
-            })?;
-        Ok(file_life > self.rotation_timespan.0)
-    }
-
     fn is_enabled(&self) -> bool {
         !self.rotation_timespan.is_zero()
+    }
+
+    fn prepare(&mut self, file: &File) -> io::Result<()> {
+        self.next_rotation_time = Some(Self::next_rotation_time(
+            file.metadata()?.modified()?,
+            self.rotation_timespan.0,
+        )?);
+        Ok(())
+    }
+
+    fn should_rotate(&self) -> io::Result<bool> {
+        assert!(self.next_rotation_time.is_some());
+        Ok(Local::now() > DateTime::<Local>::from(self.next_rotation_time.unwrap()))
+    }
+
+    fn update_in_write(&mut self, _: &[u8]) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn update_in_flush(&mut self) -> io::Result<()> {
+        assert!(self.next_rotation_time.is_some());
+        self.next_rotation_time = Some(Self::next_rotation_time(
+            self.next_rotation_time.unwrap(),
+            self.rotation_timespan.0,
+        )?);
+        Ok(())
     }
 }
 
 pub struct RotateBySize {
     rotation_size: ReadableSize,
+    written: u64,
 }
 
 impl RotateBySize {
     pub fn new(rotation_size: ReadableSize) -> Self {
-        RotateBySize { rotation_size }
+        RotateBySize {
+            rotation_size,
+            written: 0,
+        }
     }
 }
 
 impl Rotator for RotateBySize {
-    fn should_rotate(&self, file: &File) -> io::Result<bool> {
-        Ok(file.metadata()?.len() > self.rotation_size.0)
-    }
-
     fn is_enabled(&self) -> bool {
         self.rotation_size.0 != 0
+    }
+
+    fn prepare(&mut self, file: &File) -> io::Result<()> {
+        self.written = file.metadata()?.len();
+        Ok(())
+    }
+
+    fn should_rotate(&self) -> io::Result<bool> {
+        Ok(self.written > self.rotation_size.0)
+    }
+
+    fn update_in_write(&mut self, data: &[u8]) -> io::Result<()> {
+        self.written += data.len() as u64;
+        Ok(())
+    }
+
+    fn update_in_flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -224,19 +290,15 @@ mod tests {
         let path = tmp_dir.path().join("test_should_rotate_by_time.log");
         let suffix = ".backup";
 
-        // Set last accessed time to NOW.
-        let accessed = SystemTime::now()
+        // Set the last modification time to 1 minute before.
+        let last_modified = SystemTime::now()
+            .checked_sub(Duration::from_secs(60))
+            .unwrap()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
-        // Set the last modification time to 1 minute later.
-        let last_modified = SystemTime::now()
-            .checked_add(Duration::from_secs(60))
-            .unwrap()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let accessed = last_modified;
 
         // Create a file.
         open_log_file(path.clone()).unwrap();
