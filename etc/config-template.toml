@@ -770,7 +770,7 @@
 
 ## Time to delay in milliseconds before responding to TiDB when other transactions
 ## release locks that pessimistic transactions are waiting for.
-# wake-up-delay-duration = 1
+# wake-up-delay-duration = 100
 
 [gc]
 ## The number of keys to GC in one batch.
