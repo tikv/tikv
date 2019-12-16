@@ -96,7 +96,7 @@ slog-term = "2.4"
 slog_derive = "0.1"
 spin = "0.5"
 sst_importer = { path = "components/sst_importer" }
-sys-info = "0.5.7"
+sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tempfile = "3.0"
 test_util = { path = "components/test_util" }
 tidb_query = { path = "components/tidb_query" }
