@@ -15,7 +15,7 @@ use tempfile::{Builder, TempDir};
 
 use engine::Engines;
 use engine_rocks::RocksEngine;
-use tikv::config::TiKvConfig;
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -238,7 +238,7 @@ impl Simulator for ServerCluster {
         );
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router.clone());
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
@@ -246,6 +246,7 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
+        let cfg_controller = ConfigController::new(cfg);
         node.start(
             engines.clone(),
             simulate_trans.clone(),
@@ -254,6 +255,7 @@ impl Simulator for ServerCluster {
             store_meta,
             coprocessor_host,
             importer.clone(),
+            cfg_controller,
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
