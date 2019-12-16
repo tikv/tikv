@@ -54,12 +54,12 @@ zeroize = { version = "0.10", features = [ "alloc" ] }
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
+rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 features = ["nightly", "push", "process"]
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
+rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }
