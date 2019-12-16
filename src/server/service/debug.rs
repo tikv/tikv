@@ -4,7 +4,7 @@ use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
 use fail;
 use futures::{future, stream, Future, Stream};
-use futures_cpupool::{Builder, CpuPool};
+use futures_cpupool::CpuPool;
 use grpcio::{Error as GrpcError, WriteFlags};
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use kvproto::debugpb::{self, *};
@@ -14,10 +14,10 @@ use kvproto::raft_cmdpb::{
 };
 use tokio_sync::oneshot;
 
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};
-use crate::server::gc_worker::GCWorker;
-use crate::server::transport::RaftStoreRouter;
+use crate::server::gc_worker::GcWorker;
 use crate::storage::kv::Engine;
 use tikv_util::metrics;
 
@@ -52,12 +52,13 @@ pub struct Service<T: RaftStoreRouter, E: Engine> {
 }
 
 impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
-    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GCWorker`.
-    pub fn new(engines: Engines, raft_router: T, gc_worker: GCWorker<E>) -> Service<T, E> {
-        let pool = Builder::new()
-            .name_prefix(thd_name!("debugger"))
-            .pool_size(1)
-            .create();
+    /// Constructs a new `Service` with `Engines`, a `RaftStoreRouter` and a `GcWorker`.
+    pub fn new(
+        engines: Engines,
+        pool: CpuPool,
+        raft_router: T,
+        gc_worker: GcWorker<E>,
+    ) -> Service<T, E> {
         let debugger = Debugger::new(engines, Some(gc_worker));
         Service {
             pool,
@@ -523,10 +524,12 @@ fn consistency_check<T: RaftStoreRouter>(
         })
 }
 
+#[cfg(feature = "protobuf-codec")]
 mod region_size_response {
     pub type Entry = kvproto::debugpb::RegionSizeResponseEntry;
 }
 
+#[cfg(feature = "protobuf-codec")]
 mod list_fail_points_response {
     pub type Entry = kvproto::debugpb::ListFailPointsResponseEntry;
 }

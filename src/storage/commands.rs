@@ -4,20 +4,16 @@ use std::fmt::{self, Debug, Display, Formatter};
 
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, RawGetRequest};
 use tikv_util::collections::HashMap;
+use txn_types::{Key, Lock, Mutation, TimeStamp};
 
 use crate::storage::metrics::{self, CommandPriority};
-use crate::storage::mvcc::Lock;
-use crate::storage::types::{Key, Mutation};
-
-pub const CMD_TAG_GC: &str = "gc";
-pub const CMD_TAG_UNSAFE_DESTROY_RANGE: &str = "unsafe_destroy_range";
 
 /// Get a single value.
 pub struct PointGetCommand {
     pub(super) ctx: Context,
     pub(super) key: Key,
     /// None if this is a raw get, Some if this is a transactional get.
-    pub(super) ts: Option<u64>,
+    pub(super) ts: Option<TimeStamp>,
 }
 
 impl PointGetCommand {
@@ -25,7 +21,7 @@ impl PointGetCommand {
         PointGetCommand {
             ctx: request.take_context(),
             key: Key::from_raw(request.get_key()),
-            ts: Some(request.get_version()),
+            ts: Some(request.get_version().into()),
         }
     }
 
@@ -38,7 +34,7 @@ impl PointGetCommand {
     }
 
     #[cfg(test)]
-    pub fn from_key_ts(key: Key, ts: Option<u64>) -> Self {
+    pub fn from_key_ts(key: Key, ts: Option<TimeStamp>) -> Self {
         PointGetCommand {
             ctx: Context::default(),
             key,
@@ -73,7 +69,7 @@ pub enum CommandKind {
         /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
         primary: Vec<u8>,
         /// The transaction timestamp.
-        start_ts: u64,
+        start_ts: TimeStamp,
         options: Options,
     },
     /// Acquire a Pessimistic lock on the keys.
@@ -85,7 +81,7 @@ pub enum CommandKind {
         /// The primary lock. Secondary locks (from `keys`) will refer to the primary lock.
         primary: Vec<u8>,
         /// The transaction timestamp.
-        start_ts: u64,
+        start_ts: TimeStamp,
         options: Options,
     },
     /// Commit the transaction that started at `lock_ts`.
@@ -95,9 +91,9 @@ pub enum CommandKind {
         /// The keys affected.
         keys: Vec<Key>,
         /// The lock timestamp.
-        lock_ts: u64,
+        lock_ts: TimeStamp,
         /// The commit timestamp.
-        commit_ts: u64,
+        commit_ts: TimeStamp,
     },
     /// Rollback mutations on a single key.
     ///
@@ -105,10 +101,10 @@ pub enum CommandKind {
     Cleanup {
         key: Key,
         /// The transaction timestamp.
-        start_ts: u64,
+        start_ts: TimeStamp,
         /// The approximate current ts when cleanup request is invoked, which is used to check the
         /// lock's TTL. 0 means do not check TTL.
-        current_ts: u64,
+        current_ts: TimeStamp,
     },
     /// Rollback from the transaction that was started at `start_ts`.
     ///
@@ -116,7 +112,7 @@ pub enum CommandKind {
     Rollback {
         keys: Vec<Key>,
         /// The transaction timestamp.
-        start_ts: u64,
+        start_ts: TimeStamp,
     },
     /// Rollback pessimistic locks identified by `start_ts` and `for_update_ts`.
     ///
@@ -125,8 +121,8 @@ pub enum CommandKind {
         /// The keys to be rolled back.
         keys: Vec<Key>,
         /// The transaction timestamp.
-        start_ts: u64,
-        for_update_ts: u64,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
     },
     /// Heart beat of a transaction. It enlarges the primary lock's TTL.
     ///
@@ -137,7 +133,7 @@ pub enum CommandKind {
         /// The primary key of the transaction.
         primary_key: Key,
         /// The transaction's start_ts.
-        start_ts: u64,
+        start_ts: TimeStamp,
         /// The new TTL that will be used to update the lock's TTL. If the lock's TTL is already
         /// greater than `advise_ttl`, nothing will happen.
         advise_ttl: u64,
@@ -154,11 +150,11 @@ pub enum CommandKind {
         /// The primary key of the transaction.
         primary_key: Key,
         /// The lock's ts, namely the transaction's start_ts.
-        lock_ts: u64,
+        lock_ts: TimeStamp,
         /// The start_ts of the transaction that invokes this command.
-        caller_start_ts: u64,
+        caller_start_ts: TimeStamp,
         /// The approximate current_ts when the command is invoked.
-        current_ts: u64,
+        current_ts: TimeStamp,
         /// Specifies the behavior when neither commit/rollback record nor lock is found. If true,
         /// rollbacks that transaction; otherwise returns an error.
         rollback_if_not_exist: bool,
@@ -166,7 +162,7 @@ pub enum CommandKind {
     /// Scan locks from `start_key`, and find all locks whose timestamp is before `max_ts`.
     ScanLock {
         /// The maximum transaction timestamp to scan.
-        max_ts: u64,
+        max_ts: TimeStamp,
         /// The key to start from. (`None` means start from the very beginning.)
         start_key: Option<Key>,
         /// The result limit.
@@ -193,16 +189,16 @@ pub enum CommandKind {
         /// will be rolled back.  `"k3"` will not be affected, because its lock_ts is not contained in
         /// `txn_status`. `"k4"` will not be affected either, because it doesn't have a non-committed
         /// version.
-        txn_status: HashMap<u64, u64>,
+        txn_status: HashMap<TimeStamp, TimeStamp>,
         scan_key: Option<Key>,
         key_locks: Vec<(Key, Lock)>,
     },
     /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
     ResolveLockLite {
         /// The transaction timestamp.
-        start_ts: u64,
+        start_ts: TimeStamp,
         /// The transaction commit timestamp.
-        commit_ts: u64,
+        commit_ts: TimeStamp,
         /// The keys to resolve.
         resolve_keys: Vec<Key>,
     },
@@ -230,7 +226,7 @@ pub enum CommandKind {
     /// Retrieve MVCC information for the given key.
     MvccByKey { key: Key },
     /// Retrieve MVCC info for the first committed key which `start_ts == ts`.
-    MvccByStartTs { start_ts: u64 },
+    MvccByStartTs { start_ts: TimeStamp },
 }
 
 impl Command {
@@ -291,7 +287,7 @@ impl Command {
         }
     }
 
-    pub fn ts(&self) -> u64 {
+    pub fn ts(&self) -> TimeStamp {
         match self.kind {
             CommandKind::Prewrite { start_ts, .. }
             | CommandKind::AcquirePessimisticLock { start_ts, .. }
@@ -308,7 +304,7 @@ impl Command {
             CommandKind::ResolveLock { .. }
             | CommandKind::DeleteRange { .. }
             | CommandKind::Pause { .. }
-            | CommandKind::MvccByKey { .. } => 0,
+            | CommandKind::MvccByKey { .. } => TimeStamp::zero(),
         }
     }
 
@@ -521,11 +517,11 @@ pub struct Options {
     pub key_only: bool,
     pub reverse_scan: bool,
     pub is_first_lock: bool,
-    pub for_update_ts: u64,
+    pub for_update_ts: TimeStamp,
     pub is_pessimistic_lock: Vec<bool>,
     // How many keys this transaction involved.
     pub txn_size: u64,
-    pub min_commit_ts: u64,
+    pub min_commit_ts: TimeStamp,
     // Time to wait for lock released in milliseconds when encountering locks.
     // 0 means using default timeout. Negative means no wait.
     pub wait_timeout: i64,

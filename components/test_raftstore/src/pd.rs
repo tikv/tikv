@@ -11,15 +11,17 @@ use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
 use tokio_timer::timer::Handle;
 
+use kvproto::configpb;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 
-use pd_client::{Error, Key, PdClient, PdFuture, RegionStat, Result};
-use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
+use keys::{self, data_key, enc_end_key, enc_start_key};
+use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
+use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 
@@ -211,7 +213,7 @@ struct Cluster {
     region_id_keys: HashMap<u64, Key>,
     region_approximate_size: HashMap<u64, u64>,
     region_approximate_keys: HashMap<u64, u64>,
-    region_last_report_ts: HashMap<u64, u64>,
+    region_last_report_ts: HashMap<u64, UnixSecs>,
     region_last_report_term: HashMap<u64, u64>,
     base_id: AtomicUsize,
 
@@ -323,7 +325,7 @@ impl Cluster {
         self.region_approximate_keys.get(&region_id).cloned()
     }
 
-    fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
+    fn get_region_last_report_ts(&self, region_id: u64) -> Option<UnixSecs> {
         self.region_last_report_ts.get(&region_id).cloned()
     }
 
@@ -955,7 +957,7 @@ impl TestPdClient {
         self.cluster.rl().get_region_approximate_keys(region_id)
     }
 
-    pub fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
+    pub fn get_region_last_report_ts(&self, region_id: u64) -> Option<UnixSecs> {
         self.cluster.rl().get_region_last_report_ts(region_id)
     }
 
@@ -1014,6 +1016,12 @@ impl PdClient for TestPdClient {
             "no region contains key {}",
             hex::encode_upper(key)
         ))
+    }
+
+    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
+        let region = self.get_region(key)?;
+        let leader = self.cluster.rl().leaders.get(&region.get_id()).cloned();
+        Ok(RegionInfo::new(region, leader))
     }
 
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
@@ -1198,6 +1206,44 @@ impl PdClient for TestPdClient {
         let mut resp = pdpb::GetOperatorResponse::default();
         resp.set_header(header);
         resp.set_region_id(region_id);
+        Ok(resp)
+    }
+
+    fn register_config(
+        &self,
+        _id: String,
+        version: configpb::Version,
+        cfg: String,
+    ) -> Result<configpb::CreateResponse> {
+        let mut status = configpb::Status::default();
+        status.set_code(configpb::StatusCode::Ok);
+        let mut resp = configpb::CreateResponse::default();
+        resp.set_status(status);
+        resp.set_config(cfg);
+        resp.set_version(version);
+        Ok(resp)
+    }
+
+    fn get_config(&self, _id: String, version: configpb::Version) -> Result<configpb::GetResponse> {
+        let mut status = configpb::Status::default();
+        status.set_code(configpb::StatusCode::NotChange);
+        let mut resp = configpb::GetResponse::default();
+        resp.set_version(version);
+        resp.set_status(status);
+        Ok(resp)
+    }
+
+    fn update_config(
+        &self,
+        _id: String,
+        version: configpb::Version,
+        _entries: Vec<configpb::ConfigEntry>,
+    ) -> Result<configpb::UpdateResponse> {
+        let mut status = configpb::Status::default();
+        status.set_code(configpb::StatusCode::Ok);
+        let mut resp = configpb::UpdateResponse::default();
+        resp.set_version(version);
+        resp.set_status(status);
         Ok(resp)
     }
 }

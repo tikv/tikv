@@ -6,6 +6,8 @@
 extern crate derive_more;
 #[macro_use]
 extern crate failure;
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
 
 use byteorder::{BigEndian, ByteOrder};
 
@@ -13,9 +15,6 @@ use kvproto::metapb::Region;
 use std::mem;
 
 pub mod rewrite;
-mod types;
-
-pub use types::{Key, KvPair, Value};
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];

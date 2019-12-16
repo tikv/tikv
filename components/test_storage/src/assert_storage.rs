@@ -3,11 +3,14 @@
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
-use tikv::storage::kv::{self, RocksEngine};
-use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
-use tikv::storage::txn;
-use tikv::storage::{self, Engine, Key, KvPair, Mutation, Value};
+use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine};
+use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE};
+use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
+use tikv::storage::{
+    self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
+};
 use tikv_util::HandyRwLock;
+use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 use super::*;
 
@@ -55,20 +58,28 @@ impl AssertionStorage<SimulateEngine> {
         &mut self,
         cluster: &mut Cluster<ServerCluster>,
         key: &[u8],
-        start_ts: u64,
-        commit_ts: u64,
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
     ) {
         let mutations = vec![Mutation::Delete(Key::from_raw(key))];
         let commit_keys = vec![Key::from_raw(key)];
-        self.two_pc_ok_for_cluster(cluster, mutations, key, commit_keys, start_ts, commit_ts);
+        self.two_pc_ok_for_cluster(
+            cluster,
+            mutations,
+            key,
+            commit_keys,
+            start_ts.into(),
+            commit_ts.into(),
+        );
     }
 
     fn get_from_custer(
         &mut self,
         cluster: &mut Cluster<ServerCluster>,
         key: &[u8],
-        ts: u64,
+        ts: impl Into<TimeStamp>,
     ) -> Option<Value> {
+        let ts = ts.into();
         for _ in 0..3 {
             let res = self.store.get(self.ctx.clone(), &Key::from_raw(key), ts);
             if let Ok(data) = res {
@@ -84,7 +95,7 @@ impl AssertionStorage<SimulateEngine> {
         &mut self,
         cluster: &mut Cluster<ServerCluster>,
         key: &[u8],
-        ts: u64,
+        ts: impl Into<TimeStamp>,
     ) {
         assert_eq!(self.get_from_custer(cluster, key, ts), None);
     }
@@ -94,8 +105,8 @@ impl AssertionStorage<SimulateEngine> {
         cluster: &mut Cluster<ServerCluster>,
         key: &[u8],
         value: &[u8],
-        start_ts: u64,
-        commit_ts: u64,
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
     ) {
         let mutations = vec![Mutation::Put((Key::from_raw(key), value.to_vec()))];
         let commit_keys = vec![Key::from_raw(key)];
@@ -108,11 +119,12 @@ impl AssertionStorage<SimulateEngine> {
         prewrite_mutations: Vec<Mutation>,
         key: &[u8],
         commit_keys: Vec<Key>,
-        start_ts: u64,
-        commit_ts: u64,
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
     ) {
         let retry_time = 3;
         let mut success = false;
+        let start_ts = start_ts.into();
         for _ in 0..retry_time {
             let res = self.store.prewrite(
                 self.ctx.clone(),
@@ -130,6 +142,7 @@ impl AssertionStorage<SimulateEngine> {
         assert!(success);
 
         success = false;
+        let commit_ts = commit_ts.into();
         for _ in 0..retry_time {
             let res = self
                 .store
@@ -148,8 +161,9 @@ impl AssertionStorage<SimulateEngine> {
         &mut self,
         cluster: &mut Cluster<ServerCluster>,
         region_key: &[u8],
-        safe_point: u64,
+        safe_point: impl Into<TimeStamp>,
     ) {
+        let safe_point = safe_point.into();
         for _ in 0..3 {
             let ret = self.store.gc(self.ctx.clone(), safe_point);
             if ret.is_ok() {
@@ -180,29 +194,35 @@ impl AssertionStorage<SimulateEngine> {
 }
 
 impl<E: Engine> AssertionStorage<E> {
-    pub fn get_none(&self, key: &[u8], ts: u64) {
-        let key = Key::from_raw(key);
-        assert_eq!(self.store.get(self.ctx.clone(), &key, ts).unwrap(), None);
-    }
-
-    pub fn get_err(&self, key: &[u8], ts: u64) {
-        let key = Key::from_raw(key);
-        assert!(self.store.get(self.ctx.clone(), &key, ts).is_err());
-    }
-
-    pub fn get_ok(&self, key: &[u8], ts: u64, expect: &[u8]) {
+    pub fn get_none(&self, key: &[u8], ts: impl Into<TimeStamp>) {
         let key = Key::from_raw(key);
         assert_eq!(
-            self.store.get(self.ctx.clone(), &key, ts).unwrap().unwrap(),
+            self.store.get(self.ctx.clone(), &key, ts.into()).unwrap(),
+            None
+        );
+    }
+
+    pub fn get_err(&self, key: &[u8], ts: impl Into<TimeStamp>) {
+        let key = Key::from_raw(key);
+        assert!(self.store.get(self.ctx.clone(), &key, ts.into()).is_err());
+    }
+
+    pub fn get_ok(&self, key: &[u8], ts: impl Into<TimeStamp>, expect: &[u8]) {
+        let key = Key::from_raw(key);
+        assert_eq!(
+            self.store
+                .get(self.ctx.clone(), &key, ts.into())
+                .unwrap()
+                .unwrap(),
             expect
         );
     }
 
-    pub fn batch_get_ok(&self, keys: &[&[u8]], ts: u64, expect: Vec<&[u8]>) {
+    pub fn batch_get_ok(&self, keys: &[&[u8]], ts: impl Into<TimeStamp>, expect: Vec<&[u8]>) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         let result: Vec<Vec<u8>> = self
             .store
-            .batch_get(self.ctx.clone(), &keys, ts)
+            .batch_get(self.ctx.clone(), &keys, ts.into())
             .unwrap()
             .into_iter()
             .map(|x| x.unwrap().1)
@@ -213,11 +233,15 @@ impl<E: Engine> AssertionStorage<E> {
 
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
-            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(kv::Error::Request(
-                ref e,
+            StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                MvccError(box MvccErrorInner::Engine(KvError(box KvErrorInner::Request(ref e)))),
             ))))
-            | storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e)))
-            | storage::Error::Engine(kv::Error::Request(ref e)) => {
+            | StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Engine(
+                KvError(box KvErrorInner::Request(ref e)),
+            ))))
+            | StorageError(box StorageErrorInner::Engine(KvError(box KvErrorInner::Request(
+                ref e,
+            )))) => {
                 assert!(
                     e.has_not_leader() | e.has_stale_command(),
                     "invalid error {:?}",
@@ -233,16 +257,25 @@ impl<E: Engine> AssertionStorage<E> {
         }
     }
 
-    fn expect_invalid_tso_err(&self, resp: Result<(), storage::Error>, sts: u64, cmt_ts: u64) {
+    fn expect_invalid_tso_err<T>(
+        &self,
+        resp: Result<T, storage::Error>,
+        sts: impl Into<TimeStamp>,
+        cmt_ts: impl Into<TimeStamp>,
+    ) where
+        T: std::fmt::Debug,
+    {
         assert!(resp.is_err());
         let err = resp.unwrap_err();
         match err {
-            storage::Error::Txn(txn::Error::InvalidTxnTso {
-                start_ts,
-                commit_ts,
-            }) => {
-                assert_eq!(sts, start_ts);
-                assert_eq!(cmt_ts, commit_ts);
+            StorageError(box StorageErrorInner::Txn(TxnError(
+                box TxnErrorInner::InvalidTxnTso {
+                    start_ts,
+                    commit_ts,
+                },
+            ))) => {
+                assert_eq!(sts.into(), start_ts);
+                assert_eq!(cmt_ts.into(), commit_ts);
             }
             _ => {
                 panic!("expect invalid tso error, but got {:?}", err);
@@ -250,7 +283,14 @@ impl<E: Engine> AssertionStorage<E> {
         }
     }
 
-    pub fn put_ok(&self, key: &[u8], value: &[u8], start_ts: u64, commit_ts: u64) {
+    pub fn put_ok(
+        &self,
+        key: &[u8],
+        value: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+    ) {
+        let start_ts = start_ts.into();
         self.store
             .prewrite(
                 self.ctx.clone(),
@@ -264,12 +304,18 @@ impl<E: Engine> AssertionStorage<E> {
                 self.ctx.clone(),
                 vec![Key::from_raw(key)],
                 start_ts,
-                commit_ts,
+                commit_ts.into(),
             )
             .unwrap();
     }
 
-    pub fn delete_ok(&self, key: &[u8], start_ts: u64, commit_ts: u64) {
+    pub fn delete_ok(
+        &self,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+    ) {
+        let start_ts = start_ts.into();
         self.store
             .prewrite(
                 self.ctx.clone(),
@@ -283,7 +329,7 @@ impl<E: Engine> AssertionStorage<E> {
                 self.ctx.clone(),
                 vec![Key::from_raw(key)],
                 start_ts,
-                commit_ts,
+                commit_ts.into(),
             )
             .unwrap();
     }
@@ -292,13 +338,13 @@ impl<E: Engine> AssertionStorage<E> {
         &self,
         start_key: &[u8],
         limit: usize,
-        ts: u64,
+        ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, None, limit, false, ts)
+            .scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -312,13 +358,13 @@ impl<E: Engine> AssertionStorage<E> {
         &self,
         start_key: &[u8],
         limit: usize,
-        ts: u64,
+        ts: impl Into<TimeStamp>,
         expect: Vec<Option<(&[u8], &[u8])>>,
     ) {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .reverse_scan(self.ctx.clone(), key_address, None, limit, false, ts)
+            .reverse_scan(self.ctx.clone(), key_address, None, limit, false, ts.into())
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -332,13 +378,13 @@ impl<E: Engine> AssertionStorage<E> {
         &self,
         start_key: &[u8],
         limit: usize,
-        ts: u64,
+        ts: impl Into<TimeStamp>,
         expect: Vec<Option<&[u8]>>,
     ) {
         let key_address = Key::from_raw(start_key);
         let result = self
             .store
-            .scan(self.ctx.clone(), key_address, None, limit, true, ts)
+            .scan(self.ctx.clone(), key_address, None, limit, true, ts.into())
             .unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
@@ -348,15 +394,35 @@ impl<E: Engine> AssertionStorage<E> {
         assert_eq!(result, expect);
     }
 
-    pub fn prewrite_ok(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
+    pub fn prewrite_ok(
+        &self,
+        mutations: Vec<Mutation>,
+        primary: &[u8],
+        start_ts: impl Into<TimeStamp>,
+    ) {
         self.store
-            .prewrite(self.ctx.clone(), mutations, primary.to_vec(), start_ts)
+            .prewrite(
+                self.ctx.clone(),
+                mutations,
+                primary.to_vec(),
+                start_ts.into(),
+            )
             .unwrap();
     }
 
-    pub fn prewrite_err(&self, mutations: Vec<Mutation>, primary: &[u8], start_ts: u64) {
+    pub fn prewrite_err(
+        &self,
+        mutations: Vec<Mutation>,
+        primary: &[u8],
+        start_ts: impl Into<TimeStamp>,
+    ) {
         self.store
-            .prewrite(self.ctx.clone(), mutations, primary.to_vec(), start_ts)
+            .prewrite(
+                self.ctx.clone(),
+                mutations,
+                primary.to_vec(),
+                start_ts.into(),
+            )
             .unwrap_err();
     }
 
@@ -364,23 +430,29 @@ impl<E: Engine> AssertionStorage<E> {
         &self,
         mutations: Vec<Mutation>,
         primary: &[u8],
-        start_ts: u64,
-        expect_locks: Vec<(&[u8], &[u8], u64)>,
+        start_ts: impl Into<TimeStamp>,
+        expect_locks: Vec<(&[u8], &[u8], TimeStamp)>,
     ) {
         let res = self
             .store
-            .prewrite(self.ctx.clone(), mutations, primary.to_vec(), start_ts)
+            .prewrite(
+                self.ctx.clone(),
+                mutations,
+                primary.to_vec(),
+                start_ts.into(),
+            )
             .unwrap();
-        let locks: Vec<(&[u8], &[u8], u64)> = res
+        let locks: Vec<(&[u8], &[u8], TimeStamp)> = res
             .iter()
             .filter_map(|x| {
-                if let Err(storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::KeyIsLocked(info)))) =
-                    x
+                if let Err(StorageError(box StorageErrorInner::Txn(TxnError(
+                    box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(info))),
+                )))) = x
                 {
                     Some((
                         info.get_key(),
                         info.get_primary_lock(),
-                        info.get_lock_version(),
+                        info.get_lock_version().into(),
                     ))
                 } else {
                     None
@@ -394,10 +466,11 @@ impl<E: Engine> AssertionStorage<E> {
         &self,
         mutations: Vec<Mutation>,
         cur_primary: &[u8],
-        cur_start_ts: u64,
+        cur_start_ts: impl Into<TimeStamp>,
         confl_key: &[u8],
-        confl_ts: u64,
+        confl_ts: impl Into<TimeStamp>,
     ) {
+        let cur_start_ts = cur_start_ts.into();
         let err = self
             .store
             .prewrite(
@@ -409,15 +482,17 @@ impl<E: Engine> AssertionStorage<E> {
             .unwrap_err();
 
         match err {
-            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::WriteConflict {
-                start_ts,
-                conflict_start_ts,
-                ref key,
-                ref primary,
-                ..
-            })) => {
+            StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                MvccError(box MvccErrorInner::WriteConflict {
+                    start_ts,
+                    conflict_start_ts,
+                    ref key,
+                    ref primary,
+                    ..
+                }),
+            )))) => {
                 assert_eq!(cur_start_ts, start_ts);
-                assert_eq!(confl_ts, conflict_start_ts);
+                assert_eq!(confl_ts.into(), conflict_start_ts);
                 assert_eq!(key.to_owned(), confl_key.to_owned());
                 assert_eq!(primary.to_owned(), cur_primary.to_owned());
             }
@@ -427,14 +502,29 @@ impl<E: Engine> AssertionStorage<E> {
         }
     }
 
-    pub fn commit_ok(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
+    pub fn commit_ok(
+        &self,
+        keys: Vec<&[u8]>,
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+        actual_commit_ts: impl Into<TimeStamp>,
+    ) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
-        self.store
-            .commit(self.ctx.clone(), keys, start_ts, commit_ts)
+        let txn_status = self
+            .store
+            .commit(self.ctx.clone(), keys, start_ts.into(), commit_ts.into())
             .unwrap();
+        assert_eq!(txn_status, TxnStatus::committed(actual_commit_ts.into()));
     }
 
-    pub fn commit_with_illegal_tso(&self, keys: Vec<&[u8]>, start_ts: u64, commit_ts: u64) {
+    pub fn commit_with_illegal_tso(
+        &self,
+        keys: Vec<&[u8]>,
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
+    ) {
+        let start_ts = start_ts.into();
+        let commit_ts = commit_ts.into();
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         let resp = self
             .store
@@ -442,79 +532,112 @@ impl<E: Engine> AssertionStorage<E> {
         self.expect_invalid_tso_err(resp, start_ts, commit_ts);
     }
 
-    pub fn cleanup_ok(&self, key: &[u8], start_ts: u64, current_ts: u64) {
+    pub fn cleanup_ok(
+        &self,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        current_ts: impl Into<TimeStamp>,
+    ) {
         self.store
-            .cleanup(self.ctx.clone(), Key::from_raw(key), start_ts, current_ts)
+            .cleanup(
+                self.ctx.clone(),
+                Key::from_raw(key),
+                start_ts.into(),
+                current_ts.into(),
+            )
             .unwrap();
     }
 
-    pub fn cleanup_err(&self, key: &[u8], start_ts: u64, current_ts: u64) {
+    pub fn cleanup_err(
+        &self,
+        key: &[u8],
+        start_ts: impl Into<TimeStamp>,
+        current_ts: impl Into<TimeStamp>,
+    ) {
         assert!(self
             .store
-            .cleanup(self.ctx.clone(), Key::from_raw(key), start_ts, current_ts)
+            .cleanup(
+                self.ctx.clone(),
+                Key::from_raw(key),
+                start_ts.into(),
+                current_ts.into()
+            )
             .is_err());
     }
 
-    pub fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: u64) {
+    pub fn rollback_ok(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         self.store
-            .rollback(self.ctx.clone(), keys, start_ts)
+            .rollback(self.ctx.clone(), keys, start_ts.into())
             .unwrap();
     }
 
-    pub fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: u64) {
+    pub fn rollback_err(&self, keys: Vec<&[u8]>, start_ts: impl Into<TimeStamp>) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
         assert!(self
             .store
-            .rollback(self.ctx.clone(), keys, start_ts)
+            .rollback(self.ctx.clone(), keys, start_ts.into())
             .is_err());
     }
 
     pub fn scan_locks_ok(
         &self,
-        max_ts: u64,
+        max_ts: impl Into<TimeStamp>,
         start_key: Vec<u8>,
         limit: usize,
         expect: Vec<LockInfo>,
     ) {
         assert_eq!(
             self.store
-                .scan_locks(self.ctx.clone(), max_ts, start_key, limit)
+                .scan_locks(self.ctx.clone(), max_ts.into(), start_key, limit)
                 .unwrap(),
             expect
         );
     }
 
-    pub fn resolve_lock_ok(&self, start_ts: u64, commit_ts: Option<u64>) {
+    pub fn resolve_lock_ok(
+        &self,
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: Option<impl Into<TimeStamp>>,
+    ) {
         self.store
-            .resolve_lock(self.ctx.clone(), start_ts, commit_ts)
+            .resolve_lock(self.ctx.clone(), start_ts.into(), commit_ts.map(Into::into))
             .unwrap();
     }
 
     pub fn resolve_lock_batch_ok(
         &self,
-        start_ts_1: u64,
-        commit_ts_1: u64,
-        start_ts_2: u64,
-        commit_ts_2: u64,
+        start_ts_1: impl Into<TimeStamp>,
+        commit_ts_1: impl Into<TimeStamp>,
+        start_ts_2: impl Into<TimeStamp>,
+        commit_ts_2: impl Into<TimeStamp>,
     ) {
         self.store
             .resolve_lock_batch(
                 self.ctx.clone(),
-                vec![(start_ts_1, commit_ts_1), (start_ts_2, commit_ts_2)],
+                vec![
+                    (start_ts_1.into(), commit_ts_1.into()),
+                    (start_ts_2.into(), commit_ts_2.into()),
+                ],
             )
             .unwrap();
     }
 
-    pub fn resolve_lock_with_illegal_tso(&self, start_ts: u64, commit_ts: Option<u64>) {
+    pub fn resolve_lock_with_illegal_tso(
+        &self,
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: Option<impl Into<TimeStamp>>,
+    ) {
+        let start_ts = start_ts.into();
+        let commit_ts = commit_ts.map(Into::into);
         let resp = self
             .store
             .resolve_lock(self.ctx.clone(), start_ts, commit_ts);
         self.expect_invalid_tso_err(resp, start_ts, commit_ts.unwrap())
     }
 
-    pub fn gc_ok(&self, safe_point: u64) {
-        self.store.gc(self.ctx.clone(), safe_point).unwrap();
+    pub fn gc_ok(&self, safe_point: impl Into<TimeStamp>) {
+        self.store.gc(self.ctx.clone(), safe_point.into()).unwrap();
     }
 
     pub fn raw_get_ok(&self, cf: String, key: Vec<u8>, value: Option<Vec<u8>>) {

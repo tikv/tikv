@@ -21,6 +21,7 @@ use crate::raftstore::store::{
 };
 use crate::raftstore::Result;
 use engine::DB;
+use engine_rocks::{Compat, RocksEngine};
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
 
@@ -83,9 +84,9 @@ impl ReadDelegate {
     fn handle_read(
         &self,
         req: &RaftCmdRequest,
-        executor: &mut ReadExecutor,
+        executor: &mut ReadExecutor<RocksEngine>,
         metrics: &mut ReadMetrics,
-    ) -> Option<ReadResponse> {
+    ) -> Option<ReadResponse<RocksEngine>> {
         if let Some(ref lease) = self.leader_lease {
             let term = lease.term();
             if term == self.term {
@@ -290,7 +291,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     pub fn propose_raft_command(&self, cmd: RaftCommand) {
         let region_id = cmd.request.get_header().get_region_id();
         let mut executor = ReadExecutor::new(
-            self.kv_engine.clone(),
+            self.kv_engine.c().clone(),
             false, /* dont check region epoch */
             true,  /* we need snapshot time */
         );
@@ -701,7 +702,7 @@ mod tests {
         let region = region1.clone();
         let task = RaftCommand::new(
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let snap = resp.snapshot.unwrap();
                 assert_eq!(snap.get_region(), &region);
             })),
@@ -724,7 +725,7 @@ mod tests {
             .set_store_id(store_id + 1);
         let task = RaftCommand::new(
             cmd_store_id,
-            Callback::Read(Box::new(move |resp: ReadResponse| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_store_not_match());
                 assert!(resp.snapshot.is_none());
@@ -742,7 +743,7 @@ mod tests {
             .set_id(leader2.get_id() + 1);
         let task = RaftCommand::new(
             cmd_peer_id,
-            Callback::Read(Box::new(move |resp: ReadResponse| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 assert!(
                     resp.response.get_header().has_error(),
                     "{:?}",
@@ -766,7 +767,7 @@ mod tests {
         cmd_term.mut_header().set_term(term6 - 2);
         let task = RaftCommand::new(
             cmd_term,
-            Callback::Read(Box::new(move |resp: ReadResponse| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_stale_command(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());
@@ -800,7 +801,7 @@ mod tests {
         let task1 = RaftCommand::new(cmd.clone(), Callback::None);
         let task_full = RaftCommand::new(
             cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse| {
+            Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
                 let err = resp.response.get_header().get_error();
                 assert!(err.has_server_is_busy(), "{:?}", resp);
                 assert!(resp.snapshot.is_none());

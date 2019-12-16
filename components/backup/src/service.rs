@@ -3,9 +3,8 @@ use std::sync::atomic::*;
 use futures::future::*;
 use futures::prelude::*;
 use futures::sync::mpsc;
-use grpcio::*;
-use kvproto::backup::{BackupRequest, BackupResponse};
-use kvproto::backup_grpc::*;
+use grpcio::{self, *};
+use kvproto::backup::*;
 use tikv_util::worker::*;
 
 use super::Task;
@@ -56,7 +55,7 @@ impl Backup for Service {
             Ok(resp) => Ok((resp, WriteFlags::default())),
             Err(e) => {
                 error!("backup send failed"; "error" => ?e);
-                Err(Error::RpcFailure(RpcStatus::new(
+                Err(grpcio::Error::RpcFailure(RpcStatus::new(
                     RpcStatusCode::UNKNOWN,
                     Some(format!("{:?}", e)),
                 )))
@@ -85,8 +84,10 @@ mod tests {
 
     use super::*;
     use crate::endpoint::tests::*;
+    use external_storage::make_local_backend;
     use tikv::storage::mvcc::tests::*;
     use tikv_util::mpsc::Receiver;
+    use txn_types::TimeStamp;
 
     fn new_rpc_suite() -> (Server, BackupClient, Receiver<Option<Task>>) {
         let env = Arc::new(EnvBuilder::new().build());
@@ -114,11 +115,8 @@ mod tests {
             (b"2".to_vec(), b"5".to_vec(), 2),
         ]);
 
-        let mut ts = 1;
-        let mut alloc_ts = || {
-            ts += 1;
-            ts
-        };
+        let mut ts: TimeStamp = 1.into();
+        let mut alloc_ts = || *ts.incr();
         for i in 0..5 {
             let start = alloc_ts();
             let key = format!("{}", i);
@@ -134,16 +132,13 @@ mod tests {
         }
 
         let now = alloc_ts();
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![b'5']);
-        req.set_start_version(now);
-        req.set_end_version(now);
+        req.set_start_version(now.into_inner());
+        req.set_end_version(now.into_inner());
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", now)).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
 
         let stream = client.backup(&req).unwrap();
         let task = rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -153,10 +148,7 @@ mod tests {
         endpoint.handle_backup_task(task.unwrap());
 
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", alloc_ts())).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(alloc_ts().to_string())));
         let stream = client.backup(&req).unwrap();
         // Drop steam once it received something.
         client.spawn(stream.into_future().then(|_res| Ok(())));
@@ -165,10 +157,7 @@ mod tests {
         endpoint.handle_backup_task(task.unwrap());
 
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", alloc_ts())).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(alloc_ts().to_string())));
         let stream = client.backup(&req).unwrap();
         let task = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
         // Drop stream without start receiving will cause cancel error.

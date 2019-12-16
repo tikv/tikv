@@ -5,12 +5,11 @@ use std::{i32, isize};
 use super::Result;
 use grpcio::CompressionAlgorithms;
 
-use engine::rocks::util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 use tikv_util::collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
 
 pub use crate::raftstore::store::Config as RaftStoreConfig;
-pub use crate::storage::Config as StorageConfig;
+pub use crate::storage::config::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
@@ -31,6 +30,8 @@ const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
+
+const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
 /// A clone of `grpc::CompressionAlgorithms` with serde supports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
