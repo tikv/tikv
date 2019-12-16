@@ -326,7 +326,7 @@ mod tests {
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
             3000,
-            3100,
+            3200,
         );
         assert!(!lock_mgr.has_waiter());
 
@@ -345,7 +345,7 @@ mod tests {
         assert_elapsed(
             || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, 30.into()),
             0,
-            100,
+            200,
         );
         assert!(!lock_mgr.has_waiter());
 
@@ -373,14 +373,14 @@ mod tests {
         assert_elapsed(
             || expect_deadlock(f2.wait().unwrap(), 20.into(), lock_info2, 20),
             0,
-            100,
+            200,
         );
         // Waiter2 releases its lock.
         lock_mgr.wake_up(20.into(), Some(vec![20]), 20.into(), true);
         assert_elapsed(
             || expect_write_conflict(f1.wait().unwrap(), 10.into(), lock_info1, 20.into()),
             0,
-            100,
+            200,
         );
         assert!(!lock_mgr.has_waiter());
 
@@ -404,23 +404,29 @@ mod tests {
         assert!(!lock_mgr.has_waiter());
 
         // If key_hashes is none, no wake up.
-        let prev_wake_up = TASK_COUNTER_VEC.wake_up.get();
+        let prev_wake_up = TASK_COUNTER_METRICS.with(|m| m.wake_up.get());
         lock_mgr.wake_up(10.into(), None, 10.into(), false);
-        assert_eq!(TASK_COUNTER_VEC.wake_up.get(), prev_wake_up);
+        assert_eq!(TASK_COUNTER_METRICS.with(|m| m.wake_up.get()), prev_wake_up);
 
         // If it's non-pessimistic-txn, no clean up.
-        let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
+        let prev_clean_up = TASK_COUNTER_METRICS.with(|m| m.clean_up.get());
         lock_mgr.wake_up(10.into(), None, 10.into(), false);
-        assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
+        assert_eq!(
+            TASK_COUNTER_METRICS.with(|m| m.clean_up.get()),
+            prev_clean_up
+        );
 
         // If the txn doesn't wait for locks, no clean up.
-        let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
+        let prev_clean_up = TASK_COUNTER_METRICS.with(|m| m.clean_up.get());
         lock_mgr.wake_up(10.into(), None, 10.into(), true);
-        assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
+        assert_eq!(
+            TASK_COUNTER_METRICS.with(|m| m.clean_up.get()),
+            prev_clean_up
+        );
 
         // If timeout is negative, no wait for.
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
-        let prev_wait_for = TASK_COUNTER_VEC.wait_for.get();
+        let prev_wait_for = TASK_COUNTER_METRICS.with(|m| m.wait_for.get());
         lock_mgr.wait_for(
             waiter.start_ts,
             waiter.cb,
@@ -432,9 +438,12 @@ mod tests {
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
             0,
-            100,
+            200,
         );
-        assert_eq!(TASK_COUNTER_VEC.wait_for.get(), prev_wait_for);
+        assert_eq!(
+            TASK_COUNTER_METRICS.with(|m| m.wait_for.get()),
+            prev_wait_for,
+        );
     }
 
     #[bench]

@@ -524,7 +524,10 @@ impl FutureRunnable<Task> for WaiterManager {
             } => {
                 let waiter = Waiter::new(start_ts, cb, pr, lock, self.normalize_deadline(timeout));
                 self.handle_wait_for(handle, waiter);
-                TASK_COUNTER_VEC.wait_for.inc();
+                TASK_COUNTER_METRICS.with(|m| {
+                    m.wait_for.inc();
+                    m.may_flush_all()
+                });
             }
             Task::WakeUp {
                 lock_ts,
@@ -532,11 +535,17 @@ impl FutureRunnable<Task> for WaiterManager {
                 commit_ts,
             } => {
                 self.handle_wake_up(lock_ts, hashes, commit_ts);
-                TASK_COUNTER_VEC.wake_up.inc();
+                TASK_COUNTER_METRICS.with(|m| {
+                    m.wake_up.inc();
+                    m.may_flush_all()
+                });
             }
             Task::Dump { cb } => {
                 self.handle_dump(cb);
-                TASK_COUNTER_VEC.dump.inc();
+                TASK_COUNTER_METRICS.with(|m| {
+                    m.dump.inc();
+                    m.may_flush_all()
+                });
             }
             Task::Deadlock {
                 start_ts,
@@ -979,7 +988,7 @@ pub mod tests {
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
             1000,
-            1100,
+            1200,
         );
 
         // Custom timeout
@@ -988,7 +997,7 @@ pub mod tests {
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
             100,
-            200,
+            300,
         );
 
         // Timeout can't exceed wait_for_lock_timeout
@@ -997,7 +1006,7 @@ pub mod tests {
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
             1000,
-            1100,
+            1200,
         );
 
         worker.stop().unwrap();
@@ -1031,7 +1040,7 @@ pub mod tests {
             assert_elapsed(
                 || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, commit_ts),
                 0,
-                100,
+                200,
             );
         }
 
@@ -1064,7 +1073,7 @@ pub mod tests {
             assert_elapsed(
                 || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, commit_ts),
                 0,
-                100,
+                200,
             );
             // Now the lock is held by the waked up transaction.
             lock.ts = waiter_ts;
@@ -1078,7 +1087,7 @@ pub mod tests {
         assert_elapsed(
             || expect_write_conflict(f.wait().unwrap(), waiter_ts, lock_info, *commit_ts.decr()),
             wake_up_delay_duration,
-            wake_up_delay_duration + 100,
+            wake_up_delay_duration + 200,
         );
 
         // The max lifetime of waiter is its timeout.
@@ -1113,7 +1122,7 @@ pub mod tests {
         assert_elapsed(
             || expect_write_conflict(f1.wait().unwrap(), 20.into(), lock_info1, commit_ts),
             0,
-            100,
+            200,
         );
         rx.recv().unwrap();
 
@@ -1136,7 +1145,7 @@ pub mod tests {
         assert_elapsed(
             || expect_deadlock(f.wait().unwrap(), waiter_ts, lock_info, 30),
             0,
-            100,
+            200,
         );
         worker.stop().unwrap();
     }
@@ -1159,13 +1168,13 @@ pub mod tests {
         assert_elapsed(
             || expect_key_is_locked(f1.wait().unwrap().unwrap().pop().unwrap(), lock_info1),
             0,
-            100,
+            200,
         );
         // The new waiter will be wake up after timeout.
         assert_elapsed(
             || expect_key_is_locked(f2.wait().unwrap().unwrap().pop().unwrap(), lock_info2),
             1000,
-            1100,
+            1200,
         );
 
         worker.stop().unwrap();
