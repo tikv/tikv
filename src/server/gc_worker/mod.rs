@@ -448,6 +448,7 @@ impl<E: Engine> GcRunner<E> {
         );
 
         if !self.need_gc(ctx, safe_point) {
+            GC_SKIPPED_COUNTER.inc();
             return Ok(());
         }
 
