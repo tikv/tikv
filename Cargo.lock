@@ -1399,7 +1399,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/MyonKeminta/kvproto.git?branch=misono/green-gc#0e4f18415799bd3b592da50511dcbc53b7b73bcc"
+source = "git+https://github.com/MyonKeminta/kvproto.git?branch=misono/green-gc#abbd383bdbab58ffc2cadca533d72acf90d186e1"
 dependencies = [
  "bytes",
  "futures",
