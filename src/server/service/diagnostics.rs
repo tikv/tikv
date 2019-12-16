@@ -1,11 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::{Duration, Instant};
+
 use futures::{Future, Sink};
 use futures_cpupool::CpuPool;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
+    ServerInfoType,
 };
+use tokio_timer::Delay;
+
+use crate::server::{Error, Result};
 
 /// Service handles the RPC messages for the `Diagnostics` service.
 #[derive(Clone)]
@@ -49,11 +55,150 @@ impl Diagnostics for Service {
 
     fn server_info(
         &mut self,
-        _ctx: RpcContext<'_>,
-        _req: ServerInfoRequest,
-        _sink: UnarySink<ServerInfoResponse>,
+        ctx: RpcContext<'_>,
+        req: ServerInfoRequest,
+        sink: UnarySink<ServerInfoResponse>,
     ) {
-        unimplemented!()
+        let (load, when) = match req.get_tp() {
+            ServerInfoType::LoadInfo | ServerInfoType::All => {
+                let load = (sysinfo::NICLoad::snapshot(), sysinfo::IOLoad::snapshot());
+                let when = Instant::now() + Duration::from_millis(500);
+                (Some(load), when)
+            }
+            _ => (None, Instant::now()),
+        };
+
+        let collect = Delay::new(when)
+            .and_then(move |_| Ok(load))
+            .map_err(|e| box_err!("Unexpected delay error: {:?}", e))
+            .and_then(move |load| -> Result<ServerInfoResponse> {
+                let mut server_infos = Vec::new();
+                match req.get_tp() {
+                    ServerInfoType::HardwareInfo => sys::hardware_info(&mut server_infos),
+                    ServerInfoType::LoadInfo => sys::load_info(load.unwrap(), &mut server_infos),
+                    ServerInfoType::SystemInfo => sys::system_info(&mut server_infos),
+                    ServerInfoType::All => {
+                        sys::hardware_info(&mut server_infos);
+                        sys::load_info(load.unwrap(), &mut server_infos);
+                        sys::system_info(&mut server_infos);
+                    }
+                };
+                // Sort pairs by key to make result stable
+                server_infos
+                    .sort_by(|a, b| (a.get_tp(), a.get_name()).cmp(&(b.get_tp(), b.get_name())));
+                let mut resp = ServerInfoResponse::default();
+                resp.set_items(server_infos.into());
+                Ok(resp)
+            });
+        let f = self
+            .pool
+            .spawn(collect)
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map_err(|e| debug!("Diagnostics rpc failed"; "err" => ?e));
+        ctx.spawn(f);
+    }
+}
+
+mod sys {
+    use std::collections::HashMap;
+    use std::string::ToString;
+
+    use kvproto::diagnosticspb::{ServerInfoItem, ServerInfoPair};
+    use sysinfo::{ProcessExt, SystemExt};
+
+    /// load_info collects CPU/Memory/IO/Network load information
+    pub fn load_info(
+        (_prev_nic, _prev_io): (
+            HashMap<String, sysinfo::NICLoad>,
+            HashMap<String, sysinfo::IOLoad>,
+        ),
+        _collector: &mut Vec<ServerInfoItem>,
+    ) {
+        unimplemented!();
+    }
+
+    /// hardware_info collects CPU/Memory/Network/Disk hardware information
+    pub fn hardware_info(_collector: &mut Vec<ServerInfoItem>) {
+        unimplemented!();
+    }
+
+    /// system_info collects system related information, e.g: kernel
+    pub fn system_info(collector: &mut Vec<ServerInfoItem>) {
+        // sysctl
+        let sysctl = sysinfo::get_sysctl_list();
+        let mut pairs = vec![];
+        for (key, val) in sysctl.into_iter() {
+            let mut pair = ServerInfoPair::default();
+            pair.set_key(key);
+            pair.set_value(val);
+            pairs.push(pair);
+        }
+        // Sort pairs by key to make result stable
+        pairs.sort_by(|a, b| a.get_key().cmp(b.get_key()));
+        let mut item = ServerInfoItem::default();
+        item.set_tp("system".to_string());
+        item.set_name("sysctl".to_string());
+        item.set_pairs(pairs.into());
+        collector.push(item);
+        // process list
+        let mut system = sysinfo::System::new();
+        system.refresh_all();
+        let processes = system.get_process_list();
+        for (pid, p) in processes.iter() {
+            if p.cmd().is_empty() {
+                continue;
+            }
+            let mut pairs = vec![];
+            let infos = vec![
+                ("executable", format!("{:?}", p.exe())),
+                ("cmd", p.cmd().join(" ")),
+                ("cwd", format!("{:?}", p.cwd())),
+                ("start-time", p.start_time().to_string()),
+                ("memory", p.memory().to_string()),
+                ("status", p.status().to_string().to_owned()),
+                ("cpu-usage", p.cpu_usage().to_string()),
+            ];
+            for (key, val) in infos.into_iter() {
+                let mut pair = ServerInfoPair::default();
+                pair.set_key(key.to_string());
+                pair.set_value(val);
+                pairs.push(pair);
+            }
+            let mut item = ServerInfoItem::default();
+            item.set_tp("process".to_string());
+            item.set_name(format!("{}({})", p.name(), pid));
+            item.set_pairs(pairs.into());
+            collector.push(item);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_system_info() {
+            let mut collector = vec![];
+            system_info(&mut collector);
+            let tps = vec!["system", "process"];
+            for tp in tps.into_iter() {
+                assert!(
+                    collector.iter().any(|x| x.get_tp() == tp),
+                    "expect collect {}, but collect nothing",
+                    tp
+                );
+            }
+            #[cfg(linux)]
+            {
+                let item = collector
+                    .filter(|x| x.get_tp() == "system" && x.get_name() == "sysctl")
+                    .unwrap();
+                assert_ne!(item.count(), 0);
+            }
+            // at least contains the unit test process
+            let processes = collector.iter().find(|x| x.get_tp() == "process").unwrap();
+            assert_ne!(processes.get_pairs().len(), 0);
+        }
     }
 }
 
@@ -163,15 +308,14 @@ mod log {
                     Ok((file_start_time, file_end_time)) => (file_start_time, file_end_time),
                     Err(_) => continue,
                 };
-                if (begin_time <= file_start_time && end_time >= file_start_time)
-                    || (end_time >= file_end_time && begin_time <= file_end_time)
-                {
-                    if let Err(err) = file.seek(SeekFrom::Start(0)) {
-                        warn!("seek file failed: {}, err: {}", file_name, err);
-                        continue;
-                    }
-                    search_files.push((file_start_time, file));
+                if begin_time > file_end_time || end_time < file_start_time {
+                    continue;
                 }
+                if let Err(err) = file.seek(SeekFrom::Start(0)) {
+                    warn!("seek file failed: {}, err: {}", file_name, err);
+                    continue;
+                }
+                search_files.push((file_start_time, file));
             }
             // Sort by start time descending
             search_files.sort_by(|a, b| b.0.cmp(&a.0));
@@ -315,8 +459,8 @@ mod log {
         Ok((file_start_time, file_end_time))
     }
 
-    pub fn search(
-        log_file: String,
+    pub fn search<P: AsRef<Path>>(
+        log_file: P,
         mut req: SearchLogRequest,
     ) -> impl Future<Item = SearchLogResponse, Error = Error> {
         let begin_time = req.get_start_time();
@@ -590,6 +734,26 @@ mod log {
                 "2019/08/23 18:10:01.387 +08:00",
                 "2019/08/23 18:10:02.387 +08:00",
                 "2019/08/23 18:10:03.387 +08:00",
+            ]
+            .iter()
+            .map(|s| timestamp(s))
+            .collect::<Vec<i64>>();
+            assert_eq!(
+                log_iter.map(|m| m.get_time()).collect::<Vec<i64>>(),
+                expected
+            );
+            let log_iter = LogIterator::new(
+                &log_file,
+                timestamp("2019/08/23 18:09:56.387 +08:00"),
+                timestamp("2019/08/23 18:09:58.387 +08:00"),
+                0,
+                vec![],
+            )
+            .unwrap();
+            let expected = vec![
+                "2019/08/23 18:09:56.387 +08:00",
+                "2019/08/23 18:09:57.387 +08:00",
+                "2019/08/23 18:09:58.387 +08:00",
             ]
             .iter()
             .map(|s| timestamp(s))
