@@ -316,6 +316,10 @@ impl Snapshot for RocksSnapshot {
         let iter = self.db_iterator_cf(cf, iter_opt)?;
         Ok(Cursor::new(iter, mode))
     }
+
+    fn region_id(&self) -> u64 {
+        0
+    }
 }
 
 impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {

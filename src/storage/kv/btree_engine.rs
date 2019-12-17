@@ -241,6 +241,10 @@ impl Snapshot for BTreeEngineSnapshot {
             mode,
         ))
     }
+
+    fn region_id(&self) -> u64 {
+        0
+    }
 }
 
 #[derive(Debug, Clone)]

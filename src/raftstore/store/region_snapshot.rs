@@ -21,7 +21,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 #[derive(Debug)]
 pub struct RegionSnapshot {
     snap: SyncSnapshot,
-    region: Arc<Region>,
+    pub region: Arc<Region>,
 }
 
 impl RegionSnapshot {

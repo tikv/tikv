@@ -415,6 +415,10 @@ impl Snapshot for RegionSnapshot {
     fn upper_bound(&self) -> Option<&[u8]> {
         Some(self.get_end_key())
     }
+
+    fn region_id(&self) -> u64 {
+        self.region.get_id()
+    }
 }
 
 impl EngineIterator for RegionIterator {

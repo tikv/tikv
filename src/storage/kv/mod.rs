@@ -131,6 +131,8 @@ pub trait Snapshot: Send + Clone {
     fn upper_bound(&self) -> Option<&[u8]> {
         None
     }
+
+    fn region_id(&self) -> u64;
 }
 
 pub trait Iterator: Send {

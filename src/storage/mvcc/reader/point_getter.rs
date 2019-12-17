@@ -132,6 +132,11 @@ impl<S: Snapshot> PointGetter<S> {
         if !self.multi {
             // Protect from calling `get()` multiple times when `multi == false`.
             if self.drained {
+                error!(
+                    "[test] PointGetter::load_data returns None because of drained";
+                    "region_id" => self.snapshot.region_id(),
+                    "start_ts" => self.ts,
+                );
                 return Ok(None);
             } else {
                 self.drained = true;
@@ -174,6 +179,11 @@ impl<S: Snapshot> PointGetter<S> {
     /// from Default CF if necessary.
     fn load_data(&mut self, user_key: &Key) -> Result<Option<Value>> {
         if !self.write_cursor_valid {
+            error!(
+                "[test] PointGetter::load_data returns None because of write_cursor";
+                "region_id" => self.snapshot.region_id(),
+                "start_ts" => self.ts,
+            );
             return Ok(None);
         }
 
@@ -190,18 +200,33 @@ impl<S: Snapshot> PointGetter<S> {
             // So in all scenarios we should not provide results in future calls when we enter this
             // branch.
             self.write_cursor_valid = false;
+            error!(
+                "[test] PointGetter::load_data returns None because of near_seek";
+                "region_id" => self.snapshot.region_id(),
+                "start_ts" => self.ts,
+            );
             return Ok(None);
         }
 
         loop {
             if !self.write_cursor.valid()? {
                 // Key space ended.
+                error!(
+                    "[test] PointGetter::load_data returns None because of write_cursor::valid";
+                    "region_id" => self.snapshot.region_id(),
+                    "start_ts" => self.ts,
+                );
                 return Ok(None);
             }
             // We may seek to another key. In this case, it means we cannot find the specified key.
             {
                 let cursor_key = self.write_cursor.key(&mut self.statistics.write);
                 if !Key::is_user_key_eq(cursor_key, user_key.as_encoded().as_slice()) {
+                    error!(
+                        "[test] PointGetter::load_data returns None because of is_user_key_eq";
+                        "region_id" => self.snapshot.region_id(),
+                        "start_ts" => self.ts,
+                    );
                     return Ok(None);
                 }
             }
@@ -214,6 +239,11 @@ impl<S: Snapshot> PointGetter<S> {
                     return Ok(Some(self.load_data_by_write(write, user_key)?));
                 }
                 WriteType::Delete => {
+                    error!(
+                        "[test] PointGetter::load_data returns None because of WriteType::Delete";
+                        "region_id" => self.snapshot.region_id(),
+                        "start_ts" => self.ts,
+                    );
                     return Ok(None);
                 }
                 WriteType::Lock | WriteType::Rollback => {

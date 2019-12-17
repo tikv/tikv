@@ -99,11 +99,11 @@ impl<E: Engine> Endpoint<E> {
             REQ_TYPE_DAG => {
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut is));
-                info!(
-                    "[test] dag request is received";
-                    "start_ts" => dag.get_start_ts(),
-                    "region_id" => context.get_region_id(),
-                );
+                // info!(
+                //     "[test] dag request is received";
+                //     "start_ts" => dag.get_start_ts(),
+                //     "region_id" => context.get_region_id(),
+                // );
                 let mut table_scan = false;
                 let mut is_desc_scan = false;
                 if let Some(scan) = dag.get_executors().iter().next() {
@@ -257,19 +257,19 @@ impl<E: Engine> Endpoint<E> {
 
                 tracker.on_finish_all_items();
 
-                let start_ts = tracker.req_ctx.txn_start_ts.unwrap();
-                let region_id = tracker.req_ctx.context.get_region_id();
+                // let start_ts = tracker.req_ctx.txn_start_ts.unwrap();
+                // let region_id = tracker.req_ctx.context.get_region_id();
 
                 future::result(result)
                     .or_else(|e| Ok::<_, Error>(make_error_response(e)))
                     .map(move |mut resp| {
-                        let resp_data = resp.write_to_bytes().unwrap();
-                        info!(
-                            "[test] cop response";
-                            "start_ts" => start_ts,
-                            "region_id" => region_id,
-                            "resp" => hex::encode(resp_data),
-                        );
+                        // let resp_data = resp.write_to_bytes().unwrap();
+                        // info!(
+                        //     "[test] cop response";
+                        //     "start_ts" => start_ts,
+                        //     "region_id" => region_id,
+                        //     "resp" => hex::encode(resp_data),
+                        // );
                         COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
                         resp.set_exec_details(exec_details);
                         resp
@@ -389,13 +389,13 @@ impl<E: Engine> Endpoint<E> {
                                 }
                                 Ok((Some(resp), finished)) => (resp, finished),
                             };
-                            let resp_data = resp.write_to_bytes().unwrap();
-                            info!(
-                                "[test] cop response";
-                                "start_ts" => tracker.req_ctx.txn_start_ts.unwrap(),
-                                "region_id" => tracker.req_ctx.context.get_region_id(),
-                                "resp" => hex::encode(resp_data),
-                            );
+                            // let resp_data = resp.write_to_bytes().unwrap();
+                            // info!(
+                            //     "[test] cop response";
+                            //     "start_ts" => tracker.req_ctx.txn_start_ts.unwrap(),
+                            //     "region_id" => tracker.req_ctx.context.get_region_id(),
+                            //     "resp" => hex::encode(resp_data),
+                            // );
                             COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
                             resp.set_exec_details(exec_details);
 
