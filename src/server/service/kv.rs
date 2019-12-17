@@ -2005,26 +2005,14 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                     batch_commands_response::response::Cmd::BatchRollback
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc());
-            response_batch_commands_request(
-                id,
-                resp,
-                tx,
-                instant,
-                GrpcTypeKind::kv_batch_rollback,
-            );
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_batch_rollback);
         }
         Some(batch_commands_request::request::Cmd::TxnHeartBeat(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_txn_heart_beat(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::TxnHeartBeat))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_txn_heart_beat.inc());
-            response_batch_commands_request(
-                id,
-                resp,
-                tx,
-                instant,
-                GrpcTypeKind::kv_txn_heart_beat,
-            );
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_txn_heart_beat);
         }
         Some(batch_commands_request::request::Cmd::CheckTxnStatus(req)) => {
             let instant = TiInstant::now_coarse();
