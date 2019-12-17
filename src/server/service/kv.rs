@@ -20,8 +20,10 @@ use crate::storage::mvcc::{
     Error as MvccError, ErrorInner as MvccErrorInner, LockType, TimeStamp, Write as MvccWrite,
     WriteType,
 };
-use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use crate::storage::{self, Engine, Mutation, Options, PointGetCommand, Storage, TxnStatus};
+use crate::storage::txn::{
+    Error as TxnError, ErrorInner as TxnErrorInner, Options, PointGetCommand,
+};
+use crate::storage::{self, Engine, Storage, TxnStatus};
 use crate::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
@@ -29,7 +31,6 @@ use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use keys::{self, Key, Value};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::{self, *};
@@ -44,6 +45,7 @@ use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
+use txn_types::{self, Key, Mutation, Value};
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
@@ -2777,7 +2779,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
     key_error
 }
 
-fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<keys::KvPair>>>) -> Vec<KvPair> {
+fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<txn_types::KvPair>>>) -> Vec<KvPair> {
     match res {
         Ok(res) => res
             .into_iter()

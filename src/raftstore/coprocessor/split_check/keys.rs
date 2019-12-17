@@ -222,7 +222,6 @@ mod tests {
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::DB;
     use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
-    use keys::Key;
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;
@@ -230,6 +229,7 @@ mod tests {
     use std::u64;
     use tempfile::Builder;
     use tikv_util::worker::Runnable;
+    use txn_types::Key;
 
     use super::*;
 
