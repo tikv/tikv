@@ -6,6 +6,7 @@
 //! made up of many other configuration types.
 
 use std::cmp::{self, Ord, Ordering};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -1743,29 +1744,104 @@ pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) ->
 
 type CfgResult<T> = Result<T, Box<dyn Error>>;
 
+pub trait ConfigManager: Send {
+    fn dispatch(&mut self, _: ConfigChange) -> Result<(), Box<dyn Error>>;
+}
+
+#[derive(PartialEq, Eq, Hash)]
+pub enum Module {
+    Readpool,
+    Server,
+    Metric,
+    Raftstore,
+    Coprocessor,
+    Pd,
+    Rocksdb,
+    Raftdb,
+    Storage,
+    Security,
+    Import,
+    PessimisticTxn,
+    Gc,
+    Unknown(String),
+}
+
+impl From<&str> for Module {
+    fn from(m: &str) -> Module {
+        match m {
+            "readpool" => Module::Readpool,
+            "server" => Module::Server,
+            "metric" => Module::Metric,
+            "raft_store" => Module::Raftstore,
+            "coprocessor" => Module::Coprocessor,
+            "pd" => Module::Pd,
+            "rocksdb" => Module::Rocksdb,
+            "raftdb" => Module::Raftdb,
+            "storage" => Module::Storage,
+            "security" => Module::Security,
+            "import" => Module::Import,
+            "pessimistic_txn" => Module::PessimisticTxn,
+            "gc" => Module::Gc,
+            name => Module::Unknown(name.to_owned()),
+        }
+    }
+}
+
 /// ConfigController use to register each module's config manager,
 /// and dispatch the change of config to corresponding managers or
 /// return the change if the incoming change is invalid.
 #[derive(Default)]
 pub struct ConfigController {
     current: TiKvConfig,
+    config_mgrs: HashMap<Module, Box<dyn ConfigManager>>,
 }
 
 impl ConfigController {
-    pub fn new(cfg: TiKvConfig) -> Self {
-        ConfigController { current: cfg }
+    pub fn new(current: TiKvConfig) -> Self {
+        ConfigController {
+            current,
+            config_mgrs: HashMap::new(),
+        }
     }
 
-    fn update_or_rollback(&mut self, mut incoming: TiKvConfig) -> Option<ConfigChange> {
+    fn update_or_rollback(&mut self, mut incoming: TiKvConfig) -> CfgResult<Option<ConfigChange>> {
         if incoming.validate().is_err() {
-            return Some(incoming.diff(&self.current));
+            return Ok(Some(incoming.diff(&self.current)));
         }
         let diff = self.current.diff(&incoming);
-        if !diff.is_empty() {
-            // TODO: dispatch change to each module
-            self.current.update(diff);
+        if diff.is_empty() {
+            return Ok(None);
         }
-        None
+        let mut to_update = HashMap::with_capacity(diff.len());
+        for (name, change) in diff.into_iter() {
+            match change {
+                ConfigValue::Module(change) => {
+                    // update a submodule's config only if changes had been sucessfully
+                    // dispatched to corresponding config manager, to avoid double dispatch change
+                    if let Some(mgr) = self.config_mgrs.get_mut(&Module::from(name.as_str())) {
+                        if let Err(e) = mgr.dispatch(change.clone()) {
+                            self.current.update(to_update);
+                            return Err(e);
+                        }
+                    }
+                    to_update.insert(name, ConfigValue::Module(change));
+                }
+                _ => {
+                    let _ = to_update.insert(name, change);
+                }
+            }
+        }
+        self.current.update(to_update);
+        Ok(None)
+    }
+
+    pub fn register(&mut self, module: &str, cfg_mgr: Box<dyn ConfigManager>) {
+        match Module::from(module) {
+            Module::Unknown(name) => warn!("tried to register unknown module: {}", name),
+            m => {
+                let _ = self.config_mgrs.insert(m, cfg_mgr);
+            }
+        }
     }
 
     pub fn get_current(&self) -> &TiKvConfig {
@@ -1827,7 +1903,7 @@ impl ConfigHandler {
         let version = configpb::Version::default();
         let mut resp = pd_client.register_config(id, version, cfg)?;
         match resp.get_status().get_code() {
-            StatusCode::Ok => {
+            StatusCode::Ok || StatusCode::WrongVersion => {
                 let cfg: TiKvConfig = toml::from_str(resp.get_config())?;
                 Ok((resp.take_version(), cfg))
             }
@@ -1847,16 +1923,19 @@ impl ConfigHandler {
             StatusCode::NotChange => Ok(()),
             StatusCode::WrongVersion if cmp_version(&self.version, &version) == Ordering::Less => {
                 let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
-                if let Some(rollback_change) = self.config_controller.update_or_rollback(incoming) {
-                    debug!(
-                        "tried to update local config to an invalid config";
-                        "version" => ?resp.version
-                    );
-                    let entries = to_config_entry(rollback_change)?;
-                    self.update_config(version, entries, pd_client)?;
-                } else {
-                    info!("local config updated"; "version" => ?resp.version);
-                    self.version = version;
+                match self.config_controller.update_or_rollback(incoming)? {
+                    Some(rollback_change) => {
+                        debug!(
+                            "tried to update local config to an invalid config";
+                            "version" => ?resp.version
+                        );
+                        let entries = to_config_entry(rollback_change)?;
+                        self.update_config(version, entries, pd_client)?;
+                    }
+                    None => {
+                        info!("local config updated"; "version" => ?resp.version);
+                        self.version = version;
+                    }
                 }
                 Ok(())
             }

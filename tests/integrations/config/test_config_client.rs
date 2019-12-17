@@ -6,9 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use kvproto::configpb::*;
 
+use configuration::{ConfigChange, Configuration};
 use pd_client::errors::Result;
 use pd_client::PdClient;
 use tikv::config::*;
+use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::FutureWorker;
 
@@ -253,4 +255,55 @@ fn test_compatible_config() {
     let mut new_cfg = validated_cfg();
     new_cfg.raft_store.store_max_batch_size = 2048;
     assert_eq!(cfg_handler.get_config(), &new_cfg);
+}
+
+#[test]
+fn test_dispatch_change() {
+    use std::error::Error;
+    use std::result::Result;
+
+    #[derive(Clone)]
+    struct CfgManager(Arc<Mutex<RaftstoreConfig>>);
+
+    impl ConfigManager for CfgManager {
+        fn dispatch(&mut self, c: ConfigChange) -> Result<(), Box<dyn Error>> {
+            self.0.lock().unwrap().update(c);
+            Ok(())
+        }
+    }
+
+    let pd_client = Arc::new(MockPdClient::new());
+    let id = "localhost:1080";
+    let cfg = validated_cfg();
+    let mgr = CfgManager(Arc::new(Mutex::new(Default::default())));
+
+    // register config and raftstore config manager
+    let mut cfg_handler = {
+        let (version, cfg) = ConfigHandler::create(id.to_owned(), pd_client.clone(), cfg).unwrap();
+        *mgr.0.lock().unwrap() = cfg.raft_store.clone();
+        let mut controller = ConfigController::new(cfg);
+        controller.register("raft_store", Box::new(mgr.clone()));
+        ConfigHandler::start(
+            id.to_owned(),
+            controller,
+            version,
+            FutureWorker::new("test-pd-worker").scheduler(),
+        )
+        .unwrap()
+    };
+
+    pd_client.update_cfg(id, |cfg| {
+        cfg.raft_store.store_max_batch_size = 2000;
+    });
+
+    // refresh local config
+    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+
+    // config update
+    assert_eq!(
+        cfg_handler.get_config().raft_store.store_max_batch_size,
+        2000
+    );
+    // config change should also dispatch to raftstore config manager
+    assert_eq!(mgr.0.lock().unwrap().store_max_batch_size, 2000);
 }
