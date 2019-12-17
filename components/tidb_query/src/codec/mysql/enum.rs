@@ -2,7 +2,7 @@
 
 use crate::codec::Result;
 
-use codec::prelude::{NumberDecoder, NumberEncoder};
+// use codec::prelude::{NumberDecoder, NumberEncoder};
 use std::string::ToString;
 
 #[derive(Debug, Clone)]
