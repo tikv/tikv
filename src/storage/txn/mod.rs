@@ -2,23 +2,42 @@
 
 //! Storage Transactions
 
-mod latch;
-mod process;
+pub mod commands;
 pub mod sched_pool;
 pub mod scheduler;
+
+mod latch;
+mod process;
 mod store;
 
+use crate::storage::{
+    types::{MvccInfo, TxnStatus},
+    Error as StorageError, Result as StorageResult,
+};
+use kvproto::kvrpcpb::LockInfo;
 use std::error;
 use std::fmt;
 use std::io::Error as IoError;
+use txn_types::{Key, TimeStamp};
 
-use crate::storage::mvcc::TimeStamp;
-
+pub use self::commands::{Command, CommandKind, Options, PointGetCommand};
 pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
 pub use self::scheduler::{Msg, Scheduler};
 pub use self::store::{EntryBatch, TxnEntry, TxnEntryScanner, TxnEntryStore};
 pub use self::store::{FixtureStore, FixtureStoreScanner};
 pub use self::store::{Scanner, SnapshotStore, Store};
+
+/// Process result of a command.
+pub enum ProcessResult {
+    Res,
+    MultiRes { results: Vec<StorageResult<()>> },
+    MvccKey { mvcc: MvccInfo },
+    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
+    Locks { locks: Vec<LockInfo> },
+    TxnStatus { txn_status: TxnStatus },
+    NextCommand { cmd: Command },
+    Failed { err: StorageError },
+}
 
 quick_error! {
     #[derive(Debug)]

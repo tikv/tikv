@@ -9,19 +9,22 @@ use futures::future;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use txn_types::{Key, Value};
 
-use crate::storage::kv::with_tls_engine;
-use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
+use crate::storage::kv::{
+    with_tls_engine, CbContext, Engine, Modify, Result as EngineResult, ScanMode, Snapshot,
+    Statistics,
+};
 use crate::storage::lock_manager::{self, Lock, LockManager};
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
     MvccReader, MvccTxn, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
-use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, ErrorInner, Result};
-use crate::storage::types::ProcessResult;
+use crate::storage::txn::{
+    sched_pool::*, scheduler::Msg, Command, CommandKind, Error, ErrorInner, ProcessResult, Result,
+};
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
-    Command, CommandKind, Engine, Error as StorageError, ErrorInner as StorageErrorInner, MvccInfo,
-    Result as StorageResult, ScanMode, Snapshot, Statistics, TxnStatus,
+    types::{MvccInfo, TxnStatus},
+    Error as StorageError, ErrorInner as StorageErrorInner, Result as StorageResult,
 };
 use engine::CF_WRITE;
 use tikv_util::collections::HashMap;
