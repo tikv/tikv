@@ -1052,7 +1052,7 @@ dependencies = [
  "tokio-reactor 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-tcp 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-threadpool 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-timer 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-timer 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "want 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2771,7 +2771,7 @@ dependencies = [
  "tikv 3.0.7",
  "tikv_util 0.1.0",
  "tokio-threadpool 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-timer 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-timer 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2899,7 +2899,7 @@ dependencies = [
  "tokio-core 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-executor 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-threadpool 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-timer 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-timer 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "toml 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "twoway 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "url 1.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2961,7 +2961,7 @@ dependencies = [
  "tokio-core 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-executor 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-threadpool 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-timer 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-timer 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "toml 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "url 1.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "utime 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3021,7 +3021,7 @@ dependencies = [
  "tokio-reactor 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-tcp 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-threadpool 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-timer 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-timer 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-udp 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-uds 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -3061,7 +3061,7 @@ dependencies = [
  "tokio-executor 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-io 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-reactor 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-timer 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-timer 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -3150,7 +3150,7 @@ dependencies = [
 
 [[package]]
 name = "tokio-timer"
-version = "0.2.8"
+version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "crossbeam-utils 0.6.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3779,7 +3779,7 @@ dependencies = [
 "checksum tokio-reactor 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "502b625acb4ee13cbb3b90b8ca80e0addd263ddacf6931666ef751e610b07fb5"
 "checksum tokio-tcp 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7ad235e9dadd126b2d47f6736f65aa1fdcd6420e66ca63f44177bc78df89f912"
 "checksum tokio-threadpool 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)" = "ec5759cf26cf9659555f36c431b515e3d05f66831741c85b4b5d5dfb9cf1323c"
-"checksum tokio-timer 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)" = "4f37f0111d76cc5da132fe9bc0590b9b9cfd079bc7e75ac3846278430a299ff8"
+"checksum tokio-timer 0.2.12 (registry+https://github.com/rust-lang/crates.io-index)" = "1739638e364e558128461fc1ad84d997702c8e31c2e6b18fb99842268199e827"
 "checksum tokio-udp 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "137bda266504893ac4774e0ec4c2108f7ccdbcb7ac8dced6305fe9e4e0b5041a"
 "checksum tokio-uds 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)" = "99ce87382f6c1a24b513a72c048b2c8efe66cb5161c9061d00bee510f08dc168"
 "checksum toml 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)" = "8f84e29784a306d290f4468689f7fa250870f33118fdec09fa818998c6288625"
