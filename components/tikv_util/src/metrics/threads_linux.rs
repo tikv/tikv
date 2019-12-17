@@ -122,9 +122,9 @@ impl Collector for ThreadsCollector {
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                     .unwrap();
                 let past = cpu_total.get();
-                if let OK(cpu_count) = pid::cpu_count() {
-                    let delta = (total.sub(past)).clamp(0.0, cpu_count * 100);
-                    cpu_total.inc_by(delta);
+                if let OK(cpus) = pid::cpu_count() {
+                    let total = total.clamp(0.0, cpus * 100.0);
+                    cpu_total.inc_by(total.sub(past));
                 }
 
                 // Threads states.
