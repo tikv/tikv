@@ -879,14 +879,14 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
 }
 
 #[derive(Default)]
-pub struct VersionTracke<T> {
+pub struct VersionTrack<T> {
     value: RwLock<T>,
     version: AtomicU64,
 }
 
-impl<T> VersionTracke<T> {
+impl<T> VersionTrack<T> {
     pub fn new(value: T) -> Self {
-        VersionTracke {
+        VersionTrack {
             value: RwLock::new(value),
             version: AtomicU64::new(1),
         }
@@ -915,7 +915,7 @@ impl<T> VersionTracke<T> {
 
 #[derive(Clone, Default)]
 pub struct Tracker<T> {
-    inner: Arc<VersionTracke<T>>,
+    inner: Arc<VersionTrack<T>>,
     version: u64,
 }
 
@@ -1255,7 +1255,7 @@ mod tests {
         }
 
         let count = 10;
-        let vc = Arc::new(VersionTracke::new(Value::default()));
+        let vc = Arc::new(VersionTrack::new(Value::default()));
         let mut trackers = Vec::with_capacity(count);
         for _ in 0..count {
             trackers.push(vc.clone().tracker());

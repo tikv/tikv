@@ -61,6 +61,7 @@ use engine::{Iterable, Mutable, Peekable};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
 use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::timer::SteadyTimer;
@@ -191,7 +192,7 @@ impl RaftRouter {
 }
 
 pub struct PollContext<T, C: 'static> {
-    pub cfg: Arc<Config>,
+    pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
@@ -460,6 +461,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     poll_ctx: PollContext<T, C>,
     pending_proposals: Vec<RegionProposal>,
     messages_per_tick: usize,
+    cfg_tracker: Tracker<Config>,
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
@@ -574,6 +576,16 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             self.pending_proposals = Vec::with_capacity(batch_size);
         }
         self.timer = SlowTimer::new();
+        // update config
+        if let Some(incoming) = self.cfg_tracker.any_new() {
+            if self.poll_ctx.cfg.messages_per_tick != incoming.messages_per_tick {
+                self.store_msg_buf = Vec::with_capacity(incoming.messages_per_tick);
+                self.peer_msg_buf = Vec::with_capacity(incoming.messages_per_tick);
+                self.messages_per_tick = incoming.messages_per_tick;
+            }
+            self.poll_ctx.cfg = incoming.clone();
+            info!("raftstore config updated!")
+        }
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm) -> Option<usize> {
@@ -679,7 +691,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
 }
 
 pub struct RaftPollerBuilder<T, C> {
-    pub cfg: Arc<Config>,
+    pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
@@ -755,7 +767,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
             let (tx, mut peer) = box_try!(PeerFsm::create(
                 store_id,
-                &self.cfg,
+                &self.cfg.value(),
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 region,
@@ -792,7 +804,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             info!("region is applying snapshot"; "region" => ?region, "store_id" => store_id);
             let (tx, mut peer) = PeerFsm::create(
                 store_id,
-                &self.cfg,
+                &self.cfg.value(),
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 &region,
@@ -876,7 +888,7 @@ where
 
     fn build(&mut self) -> RaftPoller<T, C> {
         let ctx = PollContext {
-            cfg: self.cfg.clone(),
+            cfg: self.cfg.value().clone(),
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
@@ -918,6 +930,7 @@ where
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             pending_proposals: Vec::new(),
+            cfg_tracker: self.cfg.clone().tracker(),
         }
     }
 }
@@ -959,7 +972,7 @@ impl RaftBatchSystem {
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
-        cfg_controller: ConfigController,
+        mut cfg_controller: ConfigController,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -983,8 +996,10 @@ impl RaftBatchSystem {
                 .pool_size(cfg.future_poll_size)
                 .build(),
         };
+        let cfg = Arc::new(VersionTrack::new(cfg));
+        cfg_controller.register("raft_store", Box::new(cfg.clone()));
         let mut builder = RaftPollerBuilder {
-            cfg: Arc::new(cfg),
+            cfg,
             store: meta,
             engines,
             router: self.router.clone(),
@@ -1022,6 +1037,7 @@ impl RaftBatchSystem {
         let engines = builder.engines.clone();
         let snap_mgr = builder.snap_mgr.clone();
         let cfg = builder.cfg.clone();
+        let cfg = cfg.value();
         let store = builder.store.clone();
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
