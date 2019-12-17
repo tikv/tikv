@@ -284,7 +284,7 @@
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
 ## crosses tables.
 ## It is recommended to turn off this option if there will be a large number of tables created.
-# split-region-on-table = true
+# split-region-on-table = false
 
 ## One split check produces several split keys in batch. This config limits the number of produced
 ## split keys in one batch.
