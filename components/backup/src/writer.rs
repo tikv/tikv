@@ -13,6 +13,7 @@ use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
 use tikv_util::{self, box_err};
+use txn_types::KvPair;
 
 use crate::metrics::*;
 use crate::{Error, Result};
@@ -53,6 +54,14 @@ impl Writer {
                 .map_err(|err| Error::Other(box_err!("Decode error: {:?}", err)))?;
             self.total_bytes += (k.len() + v.len()) as u64;
             self.checksum = checksum_crc64_xor(self.checksum, self.digest.clone(), &k, &v);
+        }
+        Ok(())
+    }
+    fn update_raw_with(&mut self, key: &[u8], value: &[u8], need_checksum: bool) -> Result<()> {
+        self.total_kvs += 1;
+        if need_checksum {
+            self.total_bytes += (key.to_vec().len() + value.to_vec().len()) as u64;
+            self.checksum = checksum_crc64_xor(self.checksum, self.digest.clone(), key, value);
         }
         Ok(())
     }
@@ -185,6 +194,76 @@ impl BackupWriter {
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["save"])
+            .observe(start.elapsed().as_secs_f64());
+        Ok(files)
+    }
+}
+
+/// A writer writes Raw kv into SST files.
+pub struct BackupRawKVWriter {
+    name: String,
+    cf: String,
+    write: Writer,
+    limiter: Option<Arc<RocksIOLimiter>>,
+}
+
+impl BackupRawKVWriter {
+    /// Create a new BackupRawKVWriter.
+    pub fn new(
+        db: Arc<DB>,
+        name: &str,
+        cf: &str,
+        limiter: Option<Arc<RocksIOLimiter>>,
+    ) -> Result<BackupRawKVWriter> {
+        let write = RocksSstWriterBuilder::new()
+            .set_in_memory(true)
+            .set_cf(super::endpoint::rawkv_cf(cf)?)
+            .set_db(RocksEngine::from_ref(&db))
+            .build(name)?;
+        Ok(BackupRawKVWriter {
+            name: name.to_owned(),
+            cf: cf.to_owned(),
+            write: Writer::new(write),
+            limiter,
+        })
+    }
+
+    /// Write Kv_pair to buffered SST files.
+    pub fn write(&mut self, kv_pairs: &[Result<KvPair>], need_checksum: bool) -> Result<()> {
+        for kv_pair in kv_pairs {
+            let (k, v) = match kv_pair {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("write raw kv"; "error" => ?e);
+                    return Err(Error::Other("occur an error when written raw kv".into()));
+                }
+            };
+            assert!(!k.is_empty());
+            self.write.write(&k, &v)?;
+            self.write.update_raw_with(&k, &v, need_checksum);
+        }
+        Ok(())
+    }
+
+    /// Save buffered SST files to the given external storage.
+    pub fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
+        let start = Instant::now();
+        let mut files = Vec::with_capacity(2);
+        let mut buf = Vec::new();
+        if !self.write.is_empty() {
+            // Save default cf contents.
+            let file = self.write.save_and_build_file(
+                &self.name,
+                super::endpoint::rawkv_cf(&self.cf)?,
+                &mut buf,
+                self.limiter.clone(),
+                storage,
+            )?;
+            files.push(file);
+            buf.clear();
+        }
+        BACKUP_RANGE_HISTOGRAM_VEC
+            .with_label_values(&["save_raw"])
             .observe(start.elapsed().as_secs_f64());
         Ok(files)
     }
