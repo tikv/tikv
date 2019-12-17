@@ -118,7 +118,7 @@ impl PendingDeleteRanges {
         &self,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
+    ) -> Vec<(u64, Vec<u8>, Vec<u8>, u64)> {
         let mut ranges = Vec::new();
         // find the first range that may overlap with [start_key, end_key)
         let sub_range = self.ranges.range((Unbounded, Excluded(start_key.to_vec())));
@@ -128,6 +128,7 @@ impl PendingDeleteRanges {
                     peer_info.region_id,
                     s_key.clone(),
                     peer_info.end_key.clone(),
+                    peer_info.stale_sequence,
                 ));
             }
         }
@@ -141,6 +142,7 @@ impl PendingDeleteRanges {
                 peer_info.region_id,
                 s_key.clone(),
                 peer_info.end_key.clone(),
+                peer_info.stale_sequence,
             ));
         }
         ranges
@@ -151,10 +153,10 @@ impl PendingDeleteRanges {
         &mut self,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Vec<(u64, Vec<u8>, Vec<u8>)> {
+    ) -> Vec<(u64, Vec<u8>, Vec<u8>, u64)> {
         let ranges = self.find_overlap_ranges(start_key, end_key);
 
-        for &(_, ref s_key, _) in &ranges {
+        for &(_, ref s_key, _, _) in &ranges {
             self.ranges.remove(s_key).unwrap();
         }
         ranges
@@ -387,17 +389,26 @@ impl SnapContext {
     }
 
     /// Cleans up the data within the range.
-    fn cleanup_range(&self, region_id: u64, start_key: &[u8], end_key: &[u8]) {
-        if let Err(e) = engine_util::delete_all_files_in_range(&self.engines.kv, start_key, end_key)
-        {
-            error!(
-                "failed to delete files in range";
-                "region_id" => region_id,
-                "start_key" => log_wrappers::Key(start_key),
-                "end_key" => log_wrappers::Key(end_key),
-                "err" => %e,
-            );
-            return;
+    fn cleanup_range(
+        &self,
+        region_id: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        use_delete_files: bool,
+    ) {
+        if use_delete_files {
+            if let Err(e) =
+                engine_util::delete_all_files_in_range(&self.engines.kv, start_key, end_key)
+            {
+                error!(
+                    "failed to delete files in range";
+                    "region_id" => region_id,
+                    "start_key" => log_wrappers::Key(start_key),
+                    "end_key" => log_wrappers::Key(end_key),
+                    "err" => %e,
+                );
+                return;
+            }
         }
         if let Err(e) = engine_util::delete_all_in_range(
             &self.engines.kv,
@@ -427,8 +438,21 @@ impl SnapContext {
         let overlap_ranges = self
             .pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
-        for (region_id, s_key, e_key) in overlap_ranges {
-            self.cleanup_range(region_id, &s_key, &e_key);
+        let oldest_sequence = if !overlap_ranges.is_empty() {
+            self.engines.kv.get_oldest_snapshot_sequence_number()
+        } else {
+            0
+        };
+        for (region_id, s_key, e_key, stale_sequence) in overlap_ranges {
+            // `delete_files_in_range` may break current rocksdb snapshots consistency,
+            // so do not use it unless we can make sure there is no reader of the destroyed peer anymore.
+            let use_delete_files = stale_sequence > oldest_sequence;
+            if use_delete_files {
+                SNAP_COUNTER_VEC
+                    .with_label_values(&["overlap", "not_timeout"])
+                    .inc();
+            }
+            self.cleanup_range(region_id, &s_key, &e_key, use_delete_files);
         }
     }
 
@@ -455,14 +479,16 @@ impl SnapContext {
     fn clean_timeout_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
-        let stale_sequence = self.engines.kv.get_oldest_snapshot_sequence_number();
+        let oldest_sequence = self.engines.kv.get_oldest_snapshot_sequence_number();
         let mut cleaned_range_keys = vec![];
         {
             let now = Instant::now();
             for (region_id, start_key, end_key) in
-                self.pending_delete_ranges.timeout_ranges(stale_sequence)
+                self.pending_delete_ranges.timeout_ranges(oldest_sequence)
             {
-                self.cleanup_range(region_id, start_key, end_key);
+                self.cleanup_range(
+                    region_id, start_key, end_key, true, /* use_delete_files */
+                );
                 cleaned_range_keys.push(start_key.to_vec());
                 let elapsed = now.elapsed();
                 if elapsed >= CLEANUP_MAX_DURATION {
