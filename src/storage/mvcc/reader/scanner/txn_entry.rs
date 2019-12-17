@@ -5,14 +5,12 @@
 use std::cmp::Ordering;
 
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, TimeStamp, Write, WriteRef, WriteType};
-
-use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::{Error, Result};
-use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
-use crate::storage::{Cursor, Lock, Snapshot, Statistics};
+use txn_types::{Key, Lock, TimeStamp, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
+use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
+use crate::storage::mvcc::{Error, Result};
+use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 
 /// A dedicate scanner that outputs content in each CF.
 ///
@@ -366,8 +364,8 @@ impl<S: Snapshot> Scanner<S> {
 mod tests {
     use super::super::ScannerBuilder;
     use super::*;
+    use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
-    use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 
