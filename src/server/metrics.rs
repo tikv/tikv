@@ -2,6 +2,7 @@
 
 use prometheus::*;
 use prometheus_static_metric::*;
+use tikv_util::metrics::TLSMetricGroup;
 
 use prometheus::exponential_buckets;
 
@@ -50,7 +51,11 @@ make_static_metric! {
         unsafe_destroy_range,
     }
 
-    pub struct GrpcMsgHistogramVec: Histogram {
+    pub struct GrpcMsgHistogramVecLocal: LocalHistogram {
+        "type" => GrpcTypeKind,
+    }
+
+    pub struct GrpcMsgHistogramVecGlobal: Histogram {
         "type" => GrpcTypeKind,
     }
 
@@ -76,8 +81,7 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref GRPC_MSG_HISTOGRAM_VEC: GrpcMsgHistogramVec = register_static_histogram_vec!(
-        GrpcMsgHistogramVec,
+    pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_grpc_msg_duration_seconds",
         "Bucketed histogram of grpc server messages",
         &["type"],
@@ -295,4 +299,11 @@ lazy_static! {
         )
         .unwrap()
     };
+    pub static ref GRPC_MSG_HISTOGRAM_GLOBAL: GrpcMsgHistogramVecGlobal =
+        GrpcMsgHistogramVecGlobal::from(&GRPC_MSG_HISTOGRAM_VEC);
+}
+
+thread_local! {
+    pub static GRPC_MSG_HISTOGRAM: TLSMetricGroup<GrpcMsgHistogramVecLocal> =
+        TLSMetricGroup::new(GrpcMsgHistogramVecLocal::from(&GRPC_MSG_HISTOGRAM_VEC));
 }

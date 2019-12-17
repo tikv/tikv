@@ -40,6 +40,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::metrics::HistogramReader;
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
+use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -369,7 +370,7 @@ impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
                 BatchLimiter::new(
                     BatchableRequestKind::PointGet,
                     timeout,
-                    HistogramReader::new(GRPC_MSG_HISTOGRAM_VEC.kv_get.clone()),
+                    HistogramReader::new(GRPC_MSG_HISTOGRAM_GLOBAL.kv_get.clone()),
                     readpool_thread_load,
                 ),
                 Box::new(ReadBatcher::new()),
@@ -522,15 +523,28 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
 
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T, E, L> {
     fn kv_get(&mut self, ctx: RpcContext<'_>, req: GetRequest, sink: UnarySink<GetResponse>) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+        GRPC_MSG_HISTOGRAM.with(|m| {
+            m.kv_get.observe(duration_to_sec(instant.elapsed()));
+            m.may_flush_all();
+        });
         let future = future_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_get.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_get",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_get.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_get.inc();
             });
 
@@ -538,15 +552,24 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn kv_scan(&mut self, ctx: RpcContext<'_>, req: ScanRequest, sink: UnarySink<ScanResponse>) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
         let future = future_scan(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_scan",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_scan.inc();
             });
 
@@ -559,15 +582,24 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: PrewriteRequest,
         sink: UnarySink<PrewriteResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_prewrite.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
         let future = future_prewrite(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_prewrite.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_prewrite",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_prewrite.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc();
             });
 
@@ -580,17 +612,27 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: PessimisticLockRequest,
         sink: UnarySink<PessimisticLockResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .kv_pessimistic_lock
-            .start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_acquire_pessimistic_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_pessimistic_lock
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_pessimistic_lock",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_pessimistic_lock
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc();
             });
 
@@ -603,17 +645,28 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: PessimisticRollbackRequest,
         sink: UnarySink<PessimisticRollbackResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .kv_pessimistic_rollback
-            .start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_pessimistic_rollback(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_pessimistic_rollback
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_pessimistic_rollback",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_pessimistic_rollback
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
+
                 GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc();
             });
 
@@ -626,16 +679,26 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: CommitRequest,
         sink: UnarySink<CommitResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_commit.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let future = future_commit(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_commit.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_commit",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_commit.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
+
                 GRPC_MSG_FAIL_COUNTER.kv_commit.inc();
             });
 
@@ -652,15 +715,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: CleanupRequest,
         sink: UnarySink<CleanupResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_cleanup.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_cleanup(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_cleanup.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_cleanup",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_cleanup.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_cleanup.inc();
             });
 
@@ -673,15 +746,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: BatchGetRequest,
         sink: UnarySink<BatchGetResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_batch_get.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_batch_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_batch_get.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_batch_get",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_batch_get.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_batch_get.inc();
             });
 
@@ -694,17 +777,27 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: BatchRollbackRequest,
         sink: UnarySink<BatchRollbackResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .kv_batch_rollback
-            .start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_batch_rollback(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_batch_rollback
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_batch_rollback",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_batch_rollback
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc();
             });
 
@@ -717,17 +810,27 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: TxnHeartBeatRequest,
         sink: UnarySink<TxnHeartBeatResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .kv_txn_heart_beat
-            .start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_txn_heart_beat(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_txn_heart_beat
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_txn_heart_beat",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_txn_heart_beat
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_txn_heart_beat.inc();
             });
 
@@ -740,17 +843,27 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: CheckTxnStatusRequest,
         sink: UnarySink<CheckTxnStatusResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .kv_check_txn_status
-            .start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_check_txn_status(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_check_txn_status
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_check_txn_status",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_check_txn_status
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_check_txn_status.inc();
             });
 
@@ -763,15 +876,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: ScanLockRequest,
         sink: UnarySink<ScanLockResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_scan_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_scan_lock.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_scan_lock",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_scan_lock.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_scan_lock.inc();
             });
 
@@ -784,15 +907,27 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: ResolveLockRequest,
         sink: UnarySink<ResolveLockResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_resolve_lock.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_resolve_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_resolve_lock
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_resolve_lock",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_resolve_lock
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc();
             });
 
@@ -800,15 +935,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_gc(&self.gc_worker, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_gc.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_gc",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_gc.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_gc.inc();
             });
 
@@ -821,15 +966,27 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: DeleteRangeRequest,
         sink: UnarySink<DeleteRangeResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_delete_range.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_delete_range(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_delete_range
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "kv_delete_range",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.kv_delete_range
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.kv_delete_range.inc();
             });
 
@@ -842,15 +999,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawGetRequest,
         sink: UnarySink<RawGetResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.raw_get.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_raw_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_get.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_get",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_get.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.raw_get.inc();
             });
 
@@ -863,16 +1030,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawBatchGetRequest,
         sink: UnarySink<RawBatchGetResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_get.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let future = future_raw_batch_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_batch_get.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_batch_get",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_batch_get.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.raw_batch_get.inc();
             });
 
@@ -885,16 +1061,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawScanRequest,
         sink: UnarySink<RawScanResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let future = future_raw_scan(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_scan",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.raw_scan.inc();
             });
 
@@ -907,16 +1092,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawBatchScanRequest,
         sink: UnarySink<RawBatchScanResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_scan.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let future = future_raw_batch_scan(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_batch_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_batch_scan",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_batch_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.raw_batch_scan.inc();
             });
 
@@ -929,15 +1123,24 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawPutRequest,
         sink: UnarySink<RawPutResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.raw_put.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
         let future = future_raw_put(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_put.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_put",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_put.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.raw_put.inc();
             });
 
@@ -950,16 +1153,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawBatchPutRequest,
         sink: UnarySink<RawBatchPutResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_put.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let future = future_raw_batch_put(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_batch_put.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_batch_put",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_batch_put.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.raw_batch_put.inc();
             });
 
@@ -972,15 +1184,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawDeleteRequest,
         sink: UnarySink<RawDeleteResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_raw_delete(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_delete.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_delete",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_delete.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.raw_delete.inc();
             });
 
@@ -993,16 +1215,27 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawBatchDeleteRequest,
         sink: UnarySink<RawBatchDeleteResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_delete.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let future = future_raw_batch_delete(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_batch_delete
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_batch_delete",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_batch_delete
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.raw_batch_delete.inc();
             });
 
@@ -1015,16 +1248,27 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawDeleteRangeRequest,
         sink: UnarySink<RawDeleteRangeResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete_range.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let future = future_raw_delete_range(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_delete_range
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "raw_delete_range",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.raw_delete_range
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.raw_delete_range.inc();
             });
 
@@ -1037,9 +1281,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: UnsafeDestroyRangeRequest,
         sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .unsafe_destroy_range
-            .start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
         // MAX_KEY as end here.
@@ -1063,12 +1305,23 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 }
                 sink.success(resp).map_err(Error::from)
             })
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.unsafe_destroy_range
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "unsafe_destroy_range",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.unsafe_destroy_range
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
             });
 
@@ -1076,15 +1329,25 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
+
         let future = future_cop(&self.cop, req, Some(ctx.peer()))
             .and_then(|resp| sink.success(resp).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.coprocessor.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "coprocessor",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.coprocessor.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
             });
 
@@ -1097,9 +1360,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: Request,
         sink: ServerStreamingSink<Response>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .coprocessor_stream
-            .start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let stream = self
             .cop
@@ -1112,13 +1373,24 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             });
         let future = sink
             .send_all(stream)
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.coprocessor_stream
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(Error::from)
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "coprocessor_stream",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.coprocessor_stream
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();
             });
 
@@ -1216,7 +1488,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: MvccGetByKeyRequest,
         sink: UnarySink<MvccGetByKeyResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.mvcc_get_by_key.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let key = Key::from_raw(req.get_key());
         let (cb, f) = paired_future_callback();
@@ -1239,12 +1511,23 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 }
                 sink.success(resp).map_err(Error::from)
             })
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.mvcc_get_by_key
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "mvcc_get_by_key",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.mvcc_get_by_key
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.mvcc_get_by_key.inc();
             });
 
@@ -1257,9 +1540,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: MvccGetByStartTsRequest,
         sink: UnarySink<MvccGetByStartTsResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC
-            .mvcc_get_by_start_ts
-            .start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let (cb, f) = paired_future_callback();
         let res =
@@ -1285,12 +1566,23 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 }
                 sink.success(resp).map_err(Error::from)
             })
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.mvcc_get_by_start_ts
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "mvcc_get_by_start_ts",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.mvcc_get_by_start_ts
+                        .observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.mvcc_get_by_start_ts.inc();
             });
         ctx.spawn(future);
@@ -1302,7 +1594,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.split_region.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
@@ -1356,12 +1648,21 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 resp
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.split_region.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "split_region",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.split_region.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.split_region.inc();
             });
 
@@ -1374,7 +1675,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.read_index.start_coarse_timer();
+        let instant = TiInstant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
         let mut cmd = RaftCmdRequest::default();
@@ -1425,12 +1726,21 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 resp
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
-            .map(|_| timer.observe_duration())
+            .map(move |_| {
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.read_index.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                })
+            })
             .map_err(move |e| {
                 debug!("kv rpc failed";
                     "request" => "read_index",
                     "err" => ?e
                 );
+                GRPC_MSG_HISTOGRAM.with(|m| {
+                    m.read_index.observe(duration_to_sec(instant.elapsed()));
+                    m.may_flush_all();
+                });
                 GRPC_MSG_FAIL_COUNTER.read_index.inc();
             });
 
@@ -1632,33 +1942,33 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     match req.cmd {
         None => {
             // For some invalid requests.
-            let timer = GRPC_MSG_HISTOGRAM_VEC.invalid.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.invalid.start_coarse_timer();
             let resp = future::ok(batch_commands_response::Response::default());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::Get(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_get.start_coarse_timer();
             let resp = future_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Get))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::Scan(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_scan.start_coarse_timer();
             let resp = future_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Scan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::Prewrite(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_prewrite.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_prewrite.start_coarse_timer();
             let resp = future_prewrite(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Prewrite))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::Commit(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_commit.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_commit.start_coarse_timer();
             let resp = future_commit(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Commit))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_commit.inc());
@@ -1666,21 +1976,21 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         }
         Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
         Some(batch_commands_request::request::Cmd::Cleanup(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_cleanup.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_cleanup.start_coarse_timer();
             let resp = future_cleanup(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Cleanup))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_cleanup.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::BatchGet(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_batch_get.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_batch_get.start_coarse_timer();
             let resp = future_batch_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::BatchGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_get.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::BatchRollback(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
                 .kv_batch_rollback
                 .start_coarse_timer();
             let resp = future_batch_rollback(&storage, req)
@@ -1691,7 +2001,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::TxnHeartBeat(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
                 .kv_txn_heart_beat
                 .start_coarse_timer();
             let resp = future_txn_heart_beat(&storage, req)
@@ -1700,7 +2010,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::CheckTxnStatus(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
                 .kv_check_txn_status
                 .start_coarse_timer();
             let resp = future_check_txn_status(&storage, req)
@@ -1711,70 +2021,76 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::ScanLock(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_scan_lock.start_coarse_timer();
             let resp = future_scan_lock(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::ScanLock))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan_lock.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::ResolveLock(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_resolve_lock.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
+                .kv_resolve_lock
+                .start_coarse_timer();
             let resp = future_resolve_lock(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::ResolveLock))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::Gc(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_gc.start_coarse_timer();
             let resp = future_gc(&gc_worker, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Gc))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_gc.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::DeleteRange(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_delete_range.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
+                .kv_delete_range
+                .start_coarse_timer();
             let resp = future_delete_range(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::DeleteRange))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_delete_range.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::RawGet(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.raw_get.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_get.start_coarse_timer();
             let resp = future_raw_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::RawBatchGet(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_get.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_batch_get.start_coarse_timer();
             let resp = future_raw_batch_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_get.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::RawPut(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.raw_put.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_put.start_coarse_timer();
             let resp = future_raw_put(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawPut))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_put.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::RawBatchPut(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_put.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_batch_put.start_coarse_timer();
             let resp = future_raw_batch_put(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchPut))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_put.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::RawDelete(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_delete.start_coarse_timer();
             let resp = future_raw_delete(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawDelete))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::RawBatchDelete(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_delete.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
+                .raw_batch_delete
+                .start_coarse_timer();
             let resp = future_raw_batch_delete(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::RawBatchDelete
@@ -1783,14 +2099,16 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::RawScan(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_scan.start_coarse_timer();
             let resp = future_raw_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawScan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_scan.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::RawDeleteRange(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete_range.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
+                .raw_delete_range
+                .start_coarse_timer();
             let resp = future_raw_delete_range(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::RawDeleteRange
@@ -1799,21 +2117,23 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::RawBatchScan(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_scan.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
+                .raw_batch_scan
+                .start_coarse_timer();
             let resp = future_raw_batch_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchScan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_scan.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.coprocessor.start_coarse_timer();
             let resp = future_cop(&cop, req, Some(peer.to_string()))
                 .map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::PessimisticLock(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
                 .kv_pessimistic_lock
                 .start_coarse_timer();
             let resp = future_acquire_pessimistic_lock(&storage, req)
@@ -1824,7 +2144,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::PessimisticRollback(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
                 .kv_pessimistic_rollback
                 .start_coarse_timer();
             let resp = future_pessimistic_rollback(&storage, req)
@@ -1835,7 +2155,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, timer);
         }
         Some(batch_commands_request::request::Cmd::Empty(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.invalid.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.invalid.start_coarse_timer();
             let resp = future_handle_empty(req)
                 .map(oneof!(batch_commands_response::response::Cmd::Empty))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
@@ -1888,9 +2208,8 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     requests: Vec<u64>,
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
-    let timer = GRPC_MSG_HISTOGRAM_VEC
-        .kv_batch_get_command
-        .start_coarse_timer();
+    let instant = TiInstant::now_coarse();
+
     storage.async_batch_get_command(commands).then(move |v| {
         match v {
             Ok(v) => {
@@ -1931,7 +2250,11 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
                 }
             }
         }
-        timer.observe_duration();
+        GRPC_MSG_HISTOGRAM.with(|m| {
+            m.kv_batch_get_command
+                .observe(duration_to_sec(instant.elapsed()));
+            m.may_flush_all();
+        });
         Ok(())
     })
 }
@@ -2401,9 +2724,8 @@ fn future_raw_batch_get_command<E: Engine, L: LockManager>(
     cf: String,
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
-    let timer = GRPC_MSG_HISTOGRAM_VEC
-        .raw_batch_get_command
-        .start_coarse_timer();
+    let instant = TiInstant::now_coarse();
+
     storage
         .async_raw_batch_get_command(cf, commands)
         .then(move |v| {
@@ -2446,7 +2768,11 @@ fn future_raw_batch_get_command<E: Engine, L: LockManager>(
                     }
                 }
             }
-            timer.observe_duration();
+            GRPC_MSG_HISTOGRAM.with(|m| {
+                m.raw_batch_get_command
+                    .observe(duration_to_sec(instant.elapsed()));
+                m.may_flush_all();
+            });
             Ok(())
         })
 }
