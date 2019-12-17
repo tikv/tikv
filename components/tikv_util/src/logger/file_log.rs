@@ -34,22 +34,13 @@ pub trait Rotator: Send {
     fn prepare(&mut self, file: &File) -> io::Result<()>;
 
     /// Return if the file need to be rotated.
-    fn should_rotate(&self) -> io::Result<bool>;
+    fn should_rotate(&self) -> bool;
 
     /// Call by operator, update rotators' state while the operator try to write some data.
     fn on_write(&mut self, data: &[u8]) -> io::Result<()>;
 
-    /// Call by operator, update rotators' state while the operator try to flush the stream.
-    fn on_flush(&mut self) -> io::Result<()>;
-
-    /// Execute rotation and return a renamed file path.
-    fn rotate(&self, file: &mut File, old_path: &Path, new_path: &Path) -> io::Result<()> {
-        file.flush()?;
-        fs::rename(old_path, new_path)?;
-
-        *file = open_log_file(old_path)?;
-        Ok(())
-    }
+    /// Call by operator, update rotators' state while the operator execute a rotation.
+    fn on_rotate(&mut self) -> io::Result<()>;
 }
 
 /// This `FileLogger` will iterate over a series of `Rotators`,
@@ -125,23 +116,23 @@ where
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if self.rotators.is_empty() {
-            return self.file.flush();
-        }
         for rotator in self.rotators.iter() {
-            if rotator.should_rotate()? {
+            if rotator.should_rotate() {
+                self.file.flush()?;
+
                 let new_path = (self.rename)(&self.path)?;
-                rotator.rotate(&mut self.file, &self.path, &new_path)?;
+                fs::rename(&self.path, &new_path)?;
+                self.file = open_log_file(&self.path)?;
 
                 // Updates all roators' states.
                 for rotator in self.rotators.iter_mut() {
-                    rotator.on_flush()?;
+                    rotator.on_rotate()?;
                 }
 
-                break;
+                return Ok(());
             }
         }
-        Ok(())
+        self.file.flush()
     }
 }
 
@@ -188,19 +179,19 @@ impl Rotator for RotateByTime {
         Ok(())
     }
 
-    fn should_rotate(&self) -> io::Result<bool> {
+    fn should_rotate(&self) -> bool {
         assert!(self.next_rotation_time.is_some());
-        Ok(Local::now() > DateTime::<Local>::from(self.next_rotation_time.unwrap()))
+        Local::now() > DateTime::<Local>::from(self.next_rotation_time.unwrap())
     }
 
     fn on_write(&mut self, _: &[u8]) -> io::Result<()> {
         Ok(())
     }
 
-    fn on_flush(&mut self) -> io::Result<()> {
+    fn on_rotate(&mut self) -> io::Result<()> {
         assert!(self.next_rotation_time.is_some());
         self.next_rotation_time = Some(Self::next_rotation_time(
-            self.next_rotation_time.unwrap(),
+            SystemTime::now(),
             self.rotation_timespan.0,
         )?);
         Ok(())
@@ -231,8 +222,8 @@ impl Rotator for RotateBySize {
         Ok(())
     }
 
-    fn should_rotate(&self) -> io::Result<bool> {
-        Ok(self.file_size > self.rotation_size.0)
+    fn should_rotate(&self) -> bool {
+        self.file_size > self.rotation_size.0
     }
 
     fn on_write(&mut self, data: &[u8]) -> io::Result<()> {
@@ -240,7 +231,8 @@ impl Rotator for RotateBySize {
         Ok(())
     }
 
-    fn on_flush(&mut self) -> io::Result<()> {
+    fn on_rotate(&mut self) -> io::Result<()> {
+        self.file_size = 0;
         Ok(())
     }
 }
@@ -375,6 +367,96 @@ mod tests {
         logger.write_all(&[0xff; 1024]).unwrap();
         logger.flush().unwrap();
         assert!(file_exists(new_path));
+    }
+
+    #[test]
+    fn test_update_rotate_by_size() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("test_update_rotate_by_size.log");
+        let suffix = ".backup";
+
+        // Set the last modification time to 1 minute before.
+        let last_modified = SystemTime::now()
+            .checked_sub(Duration::from_secs(120))
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let accessed = last_modified;
+
+        // Create a file.
+        open_log_file(path.clone()).unwrap();
+
+        // Modify last_modified time.
+        utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
+
+        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
+            rename_with_subffix(path, suffix)
+        })
+        .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(60))))
+        .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
+        .build()
+        .unwrap();
+
+        let mut new_path = PathBuf::from(path).into_os_string();
+        new_path.push(suffix);
+
+        logger.write_all(&[0xff; 2048]).unwrap();
+        // Triggers rotate by time.
+        logger.flush().unwrap();
+
+        assert!(file_exists(new_path.clone()));
+
+        // Should update `RotateBySize`'s state.
+        assert_eq!(logger.rotators[1].should_rotate(), false);
+    }
+
+    #[test]
+    fn test_update_rotate_by_time() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("test_update_rotate_by_time.log");
+        let suffix = ".backup";
+
+        // Set the last modification time to 1 minute before.
+        let last_modified = SystemTime::now()
+            .checked_sub(Duration::from_secs(120))
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let accessed = last_modified;
+
+        // Create a file.
+        open_log_file(path.clone()).unwrap();
+
+        // Modify last_modified time.
+        utime::set_file_times(path.clone(), accessed, last_modified).unwrap();
+
+        let mut logger = RotatingFileLoggerBuilder::new(path.clone(), move |path| {
+            rename_with_subffix(path, suffix)
+        })
+        .add_rotator(RotateBySize::new(ReadableSize::kb(1)))
+        .add_rotator(RotateByTime::new(ReadableDuration(Duration::from_secs(60))))
+        .build()
+        .unwrap();
+
+        let mut new_path = PathBuf::from(path).into_os_string();
+        new_path.push(suffix);
+
+        logger.write_all(&[0xff; 2048]).unwrap();
+        // Triggers rotate by size.
+        logger.flush().unwrap();
+
+        assert!(file_exists(new_path.clone()));
+
+        // Should update `RotateByTime`'s state.
+        assert_eq!(logger.rotators[1].should_rotate(), false);
+
+        logger.write_all(&[0xff; 2048]).unwrap();
+        assert_eq!(logger.rotators[1].should_rotate(), false);
+        assert!(file_exists(new_path.clone()));
     }
 
     #[test]
