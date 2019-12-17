@@ -1,8 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::timestamp::{TimeStamp, TsSet};
-use super::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use super::{Error, Result};
+use crate::timestamp::{TimeStamp, TsSet};
+use crate::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::{Error, Result};
 use byteorder::ReadBytesExt;
 use derive_new::new;
 use kvproto::kvrpcpb::{LockInfo, Op};

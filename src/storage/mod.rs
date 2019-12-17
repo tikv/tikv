@@ -9,48 +9,48 @@
 //! is used by the [`Server`](server::Server). The [`BTreeEngine`](storage::kv::BTreeEngine) and
 //! [`RocksEngine`](storage::RocksEngine) are used for testing only.
 
-mod commands;
 pub mod config;
-mod errors;
 pub mod kv;
 pub mod lock_manager;
-mod metrics;
 pub mod mvcc;
-mod readpool_impl;
 pub mod txn;
+
+mod errors;
+mod metrics;
+mod readpool_impl;
 mod types;
 
-use std::cmp;
-use std::sync::{atomic, Arc};
-
-use engine::{
-    CfName, IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS, DATA_KEY_PREFIX_LEN,
+pub use self::{
+    errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
+    kv::{
+        CfStatistics, Cursor, Engine, FlowStatistics, FlowStatsReporter, Iterator,
+        RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
+    },
+    readpool_impl::{build_read_pool, build_read_pool_for_test},
+    txn::{Options, ProcessResult, Scanner, SnapshotStore, Store},
+    types::{MvccInfo, StorageCallback, TxnStatus},
 };
+
+use crate::storage::{
+    config::Config,
+    kv::{with_tls_engine, Error as EngineError, ErrorInner as EngineErrorInner, Modify},
+    lock_manager::{DummyLockManager, LockManager},
+    metrics::*,
+    txn::{
+        commands::{get_priority_tag, Command, CommandKind},
+        scheduler::Scheduler as TxnScheduler,
+        PointGetCommand,
+    },
+};
+use engine::{CfName, IterOption, ALL_CFS, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
-use tikv_util::collections::HashMap;
-use tikv_util::future_pool::FuturePool;
-use txn_types::{Key, KvPair, Lock, Mutation, TimeStamp, TsSet, Value};
-
-use crate::storage::commands::{get_priority_tag, Command, CommandKind};
-use crate::storage::config::Config;
-use crate::storage::kv::with_tls_engine;
-use crate::storage::lock_manager::{DummyLockManager, LockManager};
-use crate::storage::metrics::*;
-use crate::storage::txn::scheduler::Scheduler as TxnScheduler;
-
-pub use self::commands::{Options, PointGetCommand};
-pub use self::errors::{
-    get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner,
+use std::{
+    cmp,
+    sync::{atomic, Arc},
 };
-pub use self::kv::{
-    CfStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
-    ErrorInner as EngineErrorInner, FlowStatistics, FlowStatsReporter, Iterator, Modify,
-    RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, TestEngineBuilder,
-};
-pub use self::readpool_impl::{build_read_pool, build_read_pool_for_test};
-pub use self::txn::{Scanner, SnapshotStore, Store};
-pub use self::types::{MvccInfo, ProcessResult, StorageCallback, TxnStatus};
+use tikv_util::{collections::HashMap, future_pool::FuturePool};
+use txn_types::{Key, KvPair, Mutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
@@ -1551,8 +1551,10 @@ mod tests {
 
     use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
     use kvproto::kvrpcpb::CommandPri;
-    use std::fmt::Debug;
-    use std::sync::mpsc::{channel, Sender};
+    use std::{
+        fmt::Debug,
+        sync::mpsc::{channel, Sender},
+    };
     use tikv_util::config::ReadableSize;
 
     fn expect_none(x: Result<Option<Value>>) {
