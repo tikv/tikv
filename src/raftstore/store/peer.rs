@@ -1,15 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::cmp::{self, Ordering as CmpOrdering, Reverse};
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::{BinaryHeap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
-use std::{
-    cmp::{self, Ordering as CmpOrdering, Reverse},
-    mem, u64,
-};
+use std::{mem, u64};
 
 use engine::rocks::{WriteBatch, WriteOptions};
 use engine::Engines;
@@ -139,7 +137,6 @@ impl ReadIndexQueue {
                 "cannot find corresponding read from pending reads";
                 "id"=>?id, "read-index" =>read_index,
             );
-            panic!("advance read index fail");
         }
     }
 
