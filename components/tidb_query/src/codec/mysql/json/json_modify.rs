@@ -28,11 +28,18 @@ impl Json {
         mt: ModifyType,
     ) -> Result<()> {
         if path_expr_list.len() != values.len() {
-            return Err(box_err!("Incorrect parameter count"));
+            return Err(box_err!(
+                "Incorrect number of parameters: expected: {:?}, found {:?}",
+                values.len(),
+                path_expr_list.len()
+            ));
         }
         for expr in path_expr_list {
             if expr.contains_any_asterisk() {
-                return Err(box_err!("Invalid path expression"));
+                return Err(box_err!(
+                    "Invalid path expression: expected no asterisk, found {:?}",
+                    expr
+                ));
             }
         }
         for (expr, value) in path_expr_list.iter().zip(values.drain(..)) {

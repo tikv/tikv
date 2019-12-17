@@ -4,11 +4,14 @@ version = "0.0.1"
 publish = false
 edition = "2018"
 
+[features]
+prost-codec = ["tikv_util/prost-codec"]
+
 [lib]
 path = "mod.rs"
 
 [dependencies]
 byteorder = "1"
 failure = "0.1"
-tikv_util = { path = "../../components/tikv_util" }
 tidb_query = { path = "../../components/tidb_query" }
+tikv_util = { path = "../../components/tikv_util" }

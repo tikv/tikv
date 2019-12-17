@@ -12,10 +12,11 @@ use test_coprocessor::*;
 
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 
-fn new_analyze_req(data: Vec<u8>, range: KeyRange) -> Request {
+fn new_analyze_req(data: Vec<u8>, range: KeyRange, start_ts: u64) -> Request {
     let mut req = Request::default();
     req.set_data(data);
     req.set_ranges(vec![range].into());
+    req.set_start_ts(start_ts);
     req.set_tp(REQ_TYPE_ANALYZE);
     req
 }
@@ -37,11 +38,11 @@ fn new_analyze_column_req(
     col_req.set_cmsketch_width(cm_sketch_width);
     let mut analy_req = AnalyzeReq::default();
     analy_req.set_tp(AnalyzeType::TypeColumn);
-    analy_req.set_start_ts(next_id() as u64);
     analy_req.set_col_req(col_req);
     new_analyze_req(
         analy_req.write_to_bytes().unwrap(),
         table.get_record_range_all(),
+        next_id() as u64,
     )
 }
 
@@ -59,11 +60,11 @@ fn new_analyze_index_req(
     idx_req.set_cmsketch_width(cm_sketch_width);
     let mut analy_req = AnalyzeReq::default();
     analy_req.set_tp(AnalyzeType::TypeIndex);
-    analy_req.set_start_ts(next_id() as u64);
     analy_req.set_idx_req(idx_req);
     new_analyze_req(
         analy_req.write_to_bytes().unwrap(),
         table.get_index_range_all(idx),
+        next_id() as u64,
     )
 }
 

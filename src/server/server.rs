@@ -15,8 +15,9 @@ use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::SnapManager;
-use crate::server::gc_worker::GCWorker;
+use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
 use tikv_util::security::SecurityManager;
@@ -29,7 +30,7 @@ use super::raft_client::RaftClient;
 use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
-use super::transport::{RaftStoreRouter, ServerTransport};
+use super::transport::ServerTransport;
 use super::{Config, Result};
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
@@ -74,7 +75,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        gc_worker: GCWorker<E>,
+        gc_worker: GcWorker<E>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = ThreadPoolBuilder::new()
@@ -269,7 +270,6 @@ mod tests {
     use super::*;
 
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};
@@ -278,6 +278,7 @@ mod tests {
     use crate::raftstore::Result as RaftStoreResult;
     use crate::storage::TestStorageBuilder;
 
+    use engine_rocks::RocksEngine;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use tikv_util::security::SecurityConfig;
@@ -314,7 +315,7 @@ mod tests {
             Ok(())
         }
 
-        fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
+        fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksEngine>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -348,7 +349,7 @@ mod tests {
         cfg.addr = "127.0.0.1:0".to_owned();
 
         let storage = TestStorageBuilder::new().build().unwrap();
-        let mut gc_worker = GCWorker::new(storage.get_engine(), None, None, Default::default());
+        let mut gc_worker = GcWorker::new(storage.get_engine(), None, None, Default::default());
         gc_worker.start().unwrap();
 
         let (tx, rx) = mpsc::channel();

@@ -12,7 +12,7 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine::Peekable;
 use test_raftstore::*;
-use tikv::raftstore::store::{keys, Callback};
+use tikv::raftstore::store::Callback;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 

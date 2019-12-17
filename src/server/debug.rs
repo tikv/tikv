@@ -3,6 +3,7 @@
 use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
@@ -29,22 +30,21 @@ use crate::raftstore::coprocessor::{
     get_region_approximate_keys_cf, get_region_approximate_middle,
 };
 use crate::raftstore::store::util as raftstore_util;
+use crate::raftstore::store::PeerStorage;
 use crate::raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use crate::raftstore::store::{keys, PeerStorage};
-use crate::server::gc_worker::GCWorker;
+use crate::server::gc_worker::GcWorker;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use crate::storage::types::Key;
-use crate::storage::Engine;
-use crate::storage::Iterator as EngineIterator;
+use crate::storage::{Engine, Iterator as EngineIterator};
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
 use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
+use txn_types::Key;
 
 const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
 
@@ -136,11 +136,11 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 #[derive(Clone)]
 pub struct Debugger<E: Engine> {
     engines: Engines,
-    gc_worker: Option<GCWorker<E>>,
+    gc_worker: Option<GcWorker<E>>,
 }
 
 impl<E: Engine> Debugger<E> {
-    pub fn new(engines: Engines, gc_worker: Option<GCWorker<E>>) -> Debugger<E> {
+    pub fn new(engines: Engines, gc_worker: Option<GcWorker<E>>) -> Debugger<E> {
         Debugger { engines, gc_worker }
     }
 
@@ -481,7 +481,9 @@ impl<E: Engine> Debugger<E> {
         let fake_snap_worker = Worker::new("fake-snap-worker");
 
         let check_value = |value: Vec<u8>| -> Result<()> {
-            let local_state = box_try!(protobuf::parse_from_bytes::<RegionLocalState>(&value));
+            let mut local_state = RegionLocalState::default();
+            box_try!(local_state.merge_from_bytes(&value));
+
             match local_state.get_state() {
                 PeerState::Tombstone | PeerState::Applying => return Ok(()),
                 _ => {}
@@ -886,6 +888,19 @@ impl<E: Engine> Debugger<E> {
         res.push((
             "middle_key_by_approximate_size".to_string(),
             escape(&middle_key),
+        ));
+        res.push((
+            "sst_files".to_string(),
+            collection
+                .into_iter()
+                .map(|(k, _)| {
+                    Path::new(k)
+                        .file_name()
+                        .map(|f| f.to_str().unwrap())
+                        .unwrap_or(k)
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
         ));
         Ok(res)
     }
@@ -1441,7 +1456,7 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
     Ok(())
 }
 
-fn divide_db(db: &DB, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db(db: &Arc<DB>, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
     // Empty start and end key cover all range.
     let mut region = Region::default();
     region.mut_peers().push(Peer::default());
@@ -1457,7 +1472,7 @@ fn divide_db(db: &DB, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
     divide_db_cf(db, parts, cf)
 }
 
-fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db_cf(db: &Arc<DB>, parts: usize, cf: &str) -> crate::raftstore::Result<Vec<Vec<u8>>> {
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
     let collection = engine::util::get_range_properties_cf(db, cf, &start, &end)?;
@@ -1522,7 +1537,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::server::gc_worker::GCConfig;
+    use crate::server::gc_worker::GcConfig;
     use crate::storage::mvcc::{Lock, LockType};
     use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;
@@ -1645,7 +1660,7 @@ mod tests {
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
         let test_engine = TestEngineBuilder::new().build().unwrap();
-        let mut gc_worker = GCWorker::new(test_engine, None, None, GCConfig::default());
+        let mut gc_worker = GcWorker::new(test_engine, None, None, GcConfig::default());
         gc_worker.start().unwrap();
         Debugger::new(engines, Some(gc_worker))
     }

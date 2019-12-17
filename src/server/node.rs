@@ -4,20 +4,21 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use super::transport::RaftStoreRouter;
 use super::RaftKv;
 use super::Result;
+use crate::config::ConfigController;
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::fsm::store::StoreMeta;
 use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
-    self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
+    self, initial_region, Config as StoreConfig, SnapManager, Transport,
 };
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
-use crate::storage::{Config as StorageConfig, Storage};
+use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
@@ -114,6 +115,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
+        cfg_controller: ConfigController,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -148,6 +150,7 @@ where
             store_meta,
             coprocessor_host,
             importer,
+            cfg_controller,
         )?;
 
         // Put store only if the cluster is bootstrapped.
@@ -317,6 +320,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
+        cfg_controller: ConfigController,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -341,6 +345,7 @@ where
             store_meta,
             coprocessor_host,
             importer,
+            cfg_controller,
         )?;
         Ok(())
     }

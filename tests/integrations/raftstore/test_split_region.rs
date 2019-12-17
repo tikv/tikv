@@ -13,9 +13,9 @@ use raft::eraftpb::MessageType;
 
 use engine::Iterable;
 use engine::CF_WRITE;
+use keys::data_key;
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
 use tikv::raftstore::Result;
 use tikv_util::config::*;
