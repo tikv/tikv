@@ -1,10 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::metrics::*;
-use super::reader::MvccReader;
-use super::{ErrorInner, Result};
-use crate::storage::kv::{Modify, ScanMode, Snapshot};
-use crate::storage::{Options, Statistics, TxnStatus, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::kv::{Modify, ScanMode, Snapshot, Statistics};
+use crate::storage::mvcc::metrics::*;
+use crate::storage::mvcc::reader::MvccReader;
+use crate::storage::mvcc::{ErrorInner, Result};
+use crate::storage::txn::commands::Options;
+use crate::storage::types::TxnStatus;
+use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
 use txn_types::{
@@ -825,10 +827,9 @@ macro_rules! new_txn {
 mod tests {
     use super::*;
 
-    use crate::storage::kv::Engine;
+    use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error, ErrorInner, MvccReader};
-    use crate::storage::TestEngineBuilder;
     use kvproto::kvrpcpb::Context;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
 
