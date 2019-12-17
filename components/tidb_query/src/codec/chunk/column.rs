@@ -6,8 +6,8 @@ use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 use super::{Error, Result};
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::mysql::{
-    Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder, Json,
-    JsonDecoder, JsonEncoder, Time, TimeDecoder, TimeEncoder,
+    Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder, Enum,
+    Json, JsonDecoder, JsonEncoder, Time, TimeDecoder, TimeEncoder,
 };
 use crate::codec::Datum;
 use crate::expr::EvalContext;
@@ -82,7 +82,8 @@ impl Column {
             FieldTypeTp::Duration => Datum::Dur(self.get_duration(idx, field_type.decimal())?),
             FieldTypeTp::NewDecimal => Datum::Dec(self.get_decimal(idx)?),
             FieldTypeTp::JSON => Datum::Json(self.get_json(idx)?),
-            FieldTypeTp::Enum | FieldTypeTp::Bit | FieldTypeTp::Set => {
+            FieldTypeTp::Enum => Datum::Enum(self.get_enum(idx)?),
+            FieldTypeTp::Bit | FieldTypeTp::Set => {
                 return Err(box_err!(
                     "get datum with {} is not supported yet.",
                     field_type.tp()
@@ -118,6 +119,7 @@ impl Column {
             Datum::Dur(v) => self.append_duration(*v),
             Datum::Time(v) => self.append_time(*v),
             Datum::Json(ref v) => self.append_json(v),
+            Datum::Enum(ref e) => self.append_enum(e),
             _ => Err(box_err!("unsupported datum {:?}", data)),
         }
     }
@@ -352,6 +354,37 @@ impl Column {
         data.read_json()
     }
 
+    /// Helper for `append_enum` and `append_set`
+    fn append_name_value(&mut self, name: &[u8], val: u64) -> Result<()> {
+        self.data.write_bytes(name)?;
+        self.data.write_u64_le(val)?;
+        Ok(())
+    }
+
+    pub fn append_enum(&mut self, enm: &Enum) -> Result<()> {
+        self.append_name_value(enm.get_name().as_bytes(), enm.get_value())?;
+        self.finished_append_var()
+    }
+
+    /// Helper for `get_enum` and `get_set`
+    fn get_name_value(&self, idx: usize) -> Result<(&[u8], u64)> {
+        let start = self.var_offsets[idx];
+        let end = self.var_offsets[idx + 1];
+        if start == end {
+            Ok((b"", 0))
+        } else {
+            let mut val = &self.data[start..start + 8];
+            let bs = &self.data[start + 8..end];
+            Ok((bs, val.read_u64_le()?))
+        }
+    }
+
+    pub fn get_enum(&self, idx: usize) -> Result<Enum> {
+        let (name, val) = self.get_name_value(idx)?;
+        let name_str = std::str::from_utf8(name)?;
+        Ok(Enum::new(name_str, val))
+    }
+
     /// Return the total rows in the column.
     pub fn len(&self) -> usize {
         self.length
@@ -554,6 +587,13 @@ mod tests {
             field_type(FieldTypeTp::LongBlob),
         ];
         let data = vec![Datum::Null, Datum::Bytes(b"xxx".to_vec())];
+        test_colum_datum(fields, data);
+    }
+
+    #[test]
+    fn test_column_enum() {
+        let fields = vec![field_type(FieldTypeTp::Enum)];
+        let data = vec![Datum::Null, Datum::Enum(Enum::new("key", 1))];
         test_colum_datum(fields, data);
     }
 }
