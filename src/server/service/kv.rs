@@ -35,7 +35,6 @@ use kvproto::kvrpcpb::{self, *};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::metrics::HistogramReader;
@@ -1877,16 +1876,26 @@ fn response_batch_commands_request<F>(
     id: u64,
     resp: F,
     tx: Sender<(u64, batch_commands_response::Response)>,
-    timer: HistogramTimer,
+    begin: TiInstant,
+    histogram_key: GrpcTypeKind,
 ) where
     F: Future<Item = batch_commands_response::Response, Error = ()> + Send + 'static,
 {
     let f = resp.and_then(move |resp| {
         if tx.send_and_notify((id, resp)).is_err() {
             error!("KvService response batch commands fail");
+            GRPC_MSG_HISTOGRAM.with(|m| {
+                m.get(histogram_key)
+                    .observe(duration_to_sec(begin.elapsed()));
+                m.may_flush_all();
+            });
             return Err(());
         }
-        timer.observe_duration();
+        GRPC_MSG_HISTOGRAM.with(|m| {
+            m.get(histogram_key)
+                .observe(duration_to_sec(begin.elapsed()));
+            m.may_flush_all();
+        });
         Ok(())
     });
     poll_future_notify(f);
@@ -1942,224 +1951,234 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     match req.cmd {
         None => {
             // For some invalid requests.
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.invalid.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future::ok(batch_commands_response::Response::default());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::invalid);
         }
         Some(batch_commands_request::request::Cmd::Get(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_get.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Get))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_get);
         }
         Some(batch_commands_request::request::Cmd::Scan(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_scan.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Scan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_scan);
         }
         Some(batch_commands_request::request::Cmd::Prewrite(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_prewrite.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_prewrite(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Prewrite))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_prewrite);
         }
         Some(batch_commands_request::request::Cmd::Commit(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_commit.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_commit(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Commit))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_commit.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_commit);
         }
         Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
         Some(batch_commands_request::request::Cmd::Cleanup(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_cleanup.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_cleanup(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Cleanup))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_cleanup.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_cleanup);
         }
         Some(batch_commands_request::request::Cmd::BatchGet(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_batch_get.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_batch_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::BatchGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_get.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_batch_get);
         }
         Some(batch_commands_request::request::Cmd::BatchRollback(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
-                .kv_batch_rollback
-                .start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_batch_rollback(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::BatchRollback
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(
+                id,
+                resp,
+                tx,
+                instant,
+                GrpcTypeKind::kv_batch_rollback,
+            );
         }
         Some(batch_commands_request::request::Cmd::TxnHeartBeat(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
-                .kv_txn_heart_beat
-                .start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_txn_heart_beat(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::TxnHeartBeat))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_txn_heart_beat.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(
+                id,
+                resp,
+                tx,
+                instant,
+                GrpcTypeKind::kv_txn_heart_beat,
+            );
         }
         Some(batch_commands_request::request::Cmd::CheckTxnStatus(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
-                .kv_check_txn_status
-                .start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_check_txn_status(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::CheckTxnStatus
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_check_txn_status.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(
+                id,
+                resp,
+                tx,
+                instant,
+                GrpcTypeKind::kv_check_txn_status,
+            );
         }
         Some(batch_commands_request::request::Cmd::ScanLock(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_scan_lock.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_scan_lock(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::ScanLock))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan_lock.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_scan_lock);
         }
         Some(batch_commands_request::request::Cmd::ResolveLock(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
-                .kv_resolve_lock
-                .start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_resolve_lock(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::ResolveLock))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_resolve_lock);
         }
         Some(batch_commands_request::request::Cmd::Gc(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.kv_gc.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_gc(&gc_worker, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Gc))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_gc.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_gc);
         }
         Some(batch_commands_request::request::Cmd::DeleteRange(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
-                .kv_delete_range
-                .start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_delete_range(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::DeleteRange))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_delete_range.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_delete_range);
         }
         Some(batch_commands_request::request::Cmd::RawGet(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_get.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_raw_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_get);
         }
         Some(batch_commands_request::request::Cmd::RawBatchGet(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_batch_get.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_raw_batch_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_get.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_get);
         }
         Some(batch_commands_request::request::Cmd::RawPut(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_put.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_raw_put(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawPut))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_put.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_put);
         }
         Some(batch_commands_request::request::Cmd::RawBatchPut(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_batch_put.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_raw_batch_put(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchPut))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_put.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_put);
         }
         Some(batch_commands_request::request::Cmd::RawDelete(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_delete.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_raw_delete(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawDelete))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_delete);
         }
         Some(batch_commands_request::request::Cmd::RawBatchDelete(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
-                .raw_batch_delete
-                .start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_raw_batch_delete(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::RawBatchDelete
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_delete.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_delete);
         }
         Some(batch_commands_request::request::Cmd::RawScan(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.raw_scan.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_raw_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawScan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_scan.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_scan);
         }
         Some(batch_commands_request::request::Cmd::RawDeleteRange(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
-                .raw_delete_range
-                .start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_raw_delete_range(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::RawDeleteRange
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete_range.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_delete_range);
         }
         Some(batch_commands_request::request::Cmd::RawBatchScan(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
-                .raw_batch_scan
-                .start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_raw_batch_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchScan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_scan.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_scan);
         }
         Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.coprocessor.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_cop(&cop, req, Some(peer.to_string()))
                 .map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::coprocessor);
         }
         Some(batch_commands_request::request::Cmd::PessimisticLock(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
-                .kv_pessimistic_lock
-                .start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_acquire_pessimistic_lock(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::PessimisticLock
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(
+                id,
+                resp,
+                tx,
+                instant,
+                GrpcTypeKind::kv_pessimistic_lock,
+            );
         }
         Some(batch_commands_request::request::Cmd::PessimisticRollback(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL
-                .kv_pessimistic_rollback
-                .start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_pessimistic_rollback(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::PessimisticRollback
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(
+                id,
+                resp,
+                tx,
+                instant,
+                GrpcTypeKind::kv_pessimistic_rollback,
+            );
         }
         Some(batch_commands_request::request::Cmd::Empty(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_GLOBAL.invalid.start_coarse_timer();
+            let instant = TiInstant::now_coarse();
             let resp = future_handle_empty(req)
                 .map(oneof!(batch_commands_response::response::Cmd::Empty))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+            response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::invalid);
         }
     }
 }
