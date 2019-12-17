@@ -523,10 +523,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T, E, L> {
     fn kv_get(&mut self, ctx: RpcContext<'_>, req: GetRequest, sink: UnarySink<GetResponse>) {
         let instant = TiInstant::now_coarse();
-        GRPC_MSG_HISTOGRAM.with(|m| {
-            m.kv_get.observe(duration_to_sec(instant.elapsed()));
-            m.may_flush_all();
-        });
+
         let future = future_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
