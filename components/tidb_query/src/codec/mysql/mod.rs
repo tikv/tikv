@@ -25,6 +25,7 @@ pub mod binary_literal;
 pub mod charset;
 pub mod decimal;
 pub mod duration;
+pub mod r#enum;
 pub mod json;
 pub mod time;
 
@@ -33,4 +34,5 @@ pub use self::duration::{Duration, DurationDecoder, DurationEncoder};
 pub use self::json::{
     parse_json_path_expr, Json, JsonDecoder, JsonEncoder, ModifyType, PathExpression,
 };
+pub use self::r#enum::Enum;
 pub use self::time::{Time, TimeDecoder, TimeEncoder, TimeType, Tz};

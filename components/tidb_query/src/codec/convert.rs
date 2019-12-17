@@ -475,6 +475,16 @@ impl ToInt for Json {
     }
 }
 
+impl ToInt for Enum {
+    fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
+        self.get_value().to_int(ctx, tp)
+    }
+
+    fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
+        self.get_value().to_uint(ctx, tp)
+    }
+}
+
 #[inline]
 pub fn get_valid_utf8_prefix<'a>(ctx: &mut EvalContext, bytes: &'a [u8]) -> Result<&'a str> {
     let valid = match str::from_utf8(bytes) {

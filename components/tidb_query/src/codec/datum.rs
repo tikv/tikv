@@ -10,7 +10,7 @@ use tikv_util::codec::BytesSlice;
 use tikv_util::escape;
 
 use super::mysql::{
-    self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Json,
+    self, parse_json_path_expr, Decimal, DecimalDecoder, DecimalEncoder, Duration, Enum, Json,
     JsonDecoder, JsonEncoder, PathExpression, Time, DEFAULT_FSP, MAX_FSP,
 };
 use super::Result;
@@ -47,6 +47,7 @@ pub enum Datum {
     Dec(Decimal),
     Time(Time),
     Json(Json),
+    Enum(Enum),
     Min,
     Max,
 }
@@ -63,6 +64,7 @@ impl Display for Datum {
             Datum::Dec(ref d) => write!(f, "Dec({})", d),
             Datum::Time(t) => write!(f, "Time({})", t),
             Datum::Json(ref j) => write!(f, "Json({})", j.to_string()),
+            Datum::Enum(ref e) => write!(f, "Enum({})", e.to_string()),
             Datum::Min => write!(f, "MIN"),
             Datum::Max => write!(f, "MAX"),
         }
@@ -126,6 +128,7 @@ impl Datum {
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
             Datum::Time(t) => self.cmp_time(ctx, t),
             Datum::Json(ref j) => self.cmp_json(ctx, j),
+            Datum::Enum(ref e) => self.cmp_enum(ctx, e),
         }
     }
 
@@ -169,6 +172,7 @@ impl Datum {
             Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
             Datum::Time(t) => cmp_f64(t.convert(ctx)?, f),
             Datum::Json(_) => Ok(Ordering::Less),
+            Datum::Enum(ref e) => cmp_f64(e.get_value() as f64, f),
         }
     }
 
@@ -265,6 +269,11 @@ impl Datum {
         Ok(order)
     }
 
+    fn cmp_enum(&self, ctx: &mut EvalContext, enm: &Enum) -> Result<Ordering> {
+        let bytes = enm.get_name().as_bytes();
+        self.cmp_bytes(ctx, bytes)
+    }
+
     /// `into_bool` converts self to a bool.
     /// source function name is `ToBool`.
     pub fn into_bool(self, ctx: &mut EvalContext) -> Result<Option<bool>> {
@@ -278,6 +287,7 @@ impl Datum {
             Datum::Time(t) => Some(!t.is_zero()),
             Datum::Dur(d) => Some(!d.is_zero()),
             Datum::Dec(d) => Some(ConvertTo::<f64>::convert(&d, ctx)?.round() != 0f64),
+            Datum::Enum(e) => Some(e.get_value() != 0),
             Datum::Null => None,
             _ => return Err(invalid_type!("can't convert {} to bool", self)),
         };
@@ -295,6 +305,7 @@ impl Datum {
             Datum::Dur(ref d) => format!("{}", d),
             Datum::Dec(ref d) => format!("{}", d),
             Datum::Json(ref d) => d.to_string(),
+            Datum::Enum(ref e) => e.to_string(),
             ref d => return Err(invalid_type!("can't convert {} to string", d)),
         };
         Ok(s)
@@ -323,6 +334,7 @@ impl Datum {
             Datum::Dur(d) => d.convert(ctx),
             Datum::Dec(d) => d.convert(ctx),
             Datum::Json(j) => j.convert(ctx),
+            Datum::Enum(e) => Ok(e.get_value() as f64),
             _ => Err(box_err!("failed to convert {} to f64", self)),
         }
     }
@@ -361,6 +373,7 @@ impl Datum {
             Datum::U64(u) => u as i64,
             Datum::F64(f) => f.to_bits() as i64,
             Datum::Dur(ref d) => d.to_nanos(),
+            Datum::Enum(ref e) => e.get_value() as i64,
             Datum::Time(_)
             | Datum::Bytes(_)
             | Datum::Dec(_)
@@ -786,6 +799,12 @@ impl From<Json> for Datum {
     }
 }
 
+impl From<Enum> for Datum {
+    fn from(data: Enum) -> Datum {
+        Datum::Enum(data)
+    }
+}
+
 /// `DatumDecoder` decodes the datum.
 pub trait DatumDecoder:
     DecimalDecoder + JsonDecoder + CompactByteDecoder + MemComparableByteDecoder
@@ -907,6 +926,9 @@ pub trait DatumEncoder:
                     self.write_u8(JSON_FLAG)?;
                     self.write_json(j)?;
                 }
+                Datum::Enum(ref e) => {
+                    write_uint!(self, e.get_value(), comparable);
+                }
             }
         }
         Ok(())
@@ -930,7 +952,7 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
                         number::MAX_VARINT64_LENGTH
                     }
                 }
-                Datum::U64(_) => {
+                Datum::U64(_) | Datum::Enum(_) => {
                     if comparable {
                         number::U64_SIZE
                     } else {
@@ -1046,7 +1068,8 @@ mod tests {
             | (&Datum::Dur(_), &Datum::Dur(_))
             | (&Datum::Null, &Datum::Null)
             | (&Datum::Time(_), &Datum::Time(_))
-            | (&Datum::Json(_), &Datum::Json(_)) => true,
+            | (&Datum::Json(_), &Datum::Json(_))
+            | (&Datum::Enum(_), &Datum::Enum(_)) => true,
             (&Datum::Dec(ref d1), &Datum::Dec(ref d2)) => d1.prec_and_frac() == d2.prec_and_frac(),
             _ => false,
         }
