@@ -3,11 +3,11 @@
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::Range;
 use engine::CF_WRITE;
+use keys::{data_key, DATA_MAX_KEY};
 use test_raftstore::*;
-use tikv::raftstore::store::keys::{data_key, DATA_MAX_KEY};
 use tikv::storage::mvcc::{TimeStamp, Write, WriteType};
-use tikv::storage::types::Key as MvccKey;
 use tikv_util::config::*;
+use txn_types::Key;
 
 fn gen_mvcc_put_kv(
     k: &[u8],
@@ -15,14 +15,14 @@ fn gen_mvcc_put_kv(
     start_ts: TimeStamp,
     commit_ts: TimeStamp,
 ) -> (Vec<u8>, Vec<u8>) {
-    let k = MvccKey::from_encoded(data_key(k));
+    let k = Key::from_encoded(data_key(k));
     let k = k.append_ts(commit_ts);
     let w = Write::new(WriteType::Put, start_ts, Some(v.to_vec()));
     (k.as_encoded().clone(), w.as_ref().to_bytes())
 }
 
 fn gen_delete_k(k: &[u8], commit_ts: TimeStamp) -> Vec<u8> {
-    let k = MvccKey::from_encoded(data_key(k));
+    let k = Key::from_encoded(data_key(k));
     let k = k.append_ts(commit_ts);
     k.as_encoded().clone()
 }

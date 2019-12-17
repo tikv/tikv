@@ -20,22 +20,22 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tikv::config::TiKvConfig;
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
+use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 use tikv::raftstore::store::{fsm, LocalReader};
 use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
-use tikv::server::gc_worker::{AutoGCConfig, GCWorker};
+use tikv::server::gc_worker::{AutoGcConfig, GcWorker};
 use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve;
 use tikv::server::service::{DebugService, DiagnosticsService};
 use tikv::server::status_server::StatusServer;
-use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv::server::{create_raft_storage, Node, RaftKv, Server};
-use tikv::storage::{self, DEFAULT_ROCKSDB_SUB_DIR};
+use tikv::storage;
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
@@ -86,7 +86,7 @@ pub fn run_tikv(mut config: TiKvConfig) {
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
     let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
-    let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
+    let db_path = store_path.join(Path::new(storage::config::DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
     let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
     let import_path = store_path.join("import");
@@ -178,11 +178,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let engine = RaftKv::new(raft_router.clone());
 
-    let storage_read_pool = storage::readpool_impl::build_read_pool(
-        &cfg.readpool.storage,
-        pd_sender.clone(),
-        engine.clone(),
-    );
+    let storage_read_pool =
+        storage::build_read_pool(&cfg.readpool.storage, pd_sender.clone(), engine.clone());
 
     let mut lock_mgr = if cfg.pessimistic_txn.enabled {
         Some(LockManager::new())
@@ -190,7 +187,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         None
     };
 
-    let mut gc_worker = GCWorker::new(
+    let mut gc_worker = GcWorker::new(
         engine.clone(),
         Some(engines.kv.clone()),
         Some(raft_router.clone()),
@@ -323,6 +320,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         lm.register_detector_role_change_observer(&mut coprocessor_host);
     }
 
+    let cfg_controller = ConfigController::new(cfg.clone());
     node.start(
         engines.clone(),
         trans,
@@ -331,6 +329,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         store_meta,
         coprocessor_host,
         importer,
+        cfg_controller,
     )
     .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
     initial_metric(&cfg.metric, Some(node.id()));
@@ -348,7 +347,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to start backup endpoint: {}", e));
 
     // Start auto gc
-    let auto_gc_cfg = AutoGCConfig::new(
+    let auto_gc_cfg = AutoGcConfig::new(
         Arc::clone(&pd_client),
         region_info_accessor.clone(),
         node.id(),

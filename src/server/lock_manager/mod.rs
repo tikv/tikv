@@ -16,8 +16,8 @@ use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::{
-    lock_manager::Lock, types::ProcessResult, LockManager as LockManagerTrait, StorageCallback,
-    TimeStamp,
+    lock_manager::{Lock, LockManager as LockManagerTrait},
+    ProcessResult, StorageCallback,
 };
 use pd_client::PdClient;
 use spin::Mutex;
@@ -29,6 +29,7 @@ use std::thread::JoinHandle;
 use tikv_util::collections::HashSet;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::FutureWorker;
+use txn_types::TimeStamp;
 
 const DETECTED_SLOTS_NUM: usize = 128;
 
@@ -266,9 +267,8 @@ mod tests {
         Error as StorageError, Result as StorageResult,
     };
     use kvproto::kvrpcpb::LockInfo;
-    use kvproto::metapb::Region;
+    use kvproto::metapb::{Peer, Region};
     use metrics::*;
-    use pd_client::{RegionInfo, Result as PdResult};
     use raft::StateRole;
     use std::sync::mpsc;
     use std::thread;
@@ -277,11 +277,7 @@ mod tests {
 
     struct MockPdClient;
 
-    impl PdClient for MockPdClient {
-        fn get_region_info(&self, _key: &[u8]) -> PdResult<RegionInfo> {
-            unimplemented!();
-        }
-    }
+    impl PdClient for MockPdClient {}
 
     #[derive(Clone)]
     struct MockResolver;
@@ -309,9 +305,10 @@ mod tests {
             .unwrap();
 
         // Make sure the deadlock detector is the leader.
-        let mut leader_region = Region::new();
+        let mut leader_region = Region::default();
         leader_region.set_start_key(b"".to_vec());
         leader_region.set_end_key(b"foo".to_vec());
+        leader_region.set_peers(vec![Peer::default()].into());
         coprocessor_host.on_role_change(&leader_region, StateRole::Leader);
         thread::sleep(Duration::from_millis(100));
 
@@ -417,19 +414,25 @@ mod tests {
         recv(&rx);
 
         // If key_hashes is none, no wake up
-        let prev_wake_up = TASK_COUNTER_VEC.wake_up.get();
+        let prev_wake_up = TASK_COUNTER_METRICS.with(|m| m.wake_up.get());
         lock_mgr.wake_up(70.into(), None, 70.into(), false);
-        assert_eq!(TASK_COUNTER_VEC.wake_up.get(), prev_wake_up);
+        assert_eq!(TASK_COUNTER_METRICS.with(|m| m.wake_up.get()), prev_wake_up);
 
         // If it's non-pessimistic-txn, no clean up
-        let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
+        let prev_clean_up = TASK_COUNTER_METRICS.with(|m| m.clean_up.get());
         lock_mgr.wake_up(80.into(), None, 80.into(), false);
-        assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
+        assert_eq!(
+            TASK_COUNTER_METRICS.with(|m| m.clean_up.get()),
+            prev_clean_up
+        );
 
         // If the txn doesn't wait for locks, no clean up
-        let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
+        let prev_clean_up = TASK_COUNTER_METRICS.with(|m| m.clean_up.get());
         lock_mgr.wake_up(80.into(), None, 80.into(), true);
-        assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
+        assert_eq!(
+            TASK_COUNTER_METRICS.with(|m| m.clean_up.get()),
+            prev_clean_up
+        );
     }
 
     #[test]

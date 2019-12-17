@@ -8,8 +8,9 @@ use std::time::Duration;
 use prometheus::local::*;
 
 use crate::config::StorageReadPoolConfig;
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
-use crate::storage::{FlowStatistics, FlowStatsReporter, Statistics};
+use crate::storage::kv::{
+    destroy_tls_engine, set_tls_engine, FlowStatistics, FlowStatsReporter, Statistics,
+};
 use tikv_util::collections::HashMap;
 use tikv_util::future_pool::{Builder, Config, FuturePool};
 
@@ -188,9 +189,7 @@ pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
 pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
     TLS_STORAGE_METRICS.with(|m| {
         let map = &mut m.borrow_mut().local_read_flow_stats;
-        let flow_stats = map
-            .entry(region_id)
-            .or_insert_with(crate::storage::FlowStatistics::default);
+        let flow_stats = map.entry(region_id).or_insert_with(FlowStatistics::default);
         flow_stats.add(&statistics.write.flow_stats);
         flow_stats.add(&statistics.data.flow_stats);
     });

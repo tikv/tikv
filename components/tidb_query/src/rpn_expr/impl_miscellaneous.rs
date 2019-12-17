@@ -6,11 +6,25 @@ use std::str::FromStr;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::expr_util;
 use crate::Result;
 
 const IPV4_LENGTH: usize = 4;
 const IPV6_LENGTH: usize = 16;
 const PREFIX_COMPAT: [u8; 12] = [0x00; 12];
+const PREFIX_MAPPED: [u8; 12] = [
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff,
+];
+
+#[rpn_fn(varg)]
+#[inline]
+pub fn any_value<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
+    if let Some(arg) = args.first() {
+        Ok((*arg).clone())
+    } else {
+        Ok(None)
+    }
+}
 
 #[rpn_fn]
 #[inline]
@@ -89,11 +103,233 @@ pub fn inet6_ntoa(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     }))
 }
 
+#[rpn_fn]
+#[inline]
+pub fn inet6_aton(input: &Option<Bytes>) -> Result<Option<Bytes>> {
+    let input = match input {
+        Some(input) => String::from_utf8_lossy(input),
+        None => return Ok(None),
+    };
+
+    let ipv6_addr = Ipv6Addr::from_str(&input).map(|t| t.octets().to_vec());
+    let ipv4_addr_eval = |_| Ipv4Addr::from_str(&input).map(|t| t.octets().to_vec());
+    ipv6_addr
+        .or_else(ipv4_addr_eval)
+        .map(Option::Some)
+        .or(Ok(None))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn inet_aton(addr: &Option<Bytes>) -> Result<Option<i64>> {
+    Ok(addr
+        .as_ref()
+        .map(|addr| String::from_utf8_lossy(addr))
+        .and_then(expr_util::miscellaneous::inet_aton))
+}
+
+#[rpn_fn]
+#[inline]
+pub fn is_ipv4_mapped(addr: &Option<Bytes>) -> Result<Option<i64>> {
+    Ok(match addr {
+        Some(addr) => {
+            if addr.len() != IPV6_LENGTH || !addr.starts_with(&PREFIX_MAPPED) {
+                Some(0)
+            } else {
+                Some(1)
+            }
+        }
+        None => Some(0),
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
     use tipb::ScalarFuncSig;
+
+    use super::*;
+    use crate::expr::EvalContext;
+    use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
+
+    #[test]
+    fn test_decimal_any_value() {
+        let test_cases = vec![
+            (vec![], None),
+            (vec![Decimal::from(10)], Some(Decimal::from(10))),
+            (
+                vec![Decimal::from(10), Decimal::from(20)],
+                Some(Decimal::from(10)),
+            ),
+            (
+                vec![Decimal::from(10), Decimal::from(20), Decimal::from(30)],
+                Some(Decimal::from(10)),
+            ),
+        ];
+
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate::<Decimal>(ScalarFuncSig::DecimalAnyValue)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_duration_any_value() {
+        let test_cases = vec![
+            (vec![], None),
+            (
+                vec![Duration::from_millis(10, 0).unwrap()],
+                Some(Duration::from_millis(10, 0).unwrap()),
+            ),
+            (
+                vec![
+                    Duration::from_millis(10, 0).unwrap(),
+                    Duration::from_millis(11, 0).unwrap(),
+                ],
+                Some(Duration::from_millis(10, 0).unwrap()),
+            ),
+            (
+                vec![
+                    Duration::from_millis(10, 0).unwrap(),
+                    Duration::from_millis(11, 0).unwrap(),
+                    Duration::from_millis(12, 0).unwrap(),
+                ],
+                Some(Duration::from_millis(10, 0).unwrap()),
+            ),
+        ];
+
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate::<Duration>(ScalarFuncSig::DurationAnyValue)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_int_any_value() {
+        let test_cases = vec![
+            (vec![], None),
+            (vec![1i64], Some(1i64)),
+            (vec![1i64, 2i64], Some(1i64)),
+            (vec![1i64, 2i64, 3i64], Some(1i64)),
+        ];
+
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate::<Int>(ScalarFuncSig::IntAnyValue)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_json_any_value() {
+        let test_cases = vec![
+            (vec![], None),
+            (vec![Json::U64(1)], Some(Json::U64(1))),
+            (vec![Json::U64(1), Json::U64(2)], Some(Json::U64(1))),
+            (
+                vec![Json::U64(1), Json::U64(2), Json::U64(3)],
+                Some(Json::U64(1)),
+            ),
+        ];
+
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate::<Json>(ScalarFuncSig::JsonAnyValue)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_real_any_value() {
+        let test_cases = vec![
+            (vec![], None),
+            (vec![Real::from(1.2_f64)], Some(Real::from(1.2_f64))),
+            (
+                vec![Real::from(1.2_f64), Real::from(2.3_f64)],
+                Some(Real::from(1.2_f64)),
+            ),
+            (
+                vec![Real::from(1.2_f64), Real::from(2.3_f64), Real::from(3_f64)],
+                Some(Real::from(1.2_f64)),
+            ),
+        ];
+
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate::<Real>(ScalarFuncSig::RealAnyValue)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_string_any_value() {
+        let test_cases = vec![
+            (vec![], None),
+            (vec![Bytes::from("abc")], Some(Bytes::from("abc"))),
+            (
+                vec![Bytes::from("abc"), Bytes::from("def")],
+                Some(Bytes::from("abc")),
+            ),
+            (
+                vec![Bytes::from("abc"), Bytes::from("def"), Bytes::from("ojk")],
+                Some(Bytes::from("abc")),
+            ),
+        ];
+
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate::<Bytes>(ScalarFuncSig::StringAnyValue)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_time_any_value() {
+        let mut ctx = EvalContext::default();
+        let test_cases = vec![
+            (vec![], None),
+            (
+                vec![DateTime::parse_datetime(&mut ctx, "1000-01-01 00:00:00", 0, false).unwrap()],
+                Some(DateTime::parse_datetime(&mut ctx, "1000-01-01 00:00:00", 0, false).unwrap()),
+            ),
+            (
+                vec![
+                    DateTime::parse_datetime(&mut ctx, "1000-01-01 00:00:00", 0, false).unwrap(),
+                    DateTime::parse_datetime(&mut ctx, "1000-01-01 00:00:01", 0, false).unwrap(),
+                ],
+                Some(DateTime::parse_datetime(&mut ctx, "1000-01-01 00:00:00", 0, false).unwrap()),
+            ),
+            (
+                vec![
+                    DateTime::parse_datetime(&mut ctx, "1000-01-01 00:00:00", 0, false).unwrap(),
+                    DateTime::parse_datetime(&mut ctx, "1000-01-01 00:00:01", 0, false).unwrap(),
+                    DateTime::parse_datetime(&mut ctx, "1000-01-01 00:00:02", 0, false).unwrap(),
+                ],
+                Some(DateTime::parse_datetime(&mut ctx, "1000-01-01 00:00:00", 0, false).unwrap()),
+            ),
+        ];
+
+        for (args, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate::<DateTime>(ScalarFuncSig::TimeAnyValue)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
 
     #[test]
     fn test_inet_ntoa() {
@@ -261,6 +497,129 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
                 .evaluate(ScalarFuncSig::Inet6Ntoa)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_inet6_aton() {
+        let test_cases = vec![
+            (
+                Some(b"0.0.0.0".to_vec()),
+                Some(vec![0x00, 0x00, 0x00, 0x00]),
+            ),
+            (
+                Some(b"10.0.5.9".to_vec()),
+                Some(vec![0x0A, 0x00, 0x05, 0x09]),
+            ),
+            (
+                Some(b"::1.2.3.4".to_vec()),
+                Some(vec![
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+                    0x02, 0x03, 0x04,
+                ]),
+            ),
+            (
+                Some(b"::FFFF:1.2.3.4".to_vec()),
+                Some(vec![
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x01,
+                    0x02, 0x03, 0x04,
+                ]),
+            ),
+            (
+                Some(b"::fdfe:5a55:caff:fefa:9089".to_vec()),
+                Some(vec![
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFD, 0xFE, 0x5A, 0x55, 0xCA, 0xFF, 0xFE,
+                    0xFA, 0x90, 0x89,
+                ]),
+            ),
+            (
+                Some(b"fdfe::5a55:caff:fefa:9089".to_vec()),
+                Some(vec![
+                    0xFD, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5A, 0x55, 0xCA, 0xFF, 0xFE,
+                    0xFA, 0x90, 0x89,
+                ]),
+            ),
+            (
+                Some(b"2001:0db8:85a3:0000:0000:8a2e:0370:7334".to_vec()),
+                Some(vec![
+                    0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x00, 0x00, 0x00, 0x00, 0x8a, 0x2e, 0x03,
+                    0x70, 0x73, 0x34,
+                ]),
+            ),
+            (Some(b"".to_vec()), None),
+            (None, None),
+        ];
+
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::Inet6Aton)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_inet_aton() {
+        let test_cases = vec![
+            (Some(b"0.0.0.0".to_vec()), Some(0)),
+            (Some(b"255.255.255.255".to_vec()), Some(4294967295)),
+            (Some(b"127.0.0.1".to_vec()), Some(2130706433)),
+            (Some(b"113.14.22.3".to_vec()), Some(1896748547)),
+            (Some(b"1".to_vec()), Some(1)),
+            (Some(b"0.1.2".to_vec()), Some(65538)),
+            (Some(b"0.1.2.3.4".to_vec()), None),
+            (Some(b"0.1.2..3".to_vec()), None),
+            (Some(b".0.1.2.3".to_vec()), None),
+            (Some(b"0.1.2.3.".to_vec()), None),
+            (Some(b"1.-2.3.4".to_vec()), None),
+            (Some(b"".to_vec()), None),
+            (Some(b"0.0.0.256".to_vec()), None),
+            (Some(b"127.0.0,1".to_vec()), None),
+            (None, None),
+        ];
+
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::InetAton)
+                .unwrap();
+            assert_eq!(output, expect);
+        }
+    }
+
+    #[test]
+    fn test_is_ipv4_mapped() {
+        let test_cases = vec![
+            (
+                Some(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x1, 0x2, 0x3, 0x4,
+                ]),
+                Some(0),
+            ),
+            (
+                Some(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x2, 0x3, 0x4,
+                ]),
+                Some(0),
+            ),
+            (Some(vec![0x10, 0x10, 0x10, 0x10]), Some(0)),
+            (
+                Some(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xff, 0xff, 0x1, 0x2, 0x3,
+                    0x4,
+                ]),
+                Some(1),
+            ),
+            (Some(vec![0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6]), Some(0)),
+            (None, Some(0)),
+        ];
+        for (input, expect) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::IsIPv4Mapped)
                 .unwrap();
             assert_eq!(output, expect);
         }

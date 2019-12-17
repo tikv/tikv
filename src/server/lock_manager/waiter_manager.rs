@@ -6,8 +6,9 @@ use super::metrics::*;
 use crate::storage::lock_manager::Lock;
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-use crate::storage::types::ProcessResult;
-use crate::storage::{Error as StorageError, ErrorInner as StorageErrorInner, StorageCallback};
+use crate::storage::{
+    Error as StorageError, ErrorInner as StorageErrorInner, ProcessResult, StorageCallback,
+};
 use futures::Future;
 use kvproto::deadlock::WaitForEntry;
 use prometheus::HistogramTimer;
@@ -354,7 +355,10 @@ impl FutureRunnable<Task> for WaiterManager {
                     },
                     timeout,
                 );
-                TASK_COUNTER_VEC.wait_for.inc();
+                TASK_COUNTER_METRICS.with(|m| {
+                    m.wait_for.inc();
+                    m.may_flush_all()
+                });
             }
             Task::WakeUp {
                 lock_ts,
@@ -362,11 +366,17 @@ impl FutureRunnable<Task> for WaiterManager {
                 commit_ts,
             } => {
                 self.handle_wake_up(handle, lock_ts, hashes, commit_ts);
-                TASK_COUNTER_VEC.wake_up.inc();
+                TASK_COUNTER_METRICS.with(|m| {
+                    m.wake_up.inc();
+                    m.may_flush_all()
+                });
             }
             Task::Dump { cb } => {
                 self.handle_dump(cb);
-                TASK_COUNTER_VEC.dump.inc();
+                TASK_COUNTER_METRICS.with(|m| {
+                    m.dump.inc();
+                    m.may_flush_all()
+                });
             }
             Task::Deadlock {
                 start_ts,
@@ -417,9 +427,9 @@ fn extract_raw_key_from_process_result(pr: &ProcessResult) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::Key;
     use std::time::Duration;
     use test_util::KvGenerator;
+    use txn_types::Key;
 
     fn dummy_waiter(start_ts: TimeStamp, lock_ts: TimeStamp, hash: u64) -> Waiter {
         Waiter {

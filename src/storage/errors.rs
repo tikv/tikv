@@ -6,12 +6,12 @@ use std::io::Error as IoError;
 
 use kvproto::errorpb;
 
-use crate::storage::{kv::Error as EngineError, mvcc, txn};
+use crate::storage::{kv, mvcc, txn};
 
 quick_error! {
     #[derive(Debug)]
     pub enum ErrorInner {
-        Engine(err: EngineError) {
+        Engine(err: kv::Error) {
             from()
             cause(err)
             description(err.description())
@@ -42,7 +42,7 @@ quick_error! {
         SchedTooBusy {
             description("scheduler is too busy")
         }
-        GCWorkerTooBusy {
+        GcWorkerTooBusy {
             description("gc worker is too busy")
         }
         KeyTooLarge(size: usize, limit: usize) {

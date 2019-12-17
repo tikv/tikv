@@ -9,7 +9,7 @@ proc-macro = true
 
 [dependencies]
 darling = "0.10"
-syn = { version = "1", features = ["full", "extra-traits"] }
-quote = "1"
-proc-macro2 = "1"
 heck = "0.3"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "1", features = ["full", "extra-traits"] }

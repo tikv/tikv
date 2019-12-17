@@ -6,15 +6,14 @@ use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use crate::raftstore::store::keys;
 use crate::storage::mvcc::{TimeStamp, Write, WriteType};
-use crate::storage::types::Key;
 use engine::rocks::{
     CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory,
     TitanBlobIndex, UserCollectedProperties, DB,
 };
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{Error, Result};
+use txn_types::Key;
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -672,12 +671,11 @@ mod tests {
     use test::Bencher;
 
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-    use crate::raftstore::store::keys;
     use crate::storage::mvcc::{Write, WriteType};
-    use crate::storage::Key;
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::{CF_WRITE, LARGE_CFS};
+    use txn_types::Key;
 
     use super::*;
 

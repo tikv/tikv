@@ -10,6 +10,9 @@ mod threads_linux;
 #[cfg(target_os = "linux")]
 pub use self::threads_linux::{cpu_total, get_thread_ids, monitor_threads, ThreadInfoStatistics};
 
+mod tls;
+pub use self::tls::*;
+
 #[cfg(not(target_os = "linux"))]
 mod threads_dummy;
 #[cfg(not(target_os = "linux"))]

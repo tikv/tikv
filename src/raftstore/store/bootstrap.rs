@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::keys;
 use super::peer_storage::{
     write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
@@ -109,7 +108,6 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::raftstore::store::keys;
     use engine::rocks;
     use engine::Engines;
     use engine::Peekable;
