@@ -1234,7 +1234,10 @@ impl<E: Engine> GcWorker<E> {
         safe_point: TimeStamp,
         callback: Callback<()>,
     ) -> Result<()> {
-        GC_COMMAND_COUNTER_VEC_STATIC.gc.inc();
+        GC_COMMAND_COUNTER_VEC_STATIC.with(|m| {
+            m.gc.inc();
+            m.may_flush_all();
+        });
         self.worker_scheduler
             .schedule(GcTask::Gc {
                 ctx,
@@ -1256,7 +1259,10 @@ impl<E: Engine> GcWorker<E> {
         end_key: Key,
         callback: Callback<()>,
     ) -> Result<()> {
-        GC_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
+        GC_COMMAND_COUNTER_VEC_STATIC.with(|m| {
+            m.unsafe_destroy_range.inc();
+            m.may_flush_all();
+        });
         self.worker_scheduler
             .schedule(GcTask::UnsafeDestroyRange {
                 ctx,

@@ -63,7 +63,7 @@ make_static_metric! {
         "type" => GrpcTypeKind,
     }
 
-    pub struct GcCommandCounterVec: IntCounter {
+    pub struct GcCommandCounterVec: LocalIntCounter {
         "type" => GcCommandKind,
     }
 }
@@ -112,8 +112,6 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref GC_COMMAND_COUNTER_VEC_STATIC: GcCommandCounterVec =
-        GcCommandCounterVec::from(&GC_COMMAND_COUNTER_VEC);
     pub static ref GC_EMPTY_RANGE_COUNTER: IntCounter = register_int_counter!(
         "tikv_storage_gc_empty_range_total",
         "Total number of empty range found by gc"
@@ -307,4 +305,6 @@ thread_local! {
         TLSMetricGroup::new(GrpcMsgHistogramVecLocal::from(&GRPC_MSG_HISTOGRAM_VEC));
     pub static GRPC_MSG_FAIL_COUNTER: TLSMetricGroup<GrpcMsgFailCounterVec> =
         TLSMetricGroup::new(GrpcMsgFailCounterVec::from(&GRPC_MSG_FAIL_COUNTER_VEC));
+    pub static GC_COMMAND_COUNTER_VEC_STATIC: TLSMetricGroup<GcCommandCounterVec> =
+        TLSMetricGroup::new(GcCommandCounterVec::from(&GC_COMMAND_COUNTER_VEC));
 }
