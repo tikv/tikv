@@ -10,10 +10,10 @@ use crate::storage::metrics::{self, CommandPriority};
 
 /// Get a single value.
 pub struct PointGetCommand {
-    pub(super) ctx: Context,
-    pub(super) key: Key,
+    pub ctx: Context,
+    pub key: Key,
     /// None if this is a raw get, Some if this is a transactional get.
-    pub(super) ts: Option<TimeStamp>,
+    pub ts: Option<TimeStamp>,
 }
 
 impl PointGetCommand {

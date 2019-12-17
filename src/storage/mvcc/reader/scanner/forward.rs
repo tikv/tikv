@@ -4,13 +4,11 @@ use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, TimeStamp, Value, WriteRef, WriteType};
-
-use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::Result;
-use crate::storage::{Cursor, Lock, Snapshot, Statistics};
+use txn_types::{Key, Lock, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
+use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
+use crate::storage::mvcc::Result;
 
 /// Defines the behavior of the scanner.
 pub trait ScanPolicy<S: Snapshot> {
@@ -429,9 +427,9 @@ pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
 mod tests {
     use super::super::ScannerBuilder;
     use super::*;
+    use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
-    use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 
