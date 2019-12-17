@@ -7,6 +7,8 @@ use std::net::{SocketAddrV4, SocketAddrV6};
 use std::ops::{Div, Mul};
 use std::path::Path;
 use std::str::{self, FromStr};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use serde::de::{self, Unexpected, Visitor};
@@ -876,6 +878,60 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+#[derive(Default)]
+pub struct VersionTracke<T> {
+    value: RwLock<T>,
+    version: AtomicU64,
+}
+
+impl<T> VersionTracke<T> {
+    pub fn new(value: T) -> Self {
+        VersionTracke {
+            value: RwLock::new(value),
+            version: AtomicU64::new(1),
+        }
+    }
+
+    /// Update partial of the value
+    pub fn update<F>(&self, f: F)
+    where
+        F: FnOnce(&mut T),
+    {
+        f(&mut self.value.write().unwrap());
+        self.version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn value(&self) -> RwLockReadGuard<'_, T> {
+        self.value.read().unwrap()
+    }
+
+    pub fn tracker(self: Arc<Self>) -> Tracker<T> {
+        Tracker {
+            version: self.version.load(Ordering::Relaxed),
+            inner: self,
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct Tracker<T> {
+    inner: Arc<VersionTracke<T>>,
+    version: u64,
+}
+
+impl<T> Tracker<T> {
+    // The update of `value` and `version` is not atomic
+    // so there maybe false positive.
+    pub fn any_new(&mut self) -> Option<RwLockReadGuard<'_, T>> {
+        let v = self.inner.version.load(Ordering::Relaxed);
+        if self.version < v {
+            self.version = v;
+            return Some(self.inner.value.read().unwrap());
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;
@@ -1185,5 +1241,40 @@ mod tests {
         assert!(ret.is_err());
         let ret = check_data_dir_empty(tmp_path.to_str().unwrap(), "xt");
         assert!(ret.is_ok());
+    }
+
+    #[test]
+    fn test_multi_tracker() {
+        use super::*;
+        use std::sync::Arc;
+
+        #[derive(Debug, Default, PartialEq)]
+        struct Value {
+            v1: u64,
+            v2: bool,
+        }
+
+        let count = 10;
+        let vc = Arc::new(VersionTracke::new(Value::default()));
+        let mut trackers = Vec::with_capacity(count);
+        for _ in 0..count {
+            trackers.push(vc.clone().tracker());
+        }
+
+        assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
+
+        vc.update(|v| {
+            v.v1 = 1000;
+            v.v2 = true;
+        });
+        for tr in trackers.iter_mut() {
+            let incoming = tr.any_new();
+            assert!(incoming.is_some());
+            let incoming = incoming.unwrap();
+            assert_eq!(incoming.v1, 1000);
+            assert_eq!(incoming.v2, true);
+        }
+
+        assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));
     }
 }

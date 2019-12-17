@@ -1903,7 +1903,7 @@ impl ConfigHandler {
         let version = configpb::Version::default();
         let mut resp = pd_client.register_config(id, version, cfg)?;
         match resp.get_status().get_code() {
-            StatusCode::Ok || StatusCode::WrongVersion => {
+            StatusCode::Ok | StatusCode::WrongVersion => {
                 let cfg: TiKvConfig = toml::from_str(resp.get_config())?;
                 Ok((resp.take_version(), cfg))
             }
