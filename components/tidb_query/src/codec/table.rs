@@ -9,7 +9,7 @@ use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::FieldTypeTp;
 use tipb::ColumnInfo;
 
-use super::mysql::{Duration, Time};
+use super::mysql::{Duration, Enum, Time};
 use super::{datum, datum::DatumDecoder, Datum, Error, Result};
 use crate::expr::EvalContext;
 use codec::prelude::*;
@@ -125,6 +125,7 @@ pub fn flatten(ctx: &mut EvalContext, data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
         Datum::Time(t) => Ok(Datum::U64(t.to_packed_u64(ctx)?)),
+        Datum::Enum(e) => Ok(Datum::U64(e.get_value())),
         _ => Ok(data),
     }
 }
@@ -226,26 +227,25 @@ pub fn decode_index_key(
 }
 
 /// `unflatten` converts a raw datum to a column datum.
-fn unflatten(
-    ctx: &mut EvalContext,
-    datum: Datum,
-    field_type: &dyn FieldTypeAccessor,
-) -> Result<Datum> {
+fn unflatten(ctx: &mut EvalContext, datum: Datum, col_info: &ColumnInfo) -> Result<Datum> {
     if let Datum::Null = datum {
         return Ok(datum);
     }
-    let tp = field_type.tp();
+    let tp = col_info.tp();
     match tp {
         FieldTypeTp::Float => Ok(Datum::F64(f64::from(datum.f64() as f32))),
         FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
-            let fsp = field_type.decimal() as i8;
+            let fsp = col_info.decimal() as i8;
             let t = Time::from_packed_u64(ctx, datum.u64(), tp.try_into()?, fsp)?;
             Ok(Datum::Time(t))
         }
         FieldTypeTp::Duration => {
-            Duration::from_nanos(datum.i64(), field_type.decimal() as i8).map(Datum::Dur)
+            Duration::from_nanos(datum.i64(), col_info.decimal() as i8).map(Datum::Dur)
         }
-        FieldTypeTp::Enum | FieldTypeTp::Set | FieldTypeTp::Bit => Err(box_err!(
+        FieldTypeTp::Enum => {
+            Enum::try_from_value(datum.u64(), col_info.get_elems().to_vec()).map(Datum::Enum)
+        }
+        FieldTypeTp::Set | FieldTypeTp::Bit => Err(box_err!(
             "unflatten field type {} is not supported yet.",
             tp
         )),
