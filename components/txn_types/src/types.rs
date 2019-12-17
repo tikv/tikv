@@ -1,5 +1,5 @@
-use super::timestamp::TimeStamp;
-use super::Error;
+use crate::timestamp::TimeStamp;
+use crate::Error;
 
 use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
