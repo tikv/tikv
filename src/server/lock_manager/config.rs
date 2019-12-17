@@ -16,7 +16,7 @@ impl Default for Config {
         Self {
             enabled: true,
             wait_for_lock_timeout: 3000,
-            wake_up_delay_duration: 1,
+            wake_up_delay_duration: 100,
         }
     }
 }
