@@ -544,7 +544,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.kv_get.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_get.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_get.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -569,7 +572,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.kv_scan.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_scan.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_scan.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -599,7 +605,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.kv_prewrite.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_prewrite.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -632,7 +641,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_pessimistic_lock.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -666,7 +678,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.may_flush_all();
                 });
 
-                GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_pessimistic_rollback.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -698,7 +713,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.may_flush_all();
                 });
 
-                GRPC_MSG_FAIL_COUNTER.kv_commit.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_commit.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -733,7 +751,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.kv_cleanup.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_cleanup.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_cleanup.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -764,7 +785,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.kv_batch_get.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_batch_get.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_batch_get.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -797,7 +821,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_batch_rollback.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -830,7 +857,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_txn_heart_beat.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_txn_heart_beat.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -863,7 +893,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_check_txn_status.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_check_txn_status.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -894,7 +927,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.kv_scan_lock.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_scan_lock.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_scan_lock.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -927,7 +963,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_resolve_lock.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -953,7 +992,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.kv_gc.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_gc.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_gc.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -986,7 +1028,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.kv_delete_range.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.kv_delete_range.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1017,7 +1062,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.raw_get.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.raw_get.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.raw_get.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1048,7 +1096,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.raw_batch_get.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.raw_batch_get.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.raw_batch_get.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1079,7 +1130,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.raw_scan.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.raw_scan.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.raw_scan.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1110,7 +1164,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.raw_batch_scan.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.raw_batch_scan.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.raw_batch_scan.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1140,7 +1197,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.raw_put.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.raw_put.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.raw_put.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1171,7 +1231,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.raw_batch_put.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.raw_batch_put.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.raw_batch_put.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1202,7 +1265,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.raw_delete.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.raw_delete.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.raw_delete.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1235,7 +1301,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.raw_batch_delete.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.raw_batch_delete.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1268,7 +1337,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.raw_delete_range.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.raw_delete_range.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1321,7 +1393,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.unsafe_destroy_range.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1347,7 +1422,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.coprocessor.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.coprocessor.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1390,7 +1468,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.coprocessor_stream.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1527,7 +1608,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.mvcc_get_by_key.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.mvcc_get_by_key.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1582,7 +1666,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                         .observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.mvcc_get_by_start_ts.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.mvcc_get_by_start_ts.inc();
+                    m.may_flush_all();
+                });
             });
         ctx.spawn(future);
     }
@@ -1662,7 +1749,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.split_region.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.split_region.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.split_region.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1740,7 +1830,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     m.read_index.observe(duration_to_sec(instant.elapsed()));
                     m.may_flush_all();
                 });
-                GRPC_MSG_FAIL_COUNTER.read_index.inc();
+                GRPC_MSG_FAIL_COUNTER.with(|m| {
+                    m.read_index.inc();
+                    m.may_flush_all();
+                });
             });
 
         ctx.spawn(future);
@@ -1959,28 +2052,48 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             let instant = TiInstant::now_coarse();
             let resp = future_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Get))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_get.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_get);
         }
         Some(batch_commands_request::request::Cmd::Scan(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Scan))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_scan.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_scan);
         }
         Some(batch_commands_request::request::Cmd::Prewrite(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_prewrite(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Prewrite))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_prewrite.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_prewrite);
         }
         Some(batch_commands_request::request::Cmd::Commit(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_commit(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Commit))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_commit.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_commit.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_commit);
         }
         Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
@@ -1988,14 +2101,24 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             let instant = TiInstant::now_coarse();
             let resp = future_cleanup(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Cleanup))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_cleanup.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_cleanup.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_cleanup);
         }
         Some(batch_commands_request::request::Cmd::BatchGet(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_batch_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::BatchGet))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_get.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_batch_get.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_batch_get);
         }
         Some(batch_commands_request::request::Cmd::BatchRollback(req)) => {
@@ -2004,14 +2127,24 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 .map(oneof!(
                     batch_commands_response::response::Cmd::BatchRollback
                 ))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_batch_rollback.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_batch_rollback);
         }
         Some(batch_commands_request::request::Cmd::TxnHeartBeat(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_txn_heart_beat(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::TxnHeartBeat))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_txn_heart_beat.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_txn_heart_beat.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_txn_heart_beat);
         }
         Some(batch_commands_request::request::Cmd::CheckTxnStatus(req)) => {
@@ -2020,7 +2153,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 .map(oneof!(
                     batch_commands_response::response::Cmd::CheckTxnStatus
                 ))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_check_txn_status.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_check_txn_status.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(
                 id,
                 resp,
@@ -2033,63 +2171,108 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             let instant = TiInstant::now_coarse();
             let resp = future_scan_lock(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::ScanLock))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan_lock.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_scan_lock.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_scan_lock);
         }
         Some(batch_commands_request::request::Cmd::ResolveLock(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_resolve_lock(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::ResolveLock))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_resolve_lock.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_resolve_lock);
         }
         Some(batch_commands_request::request::Cmd::Gc(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_gc(&gc_worker, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Gc))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_gc.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_gc.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_gc);
         }
         Some(batch_commands_request::request::Cmd::DeleteRange(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_delete_range(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::DeleteRange))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_delete_range.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_delete_range.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_delete_range);
         }
         Some(batch_commands_request::request::Cmd::RawGet(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_raw_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawGet))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.raw_get.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_get);
         }
         Some(batch_commands_request::request::Cmd::RawBatchGet(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_raw_batch_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchGet))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_get.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.raw_batch_get.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_get);
         }
         Some(batch_commands_request::request::Cmd::RawPut(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_raw_put(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawPut))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_put.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.raw_put.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_put);
         }
         Some(batch_commands_request::request::Cmd::RawBatchPut(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_raw_batch_put(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchPut))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_put.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.raw_batch_put.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_put);
         }
         Some(batch_commands_request::request::Cmd::RawDelete(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_raw_delete(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawDelete))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.raw_delete.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_delete);
         }
         Some(batch_commands_request::request::Cmd::RawBatchDelete(req)) => {
@@ -2098,14 +2281,24 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 .map(oneof!(
                     batch_commands_response::response::Cmd::RawBatchDelete
                 ))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_delete.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.raw_batch_delete.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_delete);
         }
         Some(batch_commands_request::request::Cmd::RawScan(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_raw_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawScan))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_scan.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.raw_scan.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_scan);
         }
         Some(batch_commands_request::request::Cmd::RawDeleteRange(req)) => {
@@ -2114,21 +2307,36 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 .map(oneof!(
                     batch_commands_response::response::Cmd::RawDeleteRange
                 ))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete_range.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.raw_delete_range.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_delete_range);
         }
         Some(batch_commands_request::request::Cmd::RawBatchScan(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_raw_batch_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchScan))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_scan.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.raw_batch_scan.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_scan);
         }
         Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
             let instant = TiInstant::now_coarse();
             let resp = future_cop(&cop, req, Some(peer.to_string()))
                 .map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.coprocessor.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::coprocessor);
         }
         Some(batch_commands_request::request::Cmd::PessimisticLock(req)) => {
@@ -2137,7 +2345,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 .map(oneof!(
                     batch_commands_response::response::Cmd::PessimisticLock
                 ))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_pessimistic_lock.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(
                 id,
                 resp,
@@ -2152,7 +2365,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
                 .map(oneof!(
                     batch_commands_response::response::Cmd::PessimisticRollback
                 ))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.kv_pessimistic_rollback.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(
                 id,
                 resp,
@@ -2165,7 +2383,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             let instant = TiInstant::now_coarse();
             let resp = future_handle_empty(req)
                 .map(oneof!(batch_commands_response::response::Cmd::Empty))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
+                .map_err(|_| {
+                    GRPC_MSG_FAIL_COUNTER.with(|m| {
+                        m.invalid.inc();
+                        m.may_flush_all();
+                    })
+                });
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::invalid);
         }
     }

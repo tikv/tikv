@@ -59,7 +59,7 @@ make_static_metric! {
         "type" => GrpcTypeKind,
     }
 
-    pub struct GrpcMsgFailCounterVec: IntCounter {
+    pub struct GrpcMsgFailCounterVec: LocalIntCounter {
         "type" => GrpcTypeKind,
     }
 
@@ -88,8 +88,7 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref GRPC_MSG_FAIL_COUNTER: GrpcMsgFailCounterVec = register_static_int_counter_vec!(
-        GrpcMsgFailCounterVec,
+    pub static ref GRPC_MSG_FAIL_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_grpc_msg_fail_total",
         "Total number of handle grpc message failure",
         &["type"]
@@ -306,4 +305,6 @@ lazy_static! {
 thread_local! {
     pub static GRPC_MSG_HISTOGRAM: TLSMetricGroup<GrpcMsgHistogramVecLocal> =
         TLSMetricGroup::new(GrpcMsgHistogramVecLocal::from(&GRPC_MSG_HISTOGRAM_VEC));
+    pub static GRPC_MSG_FAIL_COUNTER: TLSMetricGroup<GrpcMsgFailCounterVec> =
+        TLSMetricGroup::new(GrpcMsgFailCounterVec::from(&GRPC_MSG_FAIL_COUNTER_VEC));
 }
