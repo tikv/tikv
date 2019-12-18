@@ -24,6 +24,16 @@ impl WaitTimeout {
             _ => panic!("expected WaitTimeout::Millis"),
         }
     }
+
+    pub fn update_if_greater(&mut self, other: u64) {
+        match *self {
+            WaitTimeout::Default => {}
+            WaitTimeout::Millis(ms) if ms > other => {}
+            _ => return,
+        }
+
+        *self = WaitTimeout::Millis(other);
+    }
 }
 
 /// Timeouts are encoded as i64s in protobufs where 0 means using default timeout.

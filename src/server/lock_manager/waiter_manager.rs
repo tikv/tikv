@@ -249,15 +249,12 @@ impl WaiterManager {
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
             // The retry mechanism is necessary. If the region leader is changed,
-            // all the waiters waiting for locks in this region won't be waked up timely
+            // all the waiters waiting for locks in this region won't be woken up timely
             // because commit or rollback request will be sent to the new leader.
             //
             // `default_wait_for_lock_timeout` is the max timeout.
-            if timeout == WaitTimeout::Default
-                || timeout.expect_millis() > self.default_wait_for_lock_timeout
-            {
-                timeout = self.default_wait_for_lock_timeout.into();
-            }
+            timeout.update_if_greater(self.default_wait_for_lock_timeout);
+
             let when = Instant::now() + Duration::from_millis(timeout.expect_millis());
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)

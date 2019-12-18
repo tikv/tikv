@@ -566,7 +566,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             min_commit_ts,
         }) => {
             let rows = mutations.len();
-            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())?;
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
 
             let mut locks = vec![];
             for (m, is_pessimistic_lock) in mutations.into_iter() {

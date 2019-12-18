@@ -94,29 +94,6 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.push(write);
     }
 
-    fn lock(
-        &self,
-        lock_type: LockType,
-        primary: &[u8],
-        short_value: Option<Value>,
-        lock_ttl: u64,
-        for_update_ts: TimeStamp,
-        txn_size: u64,
-        min_commit_ts: TimeStamp,
-    ) {
-        let lock = Lock::new(
-            lock_type,
-            primary.to_vec(),
-            self.start_ts,
-            lock_ttl,
-            short_value,
-            for_update_ts,
-            txn_size,
-            min_commit_ts,
-        );
-        self.put_lock(key, &lock);
-    }
-
     fn unlock_key(&mut self, key: Key) {
         let write = Modify::Delete(CF_LOCK, key);
         self.write_size += write.size();
@@ -162,48 +139,28 @@ impl<S: Snapshot> MvccTxn<S> {
         txn_size: u64,
         min_commit_ts: TimeStamp,
     ) {
-        // If there is a value we must store it in the lock or as a regular value.
+        let mut lock = Lock::new(
+            lock_type,
+            primary.to_vec(),
+            self.start_ts,
+            lock_ttl,
+            None,
+            for_update_ts,
+            txn_size,
+            min_commit_ts,
+        );
+
         if let Some(value) = value {
             if is_short_value(&value) {
                 // If the value is short, embed it in Lock.
-                self.lock_key(
-                    key,
-                    lock_type,
-                    primary,
-                    Some(value),
-                    lock_ttl,
-                    for_update_ts,
-                    txn_size,
-                    min_commit_ts,
-                );
+                lock.short_value = Some(value);
             } else {
                 // value is long
-                let ts = self.start_ts;
-                self.put_value(key.clone(), ts, value);
-
-                self.lock_key(
-                    key,
-                    lock_type,
-                    primary,
-                    None,
-                    lock_ttl,
-                    for_update_ts,
-                    txn_size,
-                    min_commit_ts,
-                );
+                self.put_value(key.clone(), self.start_ts, value);
             }
-        } else {
-            self.lock_key(
-                key,
-                lock_type,
-                primary,
-                None,
-                lock_ttl,
-                for_update_ts,
-                txn_size,
-                min_commit_ts,
-            );
         }
+
+        self.put_lock(key, &lock);
     }
 
     fn rollback_lock(&mut self, key: Key, lock: &Lock, is_pessimistic_txn: bool) -> Result<()> {
@@ -271,6 +228,24 @@ impl<S: Snapshot> MvccTxn<S> {
         lock_ttl: u64,
         for_update_ts: TimeStamp,
     ) -> Result<()> {
+        fn pessimistic_lock(
+            primary: &[u8],
+            start_ts: TimeStamp,
+            lock_ttl: u64,
+            for_update_ts: TimeStamp,
+        ) -> Lock {
+            Lock::new(
+                LockType::Pessimistic,
+                primary.to_vec(),
+                start_ts,
+                lock_ttl,
+                None,
+                for_update_ts,
+                0,
+                TimeStamp::default(),
+            )
+        }
+
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 return Err(ErrorInner::KeyIsLocked(lock.into_lock_info(key.into_raw()?)).into());
@@ -285,16 +260,8 @@ impl<S: Snapshot> MvccTxn<S> {
             }
             // Overwrite the lock with small for_update_ts
             if for_update_ts > lock.for_update_ts {
-                self.lock_key(
-                    key,
-                    LockType::Pessimistic,
-                    primary.to_vec(),
-                    None,
-                    lock_ttl,
-                    for_update_ts,
-                    0,
-                    TimeStamp::default(),
-                );
+                let lock = pessimistic_lock(primary, self.start_ts, lock_ttl, for_update_ts);
+                self.put_lock(key, &lock);
             } else {
                 MVCC_DUPLICATE_CMD_COUNTER_VEC
                     .acquire_pessimistic_lock
@@ -353,16 +320,8 @@ impl<S: Snapshot> MvccTxn<S> {
             self.check_data_constraint(should_not_exist, &write, commit_ts, &key)?;
         }
 
-        self.lock_key(
-            key,
-            LockType::Pessimistic,
-            primary.to_vec(),
-            None,
-            lock_ttl,
-            for_update_ts,
-            0,
-            TimeStamp::default(),
-        );
+        let lock = pessimistic_lock(primary, self.start_ts, lock_ttl, for_update_ts);
+        self.put_lock(key, &lock);
 
         Ok(())
     }
