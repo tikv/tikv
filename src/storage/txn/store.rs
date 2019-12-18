@@ -2,16 +2,14 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
+use super::{Error, ErrorInner, Result};
+use crate::storage::kv::{Snapshot, Statistics};
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{
-    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, Scanner as MvccScanner,
-    ScannerBuilder, WriteRef,
+    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, PointGetter,
+    PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
 };
-use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TimeStamp, TsSet};
-use crate::storage::{Snapshot, Statistics};
-use keys::{Key, KvPair, Value};
-
-use super::{Error, ErrorInner, Result};
+use txn_types::{Key, KvPair, TimeStamp, TsSet, Value, WriteRef};
 
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
@@ -134,7 +132,9 @@ impl TxnEntry {
                 } else {
                     let k = Key::from_encoded(write.0).truncate_ts()?;
                     let k = k.into_raw()?;
-                    let v = WriteRef::parse(&write.1)?.to_owned();
+                    let v = WriteRef::parse(&write.1)
+                        .map_err(MvccError::from)?
+                        .to_owned();
                     let v = v.short_value.unwrap();
                     Ok((k, v))
                 }
@@ -514,11 +514,12 @@ impl Scanner for FixtureStoreScanner {
 mod tests {
     use super::*;
     use crate::storage::kv::{
-        Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+        Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+        TestEngineBuilder,
     };
-    use crate::storage::mvcc::MvccTxn;
-    use crate::storage::{CfName, Cursor, Iterator, Mutation, Options, TestEngineBuilder};
-    use engine::IterOption;
+    use crate::storage::mvcc::{Mutation, MvccTxn};
+    use crate::storage::txn::commands::Options;
+    use engine::{CfName, IterOption};
     use kvproto::kvrpcpb::Context;
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -557,7 +558,7 @@ mod tests {
             let pk = primary_key.as_bytes();
             // do prewrite.
             {
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.prewrite(
@@ -572,7 +573,7 @@ mod tests {
             self.refresh_snapshot();
             // do commit
             {
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true);
                 for key in &self.keys {
                     let key = key.as_bytes();
                     txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
@@ -877,7 +878,7 @@ mod tests {
         data.insert(
             Key::from_raw(b"zz"),
             Err(Error::from(ErrorInner::Mvcc(MvccError::from(
-                MvccErrorInner::BadFormatLock,
+                txn_types::Error::BadFormatLock,
             )))),
         );
 

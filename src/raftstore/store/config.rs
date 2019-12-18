@@ -5,9 +5,12 @@ use std::u64;
 use time::Duration as TimeDuration;
 
 use crate::raftstore::{coprocessor, Result};
+use configuration::Configuration;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+// TODO: currently we derive Configuration for test, add #[config(skip)] later
+// on fields that corresponding config not support change dynamically
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
