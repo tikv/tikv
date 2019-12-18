@@ -4,6 +4,7 @@ use num::traits::Pow;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::codec::mysql::{RoundMode, DEFAULT_FSP};
 use crate::codec::{self, Error};
 use crate::expr::EvalContext;
 use crate::expr_util::rand::MySQLRng;
@@ -425,12 +426,44 @@ pub fn conv(
     }
 }
 
+#[inline]
+#[rpn_fn]
+pub fn round_real(arg: &Option<Real>) -> Result<Option<Real>> {
+    match arg {
+        Some(arg) => Ok(Real::new(arg.round()).ok()),
+        None => Ok(None),
+    }
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_int(arg: &Option<Int>) -> Result<Option<Int>> {
+    Ok(*arg)
+}
+
+#[inline]
+#[rpn_fn]
+pub fn round_dec(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
+    match arg {
+        Some(arg) => {
+            let res: codec::Result<Decimal> = arg
+                .to_owned()
+                .round(DEFAULT_FSP, RoundMode::HalfEven)
+                .into();
+            Ok(Some(res?))
+        }
+        None => Ok(None),
+    }
+}
+
 thread_local! {
    static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+    use std::{f64, i64};
     use tipb::ScalarFuncSig;
 
     use super::*;
@@ -1322,6 +1355,65 @@ mod tests {
                 .evaluate::<Bytes>(ScalarFuncSig::Conv)
                 .unwrap();
             assert_eq!(got, e);
+        }
+    }
+
+    #[test]
+    fn test_round_real() {
+        let test_cases = vec![
+            (Some(Real::from(-3.12_f64)), Some(Real::from(-3f64))),
+            (Some(Real::from(f64::MAX)), Some(Real::from(f64::MAX))),
+            (Some(Real::from(f64::MIN)), Some(Real::from(f64::MIN))),
+            (None, None),
+        ];
+
+        for (arg, exp) in test_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Real>(ScalarFuncSig::RoundReal)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_round_int() {
+        let test_cases = vec![
+            (Some(Int::from(1)), Some(Int::from(1))),
+            (Some(Int::from(i64::MAX)), Some(Int::from(i64::MAX))),
+            (Some(Int::from(i64::MIN)), Some(Int::from(i64::MIN))),
+            (None, None),
+        ];
+
+        for (arg, exp) in test_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Int>(ScalarFuncSig::RoundInt)
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_round_dec() {
+        let test_cases = vec![
+            (
+                Some(Decimal::from_str("123.1").unwrap()),
+                Some(Decimal::from_str("123.0").unwrap()),
+            ),
+            (
+                Some(Decimal::from_str("-1111.1").unwrap()),
+                Some(Decimal::from_str("-1111.0").unwrap()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Decimal>(ScalarFuncSig::RoundDec)
+                .unwrap();
+            assert_eq!(output, expect_output);
         }
     }
 }

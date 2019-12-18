@@ -32,6 +32,7 @@ pub use self::util::RECONNECT_INTERVAL_SEC;
 use std::ops::Deref;
 
 use futures::Future;
+use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb;
 use tikv_util::time::UnixSecs;
@@ -224,6 +225,32 @@ pub trait PdClient: Send + Sync {
 
     /// Gets current operator of the region
     fn get_operator(&self, _region_id: u64) -> Result<pdpb::GetOperatorResponse> {
+        unimplemented!();
+    }
+
+    fn register_config(
+        &self,
+        _id: String,
+        _version: configpb::Version,
+        _cfg: String,
+    ) -> Result<configpb::CreateResponse> {
+        unimplemented!()
+    }
+
+    fn get_config(
+        &self,
+        _id: String,
+        _version: configpb::Version,
+    ) -> Result<configpb::GetResponse> {
+        unimplemented!()
+    }
+
+    fn update_config(
+        &self,
+        _id: String,
+        _version: configpb::Version,
+        _entries: Vec<configpb::ConfigEntry>,
+    ) -> Result<configpb::UpdateResponse> {
         unimplemented!();
     }
 }

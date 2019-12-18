@@ -4,13 +4,11 @@ use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, TimeStamp, Value, Write, WriteRef, WriteType};
-
-use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::{Error, Result};
-use crate::storage::{Cursor, Lock, Snapshot, Statistics};
+use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
+use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
+use crate::storage::mvcc::{Error, Result};
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -26,8 +24,8 @@ const REVERSE_SEEK_BOUND: u64 = 16;
 /// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
 /// isolation level is SI, locks will be checked first.
 ///
-/// Use `ScannerBuilder` to build `BackwardScanner`.
-pub struct BackwardScanner<S: Snapshot> {
+/// Use `ScannerBuilder` to build `BackwardKvScanner`.
+pub struct BackwardKvScanner<S: Snapshot> {
     cfg: ScannerConfig<S>,
     lock_cursor: Cursor<S::Iter>,
     write_cursor: Cursor<S::Iter>,
@@ -38,13 +36,13 @@ pub struct BackwardScanner<S: Snapshot> {
     statistics: Statistics,
 }
 
-impl<S: Snapshot> BackwardScanner<S> {
+impl<S: Snapshot> BackwardKvScanner<S> {
     pub fn new(
         cfg: ScannerConfig<S>,
         lock_cursor: Cursor<S::Iter>,
         write_cursor: Cursor<S::Iter>,
-    ) -> BackwardScanner<S> {
-        BackwardScanner {
+    ) -> BackwardKvScanner<S> {
+        BackwardKvScanner {
             cfg,
             lock_cursor,
             write_cursor,
@@ -84,7 +82,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         }
 
         // Similar to forward scanner, the general idea is to simultaneously step write
-        // cursor and lock cursor. Please refer to `ForwardScanner` for details.
+        // cursor and lock cursor. Please refer to `ForwardKvScanner` for details.
 
         loop {
             let (current_user_key, has_write, has_lock) = {
@@ -370,9 +368,9 @@ impl<S: Snapshot> BackwardScanner<S> {
 mod tests {
     use super::super::ScannerBuilder;
     use super::*;
+    use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
-    use crate::storage::{Engine, TestEngineBuilder};
     use kvproto::kvrpcpb::Context;
 
     #[test]
@@ -619,7 +617,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
     }
 
-    /// Check whether everything works as usual when `BackwardScanner::reverse_get()` goes
+    /// Check whether everything works as usual when `BackwardKvScanner::reverse_get()` goes
     /// out of bound.
     ///
     /// Case 1. prev out of bound, next_version is None.
@@ -687,7 +685,7 @@ mod tests {
         assert_eq!(statistics.write.prev, 0);
     }
 
-    /// Check whether everything works as usual when `BackwardScanner::reverse_get()` goes
+    /// Check whether everything works as usual when `BackwardKvScanner::reverse_get()` goes
     /// out of bound.
     ///
     /// Case 2. prev out of bound, next_version is Some.
@@ -761,7 +759,7 @@ mod tests {
     }
 
     /// Check whether everything works as usual when
-    /// `BackwardScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
     ///
     /// Case 1. prev() out of bound
     #[test]
@@ -832,7 +830,7 @@ mod tests {
     }
 
     /// Check whether everything works as usual when
-    /// `BackwardScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
     ///
     /// Case 2. seek_for_prev() out of bound
     #[test]
@@ -909,7 +907,7 @@ mod tests {
     }
 
     /// Check whether everything works as usual when
-    /// `BackwardScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
+    /// `BackwardKvScanner::move_write_cursor_to_prev_user_key()` goes out of bound.
     ///
     /// Case 3. a more complicated case
     #[test]
