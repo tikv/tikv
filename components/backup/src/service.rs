@@ -85,9 +85,9 @@ mod tests {
     use super::*;
     use crate::endpoint::tests::*;
     use external_storage::make_local_backend;
-    use keys::TimeStamp;
     use tikv::storage::mvcc::tests::*;
     use tikv_util::mpsc::Receiver;
+    use txn_types::TimeStamp;
 
     fn new_rpc_suite() -> (Server, BackupClient, Receiver<Option<Task>>) {
         let env = Arc::new(EnvBuilder::new().build());

@@ -56,6 +56,10 @@ impl ImportModeSwitcher {
         self.mode = SwitchMode::Import;
         Ok(())
     }
+
+    pub fn get_mode(&self) -> SwitchMode {
+        self.mode
+    }
 }
 
 struct ImportModeDBOptions {

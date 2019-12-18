@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::mpsc::{self, Sender};
 use std::thread::{self, Builder, JoinHandle};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use time::{Duration as TimeDuration, Timespec};
 
@@ -33,6 +33,33 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() * 1_000_000_000 + nanos
+}
+
+/// A time in seconds since the start of the Unix epoch.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct UnixSecs(u64);
+
+impl UnixSecs {
+    pub fn now() -> UnixSecs {
+        UnixSecs(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+    }
+
+    pub fn zero() -> UnixSecs {
+        UnixSecs(0)
+    }
+
+    pub fn into_inner(self) -> u64 {
+        self.0
+    }
+
+    pub fn is_zero(self) -> bool {
+        self.0 == 0
+    }
 }
 
 pub struct SlowTimer {
