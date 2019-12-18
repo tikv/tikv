@@ -190,10 +190,10 @@ impl PendingDeleteRanges {
     }
 
     /// Gets all timeout ranges info.
-    pub fn timeout_ranges<'a>(
-        &'a self,
+    pub fn timeout_ranges(
+        &self,
         oldest_sequence: u64,
-    ) -> impl Iterator<Item = (u64, &'a [u8], &'a [u8])> {
+    ) -> impl Iterator<Item = (u64, &[u8], &[u8])> {
         self.ranges
             .iter()
             .filter(move |&(_, info)| info.stale_sequence < oldest_sequence)
@@ -693,6 +693,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::string_lit_as_bytes)]
     fn test_pending_delete_ranges() {
         let mut pending_delete_ranges = PendingDeleteRanges::default();
         let id = 0;
