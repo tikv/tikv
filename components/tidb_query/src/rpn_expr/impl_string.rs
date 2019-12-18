@@ -4,8 +4,9 @@ use std::str;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::rpn_expr::types::RpnFnCallExtra;
 use crate::Result;
-use tidb_query_datatype::EvalType;
+use tidb_query_datatype::*;
 
 const SPACE: u8 = 0o40u8;
 
@@ -197,6 +198,24 @@ pub fn right_utf8(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes
     }
 }
 
+#[rpn_fn(capture = [extra])]
+#[inline]
+pub fn upper(extra: &RpnFnCallExtra, arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    match arg.as_ref() {
+        Some(bytes) => {
+            if extra.ret_field_type.as_accessor().is_binary_string_like() {
+                return Ok(Some(bytes.to_vec()));
+            }
+
+            match str::from_utf8(bytes) {
+                Ok(s) => Ok(Some(s.to_uppercase().into_bytes())),
+                Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
 #[rpn_fn]
 #[inline]
 pub fn hex_str_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
@@ -338,7 +357,7 @@ mod tests {
     use super::*;
 
     use std::{f64, i64};
-    use tipb::ScalarFuncSig;
+    use tipb::{FieldType, ScalarFuncSig};
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
@@ -928,6 +947,52 @@ mod tests {
                 .evaluate(ScalarFuncSig::RightUtf8)
                 .unwrap();
             assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_upper() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(b"HELLO".to_vec())),
+            (Some(b"123".to_vec()), Some(b"123".to_vec())),
+            (
+                Some("café".as_bytes().to_vec()),
+                Some("CAFÉ".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("ночь на окраине москвы".as_bytes().to_vec()),
+                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+            ),
+            (
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, exp) in cases {
+            // Test binary string case
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::Upper)
+                .unwrap();
+            assert_eq!(output, exp);
+
+            // Test non-binary string case
+            let mut ft = FieldType::default();
+            ft.as_mut_accessor()
+                .set_tp(FieldTypeTp::String)
+                .set_collation(Collation::Binary);
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .return_field_type(ft)
+                .evaluate(ScalarFuncSig::Upper)
+                .unwrap();
+            assert_eq!(output, arg);
         }
     }
 
