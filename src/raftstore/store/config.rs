@@ -533,7 +533,6 @@ impl Config {
     }
 }
 
-// TODO: may VersionTrack<ConfigChange> is ok
 pub type RaftstoreConfigManager = Arc<VersionTrack<Config>>;
 
 impl ConfigManager for RaftstoreConfigManager {

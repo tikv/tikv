@@ -2959,6 +2959,7 @@ mod tests {
 
     use crate::raftstore::store::{Config, RegionTask};
     use test_sst_importer::*;
+    use tikv_util::config::VersionTrack;
     use tikv_util::worker::dummy_scheduler;
 
     use super::*;
@@ -3094,8 +3095,8 @@ mod tests {
         let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
-        let cfg = Arc::new(Config::default());
-        let (router, mut system) = create_apply_batch_system(&cfg);
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3439,8 +3440,8 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let (region_scheduler, _) = dummy_scheduler();
         let sender = Notifier::Sender(tx);
-        let cfg = Arc::new(Config::default());
-        let (router, mut system) = create_apply_batch_system(&cfg);
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3780,8 +3781,8 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let host = Arc::new(CoprocessorHost::default());
         let (region_scheduler, _) = dummy_scheduler();
-        let cfg = Arc::new(Config::default());
-        let (router, mut system) = create_apply_batch_system(&cfg);
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,

@@ -584,7 +584,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                 self.messages_per_tick = incoming.messages_per_tick;
             }
             self.poll_ctx.cfg = incoming.clone();
-            info!("raftstore config updated!")
+            info!("raftstore config updated!");
         }
     }
 
