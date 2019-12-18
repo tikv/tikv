@@ -75,6 +75,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58982858be7540a465c790b95aaea6710e5139bf8956b1d1344d014fa40100b0"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "393356ed99aa7bff0ac486dde592633b83ab02bd254d8c209d5b9f1d0f533480"
+dependencies = [
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
+ "syn 1.0.5",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3693,6 +3714,7 @@ dependencies = [
 name = "tikv"
 version = "4.0.0-alpha"
 dependencies = [
+ "async-stream",
  "async-trait",
  "backtrace",
  "bitflags",

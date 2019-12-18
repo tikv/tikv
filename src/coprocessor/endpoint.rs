@@ -3,8 +3,9 @@
 use std::marker::PhantomData;
 use std::time::Duration;
 
+use async_stream::try_stream;
 use futures::sync::mpsc;
-use futures::{future, stream, Future, Stream};
+use futures::{future, stream, Future};
 use futures03::prelude::*;
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
@@ -317,12 +318,16 @@ impl<E: Engine> Endpoint<E> {
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
     /// the given `handler_builder`. Finally, it calls the unary request interface of the
     /// `RequestHandler` to process the request and produce a result.
-    // TODO: Convert to use async / await.
     async fn handle_unary_request_impl(
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
+        // When this function is being executed, it may be queued for a long time, so that
+        // deadline may exceed.
         tracker.req_ctx.deadline.check()?;
+
+        // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
+        // exists.
         let snapshot = unsafe {
             with_tls_engine(|engine| Self::async_snapshot_new(engine, &tracker.req_ctx.context))
         }
@@ -414,92 +419,55 @@ impl<E: Engine> Endpoint<E> {
     fn handle_stream_request_impl(
         tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Stream<Item = coppb::Response, Error = Error> {
+    ) -> impl Stream<Item = Result<coppb::Response>> {
+        try_stream! {
         // When this function is being executed, it may be queued for a long time, so that
-        // deadline may exceed.
+            // deadline may exceed.
+            tracker.req_ctx.deadline.check()?;
 
-        let tracker_and_handler_future =
-            future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
-                .and_then(move |_| {
-                    // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
-                    // exists.
-                    unsafe {
-                        with_tls_engine(|engine| {
-                            Self::async_snapshot(engine, &tracker.req_ctx.context)
-                                .map(|snapshot| (tracker, snapshot))
-                        })
+            // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
+            // exists.
+            let snapshot = unsafe {
+                with_tls_engine(|engine| Self::async_snapshot_new(engine, &tracker.req_ctx.context))
+            }
+            .await?;
+            // When snapshot is retrieved, deadline may exceed.
+            tracker.req_ctx.deadline.check()?;
+
+            let mut handler = handler_builder(snapshot, &tracker.req_ctx)?;
+
+            tracker.on_begin_all_items();
+
+            loop {
+                tracker.on_begin_item();
+
+                let result = handler.handle_streaming_request();
+                let mut storage_stats = Statistics::default();
+                handler.collect_scan_statistics(&mut storage_stats);
+
+                tracker.on_finish_item(Some(storage_stats));
+                let exec_details = tracker.get_item_exec_details();
+
+                match result {
+                    Err(e) => {
+                        yield make_error_response(e);
+                        break;
+                    },
+                    Ok((None, _)) => {
+                        break;
                     }
-                })
-                .and_then(move |(tracker, snapshot)| {
-                    // When snapshot is retrieved, deadline may exceed.
-                    future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
-                        .map(|_| (tracker, snapshot))
-                })
-                .and_then(move |(tracker, snapshot)| {
-                    future::result(handler_builder(snapshot, &tracker.req_ctx))
-                        .map(|handler| (tracker, handler))
-                });
-
-        tracker_and_handler_future
-            .map(|(mut tracker, handler)| {
-                tracker.on_begin_all_items();
-
-                // The state is `Option<(tracker, handler, finished)>`, `None` indicates finished.
-                // For every stream item except the last one, the type is `Either::Left(Response)`.
-                // For last stream item, the type is `Either::Right(Tracker)` so that we can do
-                // more things for tracker later.
-                let initial_state = Some((tracker, handler, false));
-                stream::unfold(initial_state, |state| {
-                    match state {
-                        Some((mut tracker, mut handler, finished)) => {
-                            if finished {
-                                // Emit tracker as the last item.
-                                let yielded = Either::Right(tracker);
-                                let next_state = None;
-                                return Some(Ok((yielded, next_state)));
-                            }
-
-                            // There are future items
-                            tracker.on_begin_item();
-
-                            let result = handler.handle_streaming_request();
-                            let mut storage_stats = Statistics::default();
-                            handler.collect_scan_statistics(&mut storage_stats);
-
-                            tracker.on_finish_item(Some(storage_stats));
-                            let exec_details = tracker.get_item_exec_details();
-
-                            let (mut resp, finished) = match result {
-                                Err(e) => (make_error_response(e), true),
-                                Ok((None, _)) => {
-                                    let yielded = Either::Right(tracker);
-                                    let next_state = None;
-                                    return Some(Ok((yielded, next_state)));
-                                }
-                                Ok((Some(resp), finished)) => (resp, finished),
-                            };
-                            COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
-                            resp.set_exec_details(exec_details);
-
-                            let yielded = Either::Left(resp);
-                            let next_state = Some((tracker, handler, finished));
-                            Some(Ok((yielded, next_state)))
-                        }
-                        None => {
-                            // Finished
-                            None
+                    Ok((Some(mut resp), finished)) => {
+                        COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
+                resp.set_exec_details(exec_details);
+                        yield resp;
+                        if finished {
+                            break;
                         }
                     }
-                })
-                .filter_map(|resp_or_tracker| match resp_or_tracker {
-                    Either::Left(resp) => Some(resp),
-                    Either::Right(mut tracker) => {
-                        tracker.on_finish_all_items();
-                        None
-                    }
-                })
-            })
-            .flatten_stream()
+                }
+            }
+            tracker.on_finish_all_items();
+        }
     }
 
     /// Handle a stream request and run on the read pool.
@@ -510,7 +478,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<impl Stream<Item = coppb::Response, Error = Error>> {
+    ) -> Result<impl Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let read_pool = self.get_read_pool(req_ctx.context.get_priority());
         let tracker = Box::new(Tracker::new(req_ctx));
@@ -533,7 +501,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Stream<Item = coppb::Response, Error = ()> {
+    ) -> impl Stream<Item = coppb::Response> {
         let result_of_stream =
             self.parse_request(req, peer, true)
                 .and_then(|(handler_builder, req_ctx)| {
