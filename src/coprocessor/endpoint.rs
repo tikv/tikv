@@ -403,7 +403,7 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl futures03::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
-        // When this function is being executed, it may be queued for a long time, so that
+            // When this function is being executed, it may be queued for a long time, so that
             // deadline may exceed.
             tracker.req_ctx.deadline.check()?;
 
