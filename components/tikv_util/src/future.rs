@@ -20,7 +20,7 @@ where
     (callback, future)
 }
 
-pub fn paired_future_callback_new<T>() -> (
+pub fn paired_std_future_callback<T>() -> (
     Box<dyn FnOnce(T) + Send>,
     futures03::channel::oneshot::Receiver<T>,
 )

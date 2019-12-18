@@ -283,7 +283,7 @@ impl<E: Engine> Endpoint<E> {
         engine: &E,
         ctx: &kvrpcpb::Context,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
-        let (callback, future) = tikv_util::future::paired_future_callback_new();
+        let (callback, future) = tikv_util::future::paired_std_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         // make engine not cross yield point
         async move {
