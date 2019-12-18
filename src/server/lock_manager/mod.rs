@@ -241,9 +241,11 @@ impl LockManagerTrait for LockManager {
     ) {
         // If `hashes` is some, there may be some waiters waiting for these locks.
         // Try to wake up them.
-        if let Some(hashes) = hashes {
-            self.waiter_mgr_scheduler
-                .wake_up(lock_ts, hashes, commit_ts);
+        if self.has_waiter() {
+            if let Some(hashes) = hashes {
+                self.waiter_mgr_scheduler
+                    .wake_up(lock_ts, hashes, commit_ts);
+            }
         }
         // If a pessimistic transaction is committed or rolled back and it once sent requests to
         // detect deadlock, clean up its wait-for entries in the deadlock detector.
@@ -451,6 +453,6 @@ mod tests {
         let lock_mgr = LockManager::new();
         b.iter(|| {
             test::black_box(lock_mgr.clone());
-        })
+        });
     }
 }

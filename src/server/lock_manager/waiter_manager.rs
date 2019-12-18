@@ -283,8 +283,12 @@ impl WaitTable {
     }
 
     #[cfg(test)]
-    fn size(&self) -> usize {
+    fn count(&self) -> usize {
         self.wait_table.iter().map(|(_, v)| v.len()).sum()
+    }
+
+    fn len(&self) -> usize {
+        self.wait_table.len()
     }
 
     fn get_mut(&mut self, lock: &Lock) -> Option<&mut Waiters> {
@@ -469,30 +473,33 @@ impl WaiterManager {
 
     fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
         let mut wait_table = self.wait_table.borrow_mut();
+        let (mut visited, initial_len) = (0, wait_table.len());
         let new_timeout = Instant::now() + Duration::from_millis(self.wake_up_delay_duration);
         for hash in hashes {
             let lock = Lock { ts: lock_ts, hash };
-            // Notify the oldest one immediately.
-            wait_table
-                .remove_oldest_waiter(lock)
-                .and_then(|mut waiter| {
-                    self.detector_scheduler
-                        .clean_up_wait_for(waiter.start_ts, waiter.lock);
-                    waiter.conflict_with(lock_ts, commit_ts);
-                    waiter.notify();
-                    Some(())
-                });
-            // Others will be waked up after `wake_up_delay_duration`.
-            //
-            // NOTE: Actually these waiters are waiting for an unknown transaction.
-            // If there is a deadlock between them, it will be detected after timeout.
-            wait_table.get_mut(&lock).and_then(|waiters| {
-                waiters.iter_mut().for_each(|waiter| {
-                    waiter.conflict_with(lock_ts, commit_ts);
-                    waiter.reset_timeout(new_timeout);
-                });
-                Some(())
-            });
+            if let Some(mut oldest) = wait_table.remove_oldest_waiter(lock) {
+                // Notify the oldest one immediately.
+                self.detector_scheduler
+                    .clean_up_wait_for(oldest.start_ts, oldest.lock);
+                oldest.conflict_with(lock_ts, commit_ts);
+                oldest.notify();
+                // Others will be waked up after `wake_up_delay_duration`.
+                //
+                // NOTE: Actually these waiters are waiting for an unknown transaction.
+                // If there is a deadlock between them, it will be detected after timeout.
+                if let Some(others) = wait_table.get_mut(&lock) {
+                    others.iter_mut().for_each(|waiter| {
+                        waiter.conflict_with(lock_ts, commit_ts);
+                        waiter.reset_timeout(new_timeout);
+                    });
+                }
+                // Break if we haved visited all entries to reduce the cost of small wait table
+                // against big hashes.
+                visited += 1;
+                if visited == initial_len {
+                    break;
+                }
+            }
         }
     }
 
@@ -841,14 +848,14 @@ pub mod tests {
                 waiter_info.push((waiter_ts, lock));
             }
         }
-        assert_eq!(wait_table.size(), waiter_info.len());
+        assert_eq!(wait_table.count(), waiter_info.len());
 
         for (waiter_ts, lock) in waiter_info {
             let waiter = wait_table.remove_waiter(lock, waiter_ts).unwrap();
             assert_eq!(waiter.start_ts, waiter_ts);
             assert_eq!(waiter.lock, lock);
         }
-        assert_eq!(wait_table.size(), 0);
+        assert_eq!(wait_table.count(), 0);
         assert!(wait_table.wait_table.is_empty());
         assert!(wait_table
             .remove_waiter(
@@ -891,13 +898,13 @@ pub mod tests {
         for ts in waiters_ts.iter() {
             wait_table.add_waiter(dummy_waiter(*ts, lock.ts, lock.hash));
         }
-        assert_eq!(wait_table.size(), waiters_ts.len());
+        assert_eq!(wait_table.count(), waiters_ts.len());
         waiters_ts.sort();
         for ts in waiters_ts {
             let oldest = wait_table.remove_oldest_waiter(lock).unwrap();
             assert_eq!(oldest.start_ts, ts);
         }
-        assert_eq!(wait_table.size(), 0);
+        assert_eq!(wait_table.count(), 0);
         assert!(wait_table.wait_table.is_empty());
     }
 
@@ -1178,5 +1185,24 @@ pub mod tests {
         );
 
         worker.stop().unwrap();
+    }
+
+    #[bench]
+    fn bench_wake_up_small_table_against_big_hashes(b: &mut test::Bencher) {
+        let detect_worker = FutureWorker::new("dummy-deadlock");
+        let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
+        let mut waiter_mgr = WaiterManager::new(
+            Arc::new(AtomicUsize::new(0)),
+            detector_scheduler,
+            &Config::default(),
+        );
+        waiter_mgr
+            .wait_table
+            .borrow_mut()
+            .add_waiter(dummy_waiter(10.into(), 20.into(), 10000));
+        let hashes: Vec<u64> = (0..1000).collect();
+        b.iter(|| {
+            test::black_box(|| waiter_mgr.handle_wake_up(20.into(), hashes.clone(), 30.into()));
+        });
     }
 }
