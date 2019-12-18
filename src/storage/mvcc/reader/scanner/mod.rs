@@ -2,21 +2,20 @@
 
 mod backward;
 mod forward;
-mod txn_entry;
 
 use engine::{CfName, IterOption, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, TimeStamp, TsSet, Value};
 
 use self::backward::BackwardKvScanner;
-use self::forward::{ForwardKvScanner, ForwardScanner, LatestKvPolicy};
+use self::forward::{ForwardKvScanner, ForwardScanner, LatestEntryPolicy, LatestKvPolicy};
 use crate::storage::kv::{
     CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics,
 };
 use crate::storage::mvcc::{default_not_found_error, Result};
 use crate::storage::txn::{Result as TxnResult, Scanner as StoreScanner};
 
-pub use self::txn_entry::Scanner as EntryScanner;
+pub use self::forward::EntryScanner;
 
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
 
@@ -92,25 +91,29 @@ impl<S: Snapshot> ScannerBuilder<S> {
                 self.0,
                 lock_cursor,
                 write_cursor,
+                None,
                 LatestKvPolicy,
             )))
         }
     }
 
-    pub fn build_entry_scanner(mut self) -> Result<EntryScanner<S>> {
-        let lower_bound = self.0.lower_bound.clone();
+    pub fn build_entry_scanner(
+        mut self,
+        after_ts: TimeStamp,
+        output_delete: bool,
+    ) -> Result<EntryScanner<S>> {
         let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
         let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
         // Note: Create a default cf cursor will take key range, so we need to
         //       ensure the default cursor is created after lock and write.
         let default_cursor = self.0.create_cf_cursor(CF_DEFAULT)?;
-        Ok(EntryScanner::new(
+        Ok(ForwardScanner::new(
             self.0,
             lock_cursor,
             write_cursor,
-            default_cursor,
-            lower_bound,
-        )?)
+            Some(default_cursor),
+            LatestEntryPolicy::new(after_ts, output_delete),
+        ))
     }
 }
 
