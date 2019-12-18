@@ -1341,6 +1341,8 @@ pub struct TiKvConfig {
     #[config(skip)]
     pub log_rotation_timespan: ReadableDuration,
     #[config(skip)]
+    pub log_rotation_size: ReadableSize,
+    #[config(skip)]
     pub panic_when_unexpected_key_or_data: bool,
     pub refresh_config_interval: ReadableDuration,
     #[config(skip)]
@@ -1378,6 +1380,7 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
+            log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
             refresh_config_interval: ReadableDuration::secs(30),
             readpool: ReadPoolConfig::default(),
