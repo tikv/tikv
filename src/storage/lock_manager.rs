@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::{txn::ProcessResult, types::StorageCallback};
+use std::time::Duration;
 use txn_types::TimeStamp;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -12,40 +13,28 @@ pub struct Lock {
 /// Time to wait for lock released when encountering locks.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum WaitTimeout {
-    None,
     Default,
     Millis(u64),
 }
 
 impl WaitTimeout {
-    pub fn expect_millis(self) -> u64 {
+    pub fn into_duration_with_ceiling(self, ceiling: u64) -> Duration {
         match self {
-            WaitTimeout::Millis(i) => i,
-            _ => panic!("expected WaitTimeout::Millis"),
+            WaitTimeout::Default => Duration::from_millis(ceiling),
+            WaitTimeout::Millis(ms) if ms > ceiling => Duration::from_millis(ceiling),
+            WaitTimeout::Millis(ms) => Duration::from_millis(ms),
         }
     }
 
-    pub fn update_if_greater(&mut self, other: u64) {
-        match *self {
-            WaitTimeout::Default => {}
-            WaitTimeout::Millis(ms) if ms > other => {}
-            _ => return,
-        }
-
-        *self = WaitTimeout::Millis(other);
-    }
-}
-
-/// Timeouts are encoded as i64s in protobufs where 0 means using default timeout.
-/// Negative means no wait.
-impl From<i64> for WaitTimeout {
-    fn from(i: i64) -> WaitTimeout {
+    /// Timeouts are encoded as i64s in protobufs where 0 means using default timeout.
+    /// Negative means no wait.
+    pub fn from_encoded(i: i64) -> Option<WaitTimeout> {
         if i == 0 {
-            WaitTimeout::Default
+            Some(WaitTimeout::Default)
         } else if i < 0 {
-            WaitTimeout::None
+            None
         } else {
-            WaitTimeout::Millis(i as u64)
+            Some(WaitTimeout::Millis(i as u64))
         }
     }
 }
@@ -72,7 +61,7 @@ pub trait LockManager: Clone + Send + 'static {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
-        timeout: WaitTimeout,
+        timeout: Option<WaitTimeout>,
     );
 
     /// The locks with `lock_ts` and `hashes` are released, tries to wake up transactions.
@@ -104,7 +93,7 @@ impl LockManager for DummyLockManager {
         _pr: ProcessResult,
         _lock: Lock,
         _is_first_lock: bool,
-        _wait_timeout: WaitTimeout,
+        _wait_timeout: Option<WaitTimeout>,
     ) {
     }
 

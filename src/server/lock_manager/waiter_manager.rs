@@ -242,7 +242,7 @@ impl WaiterManager {
         }
     }
 
-    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter, mut timeout: WaitTimeout) {
+    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter, timeout: WaitTimeout) {
         let lock = waiter.lock;
         let start_ts = waiter.start_ts;
 
@@ -253,9 +253,8 @@ impl WaiterManager {
             // because commit or rollback request will be sent to the new leader.
             //
             // `default_wait_for_lock_timeout` is the max timeout.
-            timeout.update_if_greater(self.default_wait_for_lock_timeout);
-
-            let when = Instant::now() + Duration::from_millis(timeout.expect_millis());
+            let when = Instant::now()
+                + timeout.into_duration_with_ceiling(self.default_wait_for_lock_timeout);
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
                 .map_err(|e| info!("timeout timer delay errored"; "err" => ?e))

@@ -83,7 +83,7 @@ pub enum Msg {
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
-        wait_timeout: WaitTimeout,
+        wait_timeout: Option<WaitTimeout>,
     },
 }
 
@@ -459,7 +459,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
-        wait_timeout: WaitTimeout,
+        wait_timeout: Option<WaitTimeout>,
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -581,7 +581,7 @@ mod tests {
                 0,
                 false,
                 TimeStamp::default(),
-                WaitTimeout::Default,
+                Some(WaitTimeout::Default),
                 Context::default(),
             ),
             Commit::new(

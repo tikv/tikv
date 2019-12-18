@@ -596,7 +596,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         lock_ttl: u64,
         is_first_lock: bool,
         for_update_ts: TimeStamp,
-        wait_timeout: WaitTimeout,
+        wait_timeout: Option<WaitTimeout>,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         if !self.pessimistic_txn_enabled {

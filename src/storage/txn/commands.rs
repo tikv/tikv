@@ -160,7 +160,7 @@ pub struct AcquirePessimisticLock {
     pub is_first_lock: bool,
     pub for_update_ts: TimeStamp,
     /// Time to wait for lock released in milliseconds when encountering locks.
-    pub wait_timeout: WaitTimeout,
+    pub wait_timeout: Option<WaitTimeout>,
 }
 
 impl AcquirePessimisticLock {
@@ -171,7 +171,7 @@ impl AcquirePessimisticLock {
         lock_ttl: u64,
         is_first_lock: bool,
         for_update_ts: TimeStamp,
-        wait_timeout: WaitTimeout,
+        wait_timeout: Option<WaitTimeout>,
         ctx: Context,
     ) -> Command {
         Command {

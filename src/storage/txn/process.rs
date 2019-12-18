@@ -476,7 +476,7 @@ struct WriteResult {
     rows: usize,
     pr: ProcessResult,
     // (lock, is_first_lock, wait_timeout)
-    lock_info: Option<(lock_manager::Lock, bool, WaitTimeout)>,
+    lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
 }
 
 fn process_write_impl<S: Snapshot, L: LockManager>(
