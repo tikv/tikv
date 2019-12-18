@@ -340,14 +340,15 @@ impl<E: Engine> Endpoint<E> {
         let exec_details = tracker.get_item_exec_details();
 
         tracker.on_finish_all_items();
-        match result {
-            Ok(mut resp) => {
+        let mut resp = match result {
+            Ok(resp) => {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
-                resp.set_exec_details(exec_details);
-                Ok(resp)
+                resp
             }
-            Err(e) => Ok(make_error_response(e)),
-        }
+            Err(e) => make_error_response(e),
+        };
+        resp.set_exec_details(exec_details);
+        Ok(resp)
     }
 
     /// Handle a unary request and run on the read pool.
@@ -432,7 +433,9 @@ impl<E: Engine> Endpoint<E> {
 
                 match result {
                     Err(e) => {
-                        yield make_error_response(e);
+                        let mut resp = make_error_response(e);
+                        resp.set_exec_details(exec_details);
+                        yield resp;
                         break;
                     },
                     Ok((None, _)) => break,
