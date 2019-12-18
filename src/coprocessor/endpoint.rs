@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use async_stream::try_stream;
 use futures::sync::mpsc;
-use futures::{future, stream, Future};
+use futures::{future, stream, Future, Stream};
 use futures03::prelude::*;
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
@@ -21,7 +21,6 @@ use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 use tikv_util::future_pool::FuturePool;
-use tikv_util::Either;
 
 use crate::coprocessor::cache::CachedRequestHandler;
 use crate::coprocessor::metrics::*;
@@ -283,22 +282,6 @@ impl<E: Engine> Endpoint<E> {
     fn async_snapshot(
         engine: &E,
         ctx: &kvrpcpb::Context,
-    ) -> impl Future<Item = E::Snap, Error = Error> {
-        let (callback, future) = tikv_util::future::paired_future_callback();
-        let val = engine.async_snapshot(ctx, callback);
-        future::result(val)
-            .and_then(|_| {
-                future.map_err(|cancel| KvError::from(KvErrorInner::Other(box_err!(cancel))))
-            })
-            .and_then(|(_ctx, result)| result)
-            // map engine::Error -> coprocessor::Error
-            .map_err(Error::from)
-    }
-
-    #[inline]
-    fn async_snapshot_new(
-        engine: &E,
-        ctx: &kvrpcpb::Context,
     ) -> impl std::future::Future<Output = Result<E::Snap>> {
         let (callback, future) = tikv_util::future::paired_future_callback_new();
         let val = engine.async_snapshot(ctx, callback);
@@ -329,7 +312,7 @@ impl<E: Engine> Endpoint<E> {
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
         // exists.
         let snapshot = unsafe {
-            with_tls_engine(|engine| Self::async_snapshot_new(engine, &tracker.req_ctx.context))
+            with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
         }
         .await?;
         // When snapshot is retrieved, deadline may exceed.
@@ -415,11 +398,10 @@ impl<E: Engine> Endpoint<E> {
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
     /// the given `handler_builder`. Finally, it calls the stream request interface of the
     /// `RequestHandler` multiple times to process the request and produce multiple results.
-    // TODO: Convert to use async / await.
     fn handle_stream_request_impl(
-        tracker: Box<Tracker>,
+        mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Stream<Item = Result<coppb::Response>> {
+    ) -> impl futures03::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
         // When this function is being executed, it may be queued for a long time, so that
             // deadline may exceed.
@@ -428,7 +410,7 @@ impl<E: Engine> Endpoint<E> {
             // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
             // exists.
             let snapshot = unsafe {
-                with_tls_engine(|engine| Self::async_snapshot_new(engine, &tracker.req_ctx.context))
+                with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
             }
             .await?;
             // When snapshot is retrieved, deadline may exceed.
@@ -453,12 +435,10 @@ impl<E: Engine> Endpoint<E> {
                         yield make_error_response(e);
                         break;
                     },
-                    Ok((None, _)) => {
-                        break;
-                    }
+                    Ok((None, _)) => break,
                     Ok((Some(mut resp), finished)) => {
                         COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
-                resp.set_exec_details(exec_details);
+                        resp.set_exec_details(exec_details);
                         yield resp;
                         if finished {
                             break;
@@ -478,14 +458,15 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<impl Stream<Item = Result<coppb::Response>>> {
+    ) -> Result<impl Stream<Item = coppb::Response, Error = Error>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let read_pool = self.get_read_pool(req_ctx.context.get_priority());
         let tracker = Box::new(Tracker::new(req_ctx));
 
         read_pool
             .spawn(move || {
-                Self::handle_stream_request_impl(tracker, handler_builder) // Stream<Resp, Error>
+                Box::pin(Self::handle_stream_request_impl(tracker, handler_builder))
+                    .compat() // Stream<Resp, Error>
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
             })
@@ -501,7 +482,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Stream<Item = coppb::Response> {
+    ) -> impl Stream<Item = coppb::Response, Error = ()> {
         let result_of_stream =
             self.parse_request(req, peer, true)
                 .and_then(|(handler_builder, req_ctx)| {
