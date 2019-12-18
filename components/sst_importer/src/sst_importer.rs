@@ -12,9 +12,9 @@ use kvproto::backup::StorageBackend;
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use engine_traits::Iterator;
 use engine_traits::{IOLimiter, LimitReader};
 use engine_traits::{IngestExternalFileOptions, KvEngine};
+use engine_traits::{Iterator, CF_WRITE};
 use engine_traits::{SeekKey, SstReader, SstWriter, SstWriterBuilder};
 use external_storage::{create_storage, url_of_backend};
 use keys;
@@ -262,7 +262,7 @@ impl SSTImporter {
                     })?
                     .append_ts(TimeStamp::new(rewrite_rule.new_timestamp))
                     .into_encoded();
-                if meta.get_cf_name() == "write" {
+                if meta.get_cf_name() == CF_WRITE {
                     let mut write = WriteRef::parse(iter.value()).map_err(|e| {
                         Error::BadFormat(format!(
                             "write {}: {}",
@@ -582,7 +582,7 @@ mod tests {
 
     use engine_traits::Error as TraitError;
     use engine_traits::ExternalSstFileInfo;
-    use engine_traits::{Iterable, Iterator, SeekKey};
+    use engine_traits::{Iterable, Iterator, SeekKey, CF_DEFAULT};
     use tempfile::Builder;
     use test_sst_importer::{new_sst_reader, new_sst_writer, new_test_engine};
     use txn_types::{Value, WriteType};
@@ -621,7 +621,7 @@ mod tests {
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let db = new_test_engine(db_path.to_str().unwrap(), &["default"]);
+        let db = new_test_engine(db_path.to_str().unwrap(), &[CF_DEFAULT]);
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 
@@ -731,7 +731,7 @@ mod tests {
         let mut meta = SstMeta::default();
         let uuid = Uuid::new_v4();
         meta.set_uuid(uuid.as_bytes().to_vec());
-        meta.set_cf_name("default".to_owned());
+        meta.set_cf_name(CF_DEFAULT.to_owned());
         meta.set_length(sst_info.file_size());
         meta.set_region_id(4);
         meta.mut_region_epoch().set_conf_ver(5);
@@ -779,7 +779,7 @@ mod tests {
         let mut meta = SstMeta::default();
         let uuid = Uuid::new_v4();
         meta.set_uuid(uuid.as_bytes().to_vec());
-        meta.set_cf_name("default".to_owned());
+        meta.set_cf_name(CF_DEFAULT.to_owned());
         meta.set_length(sst_info.file_size());
         meta.set_region_id(4);
         meta.mut_region_epoch().set_conf_ver(5);
@@ -825,7 +825,7 @@ mod tests {
         let mut meta = SstMeta::default();
         let uuid = Uuid::new_v4();
         meta.set_uuid(uuid.as_bytes().to_vec());
-        meta.set_cf_name("write".to_owned());
+        meta.set_cf_name(CF_WRITE.to_owned());
         meta.set_length(sst_info.file_size());
         meta.set_region_id(4);
         meta.mut_region_epoch().set_conf_ver(5);
@@ -1052,7 +1052,7 @@ mod tests {
 
         // performs the ingest
         let ingest_dir = tempfile::tempdir().unwrap();
-        let db = new_test_engine(ingest_dir.path().to_str().unwrap(), &["default"]);
+        let db = new_test_engine(ingest_dir.path().to_str().unwrap(), &[CF_DEFAULT]);
 
         meta.set_length(0); // disable validation.
         meta.set_crc32(0);
