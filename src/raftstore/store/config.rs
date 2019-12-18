@@ -11,8 +11,6 @@ use crate::raftstore::{coprocessor, Result};
 use configuration::{ConfigChange, Configuration};
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
-// TODO: currently we derive Configuration for test, add #[config(skip)] later
-// on fields that corresponding config not support change dynamically
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -20,19 +18,29 @@ pub struct Config {
     // true for high reliability, prevent data loss when power failure.
     pub sync_log: bool,
     // minimizes disruption when a partitioned node rejoins the cluster by using a two phase election.
+    #[config(skip)]
     pub prevote: bool,
+    #[config(skip)]
     pub raftdb_path: String,
 
     // store capacity. 0 means no limit.
+    #[config(skip)]
     pub capacity: ReadableSize,
 
     // raft_base_tick_interval is a base tick interval (ms).
+    #[config(skip)]
     pub raft_base_tick_interval: ReadableDuration,
+    #[config(skip)]
     pub raft_heartbeat_ticks: usize,
+    #[config(skip)]
     pub raft_election_timeout_ticks: usize,
+    #[config(skip)]
     pub raft_min_election_timeout_ticks: usize,
+    #[config(skip)]
     pub raft_max_election_timeout_ticks: usize,
+    #[config(skip)]
     pub raft_max_size_per_msg: ReadableSize,
+    #[config(skip)]
     pub raft_max_inflight_msgs: usize,
     // When the entry exceed the max size, reject to propose it.
     pub raft_entry_max_size: ReadableSize,
@@ -74,6 +82,7 @@ pub struct Config {
     pub lock_cf_compact_interval: ReadableDuration,
     pub lock_cf_compact_bytes_threshold: ReadableSize,
 
+    #[config(skip)]
     pub notify_capacity: usize,
     pub messages_per_tick: usize,
 
@@ -112,6 +121,7 @@ pub struct Config {
     /// Interval to re-propose merge.
     pub merge_check_tick_interval: ReadableDuration,
 
+    #[config(skip)]
     pub use_delete_range: bool,
 
     pub cleanup_import_sst_interval: ReadableDuration,
@@ -119,11 +129,16 @@ pub struct Config {
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
 
+    #[config(skip)]
     pub apply_max_batch_size: usize,
+    #[config(skip)]
     pub apply_pool_size: usize,
 
+    #[config(skip)]
     pub store_max_batch_size: usize,
+    #[config(skip)]
     pub store_pool_size: usize,
+    #[config(skip)]
     pub future_poll_size: usize,
     pub hibernate_regions: bool,
 
@@ -131,9 +146,11 @@ pub struct Config {
     // They are preserved for compatibility check.
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[config(skip)]
     pub region_max_size: ReadableSize,
     #[doc(hidden)]
     #[serde(skip_serializing)]
+    #[config(skip)]
     pub region_split_size: ReadableSize,
 }
 
