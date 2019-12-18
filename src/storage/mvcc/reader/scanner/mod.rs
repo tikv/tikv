@@ -10,12 +10,11 @@ use txn_types::{Key, TimeStamp, TsSet, Value};
 
 use self::backward::BackwardKvScanner;
 use self::forward::{ForwardKvScanner, ForwardScanner, LatestKvPolicy};
-use crate::storage::mvcc::{default_not_found_error, Result};
-use crate::storage::txn::Result as TxnResult;
-use crate::storage::{
-    CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Scanner as StoreScanner, Snapshot,
-    Statistics,
+use crate::storage::kv::{
+    CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics,
 };
+use crate::storage::mvcc::{default_not_found_error, Result};
+use crate::storage::txn::{Result as TxnResult, Scanner as StoreScanner};
 
 pub use self::txn_entry::Scanner as EntryScanner;
 
@@ -276,12 +275,10 @@ pub fn has_data_in_range<S: Snapshot>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::kv::Engine;
+    use crate::storage::kv::{Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner};
     use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
-    use crate::storage::RocksEngine;
-    use crate::storage::TestEngineBuilder;
     use kvproto::kvrpcpb::Context;
 
     // Collect data from the scanner and assert it equals to `expected`, which is a collection of

@@ -18,6 +18,11 @@
 ## timestamp appended to its name and a new file will be created.
 # log-rotation-timespan = "24h"
 
+## Size of log file that triggers the log rotation.
+## Once the size of log file exceeds the threshold value, the log file will be rotated
+## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
+# log-rotation-size = "300MB"
+
 ## The interval at which to refresh the local config
 ## Set it small are good to debug and tuning.
 # refresh-config-interval = "30s"
@@ -297,7 +302,7 @@
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
 ## crosses tables.
 ## It is recommended to turn off this option if there will be a large number of tables created.
-# split-region-on-table = true
+# split-region-on-table = false
 
 ## One split check produces several split keys in batch. This config limits the number of produced
 ## split keys in one batch.
