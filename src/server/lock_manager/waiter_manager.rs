@@ -209,7 +209,6 @@ impl Waiter {
     /// Changes the `ProcessResult` to `WriteConflict`.
     /// It may be invoked more than once.
     fn conflict_with(&mut self, lock_ts: TimeStamp, commit_ts: TimeStamp) {
-        self.lock.ts = lock_ts;
         let (key, primary) = self.extract_key_info();
         let mvcc_err = MvccError::from(MvccErrorInner::WriteConflict {
             start_ts: self.start_ts,
@@ -285,6 +284,10 @@ impl WaitTable {
     #[cfg(test)]
     fn count(&self) -> usize {
         self.wait_table.iter().map(|(_, v)| v.len()).sum()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.wait_table.is_empty()
     }
 
     fn len(&self) -> usize {
@@ -475,6 +478,10 @@ impl WaiterManager {
 
     fn handle_wake_up(&mut self, lock_ts: TimeStamp, hashes: Vec<u64>, commit_ts: TimeStamp) {
         let mut wait_table = self.wait_table.borrow_mut();
+        if wait_table.is_empty() {
+            return;
+        }
+
         let (mut visited, initial_len) = (0, wait_table.len());
         let new_timeout = Instant::now() + Duration::from_millis(self.wake_up_delay_duration);
         for hash in hashes {
