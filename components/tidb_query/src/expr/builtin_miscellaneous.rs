@@ -194,9 +194,9 @@ impl ScalarFunc {
         _row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let result = Uuid::new_v4();
-        let mut buf = [b'!'; 40];
-        let uuid_str = result.to_hyphenated().encode_lower(&mut buf);
-        Ok(Some(Cow::Owned(uuid_str.as_bytes().to_vec())))
+        let mut buf = [b'!'; uuid::adapter::Hyphenated::LENGTH];
+        result.to_hyphenated().encode_lower(&mut buf);
+        Ok(Some(Cow::Owned(buf.to_vec())))
     }
 }
 
