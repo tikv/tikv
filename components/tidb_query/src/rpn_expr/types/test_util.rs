@@ -115,7 +115,7 @@ impl RpnFnScalarEvaluator {
             return (Err(e), context);
         }
 
-        let metadata = match (func.metadata_ctor_ptr)(&mut fun_sig_expr) {
+        let metadata = match (func.metadata_expr_ptr)(&mut fun_sig_expr) {
             Ok(metadata) => metadata,
             Err(e) => {
                 return (Err(e), context);
