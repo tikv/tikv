@@ -465,6 +465,9 @@ impl<E: Engine> Endpoint<E> {
 
         read_pool
             .spawn(move || {
+                // FIXME: This is an unnecessary box just in order to satisfy the Unpin
+                // requirement of compat. Remove it after using a thread pool accepting
+                // !Unpin std Futures.
                 Box::pin(Self::handle_stream_request_impl(tracker, handler_builder))
                     .compat() // Stream<Resp, Error>
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
