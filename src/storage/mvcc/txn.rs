@@ -401,7 +401,6 @@ impl<S: Snapshot> MvccTxn<S> {
         primary: &[u8],
         skip_constraint_check: bool,
         lock_ttl: u64,
-        for_update_ts: TimeStamp,
         txn_size: u64,
         min_commit_ts: TimeStamp,
     ) -> Result<()> {
@@ -456,7 +455,7 @@ impl<S: Snapshot> MvccTxn<S> {
             primary,
             value,
             lock_ttl,
-            for_update_ts,
+            TimeStamp::zero(),
             txn_size,
             min_commit_ts,
         );
@@ -1396,7 +1395,6 @@ mod tests {
             pk,
             false,
             0,
-            TimeStamp::default(),
             0,
             TimeStamp::default(),
         )
@@ -1436,7 +1434,6 @@ mod tests {
                 key,
                 false,
                 0,
-                TimeStamp::default(),
                 0,
                 TimeStamp::default()
             )
@@ -1451,7 +1448,6 @@ mod tests {
                 key,
                 true,
                 0,
-                TimeStamp::default(),
                 0,
                 TimeStamp::default()
             )
@@ -2312,7 +2308,7 @@ mod tests {
             _ => panic!("unexpected error"),
         };
 
-        // Write a optimistic lock.
+        // Write an optimistic lock.
         must_prewrite_put_impl(
             &engine,
             k,
@@ -2352,6 +2348,7 @@ mod tests {
         expected_lock_info.set_lock_version(50);
         expected_lock_info.set_lock_ttl(lock_ttl);
         expected_lock_info.set_lock_type(Op::PessimisticLock);
+        expected_lock_info.set_txn_size(0);
         assert_lock_info_eq(
             must_acquire_pessimistic_lock_err(&engine, k, k, 60, 60),
             &expected_lock_info,

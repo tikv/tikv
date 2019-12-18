@@ -533,7 +533,6 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     &primary,
                     skip_constraint_check,
                     lock_ttl,
-                    TimeStamp::default(),
                     txn_size,
                     min_commit_ts,
                 ) {

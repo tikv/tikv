@@ -29,7 +29,6 @@ where
             &k.clone(),
             false,
             0,
-            TimeStamp::default(),
             0,
             TimeStamp::default(),
         )
@@ -58,16 +57,8 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
             for (mutation, primary) in mutations {
                 let snapshot = engine.snapshot(&ctx).unwrap();
                 let mut txn = mvcc::new_txn!(snapshot, 1, true);
-                txn.prewrite(
-                    mutation,
-                    &primary,
-                    false,
-                    0,
-                    TimeStamp::default(),
-                    0,
-                    TimeStamp::default(),
-                )
-                .unwrap();
+                txn.prewrite(mutation, &primary, false, 0, 0, TimeStamp::default())
+                    .unwrap();
                 let modifies = txn.into_modifies();
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }

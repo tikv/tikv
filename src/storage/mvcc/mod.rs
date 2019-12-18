@@ -347,7 +347,6 @@ pub mod tests {
             pk,
             false,
             0,
-            TimeStamp::default(),
             0,
             TimeStamp::default(),
         )?;
@@ -372,16 +371,8 @@ pub mod tests {
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         if for_update_ts.is_zero() {
-            txn.prewrite(
-                mutation,
-                pk,
-                false,
-                lock_ttl,
-                for_update_ts,
-                txn_size,
-                min_commit_ts,
-            )
-            .unwrap();
+            txn.prewrite(mutation, pk, false, lock_ttl, txn_size, min_commit_ts)
+                .unwrap();
         } else {
             txn.pessimistic_prewrite(
                 mutation,
@@ -507,16 +498,8 @@ pub mod tests {
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
         let for_update_ts = for_update_ts.into();
         if for_update_ts.is_zero() {
-            txn.prewrite(
-                mutation,
-                pk,
-                false,
-                0,
-                for_update_ts,
-                0,
-                TimeStamp::default(),
-            )
-            .unwrap_err()
+            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
+                .unwrap_err()
         } else {
             txn.pessimistic_prewrite(
                 mutation,
@@ -575,16 +558,8 @@ pub mod tests {
         let mutation = Mutation::Delete(Key::from_raw(key));
         let for_update_ts = for_update_ts.into();
         if for_update_ts.is_zero() {
-            txn.prewrite(
-                mutation,
-                pk,
-                false,
-                0,
-                for_update_ts,
-                0,
-                TimeStamp::default(),
-            )
-            .unwrap();
+            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
+                .unwrap();
         } else {
             txn.pessimistic_prewrite(
                 mutation,
@@ -634,16 +609,8 @@ pub mod tests {
         let for_update_ts = for_update_ts.into();
         let mutation = Mutation::Lock(Key::from_raw(key));
         if for_update_ts.is_zero() {
-            txn.prewrite(
-                mutation,
-                pk,
-                false,
-                0,
-                for_update_ts,
-                0,
-                TimeStamp::default(),
-            )
-            .unwrap();
+            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
+                .unwrap();
         } else {
             txn.pessimistic_prewrite(
                 mutation,
@@ -683,7 +650,6 @@ pub mod tests {
                 pk,
                 false,
                 0,
-                TimeStamp::default(),
                 0,
                 TimeStamp::default()
             )

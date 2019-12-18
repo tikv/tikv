@@ -497,16 +497,8 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.prewrite(
-                m,
-                pk,
-                false,
-                0,
-                TimeStamp::default(),
-                0,
-                TimeStamp::default(),
-            )
-            .unwrap();
+            txn.prewrite(m, pk, false, 0, 0, TimeStamp::default())
+                .unwrap();
             self.write(txn.into_modifies());
         }
 
