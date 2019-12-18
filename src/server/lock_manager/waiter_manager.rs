@@ -291,10 +291,6 @@ impl WaitTable {
         self.wait_table.len()
     }
 
-    fn get_mut(&mut self, lock: &Lock) -> Option<&mut Waiters> {
-        self.wait_table.get_mut(&lock.hash)
-    }
-
     /// Returns the duplicated `Waiter` if there is.
     fn add_waiter(&mut self, waiter: Waiter) -> Option<Waiter> {
         let waiters = self.wait_table.entry(waiter.lock.hash).or_default();
@@ -304,6 +300,11 @@ impl WaitTable {
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
         Some(old)
         // Here we don't increase waiter_count because it's already updated in LockManager::wait_for()
+    }
+
+    /// Removes all waiters waiting for the lock.
+    fn remove(&mut self, lock: Lock) {
+        self.wait_table.remove(&lock.hash);
     }
 
     fn remove_waiter(&mut self, lock: Lock, waiter_ts: TimeStamp) -> Option<Waiter> {
@@ -319,20 +320,21 @@ impl WaitTable {
         Some(waiter)
     }
 
-    /// Removes the `Waiter` with the smallest start ts.
-    fn remove_oldest_waiter(&mut self, lock: Lock) -> Option<Waiter> {
+    /// Removes the `Waiter` with the smallest start ts and returns it with remaining waiters.
+    ///
+    /// NOTE: Due to the borrow checker, it doesn't remove the entry in the `WaitTable`
+    /// even if there is no remaining waiter.
+    fn remove_oldest_waiter(&mut self, lock: Lock) -> Option<(Waiter, &mut Waiters)> {
         let waiters = self.wait_table.get_mut(&lock.hash)?;
         let oldest_idx = waiters
             .iter()
             .enumerate()
-            .min_by_key(|(_, w)| w.start_ts)?
+            .min_by_key(|(_, w)| w.start_ts)
+            .unwrap()
             .0;
         let oldest = waiters.swap_remove(oldest_idx);
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
-        if waiters.is_empty() {
-            self.wait_table.remove(&lock.hash);
-        }
-        Some(oldest)
+        Some((oldest, waiters))
     }
 
     fn to_wait_for_entries(&self) -> Vec<WaitForEntry> {
@@ -477,7 +479,7 @@ impl WaiterManager {
         let new_timeout = Instant::now() + Duration::from_millis(self.wake_up_delay_duration);
         for hash in hashes {
             let lock = Lock { ts: lock_ts, hash };
-            if let Some(mut oldest) = wait_table.remove_oldest_waiter(lock) {
+            if let Some((mut oldest, others)) = wait_table.remove_oldest_waiter(lock) {
                 // Notify the oldest one immediately.
                 self.detector_scheduler
                     .clean_up_wait_for(oldest.start_ts, oldest.lock);
@@ -487,7 +489,10 @@ impl WaiterManager {
                 //
                 // NOTE: Actually these waiters are waiting for an unknown transaction.
                 // If there is a deadlock between them, it will be detected after timeout.
-                if let Some(others) = wait_table.get_mut(&lock) {
+                if others.is_empty() {
+                    // Remove the empty entry here.
+                    wait_table.remove(lock);
+                } else {
                     others.iter_mut().for_each(|waiter| {
                         waiter.conflict_with(lock_ts, commit_ts);
                         waiter.reset_timeout(new_timeout);
@@ -893,18 +898,23 @@ pub mod tests {
             ts: 10.into(),
             hash: 10,
         };
-        let mut waiters_ts: Vec<TimeStamp> = (0..10).map(TimeStamp::from).collect();
+        let waiter_count = 10;
+        let mut waiters_ts: Vec<TimeStamp> = (0..waiter_count).map(TimeStamp::from).collect();
         waiters_ts.shuffle(&mut rand::thread_rng());
         for ts in waiters_ts.iter() {
             wait_table.add_waiter(dummy_waiter(*ts, lock.ts, lock.hash));
         }
         assert_eq!(wait_table.count(), waiters_ts.len());
         waiters_ts.sort();
-        for ts in waiters_ts {
-            let oldest = wait_table.remove_oldest_waiter(lock).unwrap();
+        for (i, ts) in waiters_ts.into_iter().enumerate() {
+            let (oldest, others) = wait_table.remove_oldest_waiter(lock).unwrap();
             assert_eq!(oldest.start_ts, ts);
+            assert_eq!(others.len(), waiter_count as usize - i - 1);
         }
+        // There is no waiter in the wait table but there is an entry in it.
         assert_eq!(wait_table.count(), 0);
+        assert_eq!(wait_table.wait_table.len(), 1);
+        wait_table.remove(lock);
         assert!(wait_table.wait_table.is_empty());
     }
 
@@ -937,6 +947,7 @@ pub mod tests {
         assert_eq!(waiter_count.load(Ordering::SeqCst), 1);
         wait_table.remove_oldest_waiter(lock).unwrap();
         assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
+        wait_table.remove(lock);
         // Removing a non-existed waiter shouldn't decrease waiter count.
         assert!(wait_table.remove_oldest_waiter(lock).is_none());
         assert_eq!(waiter_count.load(Ordering::SeqCst), 0);
