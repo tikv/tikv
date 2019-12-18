@@ -419,6 +419,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Replace => replace_fn_meta(),
         ScalarFuncSig::LeftUtf8 => left_utf8_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
+        ScalarFuncSig::Upper => upper_fn_meta(),
         ScalarFuncSig::Locate2Args => locate_2_args_fn_meta(),
         ScalarFuncSig::Locate3Args => locate_3_args_fn_meta(),
         ScalarFuncSig::FieldInt => field_fn_meta::<Int>(),
@@ -432,6 +433,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::DayOfMonth => day_of_month_fn_meta(),
         ScalarFuncSig::Rand => rand_fn_meta(),
         ScalarFuncSig::RandWithSeedFirstGen => rand_with_seed_first_gen_fn_meta(),
+        ScalarFuncSig::RoundReal => round_real_fn_meta(),
+        ScalarFuncSig::RoundInt => round_int_fn_meta(),
+        ScalarFuncSig::RoundDec => round_dec_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
