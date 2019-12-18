@@ -3,6 +3,7 @@ use crate::Error;
 
 use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
+use kvproto::kvrpcpb;
 use std::fmt::{self, Debug, Display, Formatter};
 
 use codec::byte::MemComparableByteCodec;
@@ -271,6 +272,18 @@ impl Mutation {
         match self {
             Mutation::Insert(_) => true,
             _ => false,
+        }
+    }
+}
+
+impl From<kvrpcpb::Mutation> for Mutation {
+    fn from(mut m: kvrpcpb::Mutation) -> Mutation {
+        match m.get_op() {
+            kvrpcpb::Op::Put => Mutation::Put((Key::from_raw(m.get_key()), m.take_value())),
+            kvrpcpb::Op::Del => Mutation::Delete(Key::from_raw(m.get_key())),
+            kvrpcpb::Op::Lock => Mutation::Lock(Key::from_raw(m.get_key())),
+            kvrpcpb::Op::Insert => Mutation::Insert((Key::from_raw(m.get_key()), m.take_value())),
+            _ => panic!("mismatch Op in prewrite mutations"),
         }
     }
 }

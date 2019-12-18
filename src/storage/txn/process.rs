@@ -928,7 +928,7 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 mod tests {
     use super::*;
     use crate::storage::kv::{Snapshot, TestEngineBuilder};
-    use crate::storage::{DummyLockManager, Mutation, Options};
+    use crate::storage::{mvcc::Mutation, txn::commands::Options, DummyLockManager};
 
     #[test]
     fn test_extract_lock_from_result() {
