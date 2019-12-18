@@ -266,8 +266,7 @@ impl RegionIterator {
     }
 
     pub fn seek_to_first(&mut self) -> bool {
-        self.valid = self.iter.seek(self.start_key.as_slice().into());
-
+        self.valid = self.iter.checked_seek(self.start_key.as_slice().into()).expect("DBIterator::seek");
         self.update_valid(true)
     }
 
@@ -285,14 +284,16 @@ impl RegionIterator {
     }
 
     pub fn seek_to_last(&mut self) -> bool {
-        if !self.iter.seek(self.end_key.as_slice().into()) && !self.iter.seek(SeekKey::End) {
+        if !self.iter.checked_seek(self.end_key.as_slice().into()).expect("DBIterator::seek") && !self.iter.checked_seek(SeekKey::End)
+            .expect("DBIterator::seek")
+        {
             self.valid = false;
             return self.valid;
         }
 
-        while self.iter.key() >= self.end_key.as_slice() && self.iter.prev() {}
+        while self.iter.key() >= self.end_key.as_slice() && self.iter.checked_prev().expect("DBIterator::prev") {}
 
-        self.valid = self.iter.valid();
+        self.valid = self.iter.checked_valid().expect("DBIterator::valid");
         self.update_valid(false)
     }
 
@@ -302,7 +303,7 @@ impl RegionIterator {
         if key == self.end_key {
             self.valid = false;
         } else {
-            self.valid = self.iter.seek(key.as_slice().into());
+            self.valid = self.iter.checked_seek(key.as_slice().into()).expect("DBIterator::seek");
         }
 
         Ok(self.update_valid(true))
@@ -311,9 +312,9 @@ impl RegionIterator {
     pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        self.valid = self.iter.seek_for_prev(key.as_slice().into());
+        self.valid = self.iter.checked_seek_for_prev(key.as_slice().into()).expect("DBIterator::seek_for_prev");
         if self.valid && self.iter.key() == self.end_key.as_slice() {
-            self.valid = self.iter.prev();
+            self.valid = self.iter.checked_prev().unwrap();
         }
         Ok(self.update_valid(false))
     }
@@ -322,7 +323,7 @@ impl RegionIterator {
         if !self.valid {
             return false;
         }
-        self.valid = self.iter.prev();
+        self.valid = self.iter.checked_prev().unwrap();
 
         self.update_valid(false)
     }
@@ -331,7 +332,7 @@ impl RegionIterator {
         if !self.valid {
             return false;
         }
-        self.valid = self.iter.next();
+        self.valid = self.iter.checked_next().unwrap();
 
         self.update_valid(true)
     }

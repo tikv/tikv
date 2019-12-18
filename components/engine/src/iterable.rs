@@ -177,14 +177,14 @@ pub trait Iterable {
     // Seek the first key >= given key, if no found, return None.
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut iter = self.new_iterator(IterOption::default());
-        iter.seek(key.into());
+        iter.checked_seek(key.into())?;
         Ok(iter.kv())
     }
 
     // Seek the first key >= given key, if no found, return None.
     fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut iter = self.new_iterator_cf(cf, IterOption::default())?;
-        iter.seek(key.into());
+        iter.checked_seek(key.into())?;
         Ok(iter.kv())
     }
 }
@@ -193,11 +193,11 @@ fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], mut f: F) -> Result<(
 where
     F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
-    it.seek(start_key.into());
-    while it.valid() {
+    it.checked_seek(start_key.into())?;
+    while it.checked_valid()? {
         let r = f(it.key(), it.value())?;
 
-        if !r || !it.next() {
+        if !r || !it.checked_next()? {
             break;
         }
     }

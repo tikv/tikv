@@ -184,38 +184,42 @@ impl SSTImporter {
         let direct_retval = (|| {
             if rewrite_rule.old_key_prefix != rewrite_rule.new_key_prefix {
                 // must iterate if we perform key rewrite
-                return None;
+                return Ok(None);
             }
-            if !iter.seek(SeekKey::Start) {
+            if !iter.checked_seek(SeekKey::Start)? {
                 // the SST is empty, so no need to iterate at all (should be impossible?)
-                return Some(meta.get_range().clone());
+                return Ok(Some(meta.get_range().clone()));
             }
             let start_key = keys::origin_key(iter.key());
             if is_before_start_bound(start_key, &range_start) {
                 // SST's start is before the range to consume, so needs to iterate to skip over
-                return None;
+                return Ok(None);
             }
             let start_key = start_key.to_vec();
 
             // seek to end and fetch the last (inclusive) key of the SST.
-            iter.seek(SeekKey::End);
+            iter.checked_seek(SeekKey::End)?;
             let last_key = keys::origin_key(iter.key());
             if is_after_end_bound(last_key, &range_end) {
                 // SST's end is after the range to consume
-                return None;
+                return Ok(None);
             }
 
             // range contained the entire SST, no need to iterate, just moving the file is ok
             let mut range = Range::default();
             range.set_start(start_key);
             range.set_end(last_key.to_vec());
-            Some(range)
+            Ok(Some(range))
         })();
 
-        if let Some(range) = direct_retval {
-            // TODO: what about encrypted SSTs?
-            fs::rename(&path.temp, &path.save)?;
-            return Ok(Some(range));
+        match direct_retval {
+            Ok(Some(range)) => {
+                // TODO: what about encrypted SSTs?
+                fs::rename(&path.temp, &path.save)?;
+                return Ok(Some(range));
+            },
+            Err(e) => return Err(e),
+            Ok(None) => {}
         }
 
         // perform iteration and key rewrite.
@@ -225,11 +229,11 @@ impl SSTImporter {
         let mut first_key = None;
 
         match range_start {
-            Bound::Unbounded => iter.seek(SeekKey::Start),
-            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s))),
+            Bound::Unbounded => iter.checked_seek(SeekKey::Start)?,
+            Bound::Included(s) => iter.checked_seek(SeekKey::Key(&keys::data_key(&s)))?,
             Bound::Excluded(_) => unreachable!(),
         };
-        while iter.valid() {
+        while iter.checked_valid()? {
             let old_key = keys::origin_key(iter.key());
             if is_after_end_bound(old_key, &range_end) {
                 break;
@@ -245,7 +249,7 @@ impl SSTImporter {
             key.truncate(new_prefix_data_key_len);
             key.extend_from_slice(&old_key[old_prefix.len()..]);
             sst_writer.put(&key, iter.value())?;
-            iter.next();
+            iter.checked_next()?;
             if first_key.is_none() {
                 first_key = Some(keys::origin_key(&key).to_vec());
             }

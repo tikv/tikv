@@ -4,7 +4,10 @@ mod metrics;
 mod raft_client;
 
 pub mod config;
+
+#[allow(deprecated)]
 pub mod debug;
+
 pub mod errors;
 pub mod load_statistics;
 pub mod lock_manager;

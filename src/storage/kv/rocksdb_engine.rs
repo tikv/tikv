@@ -324,34 +324,33 @@ impl Snapshot for RocksSnapshot {
 
 impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
     fn next(&mut self) -> bool {
-        DBIterator::next(self)
+        DBIterator::checked_next(self).unwrap()
     }
 
     fn prev(&mut self) -> bool {
-        DBIterator::prev(self)
+        DBIterator::checked_prev(self).unwrap()
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek(self, key.as_encoded().as_slice().into()))
+        DBIterator::checked_seek(self, key.as_encoded().as_slice().into())
+            .map_err(|e| box_err!(e))
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek_for_prev(
-            self,
-            key.as_encoded().as_slice().into(),
-        ))
+        DBIterator::checked_seek_for_prev(self, key.as_encoded().as_slice().into())
+            .map_err(|e| box_err!(e))
     }
 
     fn seek_to_first(&mut self) -> bool {
-        DBIterator::seek(self, SeekKey::Start)
+        DBIterator::checked_seek(self, SeekKey::Start).unwrap()
     }
 
     fn seek_to_last(&mut self) -> bool {
-        DBIterator::seek(self, SeekKey::End)
+        DBIterator::checked_seek(self, SeekKey::End).unwrap()
     }
 
     fn valid(&self) -> bool {
-        DBIterator::valid(self)
+        DBIterator::checked_valid(self).unwrap()
     }
 
     fn status(&self) -> Result<()> {
