@@ -31,11 +31,11 @@ use crate::storage::kv::{
 };
 use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
 use crate::storage::{Callback, Error, ErrorInner, Result};
-use keys::Key;
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
+use txn_types::Key;
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -1286,13 +1286,14 @@ mod tests {
     use super::*;
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
-    use crate::storage::kv::Result as EngineResult;
+    use crate::storage::kv::{Result as EngineResult, TestEngineBuilder};
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
+    use crate::storage::{txn::Options, Storage, TestStorageBuilder};
     use futures::Future;
     use kvproto::metapb;
     use std::collections::BTreeMap;
     use std::sync::mpsc::{channel, Receiver, Sender};
+    use txn_types::Mutation;
 
     struct MockSafePointProvider {
         rx: Receiver<TimeStamp>,

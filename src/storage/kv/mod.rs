@@ -1,5 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod btree_engine;
+mod compact_listener;
+mod cursor;
+mod perf_context;
+mod rocksdb_engine;
+mod stats;
+
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::time::Duration;
@@ -8,19 +15,12 @@ use std::{error, ptr, result};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
-use keys::{Key, Value};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
+use txn_types::{Key, Value};
 
 use crate::into_other::IntoOther;
 use crate::raftstore::coprocessor::SeekRegionCallback;
-
-mod btree_engine;
-mod compact_listener;
-mod cursor;
-mod perf_context;
-mod rocksdb_engine;
-mod stats;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::compact_listener::{CompactedEvent, CompactionListener};

@@ -1,13 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::{
-    mvcc::{ErrorInner, Result, TimeStamp, TsSet},
-    Mutation, FOR_UPDATE_TS_PREFIX, MIN_COMMIT_TS_PREFIX, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX,
-    TXN_SIZE_PREFIX,
-};
+use crate::timestamp::{TimeStamp, TsSet};
+use crate::types::{Key, Mutation, Value, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::{Error, Result};
 use byteorder::ReadBytesExt;
 use derive_new::new;
-use keys::{Key, Value};
 use kvproto::kvrpcpb::{LockInfo, Op};
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
@@ -24,6 +21,10 @@ const FLAG_PUT: u8 = b'P';
 const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
 const FLAG_PESSIMISTIC: u8 = b'S';
+
+const FOR_UPDATE_TS_PREFIX: u8 = b'f';
+const TXN_SIZE_PREFIX: u8 = b't';
+const MIN_COMMIT_TS_PREFIX: u8 = b'c';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> LockType {
@@ -98,9 +99,9 @@ impl Lock {
 
     pub fn parse(mut b: &[u8]) -> Result<Lock> {
         if b.is_empty() {
-            return Err(ErrorInner::BadFormatLock.into());
+            return Err(Error::BadFormatLock);
         }
-        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatLock)?;
+        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(Error::BadFormatLock)?;
         let primary = bytes::decode_compact_bytes(&mut b)?;
         let ts = number::decode_var_u64(&mut b)?.into();
         let ttl = if b.is_empty() {
@@ -198,7 +199,7 @@ impl Lock {
         }
 
         // There is a pending lock. Client should wait or clean it.
-        Err(ErrorInner::KeyIsLocked(self.into_lock_info(raw_key)).into())
+        Err(Error::KeyIsLocked(self.into_lock_info(raw_key)))
     }
 }
 
