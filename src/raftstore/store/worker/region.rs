@@ -697,31 +697,31 @@ mod tests {
         let mut pending_delete_ranges = PendingDeleteRanges::default();
         let id = 0;
 
-        let timeout = 10;
-        insert_range(&mut pending_delete_ranges, id, "a", "c", timeout);
-        insert_range(&mut pending_delete_ranges, id, "m", "n", timeout);
-        insert_range(&mut pending_delete_ranges, id, "x", "z", timeout);
-        insert_range(&mut pending_delete_ranges, id + 1, "f", "i", timeout);
-        insert_range(&mut pending_delete_ranges, id + 1, "p", "t", timeout);
+        let timeout1 = 10;
+        insert_range(&mut pending_delete_ranges, id, "a", "c", timeout1);
+        insert_range(&mut pending_delete_ranges, id, "m", "n", timeout1);
+        insert_range(&mut pending_delete_ranges, id, "x", "z", timeout1);
+        insert_range(&mut pending_delete_ranges, id + 1, "f", "i", timeout1);
+        insert_range(&mut pending_delete_ranges, id + 1, "p", "t", timeout1);
         assert_eq!(pending_delete_ranges.len(), 5);
 
         //  a____c    f____i    m____n    p____t    x____z
         //              g___________________q
         // when we want to insert [g, q), we first extract overlap ranges,
         // which are [f, i), [m, n), [p, t)
-        let timeout = 12;
+        let timeout2 = 12;
         let overlap_ranges =
             pending_delete_ranges.drain_overlap_ranges(&b"g".to_vec(), &b"q".to_vec());
         assert_eq!(
             overlap_ranges,
             [
-                (id + 1, b"f".to_vec(), b"i".to_vec()),
-                (id, b"m".to_vec(), b"n".to_vec()),
-                (id + 1, b"p".to_vec(), b"t".to_vec()),
+                (id + 1, b"f".to_vec(), b"i".to_vec(), timeout1),
+                (id, b"m".to_vec(), b"n".to_vec(), timeout1),
+                (id + 1, b"p".to_vec(), b"t".to_vec(), timeout1),
             ]
         );
         assert_eq!(pending_delete_ranges.len(), 2);
-        insert_range(&mut pending_delete_ranges, id + 2, "g", "q", timeout);
+        insert_range(&mut pending_delete_ranges, id + 2, "g", "q", timeout2);
         assert_eq!(pending_delete_ranges.len(), 3);
 
         // at t1, [a, c) and [x, z) will timeout
