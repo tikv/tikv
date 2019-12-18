@@ -6,6 +6,7 @@ use std::cell::Cell;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread::LocalKey;
 
 lazy_static! {
     static ref UPDATER_IS_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
@@ -54,5 +55,24 @@ impl<T: LocalMetric> Deref for TLSMetricGroup<T> {
 
     fn deref(&self) -> &T {
         &self.inner
+    }
+}
+
+pub trait TLSExt<T: LocalMetric> {
+    fn may_flush<F, R>(&'static self, f: F) -> R
+    where
+        F: FnOnce(&TLSMetricGroup<T>) -> R;
+}
+
+impl<T: LocalMetric> TLSExt<T> for LocalKey<TLSMetricGroup<T>> {
+    fn may_flush<F, R>(&'static self, f: F) -> R
+    where
+        F: FnOnce(&TLSMetricGroup<T>) -> R,
+    {
+        self.with(|m| {
+            let res = f(m);
+            m.may_flush_all();
+            res
+        })
     }
 }
