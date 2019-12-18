@@ -72,10 +72,12 @@ impl<S: Snapshot> PointGetterBuilder<S> {
     /// Build `PointGetter` from the current configuration.
     pub fn build(self) -> Result<PointGetter<S>> {
         // If we only want to get single value, we can use prefix seek.
-        let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
+        let mut write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .fill_cache(self.fill_cache)
             .prefix_seek(!self.multi)
             .build()?;
+        write_cursor.region_id = self.snapshot.region_id();
+        write_cursor.start_ts = self.ts;
 
         Ok(PointGetter {
             snapshot: self.snapshot,

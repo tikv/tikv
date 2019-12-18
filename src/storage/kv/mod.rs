@@ -320,6 +320,9 @@ pub struct Cursor<I: Iterator> {
     // `value()` don't need to have `&mut self`.
     cur_key_has_read: Cell<bool>,
     cur_value_has_read: Cell<bool>,
+
+    pub region_id: u64,
+    pub start_ts: u64,
 }
 
 impl<I: Iterator> Cursor<I> {
@@ -332,6 +335,9 @@ impl<I: Iterator> Cursor<I> {
 
             cur_key_has_read: Cell::new(false),
             cur_value_has_read: Cell::new(false),
+
+            region_id: 0,
+            start_ts: 0,
         }
     }
 
@@ -362,6 +368,11 @@ impl<I: Iterator> Cursor<I> {
             .map_or(false, |k| k <= key.as_encoded())
         {
             self.iter.validate_key(key)?;
+            error!(
+                "[test] Cursor::seek returns false because of validate_key";
+                "region_id" => self.region_id,
+                "start_ts" => self.start_ts,
+            );
             return Ok(false);
         }
 
@@ -373,6 +384,11 @@ impl<I: Iterator> Cursor<I> {
         }
 
         if !self.internal_seek(key, statistics)? {
+            error!(
+                "[test] Cursor::seek returns false because of internal_seek";
+                "region_id" => self.region_id,
+                "start_ts" => self.start_ts,
+            );
             self.max_key = Some(key.as_encoded().to_owned());
             return Ok(false);
         }
@@ -386,7 +402,15 @@ impl<I: Iterator> Cursor<I> {
     pub fn near_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
         if !self.valid()? {
-            return self.seek(key, statistics);
+            let ret = self.seek(key, statistics);
+            if let Ok(false) = ret {
+                error!(
+                    "[test] Cursor::near_seek returns false because of seek";
+                    "region_id" => self.region_id,
+                    "start_ts" => self.start_ts,
+                );
+            }
+            return ret;
         }
         let ord = self.key(statistics).cmp(key.as_encoded());
         if ord == Ordering::Equal
@@ -400,12 +424,27 @@ impl<I: Iterator> Cursor<I> {
             .map_or(false, |k| k <= key.as_encoded())
         {
             self.iter.validate_key(key)?;
+            error!(
+                "[test] Cursor::near_seek returns false because of max_key <= key";
+                "region_id" => self.region_id,
+                "start_ts" => self.start_ts,
+            );
             return Ok(false);
         }
         if ord == Ordering::Greater {
             near_loop!(
                 self.prev(statistics) && self.key(statistics) > key.as_encoded().as_slice(),
-                self.seek(key, statistics),
+                {
+                    let res = self.seek(key, statistics);
+                    if let Ok(false) = res {
+                        error!(
+                            "[test] Cursor::near_seek returns false because of seek_1";
+                            "region_id" => self.region_id,
+                            "start_ts" => self.start_ts,
+                        );
+                    }
+                    res
+                },
                 statistics
             );
             if self.valid()? {
@@ -420,12 +459,27 @@ impl<I: Iterator> Cursor<I> {
             // ord == Less
             near_loop!(
                 self.next(statistics) && self.key(statistics) < key.as_encoded().as_slice(),
-                self.seek(key, statistics),
+                {
+                    let res = self.seek(key, statistics);
+                    if let Ok(false) = res {
+                        error!(
+                            "[test] Cursor::near_seek returns false because of seek_2";
+                            "region_id" => self.region_id,
+                            "start_ts" => self.start_ts,
+                        );
+                    }
+                    res
+                },
                 statistics
             );
         }
         if !self.valid()? {
             self.max_key = Some(key.as_encoded().to_owned());
+            error!(
+                "[test] Cursor::near_seek returns false because of invalid";
+                "region_id" => self.region_id,
+                "start_ts" => self.start_ts,
+            );
             return Ok(false);
         }
         Ok(true)
@@ -591,7 +645,19 @@ impl<I: Iterator> Cursor<I> {
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek(key)
+        let res = self.iter.seek(key);
+        match res {
+            Ok(false) => {
+                error!(
+                    "[test] Cursor::internal_seek returns false because of seek";
+                    "region_id" => self.region_id,
+                    "start_ts" => self.start_ts,
+                    "status" => ?self.iter.status(),
+                );
+            }
+            _ => {}
+        }
+        res
     }
 
     #[inline]
