@@ -356,8 +356,8 @@ impl Column {
 
     /// Helper for `append_enum` and `append_set`
     fn append_name_value(&mut self, name: &[u8], val: u64) -> Result<()> {
-        self.data.write_bytes(name)?;
         self.data.write_u64_le(val)?;
+        self.data.write_bytes(name)?;
         Ok(())
     }
 

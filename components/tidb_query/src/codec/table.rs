@@ -231,7 +231,7 @@ fn unflatten(ctx: &mut EvalContext, datum: Datum, col_info: &ColumnInfo) -> Resu
     if let Datum::Null = datum {
         return Ok(datum);
     }
-    let tp = col_info.tp();
+    let tp = (col_info as &dyn FieldTypeAccessor).tp();
     match tp {
         FieldTypeTp::Float => Ok(Datum::F64(f64::from(datum.f64() as f32))),
         FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
