@@ -954,6 +954,26 @@ impl ScalarFunc {
         result.push(b'\'');
         Ok(Some(Cow::Owned(result)))
     }
+
+    // see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_ord
+    #[inline]
+    pub fn ord<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let size = bstr::decode_utf8(&s).1;
+        let bytes = &s[..size];
+
+        let mut result = 0;
+        let mut factor = 1;
+        for b in bytes.iter().rev() {
+            result += i64::from(*b) * factor;
+            factor *= 256;
+        }
+        Ok(Some(result))
+    }
 }
 
 // when target_len is 0, return Some(0), means the pad function should return empty string
@@ -3538,5 +3558,30 @@ mod tests {
         //check for null
         let got = eval_func(ScalarFuncSig::Quote, &[Datum::Null]).unwrap();
         assert_eq!(got, Datum::Bytes(b"NULL".to_vec()))
+    }
+
+    #[test]
+    fn test_ord() {
+        let cases = vec![
+            ("2", 50),
+            ("23", 50),
+            ("2.3", 50),
+            ("", 0),
+            ("你好", 14990752),
+            ("にほん", 14909867),
+            ("한국", 15570332),
+            ("👍", 4036989325),
+            ("א", 55184),
+        ];
+
+        for (input, expect) in cases {
+            let input = Datum::Bytes(input.as_bytes().to_vec());
+            let expect = Datum::I64(expect);
+            let got = eval_func(ScalarFuncSig::Ord, &[input]).unwrap();
+            assert_eq!(got, expect);
+        }
+
+        let got = eval_func(ScalarFuncSig::Ord, &[Datum::Null]).unwrap();
+        assert_eq!(got, Datum::Null);
     }
 }

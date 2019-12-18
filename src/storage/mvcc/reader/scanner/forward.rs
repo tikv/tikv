@@ -4,13 +4,12 @@ use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, TimeStamp, Value, WriteRef, WriteType};
+use txn_types::{Key, Lock, TimeStamp, Value, WriteRef, WriteType};
 
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::Result;
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
-use crate::storage::{Cursor, Lock, Snapshot, Statistics};
-
+use crate::storage::{Cursor, Snapshot, Statistics};
 use super::ScannerConfig;
 
 /// Defines the behavior of the scanner.
@@ -475,8 +474,8 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                 }
                 WriteType::Delete if self.output_delete => {
                     break Some(TxnEntry::Commit {
-                        default: (write_key.to_vec(), write_value.to_vec()),
-                        write: (Vec::new(), Vec::new()),
+                        default: (Vec::new(), Vec::new()),
+                        write: (write_key.to_vec(), write_value.to_vec()),
                     });
                 }
                 _ => {}
@@ -555,9 +554,9 @@ impl<S: Snapshot> TxnEntryScanner for EntryScanner<S> {
 mod latest_kv_tests {
     use super::super::ScannerBuilder;
     use super::*;
+    use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
-    use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 

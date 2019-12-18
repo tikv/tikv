@@ -4,13 +4,11 @@ use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, TimeStamp, Value, Write, WriteRef, WriteType};
-
-use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::{Error, Result};
-use crate::storage::{Cursor, Lock, Snapshot, Statistics};
+use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 use super::ScannerConfig;
+use crate::storage::kv::{Cursor, Snapshot, Statistics, SEEK_BOUND};
+use crate::storage::mvcc::{Error, Result};
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -370,9 +368,9 @@ impl<S: Snapshot> BackwardKvScanner<S> {
 mod tests {
     use super::super::ScannerBuilder;
     use super::*;
+    use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
-    use crate::storage::{Engine, TestEngineBuilder};
     use kvproto::kvrpcpb::Context;
 
     #[test]

@@ -2,16 +2,14 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
+use super::{Error, ErrorInner, Result};
+use crate::storage::kv::{Snapshot, Statistics};
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{
-    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, Scanner as MvccScanner,
-    ScannerBuilder, WriteRef,
+    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, PointGetter,
+    PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
 };
-use crate::storage::mvcc::{PointGetter, PointGetterBuilder};
-use crate::storage::{Snapshot, Statistics};
-use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
-
-use super::{Error, ErrorInner, Result};
+use txn_types::{Key, KvPair, TimeStamp, TsSet, Value, WriteRef};
 
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
@@ -520,11 +518,12 @@ impl Scanner for FixtureStoreScanner {
 mod tests {
     use super::*;
     use crate::storage::kv::{
-        Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+        Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+        TestEngineBuilder,
     };
-    use crate::storage::mvcc::MvccTxn;
-    use crate::storage::{CfName, Cursor, Iterator, Mutation, Options, TestEngineBuilder};
-    use engine::IterOption;
+    use crate::storage::mvcc::{Mutation, MvccTxn};
+    use crate::storage::txn::commands::Options;
+    use engine::{CfName, IterOption};
     use kvproto::kvrpcpb::Context;
 
     const KEY_PREFIX: &str = "key_prefix";

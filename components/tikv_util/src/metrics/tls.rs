@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use coarsetime::{Instant, Updater};
+use prometheus::local::LocalMetric;
 use std::cell::Cell;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,16 +17,12 @@ fn ensure_updater() {
     }
 }
 
-pub trait TLSMetricGroupInner {
-    fn flush_all(&self);
-}
-
-pub struct TLSMetricGroup<T> {
+pub struct TLSMetricGroup<T: LocalMetric> {
     inner: T,
     last_flush_time: Cell<Instant>,
 }
 
-impl<T: TLSMetricGroupInner> TLSMetricGroup<T> {
+impl<T: LocalMetric> TLSMetricGroup<T> {
     pub fn new(inner: T) -> Self {
         ensure_updater();
         Self {
@@ -41,18 +38,18 @@ impl<T: TLSMetricGroupInner> TLSMetricGroup<T> {
             // Minimum flush interval is 1s
             return false;
         }
-        self.inner.flush_all();
+        self.inner.flush();
         self.last_flush_time.set(recent);
         true
     }
 
     /// Flushes the inner metrics immediately.
     pub fn force_flush_all(&self) {
-        self.inner.flush_all()
+        self.inner.flush()
     }
 }
 
-impl<T: TLSMetricGroupInner> Deref for TLSMetricGroup<T> {
+impl<T: LocalMetric> Deref for TLSMetricGroup<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
