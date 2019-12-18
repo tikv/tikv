@@ -23,6 +23,25 @@ pub fn like(
     }
 }
 
+#[rpn_fn]
+#[inline]
+pub fn regexp(target: &Option<Bytes>, pattern: &Option<Bytes>) -> Result<Option<i64>> {
+    match (target, pattern) {
+        (Some(target), Some(pattern)) => {
+            let target = String::from_utf8_lossy(target);
+            let pattern = String::from_utf8_lossy(pattern);
+            let pattern = format!("(?i){}", &pattern);
+
+            // TODO: cache compiled result
+            Ok(Some(match regex::Regex::new(&pattern) {
+                Ok(s) => s.is_match(&target) as i64,
+                Err(err) => return Err(box_err!("{:?}", err)),
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tipb::ScalarFuncSig;
@@ -81,6 +100,34 @@ mod tests {
                 "target={}, pattern={}, escape={}",
                 target, pattern, escape
             );
+        }
+    }
+
+    #[test]
+    fn test_regexp() {
+        let cases = vec![
+            ("a", r"^$", Some(0)),
+            ("a", r"a", Some(1)),
+            ("b", r"a", Some(0)),
+            ("aA", r"Aa", Some(1)),
+            ("aaa", r".", Some(1)),
+            ("ab", r"^.$", Some(0)),
+            ("b", r"..", Some(0)),
+            ("aab", r".ab", Some(1)),
+            ("abcd", r".*", Some(1)),
+            ("你", r"^.$", Some(1)),
+            ("你好", r"你好", Some(1)),
+            ("你好", r"^你好$", Some(1)),
+            ("你好", r"^您好$", Some(0)),
+        ];
+        for (target, pattern, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(target.to_owned().into_bytes())
+                .push_param(pattern.to_owned().into_bytes())
+                .evaluate(ScalarFuncSig::RegexpSig)
+                .unwrap();
+
+            assert_eq!(output, expected, "target={}, pattern={}", target, pattern);
         }
     }
 }
