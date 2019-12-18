@@ -1286,9 +1286,9 @@ mod tests {
     use super::*;
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
-    use crate::storage::kv::Result as EngineResult;
+    use crate::storage::kv::{Result as EngineResult, TestEngineBuilder};
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{txn::Options, Storage, TestEngineBuilder, TestStorageBuilder};
+    use crate::storage::{txn::Options, Storage, TestStorageBuilder};
     use futures::Future;
     use kvproto::metapb;
     use std::collections::BTreeMap;
