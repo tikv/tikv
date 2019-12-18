@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::iter::{self, FromIterator};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::coprocessor::Endpoint;
 use crate::raftstore::router::RaftStoreRouter;
@@ -41,7 +41,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::metrics::HistogramReader;
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
-use tikv_util::time::{duration_to_sec, Instant as TiInstant};
+use tikv_util::time::{duration_to_sec, Instant};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -524,8 +524,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Service<T, E, L> {
 
 impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T, E, L> {
     fn kv_get(&mut self, ctx: RpcContext<'_>, req: GetRequest, sink: UnarySink<GetResponse>) {
-        let instant = TiInstant::now_coarse();
-
+        let instant = Instant::now_coarse();
         let future = future_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
@@ -553,7 +552,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn kv_scan(&mut self, ctx: RpcContext<'_>, req: ScanRequest, sink: UnarySink<ScanResponse>) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
         let future = future_scan(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
@@ -586,7 +585,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: PrewriteRequest,
         sink: UnarySink<PrewriteResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
         let future = future_prewrite(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
@@ -619,7 +618,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: PessimisticLockRequest,
         sink: UnarySink<PessimisticLockResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_acquire_pessimistic_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -655,7 +654,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: PessimisticRollbackRequest,
         sink: UnarySink<PessimisticRollbackResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_pessimistic_rollback(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -692,7 +691,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: CommitRequest,
         sink: UnarySink<CommitResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_commit(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -731,7 +730,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: CleanupRequest,
         sink: UnarySink<CleanupResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_cleanup(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -765,7 +764,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: BatchGetRequest,
         sink: UnarySink<BatchGetResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_batch_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -799,7 +798,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: BatchRollbackRequest,
         sink: UnarySink<BatchRollbackResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_batch_rollback(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -835,7 +834,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: TxnHeartBeatRequest,
         sink: UnarySink<TxnHeartBeatResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_txn_heart_beat(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -871,7 +870,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: CheckTxnStatusRequest,
         sink: UnarySink<CheckTxnStatusResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_check_txn_status(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -907,7 +906,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: ScanLockRequest,
         sink: UnarySink<ScanLockResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_scan_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -941,7 +940,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: ResolveLockRequest,
         sink: UnarySink<ResolveLockResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_resolve_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -972,7 +971,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_gc(&self.gc_worker, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -1006,7 +1005,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: DeleteRangeRequest,
         sink: UnarySink<DeleteRangeResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_delete_range(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -1042,7 +1041,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawGetRequest,
         sink: UnarySink<RawGetResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_raw_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -1076,7 +1075,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawBatchGetRequest,
         sink: UnarySink<RawBatchGetResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_raw_batch_get(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -1110,7 +1109,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawScanRequest,
         sink: UnarySink<RawScanResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_raw_scan(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -1144,7 +1143,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawBatchScanRequest,
         sink: UnarySink<RawBatchScanResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_raw_batch_scan(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -1178,7 +1177,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawPutRequest,
         sink: UnarySink<RawPutResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
         let future = future_raw_put(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
@@ -1211,7 +1210,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawBatchPutRequest,
         sink: UnarySink<RawBatchPutResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_raw_batch_put(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -1245,7 +1244,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawDeleteRequest,
         sink: UnarySink<RawDeleteResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_raw_delete(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -1279,7 +1278,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawBatchDeleteRequest,
         sink: UnarySink<RawBatchDeleteResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_raw_batch_delete(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -1315,7 +1314,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: RawDeleteRangeRequest,
         sink: UnarySink<RawDeleteRangeResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_raw_delete_range(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -1351,7 +1350,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: UnsafeDestroyRangeRequest,
         sink: UnarySink<UnsafeDestroyRangeResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as start, or
         // MAX_KEY as end here.
@@ -1402,7 +1401,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let future = future_cop(&self.cop, req, Some(ctx.peer()))
             .and_then(|resp| sink.success(resp).map_err(Error::from))
@@ -1436,7 +1435,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: Request,
         sink: ServerStreamingSink<Response>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let stream = self
             .cop
@@ -1567,7 +1566,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: MvccGetByKeyRequest,
         sink: UnarySink<MvccGetByKeyResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let key = Key::from_raw(req.get_key());
         let (cb, f) = paired_future_callback();
@@ -1622,7 +1621,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: MvccGetByStartTsRequest,
         sink: UnarySink<MvccGetByStartTsResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
         let res =
@@ -1679,7 +1678,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         mut req: SplitRegionRequest,
         sink: UnarySink<SplitRegionResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
         let (cb, future) = paired_future_callback();
@@ -1763,7 +1762,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
-        let instant = TiInstant::now_coarse();
+        let instant = Instant::now_coarse();
 
         let region_id = req.get_context().get_region_id();
         let mut cmd = RaftCmdRequest::default();
@@ -1864,7 +1863,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 let req_batcher = req_batcher.clone();
                 let req_batcher2 = req_batcher.clone();
                 let stopped = Arc::clone(&stopped);
-                let start = Instant::now();
+                let start = std::time::Instant::now();
                 let timer = GLOBAL_TIMER_HANDLE.clone();
                 self.timer_pool.lock().unwrap().spawn(
                     timer
@@ -1968,7 +1967,7 @@ fn response_batch_commands_request<F>(
     id: u64,
     resp: F,
     tx: Sender<(u64, batch_commands_response::Response)>,
-    begin: TiInstant,
+    begin: Instant,
     histogram_key: GrpcTypeKind,
 ) where
     F: Future<Item = batch_commands_response::Response, Error = ()> + Send + 'static,
@@ -2043,12 +2042,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
     match req.cmd {
         None => {
             // For some invalid requests.
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future::ok(batch_commands_response::Response::default());
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::invalid);
         }
         Some(batch_commands_request::request::Cmd::Get(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Get))
                 .map_err(|_| {
@@ -2060,7 +2059,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_get);
         }
         Some(batch_commands_request::request::Cmd::Scan(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Scan))
                 .map_err(|_| {
@@ -2072,7 +2071,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_scan);
         }
         Some(batch_commands_request::request::Cmd::Prewrite(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_prewrite(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Prewrite))
                 .map_err(|_| {
@@ -2084,7 +2083,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_prewrite);
         }
         Some(batch_commands_request::request::Cmd::Commit(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_commit(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Commit))
                 .map_err(|_| {
@@ -2097,7 +2096,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
         }
         Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
         Some(batch_commands_request::request::Cmd::Cleanup(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_cleanup(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Cleanup))
                 .map_err(|_| {
@@ -2109,7 +2108,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_cleanup);
         }
         Some(batch_commands_request::request::Cmd::BatchGet(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_batch_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::BatchGet))
                 .map_err(|_| {
@@ -2121,7 +2120,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_batch_get);
         }
         Some(batch_commands_request::request::Cmd::BatchRollback(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_batch_rollback(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::BatchRollback
@@ -2135,7 +2134,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_batch_rollback);
         }
         Some(batch_commands_request::request::Cmd::TxnHeartBeat(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_txn_heart_beat(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::TxnHeartBeat))
                 .map_err(|_| {
@@ -2147,7 +2146,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_txn_heart_beat);
         }
         Some(batch_commands_request::request::Cmd::CheckTxnStatus(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_check_txn_status(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::CheckTxnStatus
@@ -2167,7 +2166,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             );
         }
         Some(batch_commands_request::request::Cmd::ScanLock(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_scan_lock(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::ScanLock))
                 .map_err(|_| {
@@ -2179,7 +2178,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_scan_lock);
         }
         Some(batch_commands_request::request::Cmd::ResolveLock(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_resolve_lock(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::ResolveLock))
                 .map_err(|_| {
@@ -2191,7 +2190,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_resolve_lock);
         }
         Some(batch_commands_request::request::Cmd::Gc(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_gc(&gc_worker, req)
                 .map(oneof!(batch_commands_response::response::Cmd::Gc))
                 .map_err(|_| {
@@ -2203,7 +2202,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_gc);
         }
         Some(batch_commands_request::request::Cmd::DeleteRange(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_delete_range(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::DeleteRange))
                 .map_err(|_| {
@@ -2215,7 +2214,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::kv_delete_range);
         }
         Some(batch_commands_request::request::Cmd::RawGet(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_raw_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawGet))
                 .map_err(|_| {
@@ -2227,7 +2226,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_get);
         }
         Some(batch_commands_request::request::Cmd::RawBatchGet(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_raw_batch_get(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchGet))
                 .map_err(|_| {
@@ -2239,7 +2238,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_get);
         }
         Some(batch_commands_request::request::Cmd::RawPut(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_raw_put(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawPut))
                 .map_err(|_| {
@@ -2251,7 +2250,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_put);
         }
         Some(batch_commands_request::request::Cmd::RawBatchPut(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_raw_batch_put(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchPut))
                 .map_err(|_| {
@@ -2263,7 +2262,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_put);
         }
         Some(batch_commands_request::request::Cmd::RawDelete(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_raw_delete(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawDelete))
                 .map_err(|_| {
@@ -2275,7 +2274,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_delete);
         }
         Some(batch_commands_request::request::Cmd::RawBatchDelete(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_raw_batch_delete(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::RawBatchDelete
@@ -2289,7 +2288,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_delete);
         }
         Some(batch_commands_request::request::Cmd::RawScan(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_raw_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawScan))
                 .map_err(|_| {
@@ -2301,7 +2300,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_scan);
         }
         Some(batch_commands_request::request::Cmd::RawDeleteRange(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_raw_delete_range(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::RawDeleteRange
@@ -2315,7 +2314,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_delete_range);
         }
         Some(batch_commands_request::request::Cmd::RawBatchScan(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_raw_batch_scan(&storage, req)
                 .map(oneof!(batch_commands_response::response::Cmd::RawBatchScan))
                 .map_err(|_| {
@@ -2327,7 +2326,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::raw_batch_scan);
         }
         Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_cop(&cop, req, Some(peer.to_string()))
                 .map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                 .map_err(|_| {
@@ -2339,7 +2338,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             response_batch_commands_request(id, resp, tx, instant, GrpcTypeKind::coprocessor);
         }
         Some(batch_commands_request::request::Cmd::PessimisticLock(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_acquire_pessimistic_lock(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::PessimisticLock
@@ -2359,7 +2358,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             );
         }
         Some(batch_commands_request::request::Cmd::PessimisticRollback(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_pessimistic_rollback(&storage, req)
                 .map(oneof!(
                     batch_commands_response::response::Cmd::PessimisticRollback
@@ -2379,7 +2378,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager>(
             );
         }
         Some(batch_commands_request::request::Cmd::Empty(req)) => {
-            let instant = TiInstant::now_coarse();
+            let instant = Instant::now_coarse();
             let resp = future_handle_empty(req)
                 .map(oneof!(batch_commands_response::response::Cmd::Empty))
                 .map_err(|_| {
@@ -2437,7 +2436,7 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     requests: Vec<u64>,
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
-    let instant = TiInstant::now_coarse();
+    let instant = Instant::now_coarse();
 
     storage.async_batch_get_command(commands).then(move |v| {
         match v {
@@ -2953,7 +2952,7 @@ fn future_raw_batch_get_command<E: Engine, L: LockManager>(
     cf: String,
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
-    let instant = TiInstant::now_coarse();
+    let instant = Instant::now_coarse();
 
     storage
         .async_raw_batch_get_command(cf, commands)
