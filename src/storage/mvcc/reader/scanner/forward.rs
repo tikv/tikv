@@ -450,12 +450,10 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
             let write = WriteRef::parse(write_value)?;
             statistics.write.processed += 1;
 
-            if write.write_type == WriteType::Put
-                || (write.write_type == WriteType::Delete && self.output_delete)
-            {
-                let entry_write = (write_key.to_vec(), write_value.to_vec());
-                let entry_default =
-                    if write.write_type == WriteType::Put && write.short_value.is_none() {
+            match write.write_type {
+                WriteType::Put => {
+                    let entry_write = (write_key.to_vec(), write_value.to_vec());
+                    let entry_default = if write.short_value.is_none() {
                         let start_ts = write.start_ts;
                         cursors.ensure_default_cursor(cfg)?;
                         let default_cursor = cursors.default.as_mut().unwrap();
@@ -470,10 +468,18 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                     } else {
                         (Vec::new(), Vec::new())
                     };
-                break Some(TxnEntry::Commit {
-                    default: entry_default,
-                    write: entry_write,
-                });
+                    break Some(TxnEntry::Commit {
+                        default: entry_default,
+                        write: entry_write,
+                    });
+                }
+                WriteType::Delete if self.output_delete => {
+                    break Some(TxnEntry::Commit {
+                        default: (write_key.to_vec(), write_value.to_vec()),
+                        write: (Vec::new(), Vec::new()),
+                    });
+                }
+                _ => {}
             }
 
             cursors.write.next(&mut statistics.write);
