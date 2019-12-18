@@ -64,6 +64,8 @@ pub trait TxnEntryStore: Send {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        after_ts: u64,
+        output_delete: bool,
     ) -> Result<Self::Scanner>;
 }
 
@@ -239,6 +241,8 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        after_ts: u64,
+        output_delete: bool,
     ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
@@ -248,7 +252,7 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
                 .omit_value(false)
                 .fill_cache(self.fill_cache)
                 .isolation_level(self.isolation_level)
-                .build_entry_scanner()?;
+                .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
     }
