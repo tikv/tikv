@@ -368,11 +368,13 @@ impl<I: Iterator> Cursor<I> {
             .map_or(false, |k| k <= key.as_encoded())
         {
             self.iter.validate_key(key)?;
-            error!(
-                "[test] Cursor::seek returns false because of validate_key";
-                "region_id" => self.region_id,
-                "start_ts" => self.start_ts,
-            );
+            if self.region_id != 0 && self.start_ts != 0 {
+                error!(
+                    "[test] Cursor::seek returns false because of validate_key";
+                    "region_id" => self.region_id,
+                    "start_ts" => self.start_ts,
+                );
+            }
             return Ok(false);
         }
 
@@ -384,11 +386,13 @@ impl<I: Iterator> Cursor<I> {
         }
 
         if !self.internal_seek(key, statistics)? {
-            error!(
-                "[test] Cursor::seek returns false because of internal_seek";
-                "region_id" => self.region_id,
-                "start_ts" => self.start_ts,
-            );
+            if self.region_id != 0 && self.start_ts != 0 {
+                error!(
+                    "[test] Cursor::seek returns false because of internal_seek";
+                    "region_id" => self.region_id,
+                    "start_ts" => self.start_ts,
+                );
+            }
             self.max_key = Some(key.as_encoded().to_owned());
             return Ok(false);
         }
@@ -404,11 +408,13 @@ impl<I: Iterator> Cursor<I> {
         if !self.valid()? {
             let ret = self.seek(key, statistics);
             if let Ok(false) = ret {
-                error!(
-                    "[test] Cursor::near_seek returns false because of seek";
-                    "region_id" => self.region_id,
-                    "start_ts" => self.start_ts,
-                );
+                if self.region_id != 0 && self.start_ts != 0 {
+                    error!(
+                        "[test] Cursor::near_seek returns false because of seek";
+                        "region_id" => self.region_id,
+                        "start_ts" => self.start_ts,
+                    );
+                }
             }
             return ret;
         }
@@ -424,11 +430,13 @@ impl<I: Iterator> Cursor<I> {
             .map_or(false, |k| k <= key.as_encoded())
         {
             self.iter.validate_key(key)?;
-            error!(
-                "[test] Cursor::near_seek returns false because of max_key <= key";
-                "region_id" => self.region_id,
-                "start_ts" => self.start_ts,
-            );
+            if self.region_id != 0 && self.start_ts != 0 {
+                error!(
+                    "[test] Cursor::near_seek returns false because of max_key <= key";
+                    "region_id" => self.region_id,
+                    "start_ts" => self.start_ts,
+                );
+            }
             return Ok(false);
         }
         if ord == Ordering::Greater {
@@ -437,11 +445,13 @@ impl<I: Iterator> Cursor<I> {
                 {
                     let res = self.seek(key, statistics);
                     if let Ok(false) = res {
-                        error!(
-                            "[test] Cursor::near_seek returns false because of seek_1";
-                            "region_id" => self.region_id,
-                            "start_ts" => self.start_ts,
-                        );
+                        if self.region_id != 0 && self.start_ts != 0 {
+                            error!(
+                                "[test] Cursor::near_seek returns false because of seek_1";
+                                "region_id" => self.region_id,
+                                "start_ts" => self.start_ts,
+                            );
+                        }
                     }
                     res
                 },
@@ -462,11 +472,13 @@ impl<I: Iterator> Cursor<I> {
                 {
                     let res = self.seek(key, statistics);
                     if let Ok(false) = res {
-                        error!(
-                            "[test] Cursor::near_seek returns false because of seek_2";
-                            "region_id" => self.region_id,
-                            "start_ts" => self.start_ts,
-                        );
+                        if self.region_id != 0 && self.start_ts != 0 {
+                            error!(
+                                "[test] Cursor::near_seek returns false because of seek_2";
+                                "region_id" => self.region_id,
+                                "start_ts" => self.start_ts,
+                            );
+                        }
                     }
                     res
                 },
@@ -475,11 +487,13 @@ impl<I: Iterator> Cursor<I> {
         }
         if !self.valid()? {
             self.max_key = Some(key.as_encoded().to_owned());
-            error!(
-                "[test] Cursor::near_seek returns false because of invalid";
-                "region_id" => self.region_id,
-                "start_ts" => self.start_ts,
-            );
+            if self.region_id != 0 && self.start_ts != 0 {
+                error!(
+                    "[test] Cursor::near_seek returns false because of invalid";
+                    "region_id" => self.region_id,
+                    "start_ts" => self.start_ts,
+                );
+            }
             return Ok(false);
         }
         Ok(true)
@@ -648,12 +662,14 @@ impl<I: Iterator> Cursor<I> {
         let res = self.iter.seek(key);
         match res {
             Ok(false) => {
-                error!(
-                    "[test] Cursor::internal_seek returns false because of seek";
-                    "region_id" => self.region_id,
-                    "start_ts" => self.start_ts,
-                    "status" => ?self.iter.status(),
-                );
+                if self.region_id != 0 && self.start_ts != 0 {
+                    error!(
+                        "[test] Cursor::internal_seek returns false because of seek";
+                        "region_id" => self.region_id,
+                        "start_ts" => self.start_ts,
+                        "status" => ?self.iter.status(),
+                    );
+                }
             }
             _ => {}
         }
