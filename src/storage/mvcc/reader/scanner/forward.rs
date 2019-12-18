@@ -6,11 +6,11 @@ use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, Value, WriteRef, WriteType};
 
+use super::ScannerConfig;
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::Result;
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Snapshot, Statistics};
-use super::ScannerConfig;
 
 /// Defines the behavior of the scanner.
 pub trait ScanPolicy<S: Snapshot> {
