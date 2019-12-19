@@ -307,7 +307,9 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             ctx,
             reqs,
             Box::new(move |(cb_ctx, res)| {
-                let res = match res {
+                ASYNC_REQUESTS_DURATIONS_VEC
+                    .may_flush(|m| m.write.observe(duration_to_sec(req_timer.elapsed())));
+                match res {
                     Ok(CmdRes::Resp(_)) => {
                         ASYNC_REQUESTS_COUNTER_VEC.may_flush(|m| m.write.success.inc());
                         fail_point!("raftkv_async_write_finish");
@@ -322,10 +324,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                         ASYNC_REQUESTS_COUNTER_VEC.may_flush(|m| m.write.get(status_kind).inc());
                         cb((cb_ctx, Err(e)))
                     }
-                };
-                ASYNC_REQUESTS_DURATIONS_VEC
-                    .may_flush(|m| m.write.observe(duration_to_sec(req_timer.elapsed())));
-                res
+                }
             }),
         )
         .map_err(|e| {
@@ -347,7 +346,9 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             ctx,
             vec![req],
             Box::new(move |(cb_ctx, res)| {
-                let res = match res {
+                ASYNC_REQUESTS_DURATIONS_VEC
+                    .may_flush(|m| m.snapshot.observe(duration_to_sec(req_timer.elapsed())));
+                match res {
                     Ok(CmdRes::Resp(r)) => cb((
                         cb_ctx,
                         Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
@@ -361,10 +362,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                         ASYNC_REQUESTS_COUNTER_VEC.may_flush(|m| m.snapshot.get(status_kind).inc());
                         cb((cb_ctx, Err(e)))
                     }
-                };
-                ASYNC_REQUESTS_DURATIONS_VEC
-                    .may_flush(|m| m.snapshot.observe(duration_to_sec(req_timer.elapsed())));
-                res
+                }
             }),
         )
         .map_err(|e| {
