@@ -461,14 +461,6 @@
 ## default: false
 # enabled = false
 
-## Specifies `Titan` blob files directory
-## default: "titandb" (if not specific or empty)
-# dirname = ""
-
-## Disable blob file gc
-# default: false
-# disable-gc = false
-
 ## Maximum number of threads of `Titan` background gc jobs.
 # default: 1
 # max-background-gc = 1
@@ -627,29 +619,10 @@
 # default: 0
 # blob-cache-size = "0GB"
 
-## The minimum batch size of one gc job. The total blob file size
-## of one gc job cannot smaller than this threshold.
-## default: 16MB
-# min-gc-batch-size = "16MB"
-
-## The maximum batch size of one gc job. The total blob file size
-## of one gc job cannot exceed this threshold.
-# max-gc-batch-size = "64MB"
-
 ## If the ratio of discardable size of a blob file is larger than
 ## this threshold, the blob file will be GCed out.
 # default: 0.5
 # discardable-ratio = 0.5
-
-## The gc job will sample the target blob files to see if its
-## discardable ratio is smaller than discardable-ratio metioned
-## above before gc start, if so the blob file will be exclude.
-# sample-ratio = 0.1
-
-## If the size of the blob file is smaller than this threshold,
-## the blob file will be merge.
-# default: 8MB
-# merge-small-file-threshold = "8MB"
 
 ## The mode used to process blob files. In read-only mode Titan
 ## stops writing value into blob log. In fallback mode Titan
