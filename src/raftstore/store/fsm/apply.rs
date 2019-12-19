@@ -61,11 +61,11 @@ const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 pub struct PendingCmd {
     pub index: u64,
     pub term: u64,
-    pub cb: Option<Callback>,
+    pub cb: Option<Callback<RocksEngine>>,
 }
 
 impl PendingCmd {
-    fn new(index: u64, term: u64, cb: Callback) -> PendingCmd {
+    fn new(index: u64, term: u64, cb: Callback<RocksEngine>) -> PendingCmd {
         PendingCmd {
             index,
             term,
@@ -231,7 +231,7 @@ impl ExecContext {
 
 struct ApplyCallback {
     region: Region,
-    cbs: Vec<(Option<Callback>, RaftCmdResponse)>,
+    cbs: Vec<(Option<Callback<RocksEngine>>, RaftCmdResponse)>,
 }
 
 impl ApplyCallback {
@@ -249,7 +249,7 @@ impl ApplyCallback {
         }
     }
 
-    fn push(&mut self, cb: Option<Callback>, resp: RaftCmdResponse) {
+    fn push(&mut self, cb: Option<Callback<RocksEngine>>, resp: RaftCmdResponse) {
         self.cbs.push((cb, resp));
     }
 }
@@ -489,7 +489,7 @@ fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
 }
 
-pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
+pub fn notify_req_region_removed(region_id: u64, cb: Callback<RocksEngine>) {
     let region_not_found = Error::RegionNotFound(region_id);
     let resp = cmd_resp::new_error(region_not_found);
     cb.invoke_with_response(resp);
@@ -507,7 +507,7 @@ fn notify_stale_command(region_id: u64, peer_id: u64, term: u64, mut cmd: Pendin
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
 
-pub fn notify_stale_req(term: u64, cb: Callback) {
+pub fn notify_stale_req(term: u64, cb: Callback<RocksEngine>) {
     let resp = cmd_resp::err_resp(Error::StaleCommand, term);
     cb.invoke_with_response(resp);
 }
@@ -614,8 +614,6 @@ pub struct ApplyDelegate {
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
-    /// Marks the delegate as merged by CommitMerge.
-    merged: bool,
     /// Indicates the peer is in merging, if that compact log won't be performed.
     is_merging: bool,
     /// Records the epoch version after the last merge.
@@ -653,7 +651,6 @@ impl ApplyDelegate {
             applied_index_term: reg.applied_index_term,
             term: reg.term,
             stopped: false,
-            merged: false,
             ready_source_region_id: 0,
             wait_merge_state: None,
             is_merging: reg.is_merging,
@@ -832,7 +829,12 @@ impl ApplyDelegate {
         }
     }
 
-    fn find_cb(&mut self, index: u64, term: u64, is_conf_change: bool) -> Option<Callback> {
+    fn find_cb(
+        &mut self,
+        index: u64,
+        term: u64,
+        is_conf_change: bool,
+    ) -> Option<Callback<RocksEngine>> {
         let (region_id, peer_id) = (self.region_id(), self.id());
         if is_conf_change {
             if let Some(mut cmd) = self.pending_cmds.take_conf_change() {
@@ -2165,11 +2167,11 @@ pub struct Proposal {
     is_conf_change: bool,
     index: u64,
     term: u64,
-    pub cb: Callback,
+    pub cb: Callback<RocksEngine>,
 }
 
 impl Proposal {
-    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback) -> Proposal {
+    pub fn new(is_conf_change: bool, index: u64, term: u64, cb: Callback<RocksEngine>) -> Proposal {
         Proposal {
             is_conf_change,
             index,
@@ -2197,6 +2199,7 @@ impl RegionProposal {
 
 pub struct Destroy {
     region_id: u64,
+    async_remove: bool,
 }
 
 /// A message that asks the delegate to apply to the given logs and then reply to
@@ -2294,8 +2297,11 @@ impl Msg {
         Msg::Registration(Registration::new(peer))
     }
 
-    pub fn destroy(region_id: u64) -> Msg {
-        Msg::Destroy(Destroy { region_id })
+    pub fn destroy(region_id: u64, async_remove: bool) -> Msg {
+        Msg::Destroy(Destroy {
+            region_id,
+            async_remove,
+        })
     }
 }
 
@@ -2476,15 +2482,17 @@ impl ApplyFsm {
         assert_eq!(d.region_id, self.delegate.region_id());
         if !self.delegate.stopped {
             self.destroy(ctx);
-            ctx.notifier.notify(
-                self.delegate.region_id(),
-                PeerMsg::ApplyRes {
-                    res: TaskRes::Destroy {
-                        region_id: self.delegate.region_id(),
-                        peer_id: self.delegate.id,
+            if d.async_remove {
+                ctx.notifier.notify(
+                    self.delegate.region_id(),
+                    PeerMsg::ApplyRes {
+                        res: TaskRes::Destroy {
+                            region_id: self.delegate.region_id(),
+                            peer_id: self.delegate.id,
+                        },
                     },
-                },
-            );
+                );
+            }
         }
     }
 
@@ -2766,11 +2774,7 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
             }
         }
         normal.handle_tasks(&mut self.apply_ctx, &mut self.msg_buf);
-        if normal.delegate.merged {
-            normal.delegate.destroy(&mut self.apply_ctx);
-            // Set it to 0 to clear all messages remained in queue.
-            expected_msg_count = Some(0);
-        } else if normal.delegate.wait_merge_state.is_some() {
+        if normal.delegate.wait_merge_state.is_some() {
             // Check it again immediately as catching up logs can be very fast.
             expected_msg_count = Some(0);
         }
@@ -3225,7 +3229,7 @@ mod tests {
             );
         });
 
-        router.schedule_task(2, Msg::destroy(2));
+        router.schedule_task(2, Msg::destroy(2, true));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Destroy { region_id, peer_id } => (region_id, peer_id),

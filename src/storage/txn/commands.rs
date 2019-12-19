@@ -2,20 +2,18 @@
 
 use std::fmt::{self, Debug, Display, Formatter};
 
-use keys::Key;
 use kvproto::kvrpcpb::{CommandPri, Context, GetRequest, RawGetRequest};
 use tikv_util::collections::HashMap;
+use txn_types::{Key, Lock, Mutation, TimeStamp};
 
 use crate::storage::metrics::{self, CommandPriority};
-use crate::storage::mvcc::{Lock, TimeStamp};
-use crate::storage::Mutation;
 
 /// Get a single value.
 pub struct PointGetCommand {
-    pub(super) ctx: Context,
-    pub(super) key: Key,
+    pub ctx: Context,
+    pub key: Key,
     /// None if this is a raw get, Some if this is a transactional get.
-    pub(super) ts: Option<TimeStamp>,
+    pub ts: Option<TimeStamp>,
 }
 
 impl PointGetCommand {

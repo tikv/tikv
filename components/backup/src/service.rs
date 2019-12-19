@@ -84,9 +84,10 @@ mod tests {
 
     use super::*;
     use crate::endpoint::tests::*;
-    use keys::TimeStamp;
+    use external_storage::make_local_backend;
     use tikv::storage::mvcc::tests::*;
     use tikv_util::mpsc::Receiver;
+    use txn_types::TimeStamp;
 
     fn new_rpc_suite() -> (Server, BackupClient, Receiver<Option<Task>>) {
         let env = Arc::new(EnvBuilder::new().build());
@@ -137,10 +138,7 @@ mod tests {
         req.set_start_version(now.into_inner());
         req.set_end_version(now.into_inner());
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", now)).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
 
         let stream = client.backup(&req).unwrap();
         let task = rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -150,10 +148,7 @@ mod tests {
         endpoint.handle_backup_task(task.unwrap());
 
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", alloc_ts())).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(alloc_ts().to_string())));
         let stream = client.backup(&req).unwrap();
         // Drop steam once it received something.
         client.spawn(stream.into_future().then(|_res| Ok(())));
@@ -162,10 +157,7 @@ mod tests {
         endpoint.handle_backup_task(task.unwrap());
 
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", alloc_ts())).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(alloc_ts().to_string())));
         let stream = client.backup(&req).unwrap();
         let task = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
         // Drop stream without start receiving will cause cancel error.
