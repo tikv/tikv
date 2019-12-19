@@ -251,12 +251,12 @@ make_static_metric! {
         snapshot,
     }
 
-    pub struct AsyncRequestsCounterVec: IntCounter {
+    pub struct AsyncRequestsCounterVec: LocalIntCounter {
         "type" => RequestTypeKind,
         "status" => RequestStatusKind,
     }
 
-    pub struct AsyncRequestsDurationVec: Histogram {
+    pub struct AsyncRequestsDurationVec: LocalHistogram {
         "type" => RequestTypeKind,
     }
 }
@@ -278,18 +278,16 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
 }
 
 lazy_static! {
-    pub static ref ASYNC_REQUESTS_COUNTER_VEC: AsyncRequestsCounterVec = {
-        register_static_int_counter_vec!(
-            AsyncRequestsCounterVec,
+    pub static ref ASYNC_REQUESTS_COUNTER_VEC_GLOBAL: IntCounterVec = {
+        register_int_counter_vec!(
             "tikv_storage_engine_async_request_total",
             "Total number of engine asynchronous requests",
             &["type", "status"]
         )
         .unwrap()
     };
-    pub static ref ASYNC_REQUESTS_DURATIONS_VEC: AsyncRequestsDurationVec = {
-        register_static_histogram_vec!(
-            AsyncRequestsDurationVec,
+    pub static ref ASYNC_REQUESTS_DURATIONS_VEC_GLOBAL: HistogramVec = {
+        register_histogram_vec!(
             "tikv_storage_engine_async_request_duration_seconds",
             "Bucketed histogram of processing successful asynchronous requests.",
             &["type"],
@@ -302,6 +300,10 @@ lazy_static! {
 }
 
 thread_local! {
+    pub static ASYNC_REQUESTS_COUNTER_VEC: TLSMetricGroup<AsyncRequestsCounterVec> =
+        TLSMetricGroup::new(AsyncRequestsCounterVec::from(&ASYNC_REQUESTS_COUNTER_VEC_GLOBAL));
+    pub static ASYNC_REQUESTS_DURATIONS_VEC: TLSMetricGroup<AsyncRequestsDurationVec> =
+        TLSMetricGroup::new(AsyncRequestsDurationVec::from(&ASYNC_REQUESTS_DURATIONS_VEC_GLOBAL));
     pub static GRPC_MSG_HISTOGRAM: TLSMetricGroup<GrpcMsgHistogramVecLocal> =
         TLSMetricGroup::new(GrpcMsgHistogramVecLocal::from(&GRPC_MSG_HISTOGRAM_VEC));
     pub static GRPC_MSG_FAIL_COUNTER: TLSMetricGroup<GrpcMsgFailCounterVec> =

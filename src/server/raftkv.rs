@@ -29,6 +29,8 @@ use crate::storage::kv::{
     Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
 use crate::storage::{self, kv};
+use tikv_util::metrics::TLSExt;
+use tikv_util::time::{duration_to_sec, Instant};
 
 quick_error! {
     #[derive(Debug)]
@@ -299,33 +301,36 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
             reqs.push(req);
         }
 
-        ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
-        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.write.start_coarse_timer();
-
+        ASYNC_REQUESTS_COUNTER_VEC.may_flush(|m| m.write.all.inc());
+        let req_timer = Instant::now_coarse();
         self.exec_write_requests(
             ctx,
             reqs,
-            Box::new(move |(cb_ctx, res)| match res {
-                Ok(CmdRes::Resp(_)) => {
-                    req_timer.observe_duration();
-                    ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
-                    fail_point!("raftkv_async_write_finish");
-                    cb((cb_ctx, Ok(())))
-                }
-                Ok(CmdRes::Snap(_)) => cb((
-                    cb_ctx,
-                    Err(box_err!("unexpect snapshot, should mutate instead.")),
-                )),
-                Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(&e);
-                    ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                    cb((cb_ctx, Err(e)))
-                }
+            Box::new(move |(cb_ctx, res)| {
+                let res = match res {
+                    Ok(CmdRes::Resp(_)) => {
+                        ASYNC_REQUESTS_COUNTER_VEC.may_flush(|m| m.write.success.inc());
+                        fail_point!("raftkv_async_write_finish");
+                        cb((cb_ctx, Ok(())))
+                    }
+                    Ok(CmdRes::Snap(_)) => cb((
+                        cb_ctx,
+                        Err(box_err!("unexpect snapshot, should mutate instead.")),
+                    )),
+                    Err(e) => {
+                        let status_kind = get_status_kind_from_engine_error(&e);
+                        ASYNC_REQUESTS_COUNTER_VEC.may_flush(|m| m.write.get(status_kind).inc());
+                        cb((cb_ctx, Err(e)))
+                    }
+                };
+                ASYNC_REQUESTS_DURATIONS_VEC
+                    .may_flush(|m| m.write.observe(duration_to_sec(req_timer.elapsed())));
+                res
             }),
         )
         .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
-            ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
+            ASYNC_REQUESTS_COUNTER_VEC.may_flush(|m| m.write.get(status_kind).inc());
             e.into()
         })
     }
@@ -335,32 +340,36 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         let mut req = Request::default();
         req.set_cmd_type(CmdType::Snap);
 
-        ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
-        let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.snapshot.start_coarse_timer();
+        ASYNC_REQUESTS_COUNTER_VEC.may_flush(|m| m.snapshot.all.inc());
+        let req_timer = Instant::now_coarse();
 
         self.exec_read_requests(
             ctx,
             vec![req],
-            Box::new(move |(cb_ctx, res)| match res {
-                Ok(CmdRes::Resp(r)) => cb((
-                    cb_ctx,
-                    Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
-                )),
-                Ok(CmdRes::Snap(s)) => {
-                    req_timer.observe_duration();
-                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                    cb((cb_ctx, Ok(s)))
-                }
-                Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(&e);
-                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-                    cb((cb_ctx, Err(e)))
-                }
+            Box::new(move |(cb_ctx, res)| {
+                let res = match res {
+                    Ok(CmdRes::Resp(r)) => cb((
+                        cb_ctx,
+                        Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
+                    )),
+                    Ok(CmdRes::Snap(s)) => {
+                        ASYNC_REQUESTS_COUNTER_VEC.may_flush(|m| m.snapshot.success.inc());
+                        cb((cb_ctx, Ok(s)))
+                    }
+                    Err(e) => {
+                        let status_kind = get_status_kind_from_engine_error(&e);
+                        ASYNC_REQUESTS_COUNTER_VEC.may_flush(|m| m.snapshot.get(status_kind).inc());
+                        cb((cb_ctx, Err(e)))
+                    }
+                };
+                ASYNC_REQUESTS_DURATIONS_VEC
+                    .may_flush(|m| m.snapshot.observe(duration_to_sec(req_timer.elapsed())));
+                res
             }),
         )
         .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
-            ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
+            ASYNC_REQUESTS_COUNTER_VEC.may_flush(|m| m.snapshot.get(status_kind).inc());
             e.into()
         })
     }
