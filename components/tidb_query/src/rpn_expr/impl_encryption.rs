@@ -290,6 +290,7 @@ mod tests {
             ScalarValue::Int(Some(0)),
             ScalarValue::Int(None),
         ];
+
         for arg in null_cases {
             assert!(RpnFnScalarEvaluator::new()
                 .push_param(arg)
