@@ -204,14 +204,14 @@ fn test_update_to_invalid() {
     let id = "localhost:1080";
 
     let mut cfg = validated_cfg();
-    cfg.raft_store.store_max_batch_size = 2000;
+    cfg.raft_store.raft_log_gc_threshold = 2000;
 
     // register config
     let mut cfg_handler = pd_client.clone().register(id, cfg);
 
     // update invalid config on pd side
     pd_client.update_cfg(id, |cfg| {
-        cfg.raft_store.store_max_batch_size = 0;
+        cfg.raft_store.raft_log_gc_threshold = 0;
     });
 
     // refresh local config
@@ -219,14 +219,14 @@ fn test_update_to_invalid() {
 
     // local config should not change
     assert_eq!(
-        cfg_handler.get_config().raft_store.store_max_batch_size,
+        cfg_handler.get_config().raft_store.raft_log_gc_threshold,
         2000
     );
 
     // config on pd side should be rollbacked to valid config
     let cfg = pd_client.get(id);
     assert_eq!(cfg.update.len(), 1);
-    assert_eq!(cfg.update[0].name, "raftstore.store-max-batch-size");
+    assert_eq!(cfg.update[0].name, "raftstore.raft-log-gc-threshold");
     assert_eq!(cfg.update[0].value, toml::to_string(&2000).unwrap());
 }
 
@@ -244,7 +244,7 @@ fn test_compatible_config() {
             [new.config]
             xyz = 1
             [raftstore]
-            store-max-batch-size = 2048
+            raft-log-gc-threshold = 2048
         "
         .to_owned();
     });
@@ -253,7 +253,7 @@ fn test_compatible_config() {
     cfg_handler.refresh_config(pd_client.clone()).unwrap();
 
     let mut new_cfg = validated_cfg();
-    new_cfg.raft_store.store_max_batch_size = 2048;
+    new_cfg.raft_store.raft_log_gc_threshold = 2048;
     assert_eq!(cfg_handler.get_config(), &new_cfg);
 }
 
@@ -293,7 +293,7 @@ fn test_dispatch_change() {
     };
 
     pd_client.update_cfg(id, |cfg| {
-        cfg.raft_store.store_max_batch_size = 2000;
+        cfg.raft_store.raft_log_gc_threshold = 2000;
     });
 
     // refresh local config
@@ -301,9 +301,9 @@ fn test_dispatch_change() {
 
     // config update
     assert_eq!(
-        cfg_handler.get_config().raft_store.store_max_batch_size,
+        cfg_handler.get_config().raft_store.raft_log_gc_threshold,
         2000
     );
     // config change should also dispatch to raftstore config manager
-    assert_eq!(mgr.0.lock().unwrap().store_max_batch_size, 2000);
+    assert_eq!(mgr.0.lock().unwrap().raft_log_gc_threshold, 2000);
 }
