@@ -1471,7 +1471,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=snapshot-oldest#7f373b6adf7d47f34b7da0801a4bfd3ac99f1798"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=snapshot-oldest#a0e6e48636b9a4a21cba4737534f8d3fc49984a6"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -1488,7 +1488,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=snapshot-oldest#7f373b6adf7d47f34b7da0801a4bfd3ac99f1798"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=snapshot-oldest#a0e6e48636b9a4a21cba4737534f8d3fc49984a6"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2689,7 +2689,7 @@ checksum = "2089e4031214d129e201f8c3c8c2fe97cd7322478a0d1cdf78e7029b0042efdb"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=snapshot-oldest#7f373b6adf7d47f34b7da0801a4bfd3ac99f1798"
+source = "git+https://github.com/Connor1996/rust-rocksdb.git?branch=snapshot-oldest#a0e6e48636b9a4a21cba4737534f8d3fc49984a6"
 dependencies = [
  "libc",
  "librocksdb_sys",
@@ -4175,7 +4175,7 @@ dependencies = [
 [[package]]
 name = "zstd-sys"
 version = "1.4.15+zstd.1.4.4"
-source = "git+https://github.com/gyscos/zstd-rs.git#9bdc44501ec3279e83d9bfe1ebc953bb7cf000b9"
+source = "git+https://github.com/gyscos/zstd-rs.git#c0e8491d460311117bacd0262374f8b973ec8b69"
 dependencies = [
  "cc",
  "glob",

@@ -439,7 +439,7 @@ impl SnapContext {
             .pending_delete_ranges
             .drain_overlap_ranges(start_key, end_key);
         let oldest_sequence = if !overlap_ranges.is_empty() {
-            self.engines.kv.get_oldest_snapshot_sequence_number()
+            self.engines.kv.get_property_int("rocksdb.oldest-snapshot-sequence").unwrap()
         } else {
             0
         };
@@ -479,7 +479,7 @@ impl SnapContext {
     fn clean_timeout_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
-        let oldest_sequence = self.engines.kv.get_oldest_snapshot_sequence_number();
+        let oldest_sequence = self.engines.kv.get_property_int("rocksdb.oldest-snapshot-sequence").unwrap();
         let mut cleaned_range_keys = vec![];
         {
             let now = Instant::now();
