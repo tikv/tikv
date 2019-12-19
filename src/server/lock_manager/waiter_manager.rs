@@ -74,7 +74,7 @@ impl Delay {
 }
 
 impl Future for Delay {
-    // Wether the instance is triggerd normally(true) or cancelled(false).
+    // Whether the instance is triggered normally(true) or cancelled(false).
     type Item = bool;
     type Error = tokio_timer::Error;
 
@@ -290,10 +290,6 @@ impl WaitTable {
         self.wait_table.is_empty()
     }
 
-    fn len(&self) -> usize {
-        self.wait_table.len()
-    }
-
     /// Returns the duplicated `Waiter` if there is.
     fn add_waiter(&mut self, waiter: Waiter) -> Option<Waiter> {
         let waiters = self.wait_table.entry(waiter.lock.hash).or_default();
@@ -481,8 +477,6 @@ impl WaiterManager {
         if wait_table.is_empty() {
             return;
         }
-
-        let (mut visited, initial_len) = (0, wait_table.len());
         let new_timeout = Instant::now() + Duration::from_millis(self.wake_up_delay_duration);
         for hash in hashes {
             let lock = Lock { ts: lock_ts, hash };
@@ -504,12 +498,6 @@ impl WaiterManager {
                         waiter.conflict_with(lock_ts, commit_ts);
                         waiter.reset_timeout(new_timeout);
                     });
-                }
-                // Break if we haved visited all entries to reduce the cost of small wait table
-                // against big hashes.
-                visited += 1;
-                if visited == initial_len {
-                    break;
                 }
             }
         }
