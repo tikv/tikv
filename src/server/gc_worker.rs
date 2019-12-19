@@ -33,6 +33,7 @@ use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
 use crate::storage::{Callback, Error, ErrorInner, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
+use tikv_util::metrics::TLSExt;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 use txn_types::Key;
@@ -234,7 +235,7 @@ impl<E: Engine> GcRunner<E> {
         // skip gc before scanning all data.
         let skip_gc = is_range_start && !reader.need_gc(safe_point, self.cfg.ratio_threshold);
         let res = if skip_gc {
-            GC_SKIPPED_COUNTER.inc();
+            GC_SKIPPED_COUNTER.may_flush(|m| m.inc());
             Ok((vec![], None))
         } else {
             reader
@@ -244,7 +245,7 @@ impl<E: Engine> GcRunner<E> {
                     if keys.is_empty() {
                         assert!(next.is_none());
                         if is_range_start {
-                            GC_EMPTY_RANGE_COUNTER.inc();
+                            GC_EMPTY_RANGE_COUNTER.may_flush(|m| m.inc());
                         }
                     }
                     Ok((keys, next))
@@ -490,7 +491,7 @@ impl<E: Engine> Runnable<GcTask> for GcRunner<E> {
 fn handle_gc_task_schedule_error(e: ScheduleError<GcTask>) -> Result<()> {
     match e {
         ScheduleError::Full(mut task) => {
-            GC_TOO_BUSY_COUNTER.inc();
+            GC_TOO_BUSY_COUNTER.may_flush(|m| m.inc());
             (task.take_callback())(Err(Error::from(ErrorInner::GcWorkerTooBusy)));
             Ok(())
         }

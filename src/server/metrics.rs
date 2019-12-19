@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use prometheus::local::*;
 use prometheus::*;
 use prometheus_static_metric::*;
 use tikv_util::metrics::TLSMetricGroup;
@@ -69,7 +70,7 @@ make_static_metric! {
 }
 
 lazy_static! {
-    pub static ref SEND_SNAP_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref SEND_SNAP_HISTOGRAM_GLOBAL: Histogram = register_histogram!(
         "tikv_server_send_snapshot_duration_seconds",
         "Bucketed histogram of server send snapshots duration",
         exponential_buckets(0.05, 2.0, 20).unwrap()
@@ -94,13 +95,13 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref GRPC_REQ_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
+    pub static ref GRPC_REQ_BATCH_COMMANDS_SIZE_GLOBAL: Histogram = register_histogram!(
         "tikv_server_grpc_req_batch_size",
         "grpc batch size of gRPC requests",
         exponential_buckets(1f64, 2f64, 10).unwrap()
     )
     .unwrap();
-    pub static ref GRPC_RESP_BATCH_COMMANDS_SIZE: Histogram = register_histogram!(
+    pub static ref GRPC_RESP_BATCH_COMMANDS_SIZE_GLOBAL: Histogram = register_histogram!(
         "tikv_server_grpc_resp_batch_size",
         "grpc batch size of gRPC responses",
         exponential_buckets(1f64, 2f64, 10).unwrap()
@@ -112,12 +113,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref GC_EMPTY_RANGE_COUNTER: IntCounter = register_int_counter!(
+    pub static ref GC_EMPTY_RANGE_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_storage_gc_empty_range_total",
         "Total number of empty range found by gc"
     )
     .unwrap();
-    pub static ref GC_SKIPPED_COUNTER: IntCounter = register_int_counter!(
+    pub static ref GC_SKIPPED_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_storage_gc_skipped_counter",
         "Total number of gc command skipped owing to optimization"
     )
@@ -141,7 +142,7 @@ lazy_static! {
         &["task"]
     )
     .unwrap();
-    pub static ref GC_TOO_BUSY_COUNTER: IntCounter = register_int_counter!(
+    pub static ref GC_TOO_BUSY_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_gc_worker_too_busy",
         "Counter of occurrence of gc_worker being too busy"
     )
@@ -169,12 +170,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref RAFT_MESSAGE_RECV_COUNTER: IntCounter = register_int_counter!(
+    pub static ref RAFT_MESSAGE_RECV_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_server_raft_message_recv_total",
         "Total number of raft messages received"
     )
     .unwrap();
-    pub static ref RAFT_MESSAGE_BATCH_SIZE: Histogram = register_histogram!(
+    pub static ref RAFT_MESSAGE_BATCH_SIZE_GLOBAL: Histogram = register_histogram!(
         "tikv_server_raft_message_batch_size",
         "Raft messages batch size",
         exponential_buckets(1f64, 2f64, 10).unwrap()
@@ -192,12 +193,12 @@ lazy_static! {
         &["type", "store_id"]
     )
     .unwrap();
-    pub static ref RAFT_MESSAGE_FLUSH_COUNTER: IntCounter = register_int_counter!(
+    pub static ref RAFT_MESSAGE_FLUSH_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_server_raft_message_flush_total",
         "Total number of raft messages flushed immediately"
     )
     .unwrap();
-    pub static ref RAFT_MESSAGE_DELAY_FLUSH_COUNTER: IntCounter = register_int_counter!(
+    pub static ref RAFT_MESSAGE_DELAY_FLUSH_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_server_raft_message_delay_flush_total",
         "Total number of raft messages flushed delay"
     )
@@ -307,4 +308,24 @@ thread_local! {
         TLSMetricGroup::new(GrpcMsgFailCounterVec::from(&GRPC_MSG_FAIL_COUNTER_VEC));
     pub static GC_COMMAND_COUNTER_VEC_STATIC: TLSMetricGroup<GcCommandCounterVec> =
         TLSMetricGroup::new(GcCommandCounterVec::from(&GC_COMMAND_COUNTER_VEC));
+    pub static SEND_SNAP_HISTOGRAM: TLSMetricGroup<LocalHistogram> =
+        TLSMetricGroup::new(SEND_SNAP_HISTOGRAM_GLOBAL.local());
+    pub static GRPC_REQ_BATCH_COMMANDS_SIZE: TLSMetricGroup<LocalHistogram> =
+        TLSMetricGroup::new(GRPC_REQ_BATCH_COMMANDS_SIZE_GLOBAL.local());
+    pub static GRPC_RESP_BATCH_COMMANDS_SIZE: TLSMetricGroup<LocalHistogram> =
+        TLSMetricGroup::new(GRPC_RESP_BATCH_COMMANDS_SIZE_GLOBAL.local());
+    pub static GC_EMPTY_RANGE_COUNTER: TLSMetricGroup<LocalIntCounter> =
+        TLSMetricGroup::new(GC_EMPTY_RANGE_COUNTER_GLOBAL.local());
+    pub static GC_SKIPPED_COUNTER: TLSMetricGroup<LocalIntCounter> =
+        TLSMetricGroup::new(GC_SKIPPED_COUNTER_GLOBAL.local());
+    pub static GC_TOO_BUSY_COUNTER: TLSMetricGroup<LocalIntCounter> =
+        TLSMetricGroup::new(GC_TOO_BUSY_COUNTER_GLOBAL.local());
+    pub static RAFT_MESSAGE_RECV_COUNTER: TLSMetricGroup<LocalIntCounter> =
+        TLSMetricGroup::new(RAFT_MESSAGE_RECV_COUNTER_GLOBAL.local());
+    pub static RAFT_MESSAGE_BATCH_SIZE: TLSMetricGroup<LocalHistogram> =
+        TLSMetricGroup::new(RAFT_MESSAGE_BATCH_SIZE_GLOBAL.local());
+    pub static RAFT_MESSAGE_FLUSH_COUNTER: TLSMetricGroup<LocalIntCounter> =
+        TLSMetricGroup::new(RAFT_MESSAGE_FLUSH_COUNTER_GLOBAL.local());
+    pub static RAFT_MESSAGE_DELAY_FLUSH_COUNTER: TLSMetricGroup<LocalIntCounter> =
+        TLSMetricGroup::new(RAFT_MESSAGE_DELAY_FLUSH_COUNTER_GLOBAL.local());
 }
