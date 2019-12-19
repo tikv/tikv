@@ -25,6 +25,10 @@ impl MySQLRng {
     }
 }
 
+pub fn gen_random_bytes(len: i64) -> Vec<u8> {
+    (0..len).map(|_| rand::random::<u8>()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

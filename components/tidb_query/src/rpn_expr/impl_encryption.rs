@@ -6,6 +6,7 @@ use tidb_query_codegen::rpn_fn;
 use super::super::expr::{Error, EvalContext};
 
 use crate::codec::data_type::*;
+use crate::expr_util::rand::gen_random_bytes;
 use crate::Result;
 
 const SHA0: i64 = 0;
@@ -79,6 +80,21 @@ pub fn uncompressed_length(ctx: &mut EvalContext, arg: &Option<Bytes>) -> Result
             Int::from(LittleEndian::read_u32(&s[0..4]))
         }
     }))
+}
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn random_bytes(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Bytes>> {
+    match arg {
+        Some(arg) => {
+            if *arg < 1 || *arg > 1024 {
+                ctx.warnings
+                    .append_warning(Error::incorrect_parameters("random_bytes"));
+                return Ok(None);
+            }
+            Ok(Some(gen_random_bytes(*arg)))
+        }
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -253,6 +269,33 @@ mod tests {
                 .evaluate::<Bytes>(ScalarFuncSig::Sha2)
                 .unwrap()
                 .is_none())
+        }
+    }
+
+    #[test]
+    fn test_random_bytes() {
+        let cases = vec![1, 32, 233, 1024];
+
+        for len in cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(Some(Int::from(len as i64)))
+                .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+                .unwrap();
+            assert_eq!(got.unwrap().len(), len);
+        }
+
+        let null_cases = vec![
+            ScalarValue::Int(Some(-32)),
+            ScalarValue::Int(Some(1025)),
+            ScalarValue::Int(Some(0)),
+            ScalarValue::Int(None),
+        ];
+        for arg in null_cases {
+            assert!(RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+                .unwrap()
+                .is_none());
         }
     }
 }
