@@ -143,7 +143,7 @@ impl BackupRange {
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
         // Incremental backup needs to output delete records.
-        let incremental = !begin_ts.is_zero();
+        let incremental = begin_ts > 0;
         let mut scanner = snap_store
             .entry_scanner(start_key, end_key, begin_ts, incremental)
             .unwrap();
