@@ -15,14 +15,15 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb::TikvClient;
 
-use crate::raftstore::router::RaftStoreRouter;
-use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use tikv_util::security::SecurityManager;
-use tikv_util::worker::Runnable;
-use tikv_util::DeferContext;
-
 use super::metrics::*;
 use super::{Config, Error, Result};
+use crate::raftstore::router::RaftStoreRouter;
+use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use tikv_util::metrics::TLSExt;
+use tikv_util::security::SecurityManager;
+use tikv_util::time::duration_to_sec;
+use tikv_util::worker::Runnable;
+use tikv_util::DeferContext;
 
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
@@ -111,8 +112,6 @@ fn send_snap(
     assert!(msg.get_message().has_snapshot());
     let timer = Instant::now();
 
-    let send_timer = SEND_SNAP_HISTOGRAM.start_coarse_timer();
-
     let key = {
         let snap = msg.get_message().get_snapshot();
         SnapKey::from_snap(snap)?
@@ -155,7 +154,7 @@ fn send_snap(
     let send = send
         .and_then(|(s, _)| receiver.map_err(Error::from).map(|_| s))
         .then(move |result| {
-            send_timer.observe_duration();
+            SEND_SNAP_HISTOGRAM.may_flush(|m| m.observe(duration_to_sec(timer.elapsed())));
             drop(deregister);
             drop(client);
             result.map(|s| {

@@ -1001,7 +1001,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             stream
                 .map_err(Error::from)
                 .for_each(move |msg| {
-                    RAFT_MESSAGE_RECV_COUNTER.inc();
+                    RAFT_MESSAGE_RECV_COUNTER.may_flush(|m| m.inc());
                     ch.send_raft_msg(msg).map_err(Error::from)
                 })
                 .then(|res| {
@@ -1032,8 +1032,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 .map_err(Error::from)
                 .for_each(move |mut msgs| {
                     let len = msgs.get_msgs().len();
-                    RAFT_MESSAGE_RECV_COUNTER.inc_by(len as i64);
-                    RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
+                    RAFT_MESSAGE_RECV_COUNTER.may_flush(|m| m.inc_by(len as i64));
+                    RAFT_MESSAGE_BATCH_SIZE.may_flush(|m| m.observe(len as f64));
                     for msg in msgs.take_msgs().into_iter() {
                         if let Err(e) = ch.send_raft_msg(msg) {
                             return Err(Error::from(e));
@@ -1388,7 +1388,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             let request_handler = stream.for_each(move |mut req| {
                 let request_ids = req.take_request_ids();
                 let requests: Vec<_> = req.take_requests().into();
-                GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
+                GRPC_REQ_BATCH_COMMANDS_SIZE.may_flush(|m| m.observe(requests.len() as f64));
                 for (id, mut req) in request_ids.into_iter().zip(requests) {
                     if !req_batcher.lock().unwrap().filter(id, &mut req) {
                         handle_batch_commands_request(
@@ -1418,7 +1418,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             let request_handler = stream.for_each(move |mut req| {
                 let request_ids = req.take_request_ids();
                 let requests: Vec<_> = req.take_requests().into();
-                GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
+                GRPC_REQ_BATCH_COMMANDS_SIZE.may_flush(|m| m.observe(requests.len() as f64));
                 for (id, req) in request_ids.into_iter().zip(requests) {
                     handle_batch_commands_request(
                         &storage,
@@ -1447,7 +1447,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         );
 
         let response_retriever = response_retriever
-            .inspect(|r| GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64))
+            .inspect(|r| {
+                GRPC_RESP_BATCH_COMMANDS_SIZE.may_flush(|m| m.observe(r.request_ids.len() as f64))
+            })
             .map(move |mut r| {
                 r.set_transport_layer_load(thread_load.load() as u64);
                 (r, WriteFlags::default().buffer_hint(false))

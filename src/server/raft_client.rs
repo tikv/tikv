@@ -18,6 +18,7 @@ use grpcio::{
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::{BatchRaftMessage, TikvClient};
 use tikv_util::collections::{HashMap, HashMapEntry};
+use tikv_util::metrics::TLSExt;
 use tikv_util::mpsc::batch::{self, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
@@ -238,8 +239,8 @@ impl<T: RaftStoreRouter> RaftClient<T> {
             }
             delay_counter += 1;
         }
-        RAFT_MESSAGE_FLUSH_COUNTER.inc_by(i64::from(counter));
-        RAFT_MESSAGE_DELAY_FLUSH_COUNTER.inc_by(i64::from(delay_counter));
+        RAFT_MESSAGE_FLUSH_COUNTER.may_flush(|m| m.inc_by(i64::from(counter)));
+        RAFT_MESSAGE_DELAY_FLUSH_COUNTER.may_flush(|m| m.inc_by(i64::from(delay_counter)));
     }
 }
 
