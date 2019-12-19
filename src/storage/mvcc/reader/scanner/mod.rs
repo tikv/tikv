@@ -81,8 +81,8 @@ impl<S: Snapshot> ScannerBuilder<S> {
 
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
-        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
-        let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
+        let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
+        let write_cursor = self.create_cf_cursor(CF_WRITE)?;
         if self.0.desc {
             Ok(Scanner::Backward(BackwardKvScanner::new(
                 self.0,
@@ -105,11 +105,11 @@ impl<S: Snapshot> ScannerBuilder<S> {
         after_ts: u64,
         output_delete: bool,
     ) -> Result<EntryScanner<S>> {
-        let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
-        let write_cursor = self.0.create_cf_cursor(CF_WRITE)?;
+        let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
+        let write_cursor = self.create_cf_cursor(CF_WRITE)?;
         // Note: Create a default cf cursor will take key range, so we need to
         //       ensure the default cursor is created after lock and write.
-        let default_cursor = self.0.create_cf_cursor(CF_DEFAULT)?;
+        let default_cursor = self.create_cf_cursor(CF_DEFAULT)?;
         Ok(ForwardScanner::new(
             self.0,
             lock_cursor,

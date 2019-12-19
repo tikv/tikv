@@ -251,9 +251,9 @@ fn test_backup_and_import() {
     let backup_ts = suite.alloc_ts();
     let storage_path = tmp.path().join(format!("{}", backup_ts));
     let rx = suite.backup(
-        vec![],   // start
-        vec![],   // end
-        0.into(), // begin_ts
+        vec![], // start
+        vec![], // end
+        0,      // begin_ts
         backup_ts,
         &storage_path,
     );
@@ -270,9 +270,9 @@ fn test_backup_and_import() {
     // Backup file should have same contents.
     // backup ts + 1 avoid file already exist.
     let rx = suite.backup(
-        vec![],   // start
-        vec![],   // end
-        0.into(), // begin_ts
+        vec![], // start
+        vec![], // end
+        0,      // begin_ts
         backup_ts,
         &tmp.path().join(format!("{}", backup_ts + 1)),
     );
@@ -328,9 +328,9 @@ fn test_backup_and_import() {
     // Backup file should have same contents.
     // backup ts + 2 avoid file already exist.
     let rx = suite.backup(
-        vec![],   // start
-        vec![],   // end
-        0.into(), // begin_ts
+        vec![], // start
+        vec![], // end
+        0,      // begin_ts
         backup_ts,
         &tmp.path().join(format!("{}", backup_ts + 2)),
     );
@@ -370,9 +370,9 @@ fn test_backup_meta() {
     let tmp = Builder::new().tempdir().unwrap();
     let storage_path = tmp.path().join(format!("{}", backup_ts));
     let rx = suite.backup(
-        vec![],   // start
-        vec![],   // end
-        0.into(), // begin_ts
+        vec![], // start
+        vec![], // end
+        0,      // begin_ts
         backup_ts,
         &storage_path,
     );
