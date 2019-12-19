@@ -15,6 +15,8 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
+use super::time::SlowTimer;
+use crate::slow_log;
 use configuration::ConfigValue;
 
 quick_error! {
@@ -905,8 +907,9 @@ impl<T> VersionTrack<T> {
         self.value.read().unwrap()
     }
 
-    pub fn tracker(self: Arc<Self>) -> Tracker<T> {
+    pub fn tracker(self: Arc<Self>, tag: String) -> Tracker<T> {
         Tracker {
+            tag,
             version: self.version.load(Ordering::Relaxed),
             inner: self,
         }
@@ -915,6 +918,7 @@ impl<T> VersionTrack<T> {
 
 #[derive(Clone, Default)]
 pub struct Tracker<T> {
+    tag: String,
     inner: Arc<VersionTrack<T>>,
     version: u64,
 }
@@ -926,9 +930,18 @@ impl<T> Tracker<T> {
         let v = self.inner.version.load(Ordering::Relaxed);
         if self.version < v {
             self.version = v;
-            return Some(self.inner.value.read().unwrap());
+            match self.inner.value.try_read() {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    let t = SlowTimer::new();
+                    let value = self.inner.value.read().unwrap();
+                    slow_log!(t, "{} tracker get updated value", self.tag);
+                    Some(value)
+                }
+            }
+        } else {
+            None
         }
-        None
     }
 }
 
@@ -1258,7 +1271,7 @@ mod tests {
         let vc = Arc::new(VersionTrack::new(Value::default()));
         let mut trackers = Vec::with_capacity(count);
         for _ in 0..count {
-            trackers.push(vc.clone().tracker());
+            trackers.push(vc.clone().tracker("test-tracker".to_owned()));
         }
 
         assert!(trackers.iter_mut().all(|tr| tr.any_new().is_none()));

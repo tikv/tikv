@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -2744,9 +2745,16 @@ pub struct ApplyPoller {
 impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
     fn begin(&mut self, _batch_size: usize) {
         if let Some(incoming) = self.cfg_tracker.any_new() {
-            if self.messages_per_tick != incoming.messages_per_tick {
-                self.msg_buf = Vec::with_capacity(incoming.messages_per_tick);
-                self.messages_per_tick = incoming.messages_per_tick;
+            match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
+                CmpOrdering::Equal => {}
+                CmpOrdering::Greater => {
+                    self.msg_buf.reserve(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
+                CmpOrdering::Less => {
+                    self.msg_buf.shrink_to(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
             }
             self.apply_ctx.enable_sync_log = incoming.sync_log;
         }
@@ -2849,7 +2857,7 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
                 &cfg,
             ),
             messages_per_tick: cfg.messages_per_tick,
-            cfg_tracker: self.cfg.clone().tracker(),
+            cfg_tracker: self.cfg.clone().tracker(self.tag.clone()),
         }
     }
 }

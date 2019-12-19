@@ -14,6 +14,7 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use protobuf::Message;
 use raft::{Ready, StateRole};
+use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -580,10 +581,21 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         self.timer = SlowTimer::new();
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
-            if self.poll_ctx.cfg.messages_per_tick != incoming.messages_per_tick {
-                self.store_msg_buf = Vec::with_capacity(incoming.messages_per_tick);
-                self.peer_msg_buf = Vec::with_capacity(incoming.messages_per_tick);
-                self.messages_per_tick = incoming.messages_per_tick;
+            match Ord::cmp(
+                &incoming.messages_per_tick,
+                &self.poll_ctx.cfg.messages_per_tick,
+            ) {
+                CmpOrdering::Equal => {}
+                CmpOrdering::Greater => {
+                    self.store_msg_buf.reserve(incoming.messages_per_tick);
+                    self.peer_msg_buf.reserve(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
+                CmpOrdering::Less => {
+                    self.store_msg_buf.shrink_to(incoming.messages_per_tick);
+                    self.peer_msg_buf.shrink_to(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
             }
             self.poll_ctx.cfg = incoming.clone();
             info!("raftstore config updated!");
@@ -923,8 +935,9 @@ where
             queued_snapshot: HashSet::default(),
             current_time: None,
         };
+        let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
-            tag: format!("[store {}]", ctx.store.get_id()),
+            tag: tag.clone(),
             store_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             previous_metrics: ctx.raft_metrics.clone(),
@@ -932,7 +945,7 @@ where
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             pending_proposals: Vec::new(),
-            cfg_tracker: self.cfg.clone().tracker(),
+            cfg_tracker: self.cfg.clone().tracker(tag),
         }
     }
 }

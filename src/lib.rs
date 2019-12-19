@@ -25,6 +25,7 @@
 #![feature(const_fn)]
 #![feature(mem_take)]
 #![feature(box_patterns)]
+#![feature(shrink_to)]
 
 #[macro_use]
 extern crate bitflags;

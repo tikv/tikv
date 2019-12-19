@@ -1842,7 +1842,9 @@ impl ConfigController {
         match Module::from(module) {
             Module::Unknown(name) => warn!("tried to register unknown module: {}", name),
             m => {
-                let _ = self.config_mgrs.insert(m, cfg_mgr);
+                if self.config_mgrs.insert(m, cfg_mgr).is_some() {
+                    warn!("config manager for module {} already registered", module)
+                }
             }
         }
     }
