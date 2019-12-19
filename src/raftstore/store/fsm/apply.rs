@@ -2283,7 +2283,7 @@ pub enum Msg {
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     #[cfg(test)]
-    Validate(u64, Box<dyn FnOnce(&ApplyDelegate) + Send>),
+    Validate(u64, Box<dyn FnOnce((&ApplyDelegate, bool)) + Send>),
 }
 
 impl Msg {
@@ -2679,7 +2679,7 @@ impl ApplyFsm {
                 Some(Msg::LogsUpToDate(_)) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 #[cfg(test)]
-                Some(Msg::Validate(_, f)) => f(&self.delegate),
+                Some(Msg::Validate(_, f)) => f((&self.delegate, apply_ctx.enable_sync_log)),
                 None => break,
             }
         }
@@ -3045,7 +3045,7 @@ mod tests {
             region_id,
             Msg::Validate(
                 region_id,
-                Box::new(move |delegate: &ApplyDelegate| {
+                Box::new(move |(delegate, _): (&ApplyDelegate, _)| {
                     validate(delegate);
                     validate_tx.send(()).unwrap();
                 }),

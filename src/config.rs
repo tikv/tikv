@@ -1804,7 +1804,10 @@ impl ConfigController {
         }
     }
 
-    fn update_or_rollback(&mut self, mut incoming: TiKvConfig) -> CfgResult<Option<ConfigChange>> {
+    pub fn update_or_rollback(
+        &mut self,
+        mut incoming: TiKvConfig,
+    ) -> CfgResult<Option<ConfigChange>> {
         if incoming.validate().is_err() {
             return Ok(Some(incoming.diff(&self.current)));
         }
