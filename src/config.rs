@@ -780,13 +780,14 @@ impl DbConfig {
                 })
         }
 
-        if self.rate_bytes_per_sec.0 > 0 {
-            opts.set_ratelimiter_with_auto_tuned(
-                self.rate_bytes_per_sec.0 as i64,
-                self.rate_limiter_mode,
-                self.auto_tuned,
-            );
-        }
+        //if self.rate_bytes_per_sec.0 > 0 {
+        opts.set_ratelimiter_with_auto_tuned(
+            10*1024*1024 ,
+            DBRateLimiterMode::WriteOnly,
+            true,
+        );  // *mut DBRateLimiter
+        println!("OrigAutoTuneRLaddr_tikv：");
+        //}
 
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
@@ -1079,8 +1080,8 @@ pub mod log_level_serde {
     use tikv_util::logger::{get_level_by_string, get_string_by_level};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
-    where
-        D: Deserializer<'de>,
+        where
+            D: Deserializer<'de>,
     {
         let string = String::deserialize(deserializer)?;
         get_level_by_string(&string)
@@ -1089,8 +1090,8 @@ pub mod log_level_serde {
 
     #[allow(clippy::trivially_copy_pass_by_ref)]
     pub fn serialize<S>(value: &Level, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
+        where
+            S: Serializer,
     {
         get_string_by_level(*value).serialize(serializer)
     }
@@ -1405,7 +1406,7 @@ impl TiKvConfig {
                 Path::new(&self.rocksdb.titan.dirname).to_path_buf()
             };
             if let Err(e) =
-                tikv_util::config::check_data_dir_empty(titandb_path.to_str().unwrap(), "blob")
+            tikv_util::config::check_data_dir_empty(titandb_path.to_str().unwrap(), "blob")
             {
                 return Err(format!(
                     "check: titandb-data-dir-empty; err: \"{}\"; \
@@ -1414,7 +1415,7 @@ impl TiKvConfig {
                      wait till titandb files are all safely ingested.",
                     e
                 )
-                .into());
+                    .into());
             }
         }
 
@@ -1425,7 +1426,7 @@ impl TiKvConfig {
                  raft tick interval (>= {})",
                 duration_to_sec(expect_keepalive)
             )
-            .into());
+                .into());
         }
 
         self.rocksdb.validate()?;
@@ -1580,13 +1581,13 @@ impl TiKvConfig {
             let s = fs::read_to_string(&path)?;
             Ok(::toml::from_str(&s)?)
         })()
-        .unwrap_or_else(|e| {
-            panic!(
-                "invalid auto generated configuration file {}, err {}",
-                path.as_ref().display(),
-                e
-            );
-        })
+            .unwrap_or_else(|e| {
+                panic!(
+                    "invalid auto generated configuration file {}, err {}",
+                    path.as_ref().display(),
+                    e
+                );
+            })
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
