@@ -196,7 +196,7 @@ impl ScalarFunc {
         let result = Uuid::new_v4();
         let mut buf = vec![0; uuid::adapter::Hyphenated::LENGTH];
         result.to_hyphenated().encode_lower(&mut buf);
-        Ok(Some(Cow::Owned(buf.to_vec())))
+        Ok(Some(Cow::Owned(buf)))
     }
 }
 
