@@ -18,6 +18,11 @@
 ## timestamp appended to its name and a new file will be created.
 # log-rotation-timespan = "24h"
 
+## Size of log file that triggers the log rotation.
+## Once the size of log file exceeds the threshold value, the log file will be rotated
+## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
+# log-rotation-size = "300MB"
+
 ## The interval at which to refresh the local config
 ## Set it small are good to debug and tuning.
 # refresh-config-interval = "30s"
