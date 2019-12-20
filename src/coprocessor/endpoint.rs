@@ -451,7 +451,7 @@ fn make_tag(is_table_scan: bool) -> &'static str {
 }
 
 fn make_error_response(e: Error) -> coppb::Response {
-    error!(
+    warn!(
         "error-response";
         "err" => %e
     );
