@@ -352,6 +352,70 @@ pub fn instr_utf8(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<In
     }
 }
 
+#[rpn_fn]
+#[inline]
+pub fn to_base64(s: &Option<Bytes>) -> Result<Option<Bytes>> {
+    if let Some(s) = s {
+        let mut input = String::from_utf8(*s).unwrap();
+        match input {
+            Ok(result) => {
+                if result.len() > tidb_query_datatype::MAX_BLOB_WIDTH {
+                    Ok(None)
+                }
+                if let Some(size) = encoded_size(s.len()) {
+                    let mut buf = vec![0; size as usize];
+                    let len_without_wrap =
+                        base64::encode_config_slice(s.as_ref(), base64::STANDARD, &mut buf);
+                    line_wrap(&mut buf, len_without_wrap);
+                    Ok(Some(Cow::Owned(buf)))
+                } else {
+                    Ok(Some(Cow::Borrowed(b"")))
+                }
+            }
+            None => Ok(None),
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+#[inline]
+fn encoded_size(len: usize) -> Option<usize> {
+    if len == 0 {
+        return Some(0);
+    }
+    // size_without_wrap = (len + (3 - 1)) / 3 * 4
+    // size = size_without_wrap + (size_withou_wrap - 1) / 76
+    len.checked_add(BASE64_INPUT_CHUNK_LENGTH - 1)
+        .and_then(|r| r.checked_div(BASE64_INPUT_CHUNK_LENGTH))
+        .and_then(|r| r.checked_mul(BASE64_ENCODED_CHUNK_LENGTH))
+        .and_then(|r| r.checked_add((r - 1) / BASE64_LINE_WRAP_LENGTH))
+}
+
+#[inline]
+fn line_wrap(buf: &mut [u8], input_len: usize) {
+    let line_len = BASE64_LINE_WRAP_LENGTH;
+    if input_len <= line_len {
+        return;
+    }
+    let last_line_len = if input_len % line_len == 0 {
+        line_len
+    } else {
+        input_len % line_len
+    };
+    let lines_with_ending = (input_len - 1) / line_len;
+    let line_with_ending_len = line_len + 1;
+    let mut old_start = input_len - last_line_len;
+    let mut new_start = buf.len() - last_line_len;
+    safemem::copy_over(buf, old_start, new_start, last_line_len);
+    for _ in 0..lines_with_ending {
+        old_start -= line_len;
+        new_start -= line_with_ending_len;
+        safemem::copy_over(buf, old_start, new_start, line_len);
+        buf[new_start + line_len] = BASE64_LINE_WRAP;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1400,6 +1464,30 @@ mod tests {
                 .evaluate::<Int>(ScalarFuncSig::InstrUtf8)
                 .unwrap();
             assert_eq!(got, exp);
+        }
+    }
+    fn test_to_base64() {
+        let test_cases = vec![
+            (Some(""), Some("")),
+            (Some("abc"), Some("YWJj")),
+            (Some("ab c"), Some("YWIgYw==")),
+            (Some("1"), Some("MQ==")),
+            (Some("1.1"), Some("MS4x")),
+            (Some("ab\nc"), Some("YWIKYw==")),
+            (Some("ab\tc"), Some("YWIJYw==")),
+            (Some("qwerty123456"), Some("cXdlcnR5MTIzNDU2")),
+            (Some("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"), Some("QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrLw==")),
+            (Some("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"),Some("QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ01OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv")),
+            (Some("ABCD  EFGHI\nJKLMNOPQRSTUVWXY\tZabcdefghijklmnopqrstuv  wxyz012\r3456789+/"),Some("QUJDRCAgRUZHSEkKSktMTU5PUFFSU1RVVldYWQlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1diAgd3h5\nejAxMg0zNDU2Nzg5Ky8=")),
+            (Some("000000000000000000000000000000000000000000000000000000000"),Some("MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw")),
+            (Some("0000000000000000000000000000000000000000000000000000000000"),Some("MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMA==")),
+            (Some("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),Some("MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw")),
+        ];
+        for (input, result) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(input)
+                .evaluate(ScalarFuncSig::ToBase64);
+            assert_eq!(output, expect_output);
         }
     }
 }
