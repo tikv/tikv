@@ -191,7 +191,7 @@ impl SSTImporter {
                 // must iterate if we perform key rewrite
                 return Ok(None);
             }
-            if !iter.seek(SeekKey::Start) {
+            if !iter.seek(SeekKey::Start)? {
                 // the SST is empty, so no need to iterate at all (should be impossible?)
                 return Ok(Some(meta.get_range().clone()));
             }
@@ -203,7 +203,7 @@ impl SSTImporter {
             let start_key = start_key.to_vec();
 
             // seek to end and fetch the last (inclusive) key of the SST.
-            iter.seek(SeekKey::End);
+            iter.seek(SeekKey::End)?;
             let last_key = keys::origin_key(iter.key());
             if is_after_end_bound(last_key, &range_end) {
                 // SST's end is after the range to consume
@@ -230,11 +230,11 @@ impl SSTImporter {
         let mut first_key = None;
 
         match range_start {
-            Bound::Unbounded => iter.seek(SeekKey::Start),
-            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s))),
+            Bound::Unbounded => iter.seek(SeekKey::Start)?,
+            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s)))?,
             Bound::Excluded(_) => unreachable!(),
         };
-        while iter.valid() {
+        while iter.valid()? {
             let old_key = keys::origin_key(iter.key());
             if is_after_end_bound(&old_key, &range_end) {
                 break;
@@ -276,7 +276,7 @@ impl SSTImporter {
             }
 
             sst_writer.put(&key, &value)?;
-            iter.next();
+            iter.next()?;
             if first_key.is_none() {
                 first_key = Some(keys::origin_key(&key).to_vec());
             }

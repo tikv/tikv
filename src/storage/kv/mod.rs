@@ -152,20 +152,21 @@ pub trait Snapshot: Send + Clone {
 }
 
 pub trait Iterator: Send {
-    fn next(&mut self) -> bool;
-    fn prev(&mut self) -> bool;
+    fn next(&mut self) -> Result<bool>;
+    fn prev(&mut self) -> Result<bool>;
     fn seek(&mut self, key: &Key) -> Result<bool>;
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool>;
-    fn seek_to_first(&mut self) -> bool;
-    fn seek_to_last(&mut self) -> bool;
-    fn valid(&self) -> bool;
-    fn status(&self) -> Result<()>;
+    fn seek_to_first(&mut self) -> Result<bool>;
+    fn seek_to_last(&mut self) -> Result<bool>;
+    fn valid(&self) -> Result<bool>;
 
     fn validate_key(&self, _: &Key) -> Result<()> {
         Ok(())
     }
 
+    /// Must be called when `self.valid() == Ok(true)`.
     fn key(&self) -> &[u8];
+    /// Must be called when `self.valid() == Ok(true)`.
     fn value(&self) -> &[u8];
 }
 

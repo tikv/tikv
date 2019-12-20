@@ -117,7 +117,7 @@ mod tests {
                 assert_eq!(v, iter.value());
                 iter.next();
             }
-            assert!(!iter.valid());
+            assert!(!iter.valid().unwrap());
         }
     }
 

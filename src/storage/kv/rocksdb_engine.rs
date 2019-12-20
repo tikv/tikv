@@ -13,7 +13,6 @@ use engine::rocks::{
     ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, DB,
 };
 use engine::Engines;
-use engine::Error as EngineError;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::RocksEngineIterator;
@@ -329,39 +328,40 @@ impl Snapshot for RocksSnapshot {
 }
 
 impl EngineIterator for RocksEngineIterator {
-    fn next(&mut self) -> bool {
-        Iterator::next(self)
+    fn next(&mut self) -> Result<bool> {
+        Iterator::next(self).map_err(Error::from)
     }
 
-    fn prev(&mut self) -> bool {
-        Iterator::prev(self)
+    fn prev(&mut self) -> Result<bool> {
+        Iterator::prev(self).map_err(Error::from)
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Ok(Iterator::seek(self, key.as_encoded().as_slice().into()))
+        Iterator::seek(self, key.as_encoded().as_slice().into())
+            .map_err(Error::from)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        Ok(Iterator::seek_for_prev(
+        Iterator::seek_for_prev(
             self,
             key.as_encoded().as_slice().into(),
-        ))
+        )
+            .map_err(Error::from)
     }
 
-    fn seek_to_first(&mut self) -> bool {
+    fn seek_to_first(&mut self) -> Result<bool> {
         Iterator::seek(self, SeekKey::Start)
+            .map_err(Error::from)
     }
 
-    fn seek_to_last(&mut self) -> bool {
+    fn seek_to_last(&mut self) -> Result<bool> {
         Iterator::seek(self, SeekKey::End)
+            .map_err(Error::from)
     }
 
-    fn valid(&self) -> bool {
+    fn valid(&self) -> Result<bool> {
         Iterator::valid(self)
-    }
-
-    fn status(&self) -> Result<()> {
-        Iterator::status(self).map_err(From::from)
+            .map_err(Error::from)
     }
 
     fn key(&self) -> &[u8] {
@@ -374,41 +374,42 @@ impl EngineIterator for RocksEngineIterator {
 }
 
 impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
-    fn next(&mut self) -> bool {
+    fn next(&mut self) -> Result<bool> {
         DBIterator::next(self)
+            .map_err(|e| box_err!(e))
     }
 
-    fn prev(&mut self) -> bool {
+    fn prev(&mut self) -> Result<bool> {
         DBIterator::prev(self)
+            .map_err(|e| box_err!(e))
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek(self, key.as_encoded().as_slice().into()))
+        DBIterator::seek(self, key.as_encoded().as_slice().into())
+            .map_err(|e| box_err!(e))
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek_for_prev(
+        DBIterator::seek_for_prev(
             self,
             key.as_encoded().as_slice().into(),
-        ))
+        )
+            .map_err(|e| box_err!(e))
     }
 
-    fn seek_to_first(&mut self) -> bool {
+    fn seek_to_first(&mut self) -> Result<bool> {
         DBIterator::seek(self, DBSeekKey::Start)
+            .map_err(|e| box_err!(e))
     }
 
-    fn seek_to_last(&mut self) -> bool {
+    fn seek_to_last(&mut self) -> Result<bool> {
         DBIterator::seek(self, DBSeekKey::End)
+            .map_err(|e| box_err!(e))
     }
 
-    fn valid(&self) -> bool {
+    fn valid(&self) -> Result<bool> {
         DBIterator::valid(self)
-    }
-
-    fn status(&self) -> Result<()> {
-        DBIterator::status(self)
-            .map_err(|e| EngineError::RocksDb(e))
-            .map_err(Error::from)
+            .map_err(|e| box_err!(e))
     }
 
     fn key(&self) -> &[u8] {

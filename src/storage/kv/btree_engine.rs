@@ -153,19 +153,19 @@ impl BTreeEngineIterator {
                 self.valid = false;
             }
         }
-        self.valid()
+        self.valid().unwrap()
     }
 }
 
 impl Iterator for BTreeEngineIterator {
-    fn next(&mut self) -> bool {
+    fn next(&mut self) -> EngineResult<bool> {
         let range = (Excluded(self.cur_key.clone().unwrap()), Unbounded);
-        self.seek_to_range_endpoint(range, true)
+        Ok(self.seek_to_range_endpoint(range, true))
     }
 
-    fn prev(&mut self) -> bool {
+    fn prev(&mut self) -> EngineResult<bool> {
         let range = (Unbounded, Excluded(self.cur_key.clone().unwrap()));
-        self.seek_to_range_endpoint(range, false)
+        Ok(self.seek_to_range_endpoint(range, false))
     }
 
     fn seek(&mut self, key: &Key) -> EngineResult<bool> {
@@ -178,33 +178,28 @@ impl Iterator for BTreeEngineIterator {
         Ok(self.seek_to_range_endpoint(range, false))
     }
 
-    fn seek_to_first(&mut self) -> bool {
+    fn seek_to_first(&mut self) -> EngineResult<bool> {
         let range = (self.bounds.0.clone(), self.bounds.1.clone());
-        self.seek_to_range_endpoint(range, true)
+        Ok(self.seek_to_range_endpoint(range, true))
     }
 
-    fn seek_to_last(&mut self) -> bool {
+    fn seek_to_last(&mut self) -> EngineResult<bool> {
         let range = (self.bounds.0.clone(), self.bounds.1.clone());
-        self.seek_to_range_endpoint(range, false)
+        Ok(self.seek_to_range_endpoint(range, false))
     }
 
     #[inline]
-    fn valid(&self) -> bool {
-        self.valid
-    }
-
-    #[inline]
-    fn status(&self) -> EngineResult<()> {
-        Ok(())
+    fn valid(&self) -> EngineResult<bool> {
+        Ok(self.valid)
     }
 
     fn key(&self) -> &[u8] {
-        assert!(self.valid());
+        assert!(self.valid().unwrap());
         self.cur_key.as_ref().unwrap().as_encoded()
     }
 
     fn value(&self) -> &[u8] {
-        assert!(self.valid());
+        assert!(self.valid().unwrap());
         self.cur_value.as_ref().unwrap().as_slice()
     }
 }
