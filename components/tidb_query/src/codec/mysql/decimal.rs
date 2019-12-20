@@ -4,6 +4,7 @@ use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::intrinsics::copy_nonoverlapping;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::string::ToString;
@@ -899,7 +900,8 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
 pub const DECIMAL_STRUCT_SIZE: usize = 40;
 
 /// `Decimal` represents a decimal value.
-#[derive(Clone, Debug)]
+#[repr(C)]
+#[derive(Clone, Debug, Default)]
 pub struct Decimal {
     /// The number of *decimal* digits before the point.
     int_cnt: u8,
@@ -907,8 +909,6 @@ pub struct Decimal {
     /// The number of decimal digits after the point.
     frac_cnt: u8,
 
-    /// The number of significant digits of the decimal.
-    precision: u8,
     /// The number of calculated or printed result fraction digits.
     result_frac_cnt: u8,
 
@@ -960,7 +960,6 @@ impl Decimal {
         Decimal {
             int_cnt,
             frac_cnt,
-            precision: 0,
             result_frac_cnt: 0,
             negative,
             word_buf: [0; 9],
@@ -1028,16 +1027,12 @@ impl Decimal {
 
     /// Get the least precision and fraction count to encode this decimal completely.
     pub fn prec_and_frac(&self) -> (u8, u8) {
-        if self.precision == 0 {
-            let (_, int_cnt) = self.remove_leading_zeroes(self.int_cnt);
-            let prec = int_cnt + self.frac_cnt;
-            if prec == 0 {
-                (1, self.frac_cnt)
-            } else {
-                (prec, self.frac_cnt)
-            }
+        let (_, int_cnt) = self.remove_leading_zeroes(self.int_cnt);
+        let prec = int_cnt + self.frac_cnt;
+        if prec == 0 {
+            (1, self.frac_cnt)
         } else {
-            (self.precision, self.result_frac_cnt)
+            (prec, self.frac_cnt)
         }
     }
 
@@ -2100,13 +2095,11 @@ pub trait DecimalEncoder: NumberEncoder {
     }
 
     fn write_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
-        self.write_u8(v.int_cnt)?;
-        self.write_u8(v.frac_cnt)?;
-        self.write_u8(v.result_frac_cnt)?;
-        self.write_u8(v.negative as u8)?;
-        let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
-        for id in 0..len as usize {
-            self.write_i32_le(v.word_buf[id] as i32)?;
+        unsafe {
+            let p = self.bytes_mut(DECIMAL_STRUCT_SIZE).as_mut_ptr();
+            let origin = v as *const Decimal as *const u8;
+            copy_nonoverlapping(origin, p, DECIMAL_STRUCT_SIZE);
+            self.advance_mut(DECIMAL_STRUCT_SIZE);
         }
         Ok(())
     }
@@ -2198,7 +2191,6 @@ pub trait DecimalDecoder: NumberDecoder {
             return Err(box_err!("decoding decimal failed: {:?}", res));
         }
         let mut d = Decimal::new(int_cnt, frac_cnt, mask != 0);
-        d.precision = prec;
         d.result_frac_cnt = frac_cnt;
         let mut word_idx = 0;
         let mut is_first = true;
@@ -2252,21 +2244,13 @@ pub trait DecimalDecoder: NumberDecoder {
     /// `read_decimal_from_chunk` decode Decimal encoded by `write_decimal_to_chunk`.
     fn read_decimal_from_chunk(&mut self) -> Result<Decimal> {
         let buf = self.bytes();
-        if buf.len() <= 4 {
+        if buf.len() < DECIMAL_STRUCT_SIZE {
             return Err(Error::unexpected_eof());
         }
-        let int_cnt = buf[0];
-        let frac_cnt = buf[1];
-        let result_frac_cnt = buf[2];
-        let negative = buf[3] == 1;
-        self.advance(4);
-
-        let mut d = Decimal::new(int_cnt, frac_cnt, negative);
-        d.result_frac_cnt = result_frac_cnt;
-
-        for id in 0..WORD_BUF_LEN {
-            d.word_buf[id as usize] = self.read_i32_le()? as u32;
-        }
+        let d = Decimal::default();
+        let dst = &d as *const Decimal as *mut u8;
+        unsafe { copy_nonoverlapping(buf.as_ptr(), dst, DECIMAL_STRUCT_SIZE) }
+        self.advance(DECIMAL_STRUCT_SIZE);
         Ok(d)
     }
 }
@@ -3141,6 +3125,16 @@ mod tests {
             let decoded = buf.as_slice().read_decimal_from_chunk().unwrap();
             assert_eq!(decoded, dec);
         }
+    }
+
+    #[test]
+    fn test_decode_chunk_from_tidb() {
+        let src: Vec<u8> = vec![
+            3, 3, 3, 0, 123, 0, 0, 0, 0, 2, 46, 27, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let decoded = src.as_slice().read_decimal_from_chunk().unwrap();
+        assert_eq!(Decimal::from_f64(123.456).unwrap(), decoded);
     }
 
     #[test]
