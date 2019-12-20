@@ -8,10 +8,9 @@ use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::{
-    CfStatistics, Error, Iterator, Key, Result, ScanMode, Snapshot, SEEK_BOUND,
-};
+use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -390,6 +389,10 @@ pub struct CursorBuilder<'a, S: Snapshot> {
     prefix_seek: bool,
     upper_bound: Option<Key>,
     lower_bound: Option<Key>,
+    // hint for we will only scan data with commit ts >= hint_min_ts
+    hint_min_ts: Option<TimeStamp>,
+    // hint for we will only scan data with commit ts <= hint_max_ts
+    hint_max_ts: Option<TimeStamp>,
 }
 
 impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
@@ -404,6 +407,8 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             prefix_seek: false,
             upper_bound: None,
             lower_bound: None,
+            hint_min_ts: None,
+            hint_max_ts: None,
         }
     }
 
@@ -442,6 +447,24 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     pub fn range(mut self, lower: Option<Key>, upper: Option<Key>) -> Self {
         self.lower_bound = lower;
         self.upper_bound = upper;
+        self
+    }
+
+    /// Set the hint for the minimum commit ts we want to scan.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn hint_min_ts(mut self, min_ts: Option<TimeStamp>) -> Self {
+        self.hint_min_ts = min_ts;
+        self
+    }
+
+    /// Set the hint for the maximum commit ts we want to scan.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn hint_max_ts(mut self, max_ts: Option<TimeStamp>) -> Self {
+        self.hint_max_ts = max_ts;
         self
     }
 
