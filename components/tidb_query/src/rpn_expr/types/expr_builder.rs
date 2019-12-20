@@ -4,7 +4,7 @@ use std::convert::{TryFrom, TryInto};
 
 use codec::prelude::NumberDecoder;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
-use tipb::{Expr, ExprType, FieldType};
+use tipb::{Expr, ExprType, FieldType, RpnExpr};
 
 use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
@@ -105,6 +105,22 @@ impl RpnExpressionBuilder {
             max_columns,
         )?;
         Ok(RpnExpression::from(expr_nodes))
+    }
+
+    pub fn build_from_rpn_def(
+        mut rpn: RpnExpr,
+        ctx: &mut EvalContext,
+        max_columns: usize,
+    ) -> Result<RpnExpression> {
+        let mut rpn_expr_nodes = Vec::with_capacity(rpn.get_exprs().len());
+        for rpn_expr_def in rpn.take_exprs().into_iter() {
+            rpn_expr_nodes.push((match rpn_expr_def.get_tp() {
+                ExprType::ScalarFunc => map_rpn_node_fn_call(rpn_expr_def, super::super::map_expr_node_to_rpn_func),
+                ExprType::ColumnRef => map_rpn_node_column_ref(rpn_expr_def, max_columns),
+                _ => map_rpn_node_constant(rpn_expr_def, ctx),
+            })?);
+        }
+        Ok(RpnExpression::from(rpn_expr_nodes))
     }
 
     /// Creates a new builder instance.
@@ -260,12 +276,11 @@ where
 }
 
 #[inline]
-fn handle_node_column_ref(
-    tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
+fn map_rpn_node_column_ref(
+    node: Expr,
     max_columns: usize,
-) -> Result<()> {
-    let offset = tree_node
+) -> Result<RpnExpressionNode> {
+    let offset = node
         .get_val()
         .read_i64()
         .map_err(|_| other_err!("Unable to decode column reference offset from the request"))?
@@ -277,7 +292,17 @@ fn handle_node_column_ref(
             offset
         ));
     }
-    rpn_nodes.push(RpnExpressionNode::ColumnRef { offset });
+
+    Ok(RpnExpressionNode::ColumnRef { offset })
+}
+
+#[inline]
+fn handle_node_column_ref(
+    tree_node: Expr,
+    rpn_nodes: &mut Vec<RpnExpressionNode>,
+    max_columns: usize,
+) -> Result<()> {
+    rpn_nodes.push(map_rpn_node_column_ref(tree_node, max_columns)?);
     Ok(())
 }
 
@@ -323,40 +348,70 @@ where
 }
 
 #[inline]
-fn handle_node_constant(
-    mut tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
+fn map_rpn_node_fn_call<F>(
+    mut rpn_node_def: Expr,
+    fn_mapper: F,
+) -> Result<RpnExpressionNode>
+where
+    F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
+{
+    // Map pb func to `RpnFnMeta`.
+    let func_meta = fn_mapper(&rpn_node_def)?;
+
+    // Validate the input expression.
+    (func_meta.validator_ptr)(&rpn_node_def).map_err(|e| {
+        other_err!(
+            "Invalid {} (sig = {:?}) signature: {}",
+            func_meta.name,
+            rpn_node_def.get_sig(),
+            e
+        )
+    })?;
+
+    let metadata = (func_meta.metadata_expr_ptr)(&mut rpn_node_def)?;
+    let args_len = rpn_node_def.get_rpn_args_len() as usize;
+    Ok(RpnExpressionNode::FnCall {
+        func_meta,
+        args_len,
+        field_type: rpn_node_def.take_field_type(),
+        metadata,
+    })
+}
+
+#[inline]
+fn map_rpn_node_constant(
+    mut node: Expr,
     ctx: &mut EvalContext,
-) -> Result<()> {
+) -> Result<RpnExpressionNode> {
     let eval_type = box_try!(EvalType::try_from(
-        tree_node.get_field_type().as_accessor().tp()
+        node.get_field_type().as_accessor().tp()
     ));
 
-    let scalar_value = match tree_node.get_tp() {
+    let scalar_value = match node.get_tp() {
         ExprType::Null => get_scalar_value_null(eval_type),
         ExprType::Int64 if eval_type == EvalType::Int => {
-            extract_scalar_value_int64(tree_node.take_val())?
+            extract_scalar_value_int64(node.take_val())?
         }
         ExprType::Uint64 if eval_type == EvalType::Int => {
-            extract_scalar_value_uint64(tree_node.take_val())?
+            extract_scalar_value_uint64(node.take_val())?
         }
         ExprType::String | ExprType::Bytes if eval_type == EvalType::Bytes => {
-            extract_scalar_value_bytes(tree_node.take_val())?
+            extract_scalar_value_bytes(node.take_val())?
         }
         ExprType::Float32 | ExprType::Float64 if eval_type == EvalType::Real => {
-            extract_scalar_value_float(tree_node.take_val())?
+            extract_scalar_value_float(node.take_val())?
         }
         ExprType::MysqlTime if eval_type == EvalType::DateTime => {
-            extract_scalar_value_date_time(tree_node.take_val(), tree_node.get_field_type(), ctx)?
+            extract_scalar_value_date_time(node.take_val(), node.get_field_type(), ctx)?
         }
         ExprType::MysqlDuration if eval_type == EvalType::Duration => {
-            extract_scalar_value_duration(tree_node.take_val())?
+            extract_scalar_value_duration(node.take_val())?
         }
         ExprType::MysqlDecimal if eval_type == EvalType::Decimal => {
-            extract_scalar_value_decimal(tree_node.take_val())?
+            extract_scalar_value_decimal(node.take_val())?
         }
         ExprType::MysqlJson if eval_type == EvalType::Json => {
-            extract_scalar_value_json(tree_node.take_val())?
+            extract_scalar_value_json(node.take_val())?
         }
         expr_type => {
             return Err(other_err!(
@@ -366,10 +421,20 @@ fn handle_node_constant(
             ))
         }
     };
-    rpn_nodes.push(RpnExpressionNode::Constant {
+
+    Ok(RpnExpressionNode::Constant {
         value: scalar_value,
-        field_type: tree_node.take_field_type(),
-    });
+        field_type: node.take_field_type(),
+    })
+}
+
+#[inline]
+fn handle_node_constant(
+    tree_node: Expr,
+    rpn_nodes: &mut Vec<RpnExpressionNode>,
+    ctx: &mut EvalContext,
+) -> Result<()> {
+    rpn_nodes.push(map_rpn_node_constant(tree_node, ctx)?);
     Ok(())
 }
 
