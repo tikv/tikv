@@ -1476,6 +1476,8 @@ mod tests {
             assert_eq!(got, exp);
         }
     }
+
+    #[test]
     fn test_to_base64() {
         let test_cases = vec![
             (Some(b"".to_vec()), Some(b"".to_vec())),
