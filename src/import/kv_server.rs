@@ -22,8 +22,6 @@ use config::TiKvConfig;
 
 use super::{ImportKVService, KVImporter};
 
-const MAX_GRPC_MSG_LEN: i32 = 32 * 1024 * 1024;
-
 /// ImportKVServer is a gRPC server that provides service to write key-value
 /// pairs into RocksDB engines for later ingesting into tikv-server.
 pub struct ImportKVServer {
@@ -48,8 +46,8 @@ impl ImportKVServer {
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
-            .max_send_message_len(MAX_GRPC_MSG_LEN)
-            .max_receive_message_len(MAX_GRPC_MSG_LEN)
+            .max_send_message_len(-1)
+            .max_receive_message_len(-1)
             .build_args();
 
         let grpc_server = ServerBuilder::new(Arc::clone(&env))
