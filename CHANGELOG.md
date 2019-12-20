@@ -2,6 +2,10 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.7]
++ Update grpc to fix a potential memory leak issue [#6128](https://github.com/tikv/tikv/pull/6128)
++ Deadlock: only observe valid region in order to make sure the manager is in the valid region [#6110](https://github.com/tikv/tikv/pull/6110)
+
 ## [3.0.6]
 + Pessimistic Transaction: keep lock's ttl when receive a smaller ttl [#6056](https://github.com/tikv/tikv/pull/6056)
 + rust-rocksdb: fix titan options for cf when create cf [#6009](https://github.com/tikv/tikv/pull/6009)

@@ -136,7 +136,7 @@ future-poll-size = 2
 hibernate-regions = true
 
 [coprocessor]
-split-region-on-table = true
+split-region-on-table = false
 batch-split-limit = 1
 region-max-size = "12MB"
 region-split-size = "12MB"
