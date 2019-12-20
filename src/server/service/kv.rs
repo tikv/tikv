@@ -37,9 +37,9 @@ use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
-use tikv_util::metrics::TLSExt;
+use tikv_util::metrics::{ObserveElapsed, TLSExt};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
-use tikv_util::time::{duration_to_sec, Instant};
+use tikv_util::time::Instant;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -125,7 +125,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_get.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_get.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -134,7 +134,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_get.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_get.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_get.inc();
@@ -150,7 +150,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_scan.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -159,7 +159,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_scan.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_scan.inc();
@@ -180,7 +180,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_prewrite.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_prewrite.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -189,7 +189,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_prewrite.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_prewrite.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_prewrite.inc();
@@ -211,8 +211,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_pessimistic_lock
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_pessimistic_lock.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -221,8 +220,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_pessimistic_lock
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_pessimistic_lock.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_pessimistic_lock.inc();
@@ -244,8 +242,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_pessimistic_rollback
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_pessimistic_rollback.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -254,8 +251,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_pessimistic_rollback
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_pessimistic_rollback.observe_elapsed(instant);
                 });
 
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
@@ -278,7 +274,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_commit.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_commit.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -287,7 +283,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_commit.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_commit.observe_elapsed(instant);
                 });
 
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
@@ -314,7 +310,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_cleanup.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_cleanup.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -323,7 +319,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_cleanup.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_cleanup.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_cleanup.inc();
@@ -345,7 +341,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_batch_get.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_batch_get.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -354,7 +350,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_batch_get.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_batch_get.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_batch_get.inc();
@@ -376,8 +372,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_batch_rollback
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_batch_rollback.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -386,8 +381,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_batch_rollback
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_batch_rollback.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_batch_rollback.inc();
@@ -409,8 +403,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_txn_heart_beat
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_txn_heart_beat.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -419,8 +412,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_txn_heart_beat
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_txn_heart_beat.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_txn_heart_beat.inc();
@@ -442,8 +434,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_check_txn_status
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_check_txn_status.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -452,8 +443,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_check_txn_status
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_check_txn_status.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_check_txn_status.inc();
@@ -475,7 +465,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_scan_lock.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_scan_lock.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -484,7 +474,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_scan_lock.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_scan_lock.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_scan_lock.inc();
@@ -506,8 +496,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_resolve_lock
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_resolve_lock.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -516,8 +505,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_resolve_lock
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_resolve_lock.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_resolve_lock.inc();
@@ -534,7 +522,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_gc.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_gc.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -543,7 +531,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_gc.observe(duration_to_sec(instant.elapsed()));
+                    m.kv_gc.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_gc.inc();
@@ -565,8 +553,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_delete_range
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_delete_range.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -575,8 +562,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.kv_delete_range
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.kv_delete_range.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.kv_delete_range.inc();
@@ -598,7 +584,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_get.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_get.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -607,7 +593,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_get.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_get.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.raw_get.inc();
@@ -629,7 +615,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_batch_get.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_batch_get.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -638,7 +624,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_batch_get.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_batch_get.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.raw_batch_get.inc();
@@ -660,7 +646,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_scan.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -669,7 +655,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_scan.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.raw_scan.inc();
@@ -691,7 +677,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_batch_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_batch_scan.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -700,7 +686,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_batch_scan.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_batch_scan.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.raw_batch_scan.inc();
@@ -721,7 +707,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_put.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_put.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -730,7 +716,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_put.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_put.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.raw_put.inc();
@@ -752,7 +738,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_batch_put.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_batch_put.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -761,7 +747,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_batch_put.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_batch_put.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.raw_batch_put.inc();
@@ -783,7 +769,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_delete.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_delete.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -792,7 +778,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_delete.observe(duration_to_sec(instant.elapsed()));
+                    m.raw_delete.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.raw_delete.inc();
@@ -814,8 +800,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_batch_delete
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.raw_batch_delete.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -824,8 +809,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_batch_delete
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.raw_batch_delete.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.raw_batch_delete.inc();
@@ -847,8 +831,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_delete_range
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.raw_delete_range.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -857,8 +840,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.raw_delete_range
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.raw_delete_range.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.raw_delete_range.inc();
@@ -900,8 +882,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             })
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.unsafe_destroy_range
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.unsafe_destroy_range.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -910,8 +891,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.unsafe_destroy_range
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.unsafe_destroy_range.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.unsafe_destroy_range.inc();
@@ -928,7 +908,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|resp| sink.success(resp).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.coprocessor.observe(duration_to_sec(instant.elapsed()));
+                    m.coprocessor.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -937,7 +917,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.coprocessor.observe(duration_to_sec(instant.elapsed()));
+                    m.coprocessor.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.coprocessor.inc();
@@ -968,8 +948,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .send_all(stream)
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.coprocessor_stream
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.coprocessor_stream.observe_elapsed(instant);
                 })
             })
             .map_err(Error::from)
@@ -979,8 +958,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.coprocessor_stream
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.coprocessor_stream.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.coprocessor_stream.inc();
@@ -1106,8 +1084,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             })
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.mvcc_get_by_key
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.mvcc_get_by_key.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -1116,8 +1093,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.mvcc_get_by_key
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.mvcc_get_by_key.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.mvcc_get_by_key.inc();
@@ -1161,8 +1137,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             })
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.mvcc_get_by_start_ts
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.mvcc_get_by_start_ts.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -1171,8 +1146,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.mvcc_get_by_start_ts
-                        .observe(duration_to_sec(instant.elapsed()));
+                    m.mvcc_get_by_start_ts.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.mvcc_get_by_start_ts.inc();
@@ -1243,7 +1217,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.split_region.observe(duration_to_sec(instant.elapsed()));
+                    m.split_region.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -1252,7 +1226,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.split_region.observe(duration_to_sec(instant.elapsed()));
+                    m.split_region.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.split_region.inc();
@@ -1321,7 +1295,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(move |_| {
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.read_index.observe(duration_to_sec(instant.elapsed()));
+                    m.read_index.observe_elapsed(instant);
                 })
             })
             .map_err(move |e| {
@@ -1330,7 +1304,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     "err" => ?e
                 );
                 GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                    m.read_index.observe(duration_to_sec(instant.elapsed()));
+                    m.read_index.observe_elapsed(instant);
                 });
                 GRPC_MSG_FAIL_COUNTER.may_flush(|m| {
                     m.read_index.inc();
@@ -1481,14 +1455,12 @@ fn response_batch_commands_request<F>(
         if tx.send_and_notify((id, resp)).is_err() {
             error!("KvService response batch commands fail");
             GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                m.get(histogram_key)
-                    .observe(duration_to_sec(begin.elapsed()));
+                m.get(histogram_key).observe_elapsed(begin);
             });
             return Err(());
         }
         GRPC_MSG_HISTOGRAM.may_flush(|m| {
-            m.get(histogram_key)
-                .observe(duration_to_sec(begin.elapsed()));
+            m.get(histogram_key).observe_elapsed(begin);
         });
         Ok(())
     });
@@ -1955,8 +1927,7 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
             }
         }
         GRPC_MSG_HISTOGRAM.may_flush(|m| {
-            m.kv_batch_get_command
-                .observe(duration_to_sec(instant.elapsed()));
+            m.kv_batch_get_command.observe_elapsed(instant);
         });
         Ok(())
     })
@@ -2471,8 +2442,7 @@ pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
             }
         }
         GRPC_MSG_HISTOGRAM.may_flush(|m| {
-            m.raw_batch_get_command
-                .observe(duration_to_sec(instant.elapsed()));
+            m.raw_batch_get_command.observe_elapsed(instant);
         });
         Ok(())
     })

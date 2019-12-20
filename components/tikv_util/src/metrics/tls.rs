@@ -1,7 +1,9 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::time::{duration_to_sec, Instant as TiInstant};
 use coarsetime::{Instant, Updater};
-use prometheus::local::LocalMetric;
+use prometheus::local::{LocalHistogram, LocalMetric};
+use prometheus::Histogram;
 use std::cell::Cell;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,5 +76,21 @@ impl<T: LocalMetric> TLSExt<T> for LocalKey<TLSMetricGroup<T>> {
             m.may_flush_all();
             res
         })
+    }
+}
+
+pub trait ObserveElapsed {
+    fn observe_elapsed(&self, instant: TiInstant);
+}
+
+impl ObserveElapsed for LocalHistogram {
+    fn observe_elapsed(&self, instant: TiInstant) {
+        self.observe(duration_to_sec(instant.elapsed()));
+    }
+}
+
+impl ObserveElapsed for Histogram {
+    fn observe_elapsed(&self, instant: TiInstant) {
+        self.observe(duration_to_sec(instant.elapsed()));
     }
 }
