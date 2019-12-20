@@ -29,13 +29,13 @@ use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
     Statistics,
 };
-use crate::storage::mvcc::{MvccReader, MvccTxn, TimeStamp};
+use crate::storage::mvcc::{MvccReader, MvccTxn};
 use crate::storage::{Callback, Error, ErrorInner, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
-use txn_types::Key;
+use txn_types::{Key, TimeStamp};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -1228,12 +1228,7 @@ impl<E: Engine> GcWorker<E> {
         Ok(())
     }
 
-    pub fn async_gc(
-        &self,
-        ctx: Context,
-        safe_point: TimeStamp,
-        callback: Callback<()>,
-    ) -> Result<()> {
+    pub fn gc(&self, ctx: Context, safe_point: TimeStamp, callback: Callback<()>) -> Result<()> {
         GC_COMMAND_COUNTER_VEC_STATIC.gc.inc();
         self.worker_scheduler
             .schedule(GcTask::Gc {
@@ -1249,7 +1244,7 @@ impl<E: Engine> GcWorker<E> {
     /// on RocksDB, bypassing the Raft layer. User must promise that, after calling `destroy_range`,
     /// the range will never be accessed any more. However, `destroy_range` is allowed to be called
     /// multiple times on an single range.
-    pub fn async_unsafe_destroy_range(
+    pub fn unsafe_destroy_range(
         &self,
         ctx: Context,
         start_key: Key,
@@ -1288,7 +1283,7 @@ mod tests {
     use crate::raftstore::store::util::new_peer;
     use crate::storage::kv::{Result as EngineResult, TestEngineBuilder};
     use crate::storage::lock_manager::DummyLockManager;
-    use crate::storage::{txn::Options, Storage, TestStorageBuilder};
+    use crate::storage::{Storage, TestStorageBuilder};
     use futures::Future;
     use kvproto::metapb;
     use std::collections::BTreeMap;
@@ -1612,13 +1607,14 @@ mod tests {
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = storage
-            .async_scan(
+            .scan(
                 Context::default(),
                 Key::from_encoded_slice(b""),
                 None,
                 expected_data.len() + 1,
                 1.into(),
-                Options::default(),
+                false,
+                false,
             )
             .wait()
             .unwrap();
@@ -1671,12 +1667,15 @@ mod tests {
         let start_ts = start_ts.into();
 
         // Write these data to the storage.
-        wait_op!(|cb| storage.async_prewrite(
+        wait_op!(|cb| storage.prewrite(
             Context::default(),
             mutations,
             primary,
             start_ts,
-            Options::default(),
+            0,
+            false,
+            0,
+            TimeStamp::default(),
             cb
         ))
         .unwrap()
@@ -1684,15 +1683,9 @@ mod tests {
 
         // Commit.
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
-        wait_op!(|cb| storage.async_commit(
-            Context::default(),
-            keys,
-            start_ts,
-            commit_ts.into(),
-            cb
-        ))
-        .unwrap()
-        .unwrap();
+        wait_op!(|cb| storage.commit(Context::default(), keys, start_ts, commit_ts.into(), cb))
+            .unwrap()
+            .unwrap();
 
         // Assert these data is successfully written to the storage.
         check_data(&storage, &data);
@@ -1707,14 +1700,9 @@ mod tests {
             .collect();
 
         // Invoke unsafe destroy range.
-        wait_op!(|cb| gc_worker.async_unsafe_destroy_range(
-            Context::default(),
-            start_key,
-            end_key,
-            cb
-        ))
-        .unwrap()
-        .unwrap();
+        wait_op!(|cb| gc_worker.unsafe_destroy_range(Context::default(), start_key, end_key, cb))
+            .unwrap()
+            .unwrap();
 
         // Check remaining data is as expected.
         check_data(&storage, &data);
