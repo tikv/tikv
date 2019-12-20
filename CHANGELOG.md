@@ -2,6 +2,28 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.7]
++ Update grpc to fix a potential memory leak issue [#6128](https://github.com/tikv/tikv/pull/6128)
++ Deadlock: only observe valid region in order to make sure the manager is in the valid region [#6110](https://github.com/tikv/tikv/pull/6110)
+
+## [3.0.6]
++ Pessimistic Transaction: keep lock's ttl when receive a smaller ttl [#6056](https://github.com/tikv/tikv/pull/6056)
++ rust-rocksdb: fix titan options for cf when create cf [#6009](https://github.com/tikv/tikv/pull/6009)
++ Fix TiKV panic when aggregation expr type is not valid [#6002](https://github.com/tikv/tikv/pull/6002)
++ Pessimistic Transaction: reduce clean up requests in lock_manager [#5965](https://github.com/tikv/tikv/pull/5965)
++ Fix a region merge bug which may cause panic: set is_merging flag after restart in raftstore [#5892](https://github.com/tikv/tikv/pull/5892)
++ Generate flamegraph at runtime [#5961](https://github.com/tikv/tikv/pull/5961)
++ Support to change the config gc io limit dynamically [#5957](https://github.com/tikv/tikv/pull/5957)
++ Limit the speed of write for GC [#5735](https://github.com/tikv/tikv/pull/5735)
++ Engine: update rocksdb and titan [#5968](https://github.com/tikv/tikv/pull/5968)
+  + rocksdb: Fix OnFlushCompleted fired before flush result write to MANIFEST [pingcap/rocksdb#130](https://github.com/pingcap/rocksdb/pull/130)
+  + titan: Fix status overrided by mistake [pingcap/titan#111](https://github.com/pingcap/titan/pull/111)
++ Makefile: add a new rule for CI test [#5938](https://github.com/tikv/tikv/pull/5938)
++ Add metrics for commit log duration [#5881](https://github.com/tikv/tikv/pull/5881)
++ Pessimistic Transaction: Add support for lock wait timeout [#5848](https://github.com/tikv/tikv/pull/5848)
++ LockManager: make has_waiter accurate [#5845](https://github.com/tikv/tikv/pull/5845)
++ Fix wrong txn_size when acquire pessimistic lock [#5740](https://github.com/tikv/tikv/pull/5740)
+
 ## [3.0.5]
 + Fix the problem that split check is always scanning caused by updating approximate in pd-worker [#5716](https://github.com/tikv/tikv/pull/5716)
 + Update rust-rocksdb to avoid intra_L0 compaction issue [#5710](https://github.com/tikv/tikv/pull/5710)

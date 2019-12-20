@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "3.0.5"
+version = "3.0.7"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -12,7 +12,7 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["tikv_alloc/default"]
+default = ["jemalloc"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine/jemalloc"]
 portable = ["engine/portable"]
