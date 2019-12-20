@@ -70,7 +70,7 @@ make_static_metric! {
 }
 
 lazy_static! {
-    pub static ref SEND_SNAP_HISTOGRAM_GLOBAL: Histogram = register_histogram!(
+    static ref SEND_SNAP_HISTOGRAM_GLOBAL: Histogram = register_histogram!(
         "tikv_server_send_snapshot_duration_seconds",
         "Bucketed histogram of server send snapshots duration",
         exponential_buckets(0.05, 2.0, 20).unwrap()
