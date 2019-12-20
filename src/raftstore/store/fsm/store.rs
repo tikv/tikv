@@ -1019,11 +1019,6 @@ impl RaftBatchSystem {
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
-        cfg_controller.register(
-            "coprocessor",
-            Box::new(workers.split_check_worker.scheduler()),
-        );
-
         let engines = builder.engines.clone();
         let snap_mgr = builder.snap_mgr.clone();
         let cfg = builder.cfg.clone();
@@ -1079,6 +1074,10 @@ impl RaftBatchSystem {
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
 
+        cfg_controller.register(
+            "coprocessor",
+            Box::new(workers.split_check_worker.scheduler()),
+        );
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
             self.router.clone(),

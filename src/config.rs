@@ -1763,7 +1763,7 @@ impl ConfigController {
         ConfigController { current: cfg }
     }
 
-    fn update_or_rollback(&mut self, mut incoming: TiKvConfig) -> Option<ConfigChange> {
+    pub fn update_or_rollback(&mut self, mut incoming: TiKvConfig) -> Option<ConfigChange> {
         if incoming.validate().is_err() {
             return Some(incoming.diff(&self.current));
         }
