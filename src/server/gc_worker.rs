@@ -1230,7 +1230,7 @@ impl<E: Engine> GcWorker<E> {
     }
 
     pub fn gc(&self, ctx: Context, safe_point: TimeStamp, callback: Callback<()>) -> Result<()> {
-        GC_COMMAND_COUNTER_VEC_STATIC.gc.inc();
+        GC_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.gc.inc());
         self.worker_scheduler
             .schedule(GcTask::Gc {
                 ctx,

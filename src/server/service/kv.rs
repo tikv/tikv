@@ -2471,9 +2471,9 @@ pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
             }
         }
         GRPC_MSG_HISTOGRAM.may_flush(|m| {
-                m.raw_batch_get_command
-                    .observe(duration_to_sec(instant.elapsed()));
-            });
+            m.raw_batch_get_command
+                .observe(duration_to_sec(instant.elapsed()));
+        });
         Ok(())
     })
 }
