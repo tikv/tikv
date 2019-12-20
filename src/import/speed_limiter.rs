@@ -324,6 +324,7 @@ mod metronome {
         // actual test case inside `catch_unwind`.
         use std::panic;
 
+        let original_hook = panic::take_hook();
         panic::set_hook(Box::new(|_| {}));
 
         let res = panic::catch_unwind(|| {
@@ -336,7 +337,7 @@ mod metronome {
             .unwrap();
         });
 
-        panic::take_hook();
+        panic::set_hook(original_hook);
 
         assert!(res.is_err());
     }
