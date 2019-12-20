@@ -429,6 +429,9 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     let _guard = ::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
     cluster.cfg.raft_store.merge_max_log_gap = 10;
     cluster.cfg.raft_store.raft_log_gc_count_limit = 11;
     // rely on this config to trigger a compact log
@@ -441,7 +444,6 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
-    let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
 
     cluster.must_split(&region, b"k2");
@@ -505,7 +507,17 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     }
     // can schedule merge now
     fail::remove(schedule_merge_fp);
-    // propose to left region and wait for merge to succeed conveniently
+    let count = 100;
+    for i in 1..count {
+        sleep_ms(10);
+
+        if pd_client.get_region_by_id(left.get_id()).wait().unwrap().is_none() {
+            break;
+        }
+        if i == count - 1 {
+            panic!("region {:?} is still not merged.", left);
+        }
+    }
     cluster.must_put(b"k123", b"v2");
     must_get_equal(&cluster.get_engine(3), b"k123", b"v2");
 }
