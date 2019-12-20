@@ -95,13 +95,13 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref GRPC_REQ_BATCH_COMMANDS_SIZE_GLOBAL: Histogram = register_histogram!(
+    static ref GRPC_REQ_BATCH_COMMANDS_SIZE_GLOBAL: Histogram = register_histogram!(
         "tikv_server_grpc_req_batch_size",
         "grpc batch size of gRPC requests",
         exponential_buckets(1f64, 2f64, 10).unwrap()
     )
     .unwrap();
-    pub static ref GRPC_RESP_BATCH_COMMANDS_SIZE_GLOBAL: Histogram = register_histogram!(
+    static ref GRPC_RESP_BATCH_COMMANDS_SIZE_GLOBAL: Histogram = register_histogram!(
         "tikv_server_grpc_resp_batch_size",
         "grpc batch size of gRPC responses",
         exponential_buckets(1f64, 2f64, 10).unwrap()
@@ -113,12 +113,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref GC_EMPTY_RANGE_COUNTER_GLOBAL: IntCounter = register_int_counter!(
+    static ref GC_EMPTY_RANGE_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_storage_gc_empty_range_total",
         "Total number of empty range found by gc"
     )
     .unwrap();
-    pub static ref GC_SKIPPED_COUNTER_GLOBAL: IntCounter = register_int_counter!(
+    static ref GC_SKIPPED_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_storage_gc_skipped_counter",
         "Total number of gc command skipped owing to optimization"
     )
@@ -142,7 +142,7 @@ lazy_static! {
         &["task"]
     )
     .unwrap();
-    pub static ref GC_TOO_BUSY_COUNTER_GLOBAL: IntCounter = register_int_counter!(
+    static ref GC_TOO_BUSY_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_gc_worker_too_busy",
         "Counter of occurrence of gc_worker being too busy"
     )
@@ -170,12 +170,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref RAFT_MESSAGE_RECV_COUNTER_GLOBAL: IntCounter = register_int_counter!(
+    static ref RAFT_MESSAGE_RECV_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_server_raft_message_recv_total",
         "Total number of raft messages received"
     )
     .unwrap();
-    pub static ref RAFT_MESSAGE_BATCH_SIZE_GLOBAL: Histogram = register_histogram!(
+    static ref RAFT_MESSAGE_BATCH_SIZE_GLOBAL: Histogram = register_histogram!(
         "tikv_server_raft_message_batch_size",
         "Raft messages batch size",
         exponential_buckets(1f64, 2f64, 10).unwrap()
@@ -193,12 +193,12 @@ lazy_static! {
         &["type", "store_id"]
     )
     .unwrap();
-    pub static ref RAFT_MESSAGE_FLUSH_COUNTER_GLOBAL: IntCounter = register_int_counter!(
+    static ref RAFT_MESSAGE_FLUSH_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_server_raft_message_flush_total",
         "Total number of raft messages flushed immediately"
     )
     .unwrap();
-    pub static ref RAFT_MESSAGE_DELAY_FLUSH_COUNTER_GLOBAL: IntCounter = register_int_counter!(
+    static ref RAFT_MESSAGE_DELAY_FLUSH_COUNTER_GLOBAL: IntCounter = register_int_counter!(
         "tikv_server_raft_message_delay_flush_total",
         "Total number of raft messages flushed delay"
     )
@@ -278,7 +278,7 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
 }
 
 lazy_static! {
-    pub static ref ASYNC_REQUESTS_COUNTER_VEC_GLOBAL: IntCounterVec = {
+    static ref ASYNC_REQUESTS_COUNTER_VEC_GLOBAL: IntCounterVec = {
         register_int_counter_vec!(
             "tikv_storage_engine_async_request_total",
             "Total number of engine asynchronous requests",
@@ -286,7 +286,7 @@ lazy_static! {
         )
         .unwrap()
     };
-    pub static ref ASYNC_REQUESTS_DURATIONS_VEC_GLOBAL: HistogramVec = {
+    static ref ASYNC_REQUESTS_DURATIONS_VEC_GLOBAL: HistogramVec = {
         register_histogram_vec!(
             "tikv_storage_engine_async_request_duration_seconds",
             "Bucketed histogram of processing successful asynchronous requests.",

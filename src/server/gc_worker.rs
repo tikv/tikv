@@ -1252,9 +1252,8 @@ impl<E: Engine> GcWorker<E> {
         end_key: Key,
         callback: Callback<()>,
     ) -> Result<()> {
-        GC_COMMAND_COUNTER_VEC_STATIC.with(|m| {
+        GC_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| {
             m.unsafe_destroy_range.inc();
-            m.may_flush_all();
         });
         self.worker_scheduler
             .schedule(GcTask::UnsafeDestroyRange {
