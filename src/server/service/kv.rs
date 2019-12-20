@@ -20,8 +20,8 @@ use crate::storage::{
         extract_region_error,
     },
     kv::Engine,
-    lock_manager::LockManager,
-    txn::{Options, PointGetCommand},
+    lock_manager::{LockManager, WaitTimeout},
+    txn::PointGetCommand,
     Storage, TxnStatus,
 };
 use futures::executor::{self, Notify, Spawn};
@@ -882,7 +882,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         assert!(!req.get_end_key().is_empty());
 
         let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.async_unsafe_destroy_range(
+        let res = self.gc_worker.unsafe_destroy_range(
             req.take_context(),
             Key::from_raw(&req.take_start_key()),
             Key::from_raw(&req.take_end_key()),
@@ -1087,7 +1087,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         let (cb, f) = paired_future_callback();
         let res = self
             .storage
-            .async_mvcc_by_key(req.take_context(), key.clone(), cb);
+            .mvcc_by_key(req.take_context(), key.clone(), cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
@@ -1136,9 +1136,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         let instant = Instant::now_coarse();
 
         let (cb, f) = paired_future_callback();
-        let res =
-            self.storage
-                .async_mvcc_by_start_ts(req.take_context(), req.get_start_ts().into(), cb);
+        let res = self
+            .storage
+            .mvcc_by_start_ts(req.take_context(), req.get_start_ts().into(), cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
@@ -1887,7 +1887,7 @@ fn future_get<E: Engine, L: LockManager>(
     mut req: GetRequest,
 ) -> impl Future<Item = GetResponse, Error = Error> {
     storage
-        .async_get(
+        .get(
             req.take_context(),
             Key::from_raw(req.get_key()),
             req.get_version().into(),
@@ -1914,8 +1914,7 @@ pub fn future_batch_get_command<E: Engine, L: LockManager>(
     commands: Vec<PointGetCommand>,
 ) -> impl Future<Item = (), Error = ()> {
     let instant = Instant::now_coarse();
-
-    storage.async_batch_get_command(commands).then(move |v| {
+    storage.batch_get_command(commands).then(move |v| {
         match v {
             Ok(v) => {
                 if requests.len() != v.len() {
@@ -1973,18 +1972,15 @@ fn future_scan<E: Engine, L: LockManager>(
         Some(Key::from_raw(req.get_end_key()))
     };
 
-    let mut options = Options::default();
-    options.key_only = req.get_key_only();
-    options.reverse_scan = req.get_reverse();
-
     storage
-        .async_scan(
+        .scan(
             req.take_context(),
             Key::from_raw(req.get_start_key()),
             end_key,
             req.get_limit() as usize,
             req.get_version().into(),
-            options,
+            req.get_key_only(),
+            req.get_reverse(),
         )
         .then(|v| {
             let mut resp = ScanResponse::default();
@@ -2001,24 +1997,40 @@ fn future_prewrite<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: PrewriteRequest,
 ) -> impl Future<Item = PrewriteResponse, Error = Error> {
-    let mutations = req.take_mutations().into_iter().map(Into::into).collect();
-    let mut options = Options::default();
-    options.lock_ttl = req.get_lock_ttl();
-    options.skip_constraint_check = req.get_skip_constraint_check();
-    options.for_update_ts = req.get_for_update_ts().into();
-    options.is_pessimistic_lock = req.take_is_pessimistic_lock();
-    options.txn_size = req.get_txn_size();
-    options.min_commit_ts = req.get_min_commit_ts().into();
-
+    let for_update_ts = req.get_for_update_ts();
     let (cb, f) = paired_future_callback();
-    let res = storage.async_prewrite(
-        req.take_context(),
-        mutations,
-        req.take_primary_lock(),
-        req.get_start_version().into(),
-        options,
-        cb,
-    );
+    let res = if for_update_ts == 0 {
+        storage.prewrite(
+            req.take_context(),
+            req.take_mutations().into_iter().map(Into::into).collect(),
+            req.take_primary_lock(),
+            req.get_start_version().into(),
+            req.get_lock_ttl(),
+            req.get_skip_constraint_check(),
+            req.get_txn_size(),
+            req.get_min_commit_ts().into(),
+            cb,
+        )
+    } else {
+        let is_pessimistic_lock = req.take_is_pessimistic_lock();
+        let mutations = req
+            .take_mutations()
+            .into_iter()
+            .map(Into::into)
+            .zip(is_pessimistic_lock.into_iter())
+            .collect();
+        storage.prewrite_pessimistic(
+            req.take_context(),
+            mutations,
+            req.take_primary_lock(),
+            req.get_start_version().into(),
+            req.get_lock_ttl(),
+            for_update_ts.into(),
+            req.get_txn_size(),
+            req.get_min_commit_ts().into(),
+            cb,
+        )
+    };
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PrewriteResponse::default();
@@ -2046,19 +2058,17 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockManager>(
             _ => panic!("mismatch Op in pessimistic lock mutations"),
         })
         .collect();
-    let mut options = Options::default();
-    options.lock_ttl = req.get_lock_ttl();
-    options.is_first_lock = req.get_is_first_lock();
-    options.for_update_ts = req.get_for_update_ts().into();
-    options.wait_timeout = req.get_wait_timeout();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_acquire_pessimistic_lock(
+    let res = storage.acquire_pessimistic_lock(
         req.take_context(),
         keys,
         req.take_primary_lock(),
         req.get_start_version().into(),
-        options,
+        req.get_lock_ttl(),
+        req.get_is_first_lock(),
+        req.get_for_update_ts().into(),
+        WaitTimeout::from_encoded(req.get_wait_timeout()),
         cb,
     );
 
@@ -2079,7 +2089,7 @@ fn future_pessimistic_rollback<E: Engine, L: LockManager>(
 ) -> impl Future<Item = PessimisticRollbackResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let (cb, f) = paired_future_callback();
-    let res = storage.async_pessimistic_rollback(
+    let res = storage.pessimistic_rollback(
         req.take_context(),
         keys,
         req.get_start_version().into(),
@@ -2104,7 +2114,7 @@ fn future_commit<E: Engine, L: LockManager>(
 ) -> impl Future<Item = CommitResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let (cb, f) = paired_future_callback();
-    let res = storage.async_commit(
+    let res = storage.commit(
         req.take_context(),
         keys,
         req.get_start_version().into(),
@@ -2134,7 +2144,7 @@ fn future_cleanup<E: Engine, L: LockManager>(
     mut req: CleanupRequest,
 ) -> impl Future<Item = CleanupResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.async_cleanup(
+    let res = storage.cleanup(
         req.take_context(),
         Key::from_raw(req.get_key()),
         req.get_start_version().into(),
@@ -2163,7 +2173,7 @@ fn future_batch_get<E: Engine, L: LockManager>(
 ) -> impl Future<Item = BatchGetResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     storage
-        .async_batch_get(req.take_context(), keys, req.get_version().into())
+        .batch_get(req.take_context(), keys, req.get_version().into())
         .then(|v| {
             let mut resp = BatchGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
@@ -2182,7 +2192,7 @@ fn future_batch_rollback<E: Engine, L: LockManager>(
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_rollback(req.take_context(), keys, req.get_start_version().into(), cb);
+    let res = storage.rollback(req.take_context(), keys, req.get_start_version().into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = BatchRollbackResponse::default();
@@ -2202,7 +2212,7 @@ fn future_txn_heart_beat<E: Engine, L: LockManager>(
     let primary_key = Key::from_raw(req.get_primary_lock());
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_txn_heart_beat(
+    let res = storage.txn_heart_beat(
         req.take_context(),
         primary_key,
         req.get_start_version().into(),
@@ -2237,7 +2247,7 @@ fn future_check_txn_status<E: Engine, L: LockManager>(
     let primary_key = Key::from_raw(req.get_primary_key());
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_check_txn_status(
+    let res = storage.check_txn_status(
         req.take_context(),
         primary_key,
         req.get_lock_ts().into(),
@@ -2283,7 +2293,7 @@ fn future_scan_lock<E: Engine, L: LockManager>(
     mut req: ScanLockRequest,
 ) -> impl Future<Item = ScanLockResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.async_scan_locks(
+    let res = storage.scan_locks(
         req.take_context(),
         req.get_max_version().into(),
         req.take_start_key(),
@@ -2332,9 +2342,9 @@ fn future_resolve_lock<E: Engine, L: LockManager>(
         let start_ts: TimeStamp = req.get_start_version().into();
         assert!(!start_ts.is_zero());
         let commit_ts = req.get_commit_version().into();
-        storage.async_resolve_lock_lite(req.take_context(), start_ts, commit_ts, resolve_keys, cb)
+        storage.resolve_lock_lite(req.take_context(), start_ts, commit_ts, resolve_keys, cb)
     } else {
-        storage.async_resolve_lock(req.take_context(), txn_status, cb)
+        storage.resolve_lock(req.take_context(), txn_status, cb)
     };
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
@@ -2353,7 +2363,7 @@ fn future_gc<E: Engine>(
     mut req: GcRequest,
 ) -> impl Future<Item = GcResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = gc_worker.async_gc(req.take_context(), req.get_safe_point().into(), cb);
+    let res = gc_worker.gc(req.take_context(), req.get_safe_point().into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = GcResponse::default();
@@ -2371,7 +2381,7 @@ fn future_delete_range<E: Engine, L: LockManager>(
     mut req: DeleteRangeRequest,
 ) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.async_delete_range(
+    let res = storage.delete_range(
         req.take_context(),
         Key::from_raw(req.get_start_key()),
         Key::from_raw(req.get_end_key()),
@@ -2395,7 +2405,7 @@ fn future_raw_get<E: Engine, L: LockManager>(
     mut req: RawGetRequest,
 ) -> impl Future<Item = RawGetResponse, Error = Error> {
     storage
-        .async_raw_get(req.take_context(), req.take_cf(), req.take_key())
+        .raw_get(req.take_context(), req.take_cf(), req.take_key())
         .then(|v| {
             let mut resp = RawGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
@@ -2420,54 +2430,52 @@ pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
 ) -> impl Future<Item = (), Error = ()> {
     let instant = Instant::now_coarse();
 
-    storage
-        .async_raw_batch_get_command(cf, commands)
-        .then(move |v| {
-            match v {
-                Ok(v) => {
-                    if requests.len() != v.len() {
-                        error!("KvService batch response size mismatch");
-                    }
-                    for (req, v) in requests.into_iter().zip(v.into_iter()) {
-                        let mut resp = RawGetResponse::default();
-                        if let Some(err) = extract_region_error(&v) {
-                            resp.set_region_error(err);
-                        } else {
-                            match v {
-                                Ok(Some(val)) => resp.set_value(val),
-                                Ok(None) => resp.set_not_found(true),
-                                Err(e) => resp.set_error(format!("{}", e)),
-                            }
-                        }
-                        let mut res = batch_commands_response::Response::default();
-                        res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                        if tx.send_and_notify((req, res)).is_err() {
-                            error!("KvService response batch commands fail");
-                        }
-                    }
+    storage.raw_batch_get_command(cf, commands).then(move |v| {
+        match v {
+            Ok(v) => {
+                if requests.len() != v.len() {
+                    error!("KvService batch response size mismatch");
                 }
-                e => {
+                for (req, v) in requests.into_iter().zip(v.into_iter()) {
                     let mut resp = RawGetResponse::default();
-                    if let Some(err) = extract_region_error(&e) {
+                    if let Some(err) = extract_region_error(&v) {
                         resp.set_region_error(err);
-                    } else if let Err(e) = e {
-                        resp.set_error(format!("{}", e));
+                    } else {
+                        match v {
+                            Ok(Some(val)) => resp.set_value(val),
+                            Ok(None) => resp.set_not_found(true),
+                            Err(e) => resp.set_error(format!("{}", e)),
+                        }
                     }
                     let mut res = batch_commands_response::Response::default();
                     res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                    for req in requests {
-                        if tx.send_and_notify((req, res.clone())).is_err() {
-                            error!("KvService response batch commands fail");
-                        }
+                    if tx.send_and_notify((req, res)).is_err() {
+                        error!("KvService response batch commands fail");
                     }
                 }
             }
-            GRPC_MSG_HISTOGRAM.may_flush(|m| {
+            e => {
+                let mut resp = RawGetResponse::default();
+                if let Some(err) = extract_region_error(&e) {
+                    resp.set_region_error(err);
+                } else if let Err(e) = e {
+                    resp.set_error(format!("{}", e));
+                }
+                let mut res = batch_commands_response::Response::default();
+                res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                for req in requests {
+                    if tx.send_and_notify((req, res.clone())).is_err() {
+                        error!("KvService response batch commands fail");
+                    }
+                }
+            }
+        }
+        GRPC_MSG_HISTOGRAM.may_flush(|m| {
                 m.raw_batch_get_command
                     .observe(duration_to_sec(instant.elapsed()));
             });
-            Ok(())
-        })
+        Ok(())
+    })
 }
 
 fn future_raw_batch_get<E: Engine, L: LockManager>(
@@ -2476,7 +2484,7 @@ fn future_raw_batch_get<E: Engine, L: LockManager>(
 ) -> impl Future<Item = RawBatchGetResponse, Error = Error> {
     let keys = req.take_keys().into();
     storage
-        .async_raw_batch_get(req.take_context(), req.take_cf(), keys)
+        .raw_batch_get(req.take_context(), req.take_cf(), keys)
         .then(|v| {
             let mut resp = RawBatchGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
@@ -2493,7 +2501,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
     mut req: RawPutRequest,
 ) -> impl Future<Item = RawPutResponse, Error = Error> {
     let (cb, future) = paired_future_callback();
-    let res = storage.async_raw_put(
+    let res = storage.raw_put(
         req.take_context(),
         req.take_cf(),
         req.take_key(),
@@ -2524,7 +2532,7 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
         .collect();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_raw_batch_put(req.take_context(), cf, pairs, cb);
+    let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = RawBatchPutResponse::default();
@@ -2542,7 +2550,7 @@ fn future_raw_delete<E: Engine, L: LockManager>(
     mut req: RawDeleteRequest,
 ) -> impl Future<Item = RawDeleteResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.async_raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
+    let res = storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = RawDeleteResponse::default();
@@ -2562,7 +2570,7 @@ fn future_raw_batch_delete<E: Engine, L: LockManager>(
     let cf = req.take_cf();
     let keys = req.take_keys().into();
     let (cb, f) = paired_future_callback();
-    let res = storage.async_raw_batch_delete(req.take_context(), cf, keys, cb);
+    let res = storage.raw_batch_delete(req.take_context(), cf, keys, cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = RawBatchDeleteResponse::default();
@@ -2585,7 +2593,7 @@ fn future_raw_scan<E: Engine, L: LockManager>(
         Some(req.take_end_key())
     };
     storage
-        .async_raw_scan(
+        .raw_scan(
             req.take_context(),
             req.take_cf(),
             req.take_start_key(),
@@ -2610,7 +2618,7 @@ fn future_raw_batch_scan<E: Engine, L: LockManager>(
     mut req: RawBatchScanRequest,
 ) -> impl Future<Item = RawBatchScanResponse, Error = Error> {
     storage
-        .async_raw_batch_scan(
+        .raw_batch_scan(
             req.take_context(),
             req.take_cf(),
             req.take_ranges().into(),
@@ -2634,7 +2642,7 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
     mut req: RawDeleteRangeRequest,
 ) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.async_raw_delete_range(
+    let res = storage.raw_delete_range(
         req.take_context(),
         req.take_cf(),
         req.take_start_key(),

@@ -269,7 +269,7 @@ clippy: pre-clippy
 		-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
 		-A clippy::needless_range_loop -A clippy::redundant_closure \
 		-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
-		-A clippy::identity_conversion
+		-A clippy::identity_conversion -A clippy::new_ret_no_self
 
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
