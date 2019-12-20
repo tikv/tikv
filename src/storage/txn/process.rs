@@ -13,13 +13,20 @@ use crate::storage::kv::{
     with_tls_engine, CbContext, Engine, Modify, Result as EngineResult, ScanMode, Snapshot,
     Statistics,
 };
-use crate::storage::lock_manager::{self, Lock, LockManager};
+use crate::storage::lock_manager::{self, Lock, LockManager, WaitTimeout};
 use crate::storage::mvcc::{
     has_data_in_range, Error as MvccError, ErrorInner as MvccErrorInner, Lock as MvccLock,
     MvccReader, MvccTxn, TimeStamp, Write, MAX_TXN_WRITE_SIZE,
 };
 use crate::storage::txn::{
-    sched_pool::*, scheduler::Msg, Command, CommandKind, Error, ErrorInner, ProcessResult, Result,
+    commands::{
+        AcquirePessimisticLock, CheckTxnStatus, Cleanup, Command, CommandKind, Commit, MvccByKey,
+        MvccByStartTs, Pause, PessimisticRollback, Prewrite, PrewritePessimistic, ResolveLock,
+        ResolveLockLite, Rollback, ScanLock, TxnHeartBeat,
+    },
+    sched_pool::*,
+    scheduler::Msg,
+    Error, ErrorInner, ProcessResult, Result,
 };
 use crate::storage::{
     metrics::{self, KV_COMMAND_KEYWRITE_HISTOGRAM_VEC, SCHED_STAGE_COUNTER_VEC},
@@ -304,7 +311,7 @@ fn process_read_impl<E: Engine>(
 ) -> Result<ProcessResult> {
     let tag = cmd.tag();
     match cmd.kind {
-        CommandKind::MvccByKey { ref key } => {
+        CommandKind::MvccByKey(MvccByKey { ref key }) => {
             let mut reader = MvccReader::new(
                 snapshot,
                 Some(ScanMode::Forward),
@@ -322,7 +329,7 @@ fn process_read_impl<E: Engine>(
                 },
             })
         }
-        CommandKind::MvccByStartTs { start_ts } => {
+        CommandKind::MvccByStartTs(MvccByStartTs { start_ts }) => {
             let mut reader = MvccReader::new(
                 snapshot,
                 Some(ScanMode::Forward),
@@ -349,12 +356,12 @@ fn process_read_impl<E: Engine>(
             }
         }
         // Scans locks with timestamp <= `max_ts`
-        CommandKind::ScanLock {
+        CommandKind::ScanLock(ScanLock {
             max_ts,
             ref start_key,
             limit,
             ..
-        } => {
+        }) => {
             let mut reader = MvccReader::new(
                 snapshot,
                 Some(ScanMode::Forward),
@@ -379,11 +386,11 @@ fn process_read_impl<E: Engine>(
 
             Ok(ProcessResult::Locks { locks })
         }
-        CommandKind::ResolveLock {
+        CommandKind::ResolveLock(ResolveLock {
             ref mut txn_status,
             ref scan_key,
             ..
-        } => {
+        }) => {
             let mut reader = MvccReader::new(
                 snapshot,
                 Some(ScanMode::Forward),
@@ -410,14 +417,12 @@ fn process_read_impl<E: Engine>(
                     None
                 };
                 Ok(ProcessResult::NextCommand {
-                    cmd: Command {
-                        ctx: cmd.ctx.clone(),
-                        kind: CommandKind::ResolveLock {
-                            txn_status: mem::replace(txn_status, Default::default()),
-                            scan_key: next_scan_key,
-                            key_locks: kv_pairs,
-                        },
-                    },
+                    cmd: ResolveLock::new(
+                        mem::replace(txn_status, Default::default()),
+                        next_scan_key,
+                        kv_pairs,
+                        cmd.ctx.clone(),
+                    ),
                 })
             }
         }
@@ -471,7 +476,7 @@ struct WriteResult {
     rows: usize,
     pr: ProcessResult,
     // (lock, is_first_lock, wait_timeout)
-    lock_info: Option<(lock_manager::Lock, bool, i64)>,
+    lock_info: Option<(lock_manager::Lock, bool, Option<WaitTimeout>)>,
 }
 
 fn process_write_impl<S: Snapshot, L: LockManager>(
@@ -481,16 +486,18 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
     statistics: &mut Statistics,
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd.kind {
-        CommandKind::Prewrite {
+        CommandKind::Prewrite(Prewrite {
             mut mutations,
             primary,
             start_ts,
-            mut options,
-            ..
-        } => {
+            lock_ttl,
+            mut skip_constraint_check,
+            txn_size,
+            min_commit_ts,
+        }) => {
             let mut scan_mode = None;
             let rows = mutations.len();
-            if options.for_update_ts.is_zero() && rows > FORWARD_MIN_MUTATIONS_NUM {
+            if rows > FORWARD_MIN_MUTATIONS_NUM {
                 mutations.sort_by(|a, b| a.key().cmp(b.key()));
                 let left_key = mutations.first().unwrap().key();
                 let right_key = mutations
@@ -509,43 +516,31 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                     // If there is no data in range, we could skip constraint check, and use Forward seek for CF_LOCK.
                     // Because in most instances, there won't be more than one transaction write the same key. Seek
                     // operation could skip nonexistent key in CF_LOCK.
-                    options.skip_constraint_check = true;
+                    skip_constraint_check = true;
                     scan_mode = Some(ScanMode::Forward)
                 }
             }
-            let mut locks = vec![];
             let mut txn = if scan_mode.is_some() {
                 MvccTxn::for_scan(snapshot, scan_mode, start_ts, !cmd.ctx.get_not_fill_cache())
             } else {
                 MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache())
             };
 
-            // If `options.for_update_ts` is 0, the transaction is optimistic
-            // or else pessimistic.
-            if options.for_update_ts.is_zero() {
-                for m in mutations {
-                    match txn.prewrite(m, &primary, &options) {
-                        Ok(_) => {}
-                        e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                            locks.push(e.map_err(Error::from).map_err(StorageError::from));
-                        }
-                        Err(e) => return Err(Error::from(e)),
+            let mut locks = vec![];
+            for m in mutations {
+                match txn.prewrite(
+                    m,
+                    &primary,
+                    skip_constraint_check,
+                    lock_ttl,
+                    txn_size,
+                    min_commit_ts,
+                ) {
+                    Ok(_) => {}
+                    e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
+                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
                     }
-                }
-            } else {
-                for (i, m) in mutations.into_iter().enumerate() {
-                    match txn.pessimistic_prewrite(
-                        m,
-                        &primary,
-                        options.is_pessimistic_lock[i],
-                        &options,
-                    ) {
-                        Ok(_) => {}
-                        e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
-                            locks.push(e.map_err(Error::from).map_err(StorageError::from));
-                        }
-                        Err(e) => return Err(Error::from(e)),
-                    }
+                    Err(e) => return Err(Error::from(e)),
                 }
             }
 
@@ -560,18 +555,69 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 (pr, vec![], 0, cmd.ctx, None)
             }
         }
-        CommandKind::AcquirePessimisticLock {
+        CommandKind::PrewritePessimistic(PrewritePessimistic {
+            mutations,
+            primary,
+            start_ts,
+            lock_ttl,
+            for_update_ts,
+            txn_size,
+            min_commit_ts,
+        }) => {
+            let rows = mutations.len();
+            let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
+
+            let mut locks = vec![];
+            for (m, is_pessimistic_lock) in mutations.into_iter() {
+                match txn.pessimistic_prewrite(
+                    m,
+                    &primary,
+                    is_pessimistic_lock,
+                    lock_ttl,
+                    for_update_ts,
+                    txn_size,
+                    min_commit_ts,
+                ) {
+                    Ok(_) => {}
+                    e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
+                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                    }
+                    Err(e) => return Err(Error::from(e)),
+                }
+            }
+
+            statistics.add(&txn.take_statistics());
+            if locks.is_empty() {
+                let pr = ProcessResult::MultiRes { results: vec![] };
+                let modifies = txn.into_modifies();
+                (pr, modifies, rows, cmd.ctx, None)
+            } else {
+                // Skip write stage if some keys are locked.
+                let pr = ProcessResult::MultiRes { results: locks };
+                (pr, vec![], 0, cmd.ctx, None)
+            }
+        }
+        CommandKind::AcquirePessimisticLock(AcquirePessimisticLock {
             keys,
             primary,
             start_ts,
-            options,
+            lock_ttl,
+            is_first_lock,
+            for_update_ts,
+            wait_timeout,
             ..
-        } => {
+        }) => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
             let mut locks = vec![];
             let rows = keys.len();
             for (k, should_not_exist) in keys {
-                match txn.acquire_pessimistic_lock(k, &primary, should_not_exist, &options) {
+                match txn.acquire_pessimistic_lock(
+                    k,
+                    &primary,
+                    should_not_exist,
+                    lock_ttl,
+                    for_update_ts,
+                ) {
                     Ok(_) => {}
                     e @ Err(MvccError(box MvccErrorInner::KeyIsLocked { .. })) => {
                         locks.push(e.map_err(Error::from).map_err(StorageError::from));
@@ -590,17 +636,17 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             } else {
                 let lock = extract_lock_from_result(&locks[0]);
                 let pr = ProcessResult::MultiRes { results: locks };
-                let lock_info = Some((lock, options.is_first_lock, options.wait_timeout));
+                let lock_info = Some((lock, is_first_lock, wait_timeout));
                 // Wait for lock released
                 (pr, vec![], 0, cmd.ctx, lock_info)
             }
         }
-        CommandKind::Commit {
+        CommandKind::Commit(Commit {
             keys,
             lock_ts,
             commit_ts,
             ..
-        } => {
+        }) => {
             if commit_ts <= lock_ts {
                 return Err(Error::from(ErrorInner::InvalidTxnTso {
                     start_ts: lock_ts,
@@ -630,12 +676,12 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             };
             (pr, txn.into_modifies(), rows, cmd.ctx, None)
         }
-        CommandKind::Cleanup {
+        CommandKind::Cleanup(Cleanup {
             key,
             start_ts,
             current_ts,
             ..
-        } => {
+        }) => {
             let mut keys = vec![key];
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
@@ -652,7 +698,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), 1, cmd.ctx, None)
         }
-        CommandKind::Rollback { keys, start_ts, .. } => {
+        CommandKind::Rollback(Rollback { keys, start_ts, .. }) => {
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
             let mut txn = MvccTxn::new(snapshot, start_ts, !cmd.ctx.get_not_fill_cache());
@@ -672,11 +718,11 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, cmd.ctx, None)
         }
-        CommandKind::PessimisticRollback {
+        CommandKind::PessimisticRollback(PessimisticRollback {
             keys,
             start_ts,
             for_update_ts,
-        } => {
+        }) => {
             assert!(lock_mgr.is_some());
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &keys);
 
@@ -696,11 +742,11 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 None,
             )
         }
-        CommandKind::ResolveLock {
+        CommandKind::ResolveLock(ResolveLock {
             txn_status,
             mut scan_key,
             key_locks,
-        } => {
+        }) => {
             // Map (txn's start_ts, is_pessimistic_txn) => Option<key_hashes>
             let (mut txn_to_keys, has_waiter) = if let Some(lm) = lock_mgr.as_ref() {
                 (Some(HashMap::default()), lm.has_waiter())
@@ -779,24 +825,17 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
                 ProcessResult::Res
             } else {
                 ProcessResult::NextCommand {
-                    cmd: Command {
-                        ctx: cmd.ctx.clone(),
-                        kind: CommandKind::ResolveLock {
-                            txn_status,
-                            scan_key: scan_key.take(),
-                            key_locks: vec![],
-                        },
-                    },
+                    cmd: ResolveLock::new(txn_status, scan_key.take(), vec![], cmd.ctx.clone()),
                 }
             };
 
             (pr, modifies, rows, cmd.ctx, None)
         }
-        CommandKind::ResolveLockLite {
+        CommandKind::ResolveLockLite(ResolveLockLite {
             start_ts,
             commit_ts,
             resolve_keys,
-        } => {
+        }) => {
             let key_hashes = gen_key_hashes_if_needed(&lock_mgr, &resolve_keys);
 
             let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !cmd.ctx.get_not_fill_cache());
@@ -822,11 +861,11 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, cmd.ctx, None)
         }
-        CommandKind::TxnHeartBeat {
+        CommandKind::TxnHeartBeat(TxnHeartBeat {
             primary_key,
             start_ts,
             advise_ttl,
-        } => {
+        }) => {
             // TxnHeartBeat never remove locks. No need to wake up waiters.
             let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !cmd.ctx.get_not_fill_cache());
             let lock_ttl = txn.txn_heart_beat(primary_key, advise_ttl)?;
@@ -837,13 +876,13 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             };
             (pr, txn.into_modifies(), 1, cmd.ctx, None)
         }
-        CommandKind::CheckTxnStatus {
+        CommandKind::CheckTxnStatus(CheckTxnStatus {
             primary_key,
             lock_ts,
             caller_start_ts,
             current_ts,
             rollback_if_not_exist,
-        } => {
+        }) => {
             let mut txn = MvccTxn::new(snapshot.clone(), lock_ts, !cmd.ctx.get_not_fill_cache());
             let (txn_status, is_pessimistic_txn) = txn.check_txn_status(
                 primary_key.clone(),
@@ -874,7 +913,7 @@ fn process_write_impl<S: Snapshot, L: LockManager>(
             let pr = ProcessResult::TxnStatus { txn_status };
             (pr, txn.into_modifies(), 1, cmd.ctx, None)
         }
-        CommandKind::Pause { duration, .. } => {
+        CommandKind::Pause(Pause { duration, .. }) => {
             thread::sleep(Duration::from_millis(duration));
             (ProcessResult::Res, vec![], 0, cmd.ctx, None)
         }
@@ -928,7 +967,7 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
 mod tests {
     use super::*;
     use crate::storage::kv::{Snapshot, TestEngineBuilder};
-    use crate::storage::{DummyLockManager, Mutation, Options};
+    use crate::storage::{mvcc::Mutation, DummyLockManager};
 
     #[test]
     fn test_extract_lock_from_result() {
@@ -1069,15 +1108,16 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let cmd = Command {
+        let cmd = Prewrite::new(
+            mutations,
+            primary,
+            TimeStamp::from(start_ts),
+            0,
+            false,
+            0,
+            TimeStamp::default(),
             ctx,
-            kind: CommandKind::Prewrite {
-                mutations,
-                primary,
-                start_ts: TimeStamp::from(start_ts),
-                options: Options::default(),
-            },
-        };
+        );
         let m = DummyLockManager {};
         let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
         if let ProcessResult::MultiRes { results } = ret.pr {
@@ -1102,14 +1142,12 @@ mod tests {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(&ctx)?;
-        let cmd = Command {
+        let cmd = Commit::new(
+            keys,
+            TimeStamp::from(lock_ts),
+            TimeStamp::from(commit_ts),
             ctx,
-            kind: CommandKind::Commit {
-                keys,
-                lock_ts: TimeStamp::from(lock_ts),
-                commit_ts: TimeStamp::from(commit_ts),
-            },
-        };
+        );
         let m = DummyLockManager {};
         let ret = process_write_impl(cmd, snap, Some(m), statistics)?;
         let ctx = Context::default();

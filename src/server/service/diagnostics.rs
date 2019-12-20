@@ -9,7 +9,7 @@ use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
     ServerInfoType,
 };
-use tokio_timer::Delay;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::server::{Error, Result};
 
@@ -59,18 +59,24 @@ impl Diagnostics for Service {
         req: ServerInfoRequest,
         sink: UnarySink<ServerInfoResponse>,
     ) {
-        let (load, when) = match req.get_tp() {
-            ServerInfoType::LoadInfo | ServerInfoType::All => {
-                let load = (sysinfo::NICLoad::snapshot(), sysinfo::IOLoad::snapshot());
-                let when = Instant::now() + Duration::from_millis(500);
-                (Some(load), when)
-            }
-            _ => (None, Instant::now()),
-        };
-
-        let collect = Delay::new(when)
-            .and_then(move |_| Ok(load))
-            .map_err(|e| box_err!("Unexpected delay error: {:?}", e))
+        let tp = req.get_tp();
+        let collect = self
+            .pool
+            .spawn_fn(move || {
+                let s = match tp {
+                    ServerInfoType::LoadInfo | ServerInfoType::All => {
+                        let load = (sysinfo::NICLoad::snapshot(), sysinfo::IOLoad::snapshot());
+                        let when = Instant::now() + Duration::from_millis(100);
+                        (Some(load), when)
+                    }
+                    _ => (None, Instant::now()),
+                };
+                Ok(s)
+            })
+            .and_then(|(load, when)| {
+                let timer = GLOBAL_TIMER_HANDLE.clone();
+                timer.delay(when).then(|_| Ok(load))
+            })
             .and_then(move |load| -> Result<ServerInfoResponse> {
                 let mut server_infos = Vec::new();
                 match req.get_tp() {

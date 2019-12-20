@@ -1,6 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::BTreeMap;
 use std::iter::{self, FromIterator};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,19 +11,19 @@ use crate::raftstore::store::{Callback, CasualMessage};
 use crate::server::gc_worker::GcWorker;
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
+use crate::server::service::batch::ReqBatcher;
 use crate::server::snap::Task as SnapTask;
 use crate::server::Error;
-use crate::storage::kv::{Error as EngineError, ErrorInner as EngineErrorInner};
-use crate::storage::lock_manager::LockManager;
-use crate::storage::mvcc::{
-    Error as MvccError, ErrorInner as MvccErrorInner, LockType, TimeStamp, Write as MvccWrite,
-    WriteType,
+use crate::storage::{
+    errors::{
+        extract_committed, extract_key_error, extract_key_errors, extract_kv_pairs,
+        extract_region_error,
+    },
+    kv::Engine,
+    lock_manager::{LockManager, WaitTimeout},
+    txn::PointGetCommand,
+    Storage, TxnStatus,
 };
-use crate::storage::txn::{
-    Error as TxnError, ErrorInner as TxnErrorInner, Options, PointGetCommand,
-};
-use crate::storage::{self, Engine, Storage, TxnStatus};
-use crate::storage::{Error as StorageError, ErrorInner as StorageErrorInner};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
@@ -32,425 +31,21 @@ use grpcio::{
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::coprocessor::*;
-use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use kvproto::kvrpcpb::{self, *};
+use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
 use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
-use tikv_util::metrics::HistogramReader;
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Scheduler;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
-use txn_types::{self, Key, Mutation, Value};
-
-const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
-const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
+use txn_types::{self, Key, TimeStamp};
 
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
-
-const REQUEST_BATCH_LIMITER_SAMPLE_WINDOW: usize = 30;
-const REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO: f32 = 0.3;
-
-#[derive(Hash, PartialEq, Eq, Debug)]
-struct RegionVerId {
-    region_id: u64,
-    conf_ver: u64,
-    version: u64,
-    term: u64,
-}
-
-impl RegionVerId {
-    #[inline]
-    fn from_context(ctx: &Context) -> Self {
-        RegionVerId {
-            region_id: ctx.get_region_id(),
-            conf_ver: ctx.get_region_epoch().get_conf_ver(),
-            version: ctx.get_region_epoch().get_version(),
-            term: ctx.get_term(),
-        }
-    }
-}
-
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord)]
-enum BatchableRequestKind {
-    PointGet,
-    Prewrite,
-    Commit,
-}
-
-impl BatchableRequestKind {
-    fn as_str(&self) -> &str {
-        match self {
-            BatchableRequestKind::PointGet => &"point_get",
-            BatchableRequestKind::Prewrite => &"prewrite",
-            BatchableRequestKind::Commit => &"commit",
-        }
-    }
-}
-
-/// BatchLimiter controls submit timing of request batch.
-struct BatchLimiter {
-    cmd: BatchableRequestKind,
-    timeout: Option<Duration>,
-    last_submit_time: Instant,
-    latency_reader: HistogramReader,
-    latency_estimation: f64,
-    thread_load_reader: Arc<ThreadLoad>,
-    thread_load_estimation: usize,
-    sample_size: usize,
-    enable_batch: bool,
-    batch_input: usize,
-}
-
-impl BatchLimiter {
-    /// Construct a new `BatchLimiter` with provided timeout-duration,
-    /// and reader on latency and thread-load.
-    fn new(
-        cmd: BatchableRequestKind,
-        timeout: Option<Duration>,
-        latency_reader: HistogramReader,
-        thread_load_reader: Arc<ThreadLoad>,
-    ) -> Self {
-        BatchLimiter {
-            cmd,
-            timeout,
-            last_submit_time: Instant::now(),
-            latency_reader,
-            latency_estimation: 0.0,
-            thread_load_reader,
-            thread_load_estimation: 100,
-            sample_size: 0,
-            enable_batch: false,
-            batch_input: 0,
-        }
-    }
-
-    /// Whether this batch limiter is disabled.
-    #[inline]
-    fn disabled(&self) -> bool {
-        self.timeout.is_none()
-    }
-
-    /// Whether the batch is timely due to be submitted.
-    #[inline]
-    fn is_due(&self, now: Instant) -> bool {
-        if let Some(timeout) = self.timeout {
-            now - self.last_submit_time >= timeout
-        } else {
-            true
-        }
-    }
-
-    /// Whether current batch needs more requests.
-    #[inline]
-    fn needs_more(&self) -> bool {
-        self.enable_batch
-    }
-
-    /// Observe a tick from timer guard. Limiter will update statistics at this point.
-    #[inline]
-    fn observe_tick(&mut self) {
-        if self.disabled() {
-            return;
-        }
-        self.sample_size += 1;
-        if self.enable_batch {
-            // check if thread load is too low, which means busy hour has passed.
-            if self.thread_load_reader.load()
-                < (self.thread_load_estimation as f32 * REQUEST_BATCH_LIMITER_LOW_LOAD_RATIO)
-                    as usize
-            {
-                self.enable_batch = false;
-            }
-        } else if self.sample_size > REQUEST_BATCH_LIMITER_SAMPLE_WINDOW {
-            self.sample_size = 0;
-            let latency = self.latency_reader.read_latest_avg() * 1000.0;
-            let load = self.thread_load_reader.load();
-            self.latency_estimation = (self.latency_estimation + latency) / 2.0;
-            if load > 70 {
-                // thread load is less sensitive to workload,
-                // a small barrier here to make sure we have good samples of thread load.
-                let timeout = self.timeout.unwrap();
-                if latency > timeout.as_millis() as f64 * 2.0 {
-                    self.thread_load_estimation = (self.thread_load_estimation + load) / 2;
-                }
-                if self.latency_estimation > timeout.as_millis() as f64 * 2.0 {
-                    self.enable_batch = true;
-                    self.latency_estimation = 0.0;
-                }
-            }
-        }
-    }
-
-    /// Observe the size of commands been examined by batcher.
-    /// Command may not be batched but must have the valid type for this batch.
-    #[inline]
-    fn observe_input(&mut self, size: usize) {
-        self.batch_input += size;
-    }
-
-    /// Observe the time and output size of one batch submit.
-    #[inline]
-    fn observe_submit(&mut self, now: Instant, size: usize) {
-        self.last_submit_time = now;
-        if self.enable_batch {
-            REQUEST_BATCH_SIZE_HISTOGRAM_VEC
-                .with_label_values(&[self.cmd.as_str()])
-                .observe(self.batch_input as f64);
-            if size > 0 {
-                REQUEST_BATCH_RATIO_HISTOGRAM_VEC
-                    .with_label_values(&[self.cmd.as_str()])
-                    .observe(self.batch_input as f64 / size as f64);
-            }
-        }
-        self.batch_input = 0;
-    }
-}
-
-/// Batcher buffers specific requests in one stream of `batch_commands` in a batch for bulk submit.
-trait Batcher<E: Engine, L: LockManager> {
-    /// Try to batch single batch_command request, returns whether the request is stashed.
-    /// One batcher must only process requests from one unique command stream.
-    fn filter(
-        &mut self,
-        request_id: u64,
-        request: &mut batch_commands_request::request::Cmd,
-    ) -> bool;
-
-    /// Submit all batched requests to store. `is_empty` always returns true after this operation.
-    /// Returns number of fused commands been submitted.
-    fn submit(
-        &mut self,
-        tx: &Sender<(u64, batch_commands_response::Response)>,
-        storage: &Storage<E, L>,
-    ) -> usize;
-
-    /// Whether this batcher is empty of buffered requests.
-    fn is_empty(&self) -> bool;
-}
-
-#[derive(Hash, PartialEq, Eq, Debug)]
-struct ReadId {
-    region: RegionVerId,
-    // None in this field stands for transactional read.
-    cf: Option<String>,
-}
-
-impl ReadId {
-    #[inline]
-    fn from_context_cf(ctx: &Context, cf: Option<String>) -> Self {
-        ReadId {
-            region: RegionVerId::from_context(ctx),
-            cf,
-        }
-    }
-}
-
-/// ReadBatcher batches normal-priority `raw_get` and `get` requests to the same region.
-struct ReadBatcher {
-    router: HashMap<ReadId, (Vec<u64>, Vec<PointGetCommand>)>,
-}
-
-impl ReadBatcher {
-    fn new() -> Self {
-        ReadBatcher {
-            router: HashMap::default(),
-        }
-    }
-
-    fn is_batchable_context(ctx: &Context) -> bool {
-        ctx.get_priority() == CommandPri::Normal && !ctx.get_replica_read()
-    }
-
-    fn add_get(&mut self, request_id: u64, request: &mut GetRequest) {
-        let id = ReadId::from_context_cf(request.get_context(), None);
-        let command = PointGetCommand::from_get(request);
-        match self.router.get_mut(&id) {
-            Some((reqs, commands)) => {
-                reqs.push(request_id);
-                commands.push(command);
-            }
-            None => {
-                self.router.insert(id, (vec![request_id], vec![command]));
-            }
-        }
-    }
-
-    fn add_raw_get(&mut self, request_id: u64, request: &mut RawGetRequest) {
-        let cf = Some(request.take_cf());
-        let id = ReadId::from_context_cf(request.get_context(), cf);
-        let command = PointGetCommand::from_raw_get(request);
-        match self.router.get_mut(&id) {
-            Some((reqs, commands)) => {
-                reqs.push(request_id);
-                commands.push(command);
-            }
-            None => {
-                self.router.insert(id, (vec![request_id], vec![command]));
-            }
-        }
-    }
-}
-
-impl<E: Engine, L: LockManager> Batcher<E, L> for ReadBatcher {
-    fn filter(
-        &mut self,
-        request_id: u64,
-        request: &mut batch_commands_request::request::Cmd,
-    ) -> bool {
-        match request {
-            batch_commands_request::request::Cmd::Get(req)
-                if Self::is_batchable_context(req.get_context()) =>
-            {
-                self.add_get(request_id, req);
-                true
-            }
-            batch_commands_request::request::Cmd::RawGet(req)
-                if Self::is_batchable_context(req.get_context()) =>
-            {
-                self.add_raw_get(request_id, req);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn submit(
-        &mut self,
-        tx: &Sender<(u64, batch_commands_response::Response)>,
-        storage: &Storage<E, L>,
-    ) -> usize {
-        let mut output = 0;
-        for (id, (reqs, commands)) in self.router.drain() {
-            let tx = tx.clone();
-            output += 1;
-            match id.cf {
-                Some(cf) => {
-                    let f = future_raw_batch_get_command(storage, tx, reqs, cf, commands);
-                    poll_future_notify(f);
-                }
-                None => {
-                    let f = future_batch_get_command(storage, tx, reqs, commands);
-                    poll_future_notify(f);
-                }
-            }
-        }
-        output
-    }
-
-    fn is_empty(&self) -> bool {
-        self.router.is_empty()
-    }
-}
-
-type ReqBatcherInner<E, L> = (BatchLimiter, Box<dyn Batcher<E, L> + Send>);
-
-/// ReqBatcher manages multiple `Batcher`s which batch requests from one unique stream of `batch_commands`
-// and controls the submit timing of those batchers based on respective `BatchLimiter`.
-struct ReqBatcher<E: Engine, L: LockManager> {
-    inners: BTreeMap<BatchableRequestKind, ReqBatcherInner<E, L>>,
-    tx: Sender<(u64, batch_commands_response::Response)>,
-}
-
-impl<E: Engine, L: LockManager> ReqBatcher<E, L> {
-    /// Constructs a new `ReqBatcher` which provides batching of one request stream with specific response channel.
-    pub fn new(
-        tx: Sender<(u64, batch_commands_response::Response)>,
-        timeout: Option<Duration>,
-        readpool_thread_load: Arc<ThreadLoad>,
-    ) -> Self {
-        let mut inners = BTreeMap::<BatchableRequestKind, ReqBatcherInner<E, L>>::default();
-        inners.insert(
-            BatchableRequestKind::PointGet,
-            (
-                BatchLimiter::new(
-                    BatchableRequestKind::PointGet,
-                    timeout,
-                    HistogramReader::new(GRPC_MSG_HISTOGRAM_VEC.kv_get.clone()),
-                    readpool_thread_load,
-                ),
-                Box::new(ReadBatcher::new()),
-            ),
-        );
-        ReqBatcher { inners, tx }
-    }
-
-    /// Try to batch single batch_command request, returns whether the request is stashed.
-    /// One batcher can only accept requests from one unique command stream.
-    pub fn filter(
-        &mut self,
-        request_id: u64,
-        request: &mut batch_commands_request::Request,
-    ) -> bool {
-        if let Some(ref mut cmd) = request.cmd {
-            if let Some((limiter, batcher)) = match cmd {
-                batch_commands_request::request::Cmd::Prewrite(_) => {
-                    self.inners.get_mut(&BatchableRequestKind::Prewrite)
-                }
-                batch_commands_request::request::Cmd::Commit(_) => {
-                    self.inners.get_mut(&BatchableRequestKind::Commit)
-                }
-                batch_commands_request::request::Cmd::Get(_)
-                | batch_commands_request::request::Cmd::RawGet(_) => {
-                    self.inners.get_mut(&BatchableRequestKind::PointGet)
-                }
-                _ => None,
-            } {
-                // in normal mode, batch requests inside one `batch_commands`.
-                // in cross-command mode, only batch request when limiter permits.
-                if limiter.disabled() || limiter.needs_more() {
-                    limiter.observe_input(1);
-                    return batcher.filter(request_id, cmd);
-                }
-            }
-        }
-        false
-    }
-
-    /// Check all batchers and submit if their limiters see fit.
-    /// Called by anyone with a suitable timeslice for executing commands.
-    #[inline]
-    pub fn maybe_submit(&mut self, storage: &Storage<E, L>) {
-        let mut now = None;
-        for (limiter, batcher) in self.inners.values_mut() {
-            if limiter.disabled() || !limiter.needs_more() {
-                if now.is_none() {
-                    now = Some(Instant::now());
-                }
-                limiter.observe_submit(now.unwrap(), batcher.submit(&self.tx, storage));
-            }
-        }
-    }
-
-    /// Check all batchers and submit if their wait duration has exceeded the max limit.
-    /// Called repeatedly every `request-batch-wait-duration` interval after the batcher starts working.
-    #[inline]
-    pub fn should_submit(&mut self, storage: &Storage<E, L>) {
-        let now = Instant::now();
-        for (limiter, batcher) in self.inners.values_mut() {
-            limiter.observe_tick();
-            if limiter.is_due(now) {
-                limiter.observe_submit(now, batcher.submit(&self.tx, storage));
-            }
-        }
-    }
-
-    /// Whether or not every batcher is empty of buffered requests.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        for (_, batcher) in self.inners.values() {
-            if !batcher.is_empty() {
-                return false;
-            }
-        }
-        true
-    }
-}
 
 /// Service handles the RPC messages for the `Tikv` service.
 #[derive(Clone)]
@@ -1049,7 +644,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         assert!(!req.get_end_key().is_empty());
 
         let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.async_unsafe_destroy_range(
+        let res = self.gc_worker.unsafe_destroy_range(
             req.take_context(),
             Key::from_raw(&req.take_start_key()),
             Key::from_raw(&req.take_end_key()),
@@ -1224,7 +819,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         let (cb, f) = paired_future_callback();
         let res = self
             .storage
-            .async_mvcc_by_key(req.take_context(), key.clone(), cb);
+            .mvcc_by_key(req.take_context(), key.clone(), cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
@@ -1234,7 +829,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                 } else {
                     match v {
                         Ok(mvcc) => {
-                            resp.set_info(extract_mvcc_info(mvcc));
+                            resp.set_info(mvcc.into_proto());
                         }
                         Err(e) => resp.set_error(format!("{}", e)),
                     };
@@ -1264,9 +859,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .start_coarse_timer();
 
         let (cb, f) = paired_future_callback();
-        let res =
-            self.storage
-                .async_mvcc_by_start_ts(req.take_context(), req.get_start_ts().into(), cb);
+        let res = self
+            .storage
+            .mvcc_by_start_ts(req.take_context(), req.get_start_ts().into(), cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
@@ -1277,7 +872,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     match v {
                         Ok(Some((k, vv))) => {
                             resp.set_key(k.into_raw().unwrap());
-                            resp.set_info(extract_mvcc_info(vv));
+                            resp.set_info(vv.into_proto());
                         }
                         Ok(None) => {
                             resp.set_info(Default::default());
@@ -1605,7 +1200,7 @@ where
     }
 }
 
-fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
+pub fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
     let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
     let notify = BatchCommandsNotify(spawn);
     notify.notify(0);
@@ -1864,7 +1459,7 @@ fn future_get<E: Engine, L: LockManager>(
     mut req: GetRequest,
 ) -> impl Future<Item = GetResponse, Error = Error> {
     storage
-        .async_get(
+        .get(
             req.take_context(),
             Key::from_raw(req.get_key()),
             req.get_version().into(),
@@ -1884,7 +1479,7 @@ fn future_get<E: Engine, L: LockManager>(
         })
 }
 
-fn future_batch_get_command<E: Engine, L: LockManager>(
+pub fn future_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
     requests: Vec<u64>,
@@ -1893,7 +1488,7 @@ fn future_batch_get_command<E: Engine, L: LockManager>(
     let timer = GRPC_MSG_HISTOGRAM_VEC
         .kv_batch_get_command
         .start_coarse_timer();
-    storage.async_batch_get_command(commands).then(move |v| {
+    storage.batch_get_command(commands).then(move |v| {
         match v {
             Ok(v) => {
                 if requests.len() != v.len() {
@@ -1948,18 +1543,15 @@ fn future_scan<E: Engine, L: LockManager>(
         Some(Key::from_raw(req.get_end_key()))
     };
 
-    let mut options = Options::default();
-    options.key_only = req.get_key_only();
-    options.reverse_scan = req.get_reverse();
-
     storage
-        .async_scan(
+        .scan(
             req.take_context(),
             Key::from_raw(req.get_start_key()),
             end_key,
             req.get_limit() as usize,
             req.get_version().into(),
-            options,
+            req.get_key_only(),
+            req.get_reverse(),
         )
         .then(|v| {
             let mut resp = ScanResponse::default();
@@ -1976,34 +1568,40 @@ fn future_prewrite<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     mut req: PrewriteRequest,
 ) -> impl Future<Item = PrewriteResponse, Error = Error> {
-    let mutations = req
-        .take_mutations()
-        .into_iter()
-        .map(|mut x| match x.get_op() {
-            Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
-            Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
-            Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
-            Op::Insert => Mutation::Insert((Key::from_raw(x.get_key()), x.take_value())),
-            _ => panic!("mismatch Op in prewrite mutations"),
-        })
-        .collect();
-    let mut options = Options::default();
-    options.lock_ttl = req.get_lock_ttl();
-    options.skip_constraint_check = req.get_skip_constraint_check();
-    options.for_update_ts = req.get_for_update_ts().into();
-    options.is_pessimistic_lock = req.take_is_pessimistic_lock();
-    options.txn_size = req.get_txn_size();
-    options.min_commit_ts = req.get_min_commit_ts().into();
-
+    let for_update_ts = req.get_for_update_ts();
     let (cb, f) = paired_future_callback();
-    let res = storage.async_prewrite(
-        req.take_context(),
-        mutations,
-        req.take_primary_lock(),
-        req.get_start_version().into(),
-        options,
-        cb,
-    );
+    let res = if for_update_ts == 0 {
+        storage.prewrite(
+            req.take_context(),
+            req.take_mutations().into_iter().map(Into::into).collect(),
+            req.take_primary_lock(),
+            req.get_start_version().into(),
+            req.get_lock_ttl(),
+            req.get_skip_constraint_check(),
+            req.get_txn_size(),
+            req.get_min_commit_ts().into(),
+            cb,
+        )
+    } else {
+        let is_pessimistic_lock = req.take_is_pessimistic_lock();
+        let mutations = req
+            .take_mutations()
+            .into_iter()
+            .map(Into::into)
+            .zip(is_pessimistic_lock.into_iter())
+            .collect();
+        storage.prewrite_pessimistic(
+            req.take_context(),
+            mutations,
+            req.take_primary_lock(),
+            req.get_start_version().into(),
+            req.get_lock_ttl(),
+            for_update_ts.into(),
+            req.get_txn_size(),
+            req.get_min_commit_ts().into(),
+            cb,
+        )
+    };
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PrewriteResponse::default();
@@ -2031,19 +1629,17 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockManager>(
             _ => panic!("mismatch Op in pessimistic lock mutations"),
         })
         .collect();
-    let mut options = Options::default();
-    options.lock_ttl = req.get_lock_ttl();
-    options.is_first_lock = req.get_is_first_lock();
-    options.for_update_ts = req.get_for_update_ts().into();
-    options.wait_timeout = req.get_wait_timeout();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_acquire_pessimistic_lock(
+    let res = storage.acquire_pessimistic_lock(
         req.take_context(),
         keys,
         req.take_primary_lock(),
         req.get_start_version().into(),
-        options,
+        req.get_lock_ttl(),
+        req.get_is_first_lock(),
+        req.get_for_update_ts().into(),
+        WaitTimeout::from_encoded(req.get_wait_timeout()),
         cb,
     );
 
@@ -2064,7 +1660,7 @@ fn future_pessimistic_rollback<E: Engine, L: LockManager>(
 ) -> impl Future<Item = PessimisticRollbackResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let (cb, f) = paired_future_callback();
-    let res = storage.async_pessimistic_rollback(
+    let res = storage.pessimistic_rollback(
         req.take_context(),
         keys,
         req.get_start_version().into(),
@@ -2089,7 +1685,7 @@ fn future_commit<E: Engine, L: LockManager>(
 ) -> impl Future<Item = CommitResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let (cb, f) = paired_future_callback();
-    let res = storage.async_commit(
+    let res = storage.commit(
         req.take_context(),
         keys,
         req.get_start_version().into(),
@@ -2119,7 +1715,7 @@ fn future_cleanup<E: Engine, L: LockManager>(
     mut req: CleanupRequest,
 ) -> impl Future<Item = CleanupResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.async_cleanup(
+    let res = storage.cleanup(
         req.take_context(),
         Key::from_raw(req.get_key()),
         req.get_start_version().into(),
@@ -2148,7 +1744,7 @@ fn future_batch_get<E: Engine, L: LockManager>(
 ) -> impl Future<Item = BatchGetResponse, Error = Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     storage
-        .async_batch_get(req.take_context(), keys, req.get_version().into())
+        .batch_get(req.take_context(), keys, req.get_version().into())
         .then(|v| {
             let mut resp = BatchGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
@@ -2167,7 +1763,7 @@ fn future_batch_rollback<E: Engine, L: LockManager>(
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_rollback(req.take_context(), keys, req.get_start_version().into(), cb);
+    let res = storage.rollback(req.take_context(), keys, req.get_start_version().into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = BatchRollbackResponse::default();
@@ -2187,7 +1783,7 @@ fn future_txn_heart_beat<E: Engine, L: LockManager>(
     let primary_key = Key::from_raw(req.get_primary_lock());
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_txn_heart_beat(
+    let res = storage.txn_heart_beat(
         req.take_context(),
         primary_key,
         req.get_start_version().into(),
@@ -2222,7 +1818,7 @@ fn future_check_txn_status<E: Engine, L: LockManager>(
     let primary_key = Key::from_raw(req.get_primary_key());
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_check_txn_status(
+    let res = storage.check_txn_status(
         req.take_context(),
         primary_key,
         req.get_lock_ts().into(),
@@ -2268,7 +1864,7 @@ fn future_scan_lock<E: Engine, L: LockManager>(
     mut req: ScanLockRequest,
 ) -> impl Future<Item = ScanLockResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.async_scan_locks(
+    let res = storage.scan_locks(
         req.take_context(),
         req.get_max_version().into(),
         req.take_start_key(),
@@ -2317,9 +1913,9 @@ fn future_resolve_lock<E: Engine, L: LockManager>(
         let start_ts: TimeStamp = req.get_start_version().into();
         assert!(!start_ts.is_zero());
         let commit_ts = req.get_commit_version().into();
-        storage.async_resolve_lock_lite(req.take_context(), start_ts, commit_ts, resolve_keys, cb)
+        storage.resolve_lock_lite(req.take_context(), start_ts, commit_ts, resolve_keys, cb)
     } else {
-        storage.async_resolve_lock(req.take_context(), txn_status, cb)
+        storage.resolve_lock(req.take_context(), txn_status, cb)
     };
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
@@ -2338,7 +1934,7 @@ fn future_gc<E: Engine>(
     mut req: GcRequest,
 ) -> impl Future<Item = GcResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = gc_worker.async_gc(req.take_context(), req.get_safe_point().into(), cb);
+    let res = gc_worker.gc(req.take_context(), req.get_safe_point().into(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = GcResponse::default();
@@ -2356,7 +1952,7 @@ fn future_delete_range<E: Engine, L: LockManager>(
     mut req: DeleteRangeRequest,
 ) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.async_delete_range(
+    let res = storage.delete_range(
         req.take_context(),
         Key::from_raw(req.get_start_key()),
         Key::from_raw(req.get_end_key()),
@@ -2380,7 +1976,7 @@ fn future_raw_get<E: Engine, L: LockManager>(
     mut req: RawGetRequest,
 ) -> impl Future<Item = RawGetResponse, Error = Error> {
     storage
-        .async_raw_get(req.take_context(), req.take_cf(), req.take_key())
+        .raw_get(req.take_context(), req.take_cf(), req.take_key())
         .then(|v| {
             let mut resp = RawGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
@@ -2396,7 +1992,7 @@ fn future_raw_get<E: Engine, L: LockManager>(
         })
 }
 
-fn future_raw_batch_get_command<E: Engine, L: LockManager>(
+pub fn future_raw_batch_get_command<E: Engine, L: LockManager>(
     storage: &Storage<E, L>,
     tx: Sender<(u64, batch_commands_response::Response)>,
     requests: Vec<u64>,
@@ -2406,51 +2002,49 @@ fn future_raw_batch_get_command<E: Engine, L: LockManager>(
     let timer = GRPC_MSG_HISTOGRAM_VEC
         .raw_batch_get_command
         .start_coarse_timer();
-    storage
-        .async_raw_batch_get_command(cf, commands)
-        .then(move |v| {
-            match v {
-                Ok(v) => {
-                    if requests.len() != v.len() {
-                        error!("KvService batch response size mismatch");
-                    }
-                    for (req, v) in requests.into_iter().zip(v.into_iter()) {
-                        let mut resp = RawGetResponse::default();
-                        if let Some(err) = extract_region_error(&v) {
-                            resp.set_region_error(err);
-                        } else {
-                            match v {
-                                Ok(Some(val)) => resp.set_value(val),
-                                Ok(None) => resp.set_not_found(true),
-                                Err(e) => resp.set_error(format!("{}", e)),
-                            }
-                        }
-                        let mut res = batch_commands_response::Response::default();
-                        res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                        if tx.send_and_notify((req, res)).is_err() {
-                            error!("KvService response batch commands fail");
-                        }
-                    }
+    storage.raw_batch_get_command(cf, commands).then(move |v| {
+        match v {
+            Ok(v) => {
+                if requests.len() != v.len() {
+                    error!("KvService batch response size mismatch");
                 }
-                e => {
+                for (req, v) in requests.into_iter().zip(v.into_iter()) {
                     let mut resp = RawGetResponse::default();
-                    if let Some(err) = extract_region_error(&e) {
+                    if let Some(err) = extract_region_error(&v) {
                         resp.set_region_error(err);
-                    } else if let Err(e) = e {
-                        resp.set_error(format!("{}", e));
+                    } else {
+                        match v {
+                            Ok(Some(val)) => resp.set_value(val),
+                            Ok(None) => resp.set_not_found(true),
+                            Err(e) => resp.set_error(format!("{}", e)),
+                        }
                     }
                     let mut res = batch_commands_response::Response::default();
                     res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
-                    for req in requests {
-                        if tx.send_and_notify((req, res.clone())).is_err() {
-                            error!("KvService response batch commands fail");
-                        }
+                    if tx.send_and_notify((req, res)).is_err() {
+                        error!("KvService response batch commands fail");
                     }
                 }
             }
-            timer.observe_duration();
-            Ok(())
-        })
+            e => {
+                let mut resp = RawGetResponse::default();
+                if let Some(err) = extract_region_error(&e) {
+                    resp.set_region_error(err);
+                } else if let Err(e) = e {
+                    resp.set_error(format!("{}", e));
+                }
+                let mut res = batch_commands_response::Response::default();
+                res.cmd = Some(batch_commands_response::response::Cmd::RawGet(resp));
+                for req in requests {
+                    if tx.send_and_notify((req, res.clone())).is_err() {
+                        error!("KvService response batch commands fail");
+                    }
+                }
+            }
+        }
+        timer.observe_duration();
+        Ok(())
+    })
 }
 
 fn future_raw_batch_get<E: Engine, L: LockManager>(
@@ -2459,7 +2053,7 @@ fn future_raw_batch_get<E: Engine, L: LockManager>(
 ) -> impl Future<Item = RawBatchGetResponse, Error = Error> {
     let keys = req.take_keys().into();
     storage
-        .async_raw_batch_get(req.take_context(), req.take_cf(), keys)
+        .raw_batch_get(req.take_context(), req.take_cf(), keys)
         .then(|v| {
             let mut resp = RawBatchGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
@@ -2476,7 +2070,7 @@ fn future_raw_put<E: Engine, L: LockManager>(
     mut req: RawPutRequest,
 ) -> impl Future<Item = RawPutResponse, Error = Error> {
     let (cb, future) = paired_future_callback();
-    let res = storage.async_raw_put(
+    let res = storage.raw_put(
         req.take_context(),
         req.take_cf(),
         req.take_key(),
@@ -2507,7 +2101,7 @@ fn future_raw_batch_put<E: Engine, L: LockManager>(
         .collect();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_raw_batch_put(req.take_context(), cf, pairs, cb);
+    let res = storage.raw_batch_put(req.take_context(), cf, pairs, cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = RawBatchPutResponse::default();
@@ -2525,7 +2119,7 @@ fn future_raw_delete<E: Engine, L: LockManager>(
     mut req: RawDeleteRequest,
 ) -> impl Future<Item = RawDeleteResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.async_raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
+    let res = storage.raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = RawDeleteResponse::default();
@@ -2545,7 +2139,7 @@ fn future_raw_batch_delete<E: Engine, L: LockManager>(
     let cf = req.take_cf();
     let keys = req.take_keys().into();
     let (cb, f) = paired_future_callback();
-    let res = storage.async_raw_batch_delete(req.take_context(), cf, keys, cb);
+    let res = storage.raw_batch_delete(req.take_context(), cf, keys, cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = RawBatchDeleteResponse::default();
@@ -2568,7 +2162,7 @@ fn future_raw_scan<E: Engine, L: LockManager>(
         Some(req.take_end_key())
     };
     storage
-        .async_raw_scan(
+        .raw_scan(
             req.take_context(),
             req.take_cf(),
             req.take_start_key(),
@@ -2593,7 +2187,7 @@ fn future_raw_batch_scan<E: Engine, L: LockManager>(
     mut req: RawBatchScanRequest,
 ) -> impl Future<Item = RawBatchScanResponse, Error = Error> {
     storage
-        .async_raw_batch_scan(
+        .raw_batch_scan(
             req.take_context(),
             req.take_cf(),
             req.take_ranges().into(),
@@ -2617,7 +2211,7 @@ fn future_raw_delete_range<E: Engine, L: LockManager>(
     mut req: RawDeleteRangeRequest,
 ) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
-    let res = storage.async_raw_delete_range(
+    let res = storage.raw_delete_range(
         req.take_context(),
         req.take_cf(),
         req.take_start_key(),
@@ -2645,234 +2239,8 @@ fn future_cop<E: Engine>(
         .map_err(|_| unreachable!())
 }
 
-fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
-    use crate::storage::{Error, ErrorInner};
-    match *res {
-        // TODO: use `Error::cause` instead.
-        Err(Error(box ErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e)))))
-        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(EngineError(
-            box EngineErrorInner::Request(ref e),
-        ))))))
-        | Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Engine(EngineError(box EngineErrorInner::Request(ref e))),
-        )))))) => Some(e.to_owned()),
-        Err(Error(box ErrorInner::SchedTooBusy)) => {
-            let mut err = RegionError::default();
-            let mut server_is_busy_err = ServerIsBusy::default();
-            server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
-            err.set_server_is_busy(server_is_busy_err);
-            Some(err)
-        }
-        Err(Error(box ErrorInner::GcWorkerTooBusy)) => {
-            let mut err = RegionError::default();
-            let mut server_is_busy_err = ServerIsBusy::default();
-            server_is_busy_err.set_reason(GC_WORKER_IS_BUSY.to_owned());
-            err.set_server_is_busy(server_is_busy_err);
-            Some(err)
-        }
-        Err(Error(box ErrorInner::Closed)) => {
-            // TiKV is closing, return an RegionError to tell the client that this region is unavailable
-            // temporarily, the client should retry the request in other TiKVs.
-            let mut err = RegionError::default();
-            err.set_message("TiKV is Closing".to_string());
-            Some(err)
-        }
-        _ => None,
-    }
-}
-
-fn extract_committed(err: &StorageError) -> Option<TimeStamp> {
-    match *err {
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Committed { commit_ts },
-        ))))) => Some(commit_ts),
-        _ => None,
-    }
-}
-
-fn extract_key_error(err: &storage::Error) -> KeyError {
-    let mut key_error = KeyError::default();
-    match err {
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::KeyIsLocked(info),
-        ))))) => {
-            key_error.set_locked(info.clone());
-        }
-        // failed in prewrite or pessimistic lock
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::WriteConflict {
-                start_ts,
-                conflict_start_ts,
-                conflict_commit_ts,
-                key,
-                primary,
-                ..
-            },
-        ))))) => {
-            let mut write_conflict = WriteConflict::default();
-            write_conflict.set_start_ts(start_ts.into_inner());
-            write_conflict.set_conflict_ts(conflict_start_ts.into_inner());
-            write_conflict.set_conflict_commit_ts(conflict_commit_ts.into_inner());
-            write_conflict.set_key(key.to_owned());
-            write_conflict.set_primary(primary.to_owned());
-            key_error.set_conflict(write_conflict);
-            // for compatibility with older versions.
-            key_error.set_retryable(format!("{:?}", err));
-        }
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::AlreadyExist { key },
-        ))))) => {
-            let mut exist = AlreadyExist::default();
-            exist.set_key(key.clone());
-            key_error.set_already_exist(exist);
-        }
-        // failed in commit
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::TxnLockNotFound { .. },
-        ))))) => {
-            warn!("txn conflicts"; "err" => ?err);
-            key_error.set_retryable(format!("{:?}", err));
-        }
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::TxnNotFound { start_ts, key },
-        ))))) => {
-            let mut txn_not_found = TxnNotFound::default();
-            txn_not_found.set_start_ts(start_ts.into_inner());
-            txn_not_found.set_primary_key(key.to_owned());
-            key_error.set_txn_not_found(txn_not_found);
-        }
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::Deadlock {
-                lock_ts,
-                lock_key,
-                deadlock_key_hash,
-                ..
-            },
-        ))))) => {
-            warn!("txn deadlocks"; "err" => ?err);
-            let mut deadlock = Deadlock::default();
-            deadlock.set_lock_ts(lock_ts.into_inner());
-            deadlock.set_lock_key(lock_key.to_owned());
-            deadlock.set_deadlock_key_hash(*deadlock_key_hash);
-            key_error.set_deadlock(deadlock);
-        }
-        StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::CommitTsExpired {
-                start_ts,
-                commit_ts,
-                key,
-                min_commit_ts,
-            },
-        ))))) => {
-            let mut commit_ts_expired = CommitTsExpired::default();
-            commit_ts_expired.set_start_ts(start_ts.into_inner());
-            commit_ts_expired.set_attempted_commit_ts(commit_ts.into_inner());
-            commit_ts_expired.set_key(key.to_owned());
-            commit_ts_expired.set_min_commit_ts(min_commit_ts.into_inner());
-            key_error.set_commit_ts_expired(commit_ts_expired);
-        }
-        _ => {
-            error!("txn aborts"; "err" => ?err);
-            key_error.set_abort(format!("{:?}", err));
-        }
-    }
-    key_error
-}
-
-fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<txn_types::KvPair>>>) -> Vec<KvPair> {
-    match res {
-        Ok(res) => res
-            .into_iter()
-            .map(|r| match r {
-                Ok((key, value)) => {
-                    let mut pair = KvPair::default();
-                    pair.set_key(key);
-                    pair.set_value(value);
-                    pair
-                }
-                Err(e) => {
-                    let mut pair = KvPair::default();
-                    pair.set_error(extract_key_error(&e));
-                    pair
-                }
-            })
-            .collect(),
-        Err(e) => {
-            let mut pair = KvPair::default();
-            pair.set_error(extract_key_error(&e));
-            vec![pair]
-        }
-    }
-}
-
-fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
-    let mut mvcc_info = MvccInfo::default();
-    if let Some(lock) = mvcc.lock {
-        let mut lock_info = MvccLock::default();
-        let op = match lock.lock_type {
-            LockType::Put => Op::Put,
-            LockType::Delete => Op::Del,
-            LockType::Lock => Op::Lock,
-            LockType::Pessimistic => Op::PessimisticLock,
-        };
-        lock_info.set_type(op);
-        lock_info.set_start_ts(lock.ts.into_inner());
-        lock_info.set_primary(lock.primary);
-        lock_info.set_short_value(lock.short_value.unwrap_or_default());
-        mvcc_info.set_lock(lock_info);
-    }
-    let vv = extract_2pc_values(mvcc.values);
-    let vw = extract_2pc_writes(mvcc.writes);
-    mvcc_info.set_writes(vw.into());
-    mvcc_info.set_values(vv.into());
-    mvcc_info
-}
-
-fn extract_2pc_values(res: Vec<(TimeStamp, Value)>) -> Vec<MvccValue> {
-    res.into_iter()
-        .map(|(start_ts, value)| {
-            let mut value_info = MvccValue::default();
-            value_info.set_start_ts(start_ts.into_inner());
-            value_info.set_value(value);
-            value_info
-        })
-        .collect()
-}
-
-fn extract_2pc_writes(res: Vec<(TimeStamp, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
-    res.into_iter()
-        .map(|(commit_ts, write)| {
-            let mut write_info = kvrpcpb::MvccWrite::default();
-            let op = match write.write_type {
-                WriteType::Put => Op::Put,
-                WriteType::Delete => Op::Del,
-                WriteType::Lock => Op::Lock,
-                WriteType::Rollback => Op::Rollback,
-            };
-            write_info.set_type(op);
-            write_info.set_start_ts(write.start_ts.into_inner());
-            write_info.set_commit_ts(commit_ts.into_inner());
-            write_info.set_short_value(write.short_value.unwrap_or_default());
-            write_info
-        })
-        .collect()
-}
-
-fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<KeyError> {
-    match res {
-        Ok(res) => res
-            .into_iter()
-            .filter_map(|x| match x {
-                Err(e) => Some(extract_key_error(&e)),
-                Ok(_) => None,
-            })
-            .collect(),
-        Err(e) => vec![extract_key_error(&e)],
-    }
-}
-
 #[cfg(feature = "protobuf-codec")]
-mod batch_commands_response {
+pub mod batch_commands_response {
     pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
 
     pub mod response {
@@ -2881,7 +2249,7 @@ mod batch_commands_response {
 }
 
 #[cfg(feature = "protobuf-codec")]
-mod batch_commands_request {
+pub mod batch_commands_request {
     pub type Request = kvproto::tikvpb::BatchCommandsRequestRequest;
 
     pub mod request {
@@ -2889,46 +2257,16 @@ mod batch_commands_request {
     }
 }
 
+#[cfg(feature = "prost-codec")]
+pub use kvproto::tikvpb::batch_commands_request;
+#[cfg(feature = "prost-codec")]
+pub use kvproto::tikvpb::batch_commands_response;
+
 #[cfg(test)]
 mod tests {
-    use std::thread;
-
-    use tokio_sync::oneshot;
-
     use super::*;
-    use crate::storage;
-    use crate::storage::mvcc::Error as MvccError;
-    use crate::storage::txn::Error as TxnError;
-
-    #[test]
-    fn test_extract_key_error_write_conflict() {
-        let start_ts = 110.into();
-        let conflict_start_ts = 108.into();
-        let conflict_commit_ts = 109.into();
-        let key = b"key".to_vec();
-        let primary = b"primary".to_vec();
-        let case = storage::Error::from(TxnError::from(MvccError::from(
-            MvccErrorInner::WriteConflict {
-                start_ts,
-                conflict_start_ts,
-                conflict_commit_ts,
-                key: key.clone(),
-                primary: primary.clone(),
-            },
-        )));
-        let mut expect = KeyError::default();
-        let mut write_conflict = WriteConflict::default();
-        write_conflict.set_start_ts(start_ts.into_inner());
-        write_conflict.set_conflict_ts(conflict_start_ts.into_inner());
-        write_conflict.set_conflict_commit_ts(conflict_commit_ts.into_inner());
-        write_conflict.set_key(key);
-        write_conflict.set_primary(primary);
-        expect.set_conflict(write_conflict);
-        expect.set_retryable(format!("{:?}", case));
-
-        let got = extract_key_error(&case);
-        assert_eq!(got, expect);
-    }
+    use std::thread;
+    use tokio_sync::oneshot;
 
     #[test]
     fn test_poll_future_notify_with_slow_source() {
