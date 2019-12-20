@@ -470,7 +470,11 @@ impl ApplyContext {
             }
         }
 
-        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+        let priority = if self.high_priority { "high" } else { "normal" };
+
+        STORE_APPLY_LOG_HISTOGRAM
+            .with_label_values(&[priority])
+            .observe(duration_to_sec(t.elapsed()) as f64);
 
         slow_log!(
             t,

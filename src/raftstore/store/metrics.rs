@@ -33,17 +33,11 @@ lazy_static! {
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
-    pub static ref STORE_APPLY_LOG_HISTOGRAM: Histogram =
-        register_histogram!(
+    pub static ref STORE_APPLY_LOG_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
             "tikv_raftstore_apply_log_duration_seconds",
             "Bucketed histogram of peer applying log duration",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
-        ).unwrap();
-
-    pub static ref HIGH_PRIORITY_STORE_APPLY_LOG_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_high_apply_log_duration_seconds",
-            "Bucketed histogram of peer applying log duration",
+            &["priority"],
             exponential_buckets(0.0005, 2.0, 20).unwrap()
         ).unwrap();
 
