@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn test_thread_stat_io() {
-        let name = "theadnametest66";
+        let name = "threadnametest66";
         let (tx, rx) = sync::mpsc::channel();
         let (tx1, rx1) = sync::mpsc::channel();
         let h = thread::Builder::new()
@@ -525,7 +525,6 @@ mod tests {
         let s2 = "test45678";
 
         let (tx, rx1) = write_two_string(s1.to_owned(), s2.to_owned());
-        thread_info.record();
 
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) as u64 };
         let pid = unsafe { libc::getpid() };
@@ -533,26 +532,28 @@ mod tests {
         for tid in tids {
             if let Ok(stat) = pid::stat_task(pid, tid) {
                 if stat.command.starts_with(s1) {
+                    rx1.recv().unwrap();
+                    thread_info.record();
                     {
                         let write_io = thread_info
                             .metrics_total
                             .write_ios
                             .entry(tid)
                             .or_insert(0.0);
-                        assert!(*write_io as u64 == page_size);
+                        assert_eq!(*write_io as u64, page_size);
                     }
 
                     tx.send(()).unwrap();
+
                     rx1.recv().unwrap();
                     thread_info.record();
-
                     {
                         let write_io = thread_info
                             .metrics_total
                             .write_ios
                             .entry(tid)
                             .or_insert(0.0);
-                        assert!(*write_io as u64 == page_size * 2);
+                        assert_eq!(*write_io as u64, page_size * 2);
                     }
 
                     tx.send(()).unwrap();
