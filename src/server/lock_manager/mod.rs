@@ -16,7 +16,7 @@ use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::{
-    lock_manager::{Lock, LockManager as LockManagerTrait},
+    lock_manager::{Lock, LockManager as LockManagerTrait, WaitTimeout},
     ProcessResult, StorageCallback,
 };
 use pd_client::PdClient;
@@ -212,18 +212,21 @@ impl LockManagerTrait for LockManager {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
-        timeout: i64,
+        timeout: Option<WaitTimeout>,
     ) {
-        // Negative timeout means no wait.
-        if timeout < 0 {
-            cb.execute(pr);
-            return;
-        }
+        let timeout = match timeout {
+            Some(t) => t,
+            None => {
+                cb.execute(pr);
+                return;
+            }
+        };
+
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
         self.waiter_mgr_scheduler
-            .wait_for(start_ts, cb, pr, lock, timeout as u64);
+            .wait_for(start_ts, cb, pr, lock, timeout);
 
         // If it is the first lock the transaction tries to lock, it won't cause deadlock.
         if !is_first_lock {
@@ -342,7 +345,7 @@ mod tests {
                 hash: 20,
             },
             true,
-            0,
+            Some(WaitTimeout::Default),
         );
         assert_eq!(lock_mgr.has_waiter(), true);
         lock_mgr.wake_up(20.into(), Some(vec![20]), 20.into(), false);
@@ -359,7 +362,7 @@ mod tests {
                 hash: 40,
             },
             false,
-            0,
+            Some(WaitTimeout::Default),
         );
         lock_mgr.wait_for(
             40.into(),
@@ -374,7 +377,7 @@ mod tests {
                 hash: 30,
             },
             false,
-            0,
+            Some(WaitTimeout::Default),
         );
         recv(&rx);
         lock_mgr.wake_up(40.into(), Some(vec![40]), 40.into(), true);
@@ -391,7 +394,7 @@ mod tests {
                 hash: 60,
             },
             true,
-            0,
+            Some(WaitTimeout::Default),
         );
         assert_eq!(lock_mgr.remove_from_detected(50.into()), false);
         lock_mgr.wake_up(60.into(), Some(vec![60]), 60.into(), false);
@@ -407,7 +410,7 @@ mod tests {
                 hash: 60,
             },
             false,
-            0,
+            Some(WaitTimeout::Default),
         );
         assert_eq!(lock_mgr.remove_from_detected(50.into()), true);
         lock_mgr.wake_up(60.into(), Some(vec![60]), 60.into(), false);
@@ -449,7 +452,7 @@ mod tests {
             ProcessResult::Res,
             Lock { ts: lock_ts, hash },
             true,
-            0,
+            Some(WaitTimeout::Default),
         );
         // new waiters should be sensed immediately
         assert!(lock_mgr.has_waiter());
@@ -479,7 +482,7 @@ mod tests {
             ProcessResult::Res,
             Lock::default(),
             false,
-            -1,
+            None,
         );
         assert!(rx.try_recv().unwrap().is_ok());
     }

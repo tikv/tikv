@@ -146,7 +146,7 @@ dependencies = [
  "tokio-threadpool",
  "txn_types",
  "url 2.1.0",
- "uuid",
+ "uuid 0.7.4",
 ]
 
 [[package]]
@@ -2766,7 +2766,7 @@ dependencies = [
  "tokio-threadpool",
  "tokio-timer",
  "url 1.7.2",
- "uuid",
+ "uuid 0.7.4",
  "winreg",
 ]
 
@@ -3116,7 +3116,7 @@ dependencies = [
  "tikv_util",
  "tokio-sync",
  "txn_types",
- "uuid",
+ "uuid 0.7.4",
 ]
 
 [[package]]
@@ -3375,7 +3375,7 @@ dependencies = [
  "engine_traits",
  "keys",
  "kvproto",
- "uuid",
+ "uuid 0.7.4",
 ]
 
 [[package]]
@@ -3450,7 +3450,7 @@ dependencies = [
  "tokio-threadpool",
  "toml",
  "txn_types",
- "uuid",
+ "uuid 0.7.4",
 ]
 
 [[package]]
@@ -3541,6 +3541,7 @@ dependencies = [
  "tipb",
  "tipb_helper",
  "twoway",
+ "uuid 0.8.1",
 ]
 
 [[package]]
@@ -3649,7 +3650,7 @@ dependencies = [
  "txn_types",
  "url 2.1.0",
  "utime",
- "uuid",
+ "uuid 0.7.4",
  "vlog",
  "zipf",
 ]
@@ -4134,6 +4135,15 @@ checksum = "90dbc611eb48397705a6b0f6e917da23ae517e4d127123d2cf7674206627d32a"
 dependencies = [
  "rand 0.6.5",
  "serde",
+]
+
+[[package]]
+name = "uuid"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fde2f6a4bea1d6e007c4ad38c6839fa71cbb63b6dbf5b595aa38dc9b1093c11"
+dependencies = [
+ "rand 0.7.2",
 ]
 
 [[package]]
