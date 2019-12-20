@@ -508,7 +508,7 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     // can schedule merge now
     fail::remove(schedule_merge_fp);
     let count = 100;
-    for i in 1..count {
+    for i in 0..count {
         sleep_ms(10);
 
         if pd_client.get_region_by_id(left.get_id()).wait().unwrap().is_none() {
