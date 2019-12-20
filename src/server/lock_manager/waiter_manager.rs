@@ -3,7 +3,7 @@
 use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
-use crate::storage::lock_manager::Lock;
+use crate::storage::lock_manager::{Lock, WaitTimeout};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
@@ -34,7 +34,7 @@ pub enum Task {
         cb: StorageCallback,
         pr: ProcessResult,
         lock: Lock,
-        timeout: u64,
+        timeout: WaitTimeout,
     },
     WakeUp {
         // lock info
@@ -186,7 +186,7 @@ impl Scheduler {
         cb: StorageCallback,
         pr: ProcessResult,
         lock: Lock,
-        timeout: u64,
+        timeout: WaitTimeout,
     ) {
         self.notify_scheduler(Task::WaitFor {
             start_ts,
@@ -242,21 +242,19 @@ impl WaiterManager {
         }
     }
 
-    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter, mut timeout: u64) {
+    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter, timeout: WaitTimeout) {
         let lock = waiter.lock;
         let start_ts = waiter.start_ts;
 
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
             // The retry mechanism is necessary. If the region leader is changed,
-            // all the waiters waiting for locks in this region won't be waked up timely
+            // all the waiters waiting for locks in this region won't be woken up timely
             // because commit or rollback request will be sent to the new leader.
             //
             // `default_wait_for_lock_timeout` is the max timeout.
-            if timeout == 0 || timeout > self.default_wait_for_lock_timeout {
-                timeout = self.default_wait_for_lock_timeout;
-            }
-            let when = Instant::now() + Duration::from_millis(timeout);
+            let when = Instant::now()
+                + timeout.into_duration_with_ceiling(self.default_wait_for_lock_timeout);
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
                 .map_err(|e| info!("timeout timer delay errored"; "err" => ?e))
@@ -593,7 +591,7 @@ mod tests {
                 ts: TimeStamp::zero(),
                 hash: 0,
             },
-            0,
+            WaitTimeout::Default,
         );
         assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
         assert_eq!(
@@ -616,7 +614,7 @@ mod tests {
                 ts: TimeStamp::zero(),
                 hash: 0,
             },
-            100,
+            WaitTimeout::Millis(100),
         );
         assert_eq!(
             rx.recv_timeout(Duration::from_millis(500))
@@ -638,7 +636,7 @@ mod tests {
                 ts: TimeStamp::zero(),
                 hash: 1,
             },
-            0,
+            WaitTimeout::Default,
         );
         waiter_mgr_scheduler.wake_up(TimeStamp::zero(), vec![3, 1, 2], 1.into());
         assert!(rx
