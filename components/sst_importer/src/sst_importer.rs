@@ -15,7 +15,7 @@ use uuid::{Builder as UuidBuilder, Uuid};
 use engine_traits::{IOLimiter, LimitReader};
 use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterator, CF_WRITE};
-use engine_traits::{SeekKey, SstReader, SstWriter, SstWriterBuilder};
+use engine_traits::{SeekKey, SstReader, SstWriter, SstExt};
 use external_storage::{create_storage, url_of_backend};
 use keys;
 use txn_types::{Key, TimeStamp, WriteRef};
@@ -32,6 +32,11 @@ impl SSTImporter {
         Ok(SSTImporter {
             dir: ImportDir::new(root)?,
         })
+    }
+
+    pub fn get_path(&self, meta: &SstMeta) -> PathBuf {
+        let path = self.dir.join(meta).unwrap();
+        return path.save.clone();
     }
 
     pub fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
@@ -96,6 +101,7 @@ impl SSTImporter {
         name: &str,
         rewrite_rule: &RewriteRule,
         speed_limiter: Option<Arc<E::IOLimiter>>,
+        sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
         debug!("download start";
             "meta" => ?meta,
@@ -104,7 +110,7 @@ impl SSTImporter {
             "rewrite_rule" => ?rewrite_rule,
             "speed_limit" => speed_limiter.as_ref().map_or(0, |l| l.get_bytes_per_second()),
         );
-        match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter) {
+        match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
             Ok(r) => {
                 info!("download"; "meta" => ?meta, "range" => ?r);
                 Ok(r)
@@ -123,6 +129,7 @@ impl SSTImporter {
         name: &str,
         rewrite_rule: &RewriteRule,
         speed_limiter: Option<Arc<E::IOLimiter>>,
+        mut sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
         let url = url_of_backend(backend);
@@ -169,17 +176,17 @@ impl SSTImporter {
             old_prefix,
             key_to_bound(range_start),
         )
-        .map_err(|_| {
-            Error::WrongKeyPrefix("SST start range", range_start.to_vec(), new_prefix.to_vec())
-        })?;
+            .map_err(|_| {
+                Error::WrongKeyPrefix("SST start range", range_start.to_vec(), new_prefix.to_vec())
+            })?;
         let range_end = keys::rewrite::rewrite_prefix_of_end_bound(
             new_prefix,
             old_prefix,
             key_to_bound(range_end),
         )
-        .map_err(|_| {
-            Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
-        })?;
+            .map_err(|_| {
+                Error::WrongKeyPrefix("SST end range", range_end.to_vec(), new_prefix.to_vec())
+            })?;
 
         // read and first and last keys from the SST, determine if we could
         // simply move the entire SST instead of iterating and generate a new one.
@@ -224,7 +231,6 @@ impl SSTImporter {
         }
 
         // perform iteration and key rewrite.
-        let mut sst_writer = E::SstWriterBuilder::new().build(path.save.to_str().unwrap())?;
         let mut key = keys::data_key(new_prefix);
         let new_prefix_data_key_len = key.len();
         let mut first_key = None;
@@ -579,7 +585,7 @@ mod tests {
     use super::*;
     use test_sst_importer::*;
 
-    use engine_traits::Error as TraitError;
+    use engine_traits::{Error as TraitError, SstWriterBuilder, TablePropertiesExt};
     use engine_traits::ExternalSstFileInfo;
     use engine_traits::{collect, Iterable, Iterator, SeekKey, CF_DEFAULT};
     use tempfile::Builder;
@@ -758,8 +764,7 @@ mod tests {
             .to_bytes()
     }
 
-    fn create_sample_external_sst_file_txn_default(
-    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+    fn create_sample_external_sst_file_txn_default() -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer = new_sst_writer(
             ext_sst_dir
@@ -788,8 +793,7 @@ mod tests {
         Ok((ext_sst_dir, backend, meta))
     }
 
-    fn create_sample_external_sst_file_txn_write(
-    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
+    fn create_sample_external_sst_file_txn_write() -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
         let ext_sst_dir = tempfile::tempdir()?;
         let mut sst_writer = new_sst_writer(
             ext_sst_dir
@@ -854,9 +858,10 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir).unwrap();
+        let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new().build(importer.get_path(&meta).to_str().unwrap()).unwrap();
 
         let range = importer
-            .download::<TestEngine>(&meta, &backend, "sample.sst", &RewriteRule::default(), None)
+            .download::<TestEngine>(&meta, &backend, "sample.sst", &RewriteRule::default(), None, sst_writer)
             .unwrap()
             .unwrap();
 
@@ -895,6 +900,7 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir).unwrap();
+        let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new().build(importer.get_path(&meta).to_str().unwrap()).unwrap();
 
         let range = importer
             .download::<TestEngine>(
@@ -903,6 +909,7 @@ mod tests {
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t567", 0),
                 None,
+                sst_writer,
             )
             .unwrap()
             .unwrap();
@@ -939,6 +946,8 @@ mod tests {
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_default().unwrap();
+        let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new().build(importer.get_path(&meta).to_str().unwrap()).unwrap();
+
         let _ = importer
             .download::<TestEngine>(
                 &meta,
@@ -946,6 +955,7 @@ mod tests {
                 "sample_default.sst",
                 &new_rewrite_rule(b"", b"", 16),
                 None,
+                sst_writer,
             )
             .unwrap()
             .unwrap();
@@ -978,6 +988,8 @@ mod tests {
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_write().unwrap();
+        let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new().build(importer.get_path(&meta).to_str().unwrap()).unwrap();
+
         let _ = importer
             .download::<TestEngine>(
                 &meta,
@@ -985,6 +997,7 @@ mod tests {
                 "sample_write.sst",
                 &new_rewrite_rule(b"", b"", 16),
                 None,
+                sst_writer,
             )
             .unwrap()
             .unwrap();
@@ -1034,6 +1047,10 @@ mod tests {
         // performs the download.
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir).unwrap();
+        let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
+        let db_path = temp_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), &["default"]);
+        let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new().set_db(&db).build(importer.get_path(&meta).to_str().unwrap()).unwrap();
 
         let range = importer
             .download::<TestEngine>(
@@ -1042,6 +1059,7 @@ mod tests {
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t9102", 0),
                 None,
+                sst_writer,
             )
             .unwrap()
             .unwrap();
@@ -1069,6 +1087,13 @@ mod tests {
                 (b"zt9102_r13".to_vec(), b"www".to_vec()),
             ]
         );
+        let start = keys::data_key(b"");
+        let end = keys::data_end_key(b"");
+        let collection = db.get_range_properties_cf("default", &start, &end).unwrap();
+        assert!(!collection.get_raw().is_empty());
+        for (_, v) in &**collection.get_raw() {
+            assert!(!v.user_collected_properties().is_empty());
+        }
     }
 
     #[test]
@@ -1076,13 +1101,13 @@ mod tests {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir).unwrap();
-
+        let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new().build(importer.get_path(&meta).to_str().unwrap()).unwrap();
         // note: the range doesn't contain the DATA_PREFIX 'z'.
         meta.mut_range().set_start(b"t123_r02".to_vec());
         meta.mut_range().set_end(b"t123_r12".to_vec());
 
         let range = importer
-            .download::<TestEngine>(&meta, &backend, "sample.sst", &RewriteRule::default(), None)
+            .download::<TestEngine>(&meta, &backend, "sample.sst", &RewriteRule::default(), None, sst_writer)
             .unwrap()
             .unwrap();
 
@@ -1113,7 +1138,7 @@ mod tests {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir).unwrap();
-
+        let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new().build(importer.get_path(&meta).to_str().unwrap()).unwrap();
         meta.mut_range().set_start(b"t5_r02".to_vec());
         meta.mut_range().set_end(b"t5_r12".to_vec());
 
@@ -1124,6 +1149,7 @@ mod tests {
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t5", 0),
                 None,
+                sst_writer,
             )
             .unwrap()
             .unwrap();
@@ -1153,13 +1179,12 @@ mod tests {
     fn test_download_sst_invalid() {
         let ext_sst_dir = tempfile::tempdir().unwrap();
         fs::write(ext_sst_dir.path().join("sample.sst"), b"not an SST file").unwrap();
-
-        let importer_dir = tempfile::tempdir().unwrap();
-        let importer = SSTImporter::new(&importer_dir).unwrap();
-
-        let backend = external_storage::make_local_backend(ext_sst_dir.path());
         let mut meta = SstMeta::default();
         meta.set_uuid(vec![0u8; 16]);
+        let importer_dir = tempfile::tempdir().unwrap();
+        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new().build(importer.get_path(&meta).to_str().unwrap()).unwrap();
+        let backend = external_storage::make_local_backend(ext_sst_dir.path());
 
         let result = importer.download::<TestEngine>(
             &meta,
@@ -1167,10 +1192,10 @@ mod tests {
             "sample.sst",
             &RewriteRule::default(),
             None,
+            sst_writer,
         );
         match &result {
-            Err(Error::EngineTraits(TraitError::Engine(msg))) if msg.starts_with("Corruption:") => {
-            }
+            Err(Error::EngineTraits(TraitError::Engine(msg))) if msg.starts_with("Corruption:") => {}
             _ => panic!("unexpected download result: {:?}", result),
         }
     }
@@ -1180,7 +1205,7 @@ mod tests {
         let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir).unwrap();
-
+        let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new().build(importer.get_path(&meta).to_str().unwrap()).unwrap();
         meta.mut_range().set_start(vec![b'x']);
         meta.mut_range().set_end(vec![b'y']);
 
@@ -1190,6 +1215,7 @@ mod tests {
             "sample.sst",
             &RewriteRule::default(),
             None,
+            sst_writer,
         );
 
         match result {
@@ -1203,6 +1229,7 @@ mod tests {
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
         let importer_dir = tempfile::tempdir().unwrap();
         let importer = SSTImporter::new(&importer_dir).unwrap();
+        let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new().build(importer.get_path(&meta).to_str().unwrap()).unwrap();
 
         let result = importer.download::<TestEngine>(
             &meta,
@@ -1210,6 +1237,7 @@ mod tests {
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy", 0),
             None,
+            sst_writer,
         );
 
         match &result {
