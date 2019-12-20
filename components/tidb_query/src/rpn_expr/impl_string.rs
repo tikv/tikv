@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use base64;
 use std::str;
 use tidb_query_codegen::rpn_fn;
 
@@ -9,6 +10,15 @@ use crate::Result;
 use tidb_query_datatype::*;
 
 const SPACE: u8 = 0o40u8;
+
+// see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
+// mysql base64 doc: A newline is added after each 76 characters of encoded output
+const BASE64_LINE_WRAP_LENGTH: usize = 76;
+
+// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
+const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
+const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
+const BASE64_LINE_WRAP: u8 = b'\n';
 
 #[rpn_fn]
 #[inline]
@@ -356,23 +366,23 @@ pub fn instr_utf8(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<In
 #[inline]
 pub fn to_base64(s: &Option<Bytes>) -> Result<Option<Bytes>> {
     if let Some(s) = s {
-        let mut input = String::from_utf8(*s).unwrap();
+        let input = String::from_utf8(s.to_vec());
         match input {
             Ok(result) => {
-                if result.len() > tidb_query_datatype::MAX_BLOB_WIDTH {
-                    Ok(None)
+                if result.len() > tidb_query_datatype::MAX_BLOB_WIDTH as usize {
+                    return Ok(None);
                 }
                 if let Some(size) = encoded_size(s.len()) {
                     let mut buf = vec![0; size as usize];
                     let len_without_wrap =
-                        base64::encode_config_slice(s.as_ref(), base64::STANDARD, &mut buf);
+                        base64::encode_config_slice(result.as_bytes(), base64::STANDARD, &mut buf);
                     line_wrap(&mut buf, len_without_wrap);
-                    Ok(Some(Cow::Owned(buf)))
+                    Ok(Some(buf))
                 } else {
-                    Ok(Some(Cow::Borrowed(b"")))
+                    Ok(None)
                 }
             }
-            None => Ok(None),
+            Err(_) => Ok(None),
         }
     } else {
         Ok(None)
@@ -1468,25 +1478,26 @@ mod tests {
     }
     fn test_to_base64() {
         let test_cases = vec![
-            (Some(""), Some("")),
-            (Some("abc"), Some("YWJj")),
-            (Some("ab c"), Some("YWIgYw==")),
-            (Some("1"), Some("MQ==")),
-            (Some("1.1"), Some("MS4x")),
-            (Some("ab\nc"), Some("YWIKYw==")),
-            (Some("ab\tc"), Some("YWIJYw==")),
-            (Some("qwerty123456"), Some("cXdlcnR5MTIzNDU2")),
-            (Some("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"), Some("QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrLw==")),
-            (Some("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"),Some("QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ01OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv")),
-            (Some("ABCD  EFGHI\nJKLMNOPQRSTUVWXY\tZabcdefghijklmnopqrstuv  wxyz012\r3456789+/"),Some("QUJDRCAgRUZHSEkKSktMTU5PUFFSU1RVVldYWQlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1diAgd3h5\nejAxMg0zNDU2Nzg5Ky8=")),
-            (Some("000000000000000000000000000000000000000000000000000000000"),Some("MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw")),
-            (Some("0000000000000000000000000000000000000000000000000000000000"),Some("MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMA==")),
-            (Some("000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),Some("MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw")),
+            (Some(b"".to_vec()), Some(b"".to_vec())),
+            (Some(b"abc".to_vec()), Some(b"YWJj".to_vec())),
+            (Some(b"ab c".to_vec()), Some(b"YWIgYw==".to_vec())),
+            (Some(b"1".to_vec()), Some(b"MQ==".to_vec())),
+            (Some(b"1.1".to_vec()), Some(b"MS4x".to_vec())),
+            (Some(b"ab\nc".to_vec()), Some(b"YWIKYw==".to_vec())),
+            (Some(b"ab\tc".to_vec()), Some(b"YWIJYw==".to_vec())),
+            (Some(b"qwerty123456".to_vec()), Some(b"cXdlcnR5MTIzNDU2".to_vec())),
+            (Some(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".to_vec()), Some(b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrLw==".to_vec())),
+            (Some(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".to_vec()),Some(b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ01OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv".to_vec())),
+            (Some(b"ABCD  EFGHI\nJKLMNOPQRSTUVWXY\tZabcdefghijklmnopqrstuv  wxyz012\r3456789+/".to_vec()),Some(b"QUJDRCAgRUZHSEkKSktMTU5PUFFSU1RVVldYWQlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1diAgd3h5\nejAxMg0zNDU2Nzg5Ky8=".to_vec())),
+            (Some(b"000000000000000000000000000000000000000000000000000000000".to_vec()),Some(b"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw".to_vec())),
+            (Some(b"0000000000000000000000000000000000000000000000000000000000".to_vec()),Some(b"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMA==".to_vec())),
+            (Some(b"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000".to_vec()),Some(b"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw".to_vec())),
         ];
-        for (input, result) in test_cases {
+        for (input, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::ToBase64);
+                .evaluate(ScalarFuncSig::ToBase64)
+                .unwrap();
             assert_eq!(output, expect_output);
         }
     }
