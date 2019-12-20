@@ -281,7 +281,6 @@ impl SSTImporter {
                 first_key = Some(keys::origin_key(&key).to_vec());
             }
         }
-        iter.status()?;
 
         let _ = fs::remove_file(&path.temp);
 

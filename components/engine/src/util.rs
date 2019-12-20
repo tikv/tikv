@@ -50,8 +50,8 @@ pub fn delete_all_in_range_cf(
             iter_opt.set_key_only(true);
         }
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
-        it.seek(start_key.into());
-        while it.valid() {
+        let mut it_valid = it.seek(start_key.into())?;
+        while it_valid {
             wb.delete_cf(handle, it.key())?;
             if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Can't use write_without_wal here.
@@ -59,12 +59,8 @@ pub fn delete_all_in_range_cf(
                 db.write(&wb)?;
                 wb.clear();
             }
-
-            if !it.next() {
-                break;
-            }
+            it_valid = it.next().unwrap();
         }
-        it.status()?;
     }
 
     if wb.count() > 0 {
