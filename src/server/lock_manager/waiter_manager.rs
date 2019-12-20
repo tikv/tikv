@@ -3,7 +3,7 @@
 use super::config::Config;
 use super::deadlock::Scheduler as DetectorScheduler;
 use super::metrics::*;
-use crate::storage::lock_manager::Lock;
+use crate::storage::lock_manager::{Lock, WaitTimeout};
 use crate::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, TimeStamp};
 use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use crate::storage::{
@@ -99,7 +99,7 @@ pub enum Task {
         cb: StorageCallback,
         pr: ProcessResult,
         lock: Lock,
-        timeout: u64,
+        timeout: WaitTimeout,
     },
     WakeUp {
         // lock info
@@ -377,7 +377,7 @@ impl Scheduler {
         cb: StorageCallback,
         pr: ProcessResult,
         lock: Lock,
-        timeout: u64,
+        timeout: WaitTimeout,
     ) {
         self.notify_scheduler(Task::WaitFor {
             start_ts,
@@ -438,13 +438,8 @@ impl WaiterManager {
         }
     }
 
-    pub fn normalize_deadline(&self, timeout: u64) -> Instant {
-        let timeout = if timeout == 0 || timeout > self.default_wait_for_lock_timeout {
-            self.default_wait_for_lock_timeout
-        } else {
-            timeout
-        };
-        Instant::now() + Duration::from_millis(timeout)
+    pub fn normalize_deadline(&self, timeout: WaitTimeout) -> Instant {
+        Instant::now() + timeout.into_duration_with_ceiling(self.default_wait_for_lock_timeout)
     }
 
     fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter) {
@@ -997,7 +992,13 @@ pub mod tests {
 
         // Default timeout
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
-        scheduler.wait_for(waiter.start_ts, waiter.cb, waiter.pr, waiter.lock, 1000);
+        scheduler.wait_for(
+            waiter.start_ts,
+            waiter.cb,
+            waiter.pr,
+            waiter.lock,
+            WaitTimeout::Millis(1000),
+        );
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
             1000,
@@ -1006,7 +1007,13 @@ pub mod tests {
 
         // Custom timeout
         let (waiter, lock_info, f) = new_test_waiter(20.into(), 30.into(), 30);
-        scheduler.wait_for(waiter.start_ts, waiter.cb, waiter.pr, waiter.lock, 100);
+        scheduler.wait_for(
+            waiter.start_ts,
+            waiter.cb,
+            waiter.pr,
+            waiter.lock,
+            WaitTimeout::Millis(100),
+        );
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
             100,
@@ -1015,7 +1022,13 @@ pub mod tests {
 
         // Timeout can't exceed wait_for_lock_timeout
         let (waiter, lock_info, f) = new_test_waiter(30.into(), 40.into(), 40);
-        scheduler.wait_for(waiter.start_ts, waiter.cb, waiter.pr, waiter.lock, 3000);
+        scheduler.wait_for(
+            waiter.start_ts,
+            waiter.cb,
+            waiter.pr,
+            waiter.lock,
+            WaitTimeout::Millis(3000),
+        );
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
             1000,
@@ -1043,7 +1056,7 @@ pub mod tests {
                 waiter.cb,
                 waiter.pr,
                 waiter.lock,
-                wait_for_lock_timeout,
+                WaitTimeout::Millis(wait_for_lock_timeout),
             );
             waiters_info.push((waiter_ts, lock_info, f));
         }
@@ -1073,7 +1086,7 @@ pub mod tests {
                 waiter.cb,
                 waiter.pr,
                 waiter.lock,
-                wait_for_lock_timeout,
+                WaitTimeout::Millis(wait_for_lock_timeout),
             );
             waiters_info.push((waiter_ts, lock_info, f));
         }
@@ -1114,11 +1127,17 @@ pub mod tests {
             waiter1.cb,
             waiter1.pr,
             waiter1.lock,
-            wait_for_lock_timeout,
+            WaitTimeout::Millis(wait_for_lock_timeout),
         );
         let (waiter2, lock_info2, f2) = new_test_waiter(30.into(), lock.ts, lock.hash);
         // Waiter2's timeout is 50ms which is less than wake_up_delay_duration.
-        scheduler.wait_for(waiter2.start_ts, waiter2.cb, waiter2.pr, waiter2.lock, 50);
+        scheduler.wait_for(
+            waiter2.start_ts,
+            waiter2.cb,
+            waiter2.pr,
+            waiter2.lock,
+            WaitTimeout::Millis(50),
+        );
         let commit_ts = 15.into();
         let (tx, rx) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
@@ -1153,7 +1172,13 @@ pub mod tests {
             },
         );
         let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
-        scheduler.wait_for(waiter.start_ts, waiter.cb, waiter.pr, waiter.lock, 1000);
+        scheduler.wait_for(
+            waiter.start_ts,
+            waiter.cb,
+            waiter.pr,
+            waiter.lock,
+            WaitTimeout::Millis(1000),
+        );
         scheduler.deadlock(waiter_ts, lock, 30);
         assert_elapsed(
             || expect_deadlock(f.wait().unwrap(), waiter_ts, lock_info, 30),
@@ -1174,9 +1199,21 @@ pub mod tests {
             },
         );
         let (waiter1, lock_info1, f1) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
-        scheduler.wait_for(waiter1.start_ts, waiter1.cb, waiter1.pr, waiter1.lock, 1000);
+        scheduler.wait_for(
+            waiter1.start_ts,
+            waiter1.cb,
+            waiter1.pr,
+            waiter1.lock,
+            WaitTimeout::Millis(1000),
+        );
         let (waiter2, lock_info2, f2) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
-        scheduler.wait_for(waiter2.start_ts, waiter2.cb, waiter2.pr, waiter2.lock, 1000);
+        scheduler.wait_for(
+            waiter2.start_ts,
+            waiter2.cb,
+            waiter2.pr,
+            waiter2.lock,
+            WaitTimeout::Millis(1000),
+        );
         // Should notify duplicated waiter immediately.
         assert_elapsed(
             || expect_key_is_locked(f1.wait().unwrap().unwrap().pop().unwrap(), lock_info1),

@@ -16,7 +16,7 @@ use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::server::resolve::StoreAddrResolver;
 use crate::server::{Error, Result};
 use crate::storage::{
-    lock_manager::{Lock, LockManager as LockManagerTrait},
+    lock_manager::{Lock, LockManager as LockManagerTrait, WaitTimeout},
     ProcessResult, StorageCallback,
 };
 use pd_client::PdClient;
@@ -212,18 +212,21 @@ impl LockManagerTrait for LockManager {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
-        timeout: i64,
+        timeout: Option<WaitTimeout>,
     ) {
-        // Negative timeout means no wait.
-        if timeout < 0 {
-            cb.execute(pr);
-            return;
-        }
+        let timeout = match timeout {
+            Some(t) => t,
+            None => {
+                cb.execute(pr);
+                return;
+            }
+        };
+
         // Increase `waiter_count` here to prevent there is an on-the-fly WaitFor msg
         // but the waiter_mgr haven't processed it, subsequent WakeUp msgs may be lost.
         self.waiter_count.fetch_add(1, Ordering::SeqCst);
         self.waiter_mgr_scheduler
-            .wait_for(start_ts, cb, pr, lock, timeout as u64);
+            .wait_for(start_ts, cb, pr, lock, timeout);
 
         // If it is the first lock the transaction tries to lock, it won't cause deadlock.
         if !is_first_lock {
@@ -323,7 +326,14 @@ mod tests {
         // Timeout
         assert!(!lock_mgr.has_waiter());
         let (waiter, lock_info, f) = new_test_waiter(10.into(), 20.into(), 20);
-        lock_mgr.wait_for(waiter.start_ts, waiter.cb, waiter.pr, waiter.lock, true, 0);
+        lock_mgr.wait_for(
+            waiter.start_ts,
+            waiter.cb,
+            waiter.pr,
+            waiter.lock,
+            true,
+            Some(WaitTimeout::Default),
+        );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),
@@ -341,7 +351,14 @@ mod tests {
             },
         );
         let (waiter, lock_info, f) = new_test_waiter(waiter_ts, lock.ts, lock.hash);
-        lock_mgr.wait_for(waiter.start_ts, waiter.cb, waiter.pr, waiter.lock, true, 0);
+        lock_mgr.wait_for(
+            waiter.start_ts,
+            waiter.cb,
+            waiter.pr,
+            waiter.lock,
+            true,
+            Some(WaitTimeout::Default),
+        );
         assert!(lock_mgr.has_waiter());
         lock_mgr.wake_up(lock.ts, Some(vec![lock.hash]), 30.into(), false);
         assert_elapsed(
@@ -359,7 +376,7 @@ mod tests {
             waiter1.pr,
             waiter1.lock,
             false,
-            0,
+            Some(WaitTimeout::Default),
         );
         assert!(lock_mgr.has_waiter());
         let (waiter2, lock_info2, f2) = new_test_waiter(20.into(), 10.into(), 10);
@@ -369,7 +386,7 @@ mod tests {
             waiter2.pr,
             waiter2.lock,
             false,
-            0,
+            Some(WaitTimeout::Default),
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
@@ -396,7 +413,7 @@ mod tests {
                 waiter.pr,
                 waiter.lock,
                 *is_first_lock,
-                0,
+                Some(WaitTimeout::Default),
             );
             assert!(lock_mgr.has_waiter());
             assert_eq!(lock_mgr.remove_from_detected(30.into()), !is_first_lock);
@@ -435,7 +452,7 @@ mod tests {
             waiter.pr,
             waiter.lock,
             false,
-            -1,
+            None,
         );
         assert_elapsed(
             || expect_key_is_locked(f.wait().unwrap().unwrap().pop().unwrap(), lock_info),

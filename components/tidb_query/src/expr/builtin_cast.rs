@@ -14,14 +14,6 @@ use crate::codec::mysql::{charset, Decimal, Duration, Json, Time, TimeType};
 use crate::codec::{mysql, Datum};
 use crate::expr::Flag;
 
-// TODO: remove it after CAST function use `in_union` function
-#[allow(dead_code)]
-/// Indicates whether the current expression is evaluated in union statement
-/// See: https://github.com/pingcap/tidb/blob/1e403873d905b2d0ad3be06bd8cd261203d84638/expression/builtin.go#L260
-fn in_union(implicit_args: &[Datum]) -> bool {
-    implicit_args.get(0) == Some(&Datum::I64(1))
-}
-
 impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
@@ -2071,20 +2063,4 @@ mod tests {
     //     let res = e.eval_duration(&mut ctx, &cols);
     //     assert!(res.is_err());
     // }
-
-    #[test]
-    fn test_in_union() {
-        use super::*;
-
-        // empty implicit arguments
-        assert!(!in_union(&[]));
-
-        // single implicit arguments
-        assert!(!in_union(&[Datum::I64(0)]));
-        assert!(in_union(&[Datum::I64(1)]));
-
-        // multiple implicit arguments
-        assert!(!in_union(&[Datum::I64(0), Datum::I64(1)]));
-        assert!(in_union(&[Datum::I64(1), Datum::I64(0)]));
-    }
 }
