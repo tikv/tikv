@@ -1,11 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
+use crate::storage::mvcc::{default_not_found_error, Result};
+use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-
-use crate::storage::mvcc::write::{WriteRef, WriteType};
-use crate::storage::mvcc::{default_not_found_error, Lock, Result, TimeStamp, TsSet};
-use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value, CF_LOCK};
-use crate::storage::{CF_DEFAULT, CF_WRITE};
+use txn_types::{Key, Lock, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -177,6 +176,7 @@ impl<S: Snapshot> PointGetter<S> {
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
             lock.check_ts_conflict(user_key, self.ts, &self.bypass_locks)
+                .map_err(Into::into)
         } else {
             Ok(())
         }
@@ -270,14 +270,14 @@ mod tests {
     use super::*;
 
     use engine_rocks::RocksSyncSnapshot;
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use kvproto::kvrpcpb::Context;
+    use txn_types::SHORT_VALUE_MAX_LEN;
 
+    use crate::storage::kv::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
-    use crate::storage::SHORT_VALUE_MAX_LEN;
-    use crate::storage::{CFStatistics, Engine, Key, RocksEngine, TestEngineBuilder};
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
             .build()
@@ -285,7 +285,7 @@ mod tests {
     }
 
     fn new_single_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         PointGetterBuilder::new(snapshot, ts)
             .isolation_level(IsolationLevel::Si)
             .multi(false)
@@ -310,7 +310,7 @@ mod tests {
         assert!(point_getter.get(&Key::from_raw(key)).is_err());
     }
 
-    fn assert_seek_next_prev(stat: &CFStatistics, seek: usize, next: usize, prev: usize) {
+    fn assert_seek_next_prev(stat: &CfStatistics, seek: usize, next: usize, prev: usize) {
         assert_eq!(
             stat.seek, seek,
             "expect seek to be {}, got {}",
@@ -608,7 +608,7 @@ mod tests {
     fn test_omit_value() {
         let engine = new_sample_engine_2();
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
 
         let mut getter = PointGetterBuilder::new(snapshot.clone(), 4.into())
             .isolation_level(IsolationLevel::Si)
@@ -688,7 +688,7 @@ mod tests {
 
         must_prewrite_delete(&engine, key, key, 30);
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![30, 40, 50]))
@@ -696,7 +696,7 @@ mod tests {
             .unwrap();
         must_get_value(&mut getter, key, val);
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut getter = PointGetterBuilder::new(snapshot, 60.into())
             .isolation_level(IsolationLevel::Si)
             .bypass_locks(TsSet::from_u64s(vec![31, 29]))

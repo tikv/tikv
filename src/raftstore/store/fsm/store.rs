@@ -6,11 +6,13 @@ use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
+use kvproto::configpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use protobuf::Message;
 use raft::{Ready, StateRole};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -21,6 +23,7 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
+use crate::config::{ConfigController, ConfigHandler};
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -36,7 +39,6 @@ use crate::raftstore::store::fsm::{
     BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
 };
 use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
-use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use crate::raftstore::store::local_metrics::RaftMetrics;
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
@@ -56,6 +58,7 @@ use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
+use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -727,7 +730,9 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
             total_count += 1;
 
-            let local_state = protobuf::parse_from_bytes::<RegionLocalState>(value)?;
+            let mut local_state = RegionLocalState::default();
+            local_state.merge_from_bytes(value)?;
+
             let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
                 tombstone_count += 1;
@@ -954,6 +959,7 @@ impl RaftBatchSystem {
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
+        cfg_controller: ConfigController,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1000,7 +1006,7 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        self.start_system(workers, region_peers, builder)?;
+        self.start_system(workers, region_peers, builder, cfg_controller)?;
         Ok(())
     }
 
@@ -1009,6 +1015,7 @@ impl RaftBatchSystem {
         mut workers: Workers,
         region_peers: Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>,
         builder: RaftPollerBuilder<T, C>,
+        cfg_controller: ConfigController,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1097,9 +1104,16 @@ impl RaftBatchSystem {
         let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
         box_try!(workers.cleanup_worker.start(cleanup_runner));
 
+        let config_client = box_try!(ConfigHandler::start(
+            cfg_controller.get_current().server.addr.clone(),
+            cfg_controller,
+            configpb::Version::new(), // TODO: we can reuse the returned Version of ConfigHandler::create
+            workers.pd_worker.scheduler(),
+        ));
         let pd_runner = PdRunner::new(
             store.get_id(),
             Arc::clone(&pd_client),
+            config_client,
             self.router.clone(),
             Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),

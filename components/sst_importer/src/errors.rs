@@ -77,6 +77,9 @@ quick_error! {
                 hex::encode_upper(&prefix),
             )
         }
+        BadFormat(msg: String) {
+            display("bad format {}", msg)
+        }
     }
 }
 

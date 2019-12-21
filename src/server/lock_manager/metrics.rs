@@ -2,9 +2,10 @@
 
 use prometheus::*;
 use prometheus_static_metric::*;
+use tikv_util::metrics::TLSMetricGroup;
 
 make_static_metric! {
-    pub struct TaskCounterVec: IntCounter {
+    pub struct LocalTaskCounter: LocalIntCounter {
         "type" => {
             wait_for,
             wake_up,
@@ -15,7 +16,7 @@ make_static_metric! {
         },
     }
 
-    pub struct ErrorCounterVec: IntCounter {
+    pub struct LocalErrorCounter: LocalIntCounter {
         "type" => {
             dropped,
             not_leader,
@@ -25,7 +26,7 @@ make_static_metric! {
         },
     }
 
-    pub struct DetectorHistogramVec: Histogram {
+    pub struct DetectorHistogramVec: LocalHistogram {
         "type" => {
             monitor_membership_change,
             detect,
@@ -34,15 +35,13 @@ make_static_metric! {
 }
 
 lazy_static! {
-    pub static ref TASK_COUNTER_VEC: TaskCounterVec = register_static_int_counter_vec!(
-        TaskCounterVec,
+    pub static ref TASK_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_lock_manager_task_counter",
         "Total number of tasks received",
         &["type"]
     )
     .unwrap();
-    pub static ref ERROR_COUNTER_VEC: ErrorCounterVec = register_static_int_counter_vec!(
-        ErrorCounterVec,
+    pub static ref ERROR_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_lock_manager_error_counter",
         "Total number of errors",
         &["type"]
@@ -54,12 +53,20 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref DETECTOR_HISTOGRAM_VEC: DetectorHistogramVec = register_static_histogram_vec!(
-        DetectorHistogramVec,
+    pub static ref DETECTOR_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_lock_manager_detector_histogram",
         "Bucketed histogram of deadlock detector",
         &["type"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+}
+
+thread_local! {
+    pub static TASK_COUNTER_METRICS: TLSMetricGroup<LocalTaskCounter> =
+        TLSMetricGroup::new(LocalTaskCounter::from(&TASK_COUNTER_VEC));
+    pub static ERROR_COUNTER_METRICS: TLSMetricGroup<LocalErrorCounter> =
+        TLSMetricGroup::new(LocalErrorCounter::from(&TASK_COUNTER_VEC));
+    pub static DETECTOR_HISTOGRAM_METRICS: TLSMetricGroup<DetectorHistogramVec> =
+        TLSMetricGroup::new(DetectorHistogramVec::from(&DETECTOR_HISTOGRAM_VEC));
 }

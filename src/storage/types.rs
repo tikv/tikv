@@ -3,13 +3,13 @@
 //! Core data types.
 
 use crate::storage::{
-    mvcc::{Lock, TimeStamp, Write},
-    Callback, Command, Error as StorageError, Result,
+    mvcc::{Lock, LockType, TimeStamp, Write, WriteType},
+    txn::ProcessResult,
+    Callback, Result,
 };
-use kvproto::kvrpcpb::LockInfo;
+use kvproto::kvrpcpb;
 use std::fmt::Debug;
-
-pub use keys::{Key, KvPair, Value};
+use txn_types::{Key, Value};
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.
@@ -22,45 +22,58 @@ pub struct MvccInfo {
     pub values: Vec<(TimeStamp, Value)>,
 }
 
-/// A row mutation.
-#[derive(Debug, Clone)]
-pub enum Mutation {
-    /// Put `Value` into `Key`, overwriting any existing value.
-    Put((Key, Value)),
-    /// Delete `Key`.
-    Delete(Key),
-    /// Set a lock on `Key`.
-    Lock(Key),
-    /// Put `Value` into `Key` if `Key` does not yet exist.
-    ///
-    /// Returns [`KeyError::AlreadyExists`](kvproto::kvrpcpb::KeyError::AlreadyExists) if the key already exists.
-    Insert((Key, Value)),
-}
-
-impl Mutation {
-    pub fn key(&self) -> &Key {
-        match self {
-            Mutation::Put((ref key, _)) => key,
-            Mutation::Delete(ref key) => key,
-            Mutation::Lock(ref key) => key,
-            Mutation::Insert((ref key, _)) => key,
+impl MvccInfo {
+    pub fn into_proto(self) -> kvrpcpb::MvccInfo {
+        fn extract_2pc_values(res: Vec<(TimeStamp, Value)>) -> Vec<kvrpcpb::MvccValue> {
+            res.into_iter()
+                .map(|(start_ts, value)| {
+                    let mut value_info = kvrpcpb::MvccValue::default();
+                    value_info.set_start_ts(start_ts.into_inner());
+                    value_info.set_value(value);
+                    value_info
+                })
+                .collect()
         }
-    }
 
-    pub fn into_key_value(self) -> (Key, Option<Value>) {
-        match self {
-            Mutation::Put((key, value)) => (key, Some(value)),
-            Mutation::Delete(key) => (key, None),
-            Mutation::Lock(key) => (key, None),
-            Mutation::Insert((key, value)) => (key, Some(value)),
+        fn extract_2pc_writes(res: Vec<(TimeStamp, Write)>) -> Vec<kvrpcpb::MvccWrite> {
+            res.into_iter()
+                .map(|(commit_ts, write)| {
+                    let mut write_info = kvrpcpb::MvccWrite::default();
+                    let op = match write.write_type {
+                        WriteType::Put => kvrpcpb::Op::Put,
+                        WriteType::Delete => kvrpcpb::Op::Del,
+                        WriteType::Lock => kvrpcpb::Op::Lock,
+                        WriteType::Rollback => kvrpcpb::Op::Rollback,
+                    };
+                    write_info.set_type(op);
+                    write_info.set_start_ts(write.start_ts.into_inner());
+                    write_info.set_commit_ts(commit_ts.into_inner());
+                    write_info.set_short_value(write.short_value.unwrap_or_default());
+                    write_info
+                })
+                .collect()
         }
-    }
 
-    pub fn is_insert(&self) -> bool {
-        match self {
-            Mutation::Insert(_) => true,
-            _ => false,
+        let mut mvcc_info = kvrpcpb::MvccInfo::default();
+        if let Some(lock) = self.lock {
+            let mut lock_info = kvrpcpb::MvccLock::default();
+            let op = match lock.lock_type {
+                LockType::Put => kvrpcpb::Op::Put,
+                LockType::Delete => kvrpcpb::Op::Del,
+                LockType::Lock => kvrpcpb::Op::Lock,
+                LockType::Pessimistic => kvrpcpb::Op::PessimisticLock,
+            };
+            lock_info.set_type(op);
+            lock_info.set_start_ts(lock.ts.into_inner());
+            lock_info.set_primary(lock.primary);
+            lock_info.set_short_value(lock.short_value.unwrap_or_default());
+            mvcc_info.set_lock(lock_info);
         }
+        let vv = extract_2pc_values(self.values);
+        let vw = extract_2pc_writes(self.writes);
+        mvcc_info.set_writes(vw.into());
+        mvcc_info.set_values(vv.into());
+        mvcc_info
     }
 }
 
@@ -68,7 +81,7 @@ impl Mutation {
 #[derive(PartialEq, Debug)]
 pub enum TxnStatus {
     /// The txn was already rolled back before.
-    Rollbacked,
+    RolledBack,
     /// The txn is just rolled back due to expiration.
     TtlExpire,
     /// The txn is just rolled back due to lock not exist.
@@ -100,20 +113,8 @@ pub enum StorageCallback {
     Booleans(Callback<Vec<Result<()>>>),
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
-    Locks(Callback<Vec<LockInfo>>),
+    Locks(Callback<Vec<kvrpcpb::LockInfo>>),
     TxnStatus(Callback<TxnStatus>),
-}
-
-/// Process result of a command.
-pub enum ProcessResult {
-    Res,
-    MultiRes { results: Vec<Result<()>> },
-    MvccKey { mvcc: MvccInfo },
-    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
-    Locks { locks: Vec<LockInfo> },
-    TxnStatus { txn_status: TxnStatus },
-    NextCommand { cmd: Command },
-    Failed { err: StorageError },
 }
 
 impl StorageCallback {
