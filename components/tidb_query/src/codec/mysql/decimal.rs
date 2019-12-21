@@ -2095,12 +2095,11 @@ pub trait DecimalEncoder: NumberEncoder {
     }
 
     fn write_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
-        unsafe {
-            let p = self.bytes_mut(DECIMAL_STRUCT_SIZE).as_mut_ptr();
-            let origin = v as *const Decimal as *const u8;
-            copy_nonoverlapping(origin, p, DECIMAL_STRUCT_SIZE);
-            self.advance_mut(DECIMAL_STRUCT_SIZE);
-        }
+        let data = unsafe {
+            let p = v as *const Decimal as *const u8;
+            std::slice::from_raw_parts(p, DECIMAL_STRUCT_SIZE)
+        };
+        self.write_bytes(data)?;
         Ok(())
     }
 }
@@ -2243,14 +2242,10 @@ pub trait DecimalDecoder: NumberDecoder {
 
     /// `read_decimal_from_chunk` decode Decimal encoded by `write_decimal_to_chunk`.
     fn read_decimal_from_chunk(&mut self) -> Result<Decimal> {
-        let buf = self.bytes();
-        if buf.len() < DECIMAL_STRUCT_SIZE {
-            return Err(Error::unexpected_eof());
-        }
+        let buf = self.read_bytes(DECIMAL_STRUCT_SIZE)?;
         let d = Decimal::default();
         let dst = &d as *const Decimal as *mut u8;
         unsafe { copy_nonoverlapping(buf.as_ptr(), dst, DECIMAL_STRUCT_SIZE) }
-        self.advance(DECIMAL_STRUCT_SIZE);
         Ok(d)
     }
 }
