@@ -6,6 +6,7 @@ use tidb_query_codegen::rpn_fn;
 use crate::codec::data_type::*;
 use crate::rpn_expr::types::RpnFnCallExtra;
 use crate::Result;
+use hex::FromHex;
 use tidb_query_datatype::*;
 
 const SPACE: u8 = 0o40u8;
@@ -355,29 +356,18 @@ pub fn instr_utf8(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<In
 #[rpn_fn]
 #[inline]
 pub fn un_hex(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
-    Ok(arg.as_ref().and_then(|bytes| {
-        let mut v = Vec::with_capacity(bytes.len() / 2);
-        let skip = if bytes.len() % 2 == 1 {
-            // if the length is not the multiple of 2, first value can ignore upper byte with no effect
-            v.push(val(bytes[0])?);
-            1
-        } else {
-            0
-        };
-        for pair in bytes[skip..].chunks(2) {
-            v.push(val(pair[0])? << 4 | val(pair[1])?);
-        }
-        Some(v)
-    }))
-}
-
-fn val(c: u8) -> Option<u8> {
-    match c {
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'0'..=b'9' => Some(c - b'0'),
-        _ => None,
-    }
+    Ok(arg
+        .as_ref()
+        .map(|bytes| {
+            if bytes.len() % 2 == 1 {
+                let mut vec = vec![b'0'];
+                vec.extend_from_slice(bytes);
+                Vec::from_hex(vec)
+            } else {
+                Vec::from_hex(bytes)
+            }
+        })
+        .and_then(|hex| hex.map(Option::Some).unwrap_or(None)))
 }
 
 #[cfg(test)]
