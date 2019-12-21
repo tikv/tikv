@@ -35,6 +35,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
     ranges: Vec<KeyRange>,
     ctx: Arc<EvalConfig>,
     is_streaming: bool,
+    is_rpn_expr: bool,
 ) -> Result<Box<dyn Executor<StorageStats = S::Statistics> + Send>> {
     let mut exec_descriptors = exec_descriptors.into_iter();
     let first = exec_descriptors
@@ -173,6 +174,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
                 ranges,
                 config,
                 is_streaming,
+                req.get_is_rpn_expr(),
             )?
         } else {
             build_executors::<_, ExecSummaryCollectorEnabled>(
@@ -181,6 +183,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
                 ranges,
                 config,
                 is_streaming,
+                req.get_is_rpn_expr(),
             )?
         };
 

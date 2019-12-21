@@ -114,6 +114,7 @@ pub fn build_executors<S: Storage + 'static>(
     storage: S,
     ranges: Vec<KeyRange>,
     config: Arc<EvalConfig>,
+    is_rpn_expr: bool,
 ) -> Result<Box<dyn BatchExecutor<StorageStats = S::Statistics>>> {
     let mut executor_descriptors = executor_descriptors.into_iter();
     let mut first_ed = executor_descriptors
@@ -173,11 +174,19 @@ pub fn build_executors<S: Storage + 'static>(
                 EXECUTOR_COUNT_METRICS.with(|m| m.batch_selection.inc());
 
                 Box::new(
-                    BatchSelectionExecutor::new(
-                        config.clone(),
-                        executor,
-                        ed.take_selection().take_conditions().into(),
-                    )?
+                    (if is_rpn_expr {
+                        BatchSelectionExecutor::new_rpn(
+                            config.clone(),
+                            executor,
+                            ed.take_selection().take_rpn_conditions().into(),
+                        )
+                    } else {
+                        BatchSelectionExecutor::new(
+                            config.clone(),
+                            executor,
+                            ed.take_selection().take_conditions().into(),
+                        )
+                    })?
                     .collect_summary(summary_slot_index),
                 )
             }
@@ -249,23 +258,43 @@ pub fn build_executors<S: Storage + 'static>(
 
                 let mut d = ed.take_top_n();
                 let order_bys = d.get_order_by().len();
-                let mut order_exprs_def = Vec::with_capacity(order_bys);
-                let mut order_is_desc = Vec::with_capacity(order_bys);
-                for mut item in d.take_order_by().into_iter() {
-                    order_exprs_def.push(item.take_expr());
-                    order_is_desc.push(item.get_desc());
-                }
+                if is_rpn_expr {
+                    let mut rpn_order_exprs_def = Vec::with_capacity(order_bys);
+                    let mut order_is_desc = Vec::with_capacity(order_bys);
+                    for mut item in d.take_order_by().into_iter() {
+                        rpn_order_exprs_def.push(item.take_rpn_expr());
+                        order_is_desc.push(item.get_desc());
+                    }
 
-                Box::new(
-                    BatchTopNExecutor::new(
-                        config.clone(),
-                        executor,
-                        order_exprs_def,
-                        order_is_desc,
-                        d.get_limit() as usize,
-                    )?
-                    .collect_summary(summary_slot_index),
-                )
+                    Box::new(
+                        BatchTopNExecutor::new_rpn(
+                            config.clone(),
+                            executor,
+                            rpn_order_exprs_def,
+                            order_is_desc,
+                            d.get_limit() as usize,
+                        )?
+                        .collect_summary(summary_slot_index),
+                    )
+                } else {
+                    let mut order_exprs_def = Vec::with_capacity(order_bys);
+                    let mut order_is_desc = Vec::with_capacity(order_bys);
+                    for mut item in d.take_order_by().into_iter() {
+                        order_exprs_def.push(item.take_expr());
+                        order_is_desc.push(item.get_desc());
+                    }
+
+                    Box::new(
+                        BatchTopNExecutor::new(
+                            config.clone(),
+                            executor,
+                            order_exprs_def,
+                            order_is_desc,
+                            d.get_limit() as usize,
+                        )?
+                        .collect_summary(summary_slot_index),
+                    )
+                }
             }
             _ => {
                 return Err(other_err!(
@@ -294,8 +323,13 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let config = Arc::new(EvalConfig::from_request(&req)?);
         let encode_type = req.get_encode_type();
 
-        let out_most_executor =
-            build_executors(req.take_executors().into(), storage, ranges, config.clone())?;
+        let out_most_executor = build_executors(
+            req.take_executors().into(),
+            storage,
+            ranges,
+            config.clone(),
+            req.get_is_rpn_expr(),
+        )?;
 
         // Check output offsets
         let output_offsets = req.take_output_offsets();
