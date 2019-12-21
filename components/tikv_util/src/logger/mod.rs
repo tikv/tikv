@@ -6,16 +6,16 @@ mod formatter;
 use std::env;
 use std::fmt;
 use std::io::{self, BufWriter};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use chrono::{self, Duration};
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_async::{Async, OverflowStrategy};
 use slog_term::{Decorator, PlainDecorator, RecordDecorator, TermDecorator};
 
-use self::file_log::RotatingFileLogger;
+use self::file_log::{RotateBySize, RotateByTime, RotatingFileLogger, RotatingFileLoggerBuilder};
+use crate::config::{ReadableDuration, ReadableSize};
 
 pub use slog::Level;
 
@@ -85,17 +85,27 @@ where
     Ok(())
 }
 
-/// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger>>`.
+/// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger<N>>>`.
 // Avoid clippy type_complexity lint.
-pub type RotatingFileDecorator = PlainDecorator<BufWriter<RotatingFileLogger>>;
+pub type RotatingFileDecorator<N> = PlainDecorator<BufWriter<RotatingFileLogger<N>>>;
 
 /// Constructs a new file drainer which outputs log to a file at the specified
 /// path. The file drainer rotates for the specified timespan.
-pub fn file_drainer(
+pub fn file_drainer<N>(
     path: impl AsRef<Path>,
-    rotation_timespan: Duration,
-) -> io::Result<TikvFormat<RotatingFileDecorator>> {
-    let logger = BufWriter::new(RotatingFileLogger::new(path, rotation_timespan)?);
+    rotation_timespan: ReadableDuration,
+    rotation_size: ReadableSize,
+    rename: N,
+) -> io::Result<TikvFormat<RotatingFileDecorator<N>>>
+where
+    N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
+{
+    let logger = BufWriter::new(
+        RotatingFileLoggerBuilder::new(path, rename)
+            .add_rotator(RotateByTime::new(rotation_timespan))
+            .add_rotator(RotateBySize::new(rotation_size))
+            .build()?,
+    );
     let decorator = PlainDecorator::new(logger);
     let drain = TikvFormat::new(decorator);
     Ok(drain)

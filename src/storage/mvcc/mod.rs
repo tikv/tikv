@@ -2,98 +2,23 @@
 
 //! Multi-version concurrency control functionality.
 
-mod lock;
 mod metrics;
 mod reader;
 mod txn;
-mod write;
 
-pub use self::lock::{Lock, LockType};
 pub use self::reader::*;
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
-pub use self::write::{Write, WriteRef, WriteType};
 pub use crate::new_txn;
-pub use keys::TimeStamp;
+pub use txn_types::{
+    Key, Lock, LockType, Mutation, TimeStamp, Value, Write, WriteRef, WriteType,
+    SHORT_VALUE_MAX_LEN,
+};
 
 use std::error;
 use std::fmt;
 use std::io;
-use std::sync::Arc;
-use tikv_util::collections::HashSet;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
-
-const TS_SET_USE_VEC_LIMIT: usize = 8;
-
-/// A hybrid immutable set for timestamps.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TsSet {
-    /// When the set is empty, avoid the useless cloning of Arc.
-    Empty,
-    /// `Vec` is suitable when the set is small or the set is barely used, and it doesn't worth
-    /// converting a `Vec` into a `HashSet`.
-    Vec(Arc<Vec<TimeStamp>>),
-    /// `Set` is suitable when there are many timestamps **and** it will be queried multiple times.
-    Set(Arc<HashSet<TimeStamp>>),
-}
-
-impl Default for TsSet {
-    #[inline]
-    fn default() -> TsSet {
-        TsSet::Empty
-    }
-}
-
-impl TsSet {
-    /// Create a `TsSet` from the given vec of timestamps. It will select the proper internal
-    /// collection type according to the size.
-    #[inline]
-    pub fn new(ts: Vec<TimeStamp>) -> Self {
-        if ts.is_empty() {
-            TsSet::Empty
-        } else if ts.len() <= TS_SET_USE_VEC_LIMIT {
-            // If there are too few elements in `ts`, use Vec directly instead of making a Set.
-            TsSet::Vec(Arc::new(ts))
-        } else {
-            TsSet::Set(Arc::new(ts.into_iter().collect()))
-        }
-    }
-
-    pub fn from_u64s(ts: Vec<u64>) -> Self {
-        // This conversion is safe because TimeStamp is a transparent wrapper over u64.
-        let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
-        Self::new(ts)
-    }
-
-    pub fn vec_from_u64s(ts: Vec<u64>) -> Self {
-        // This conversion is safe because TimeStamp is a transparent wrapper over u64.
-        let ts = unsafe { ::std::mem::transmute::<Vec<u64>, Vec<TimeStamp>>(ts) };
-        Self::vec(ts)
-    }
-
-    /// Create a `TsSet` from the given vec of timestamps, but it will be forced to use `Vec` as the
-    /// internal collection type. When it's sure that the set will be queried at most once, use this
-    /// is better than `TsSet::new`, since both the querying on `Vec` and the conversion from `Vec`
-    /// to `HashSet` is O(N).
-    #[inline]
-    pub fn vec(ts: Vec<TimeStamp>) -> Self {
-        if ts.is_empty() {
-            TsSet::Empty
-        } else {
-            TsSet::Vec(Arc::new(ts))
-        }
-    }
-
-    /// Query whether the given timestamp is contained in the set.
-    #[inline]
-    pub fn contains(&self, ts: TimeStamp) -> bool {
-        match self {
-            TsSet::Empty => false,
-            TsSet::Vec(vec) => vec.contains(&ts),
-            TsSet::Set(set) => set.contains(&ts),
-        }
-    }
-}
 
 quick_error! {
     #[derive(Debug)]
@@ -117,8 +42,10 @@ quick_error! {
             description("key is locked (backoff or cleanup)")
             display("key is locked (backoff or cleanup) {:?}", info)
         }
-        BadFormatLock { description("bad format lock data") }
-        BadFormatWrite { description("bad format write data") }
+        BadFormat(err: txn_types::Error ) {
+            cause(err)
+            description(err.description())
+        }
         Committed { commit_ts: TimeStamp } {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
@@ -181,8 +108,7 @@ impl ErrorInner {
             ErrorInner::Engine(e) => e.maybe_clone().map(ErrorInner::Engine),
             ErrorInner::Codec(e) => e.maybe_clone().map(ErrorInner::Codec),
             ErrorInner::KeyIsLocked(info) => Some(ErrorInner::KeyIsLocked(info.clone())),
-            ErrorInner::BadFormatLock => Some(ErrorInner::BadFormatLock),
-            ErrorInner::BadFormatWrite => Some(ErrorInner::BadFormatWrite),
+            ErrorInner::BadFormat(e) => e.maybe_clone().map(ErrorInner::BadFormat),
             ErrorInner::TxnLockNotFound {
                 start_ts,
                 commit_ts,
@@ -316,6 +242,19 @@ impl From<codec::Error> for ErrorInner {
     }
 }
 
+impl From<txn_types::Error> for ErrorInner {
+    fn from(err: txn_types::Error) -> Self {
+        match err {
+            txn_types::Error::Io(e) => ErrorInner::Io(e),
+            txn_types::Error::Codec(e) => ErrorInner::Codec(e),
+            txn_types::Error::BadFormatLock | txn_types::Error::BadFormatWrite => {
+                ErrorInner::BadFormat(err)
+            }
+            txn_types::Error::KeyIsLocked(lock_info) => ErrorInner::KeyIsLocked(lock_info),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Generates `DefaultNotFound` error or panic directly based on config.
@@ -343,10 +282,11 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
 
 pub mod tests {
     use super::*;
-    use crate::storage::{Engine, Modify, Mutation, Options, ScanMode, Snapshot, TxnStatus};
+    use crate::storage::kv::{Engine, Modify, ScanMode, Snapshot};
+    use crate::storage::types::TxnStatus;
     use engine::CF_WRITE;
-    use keys::Key;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use txn_types::Key;
 
     fn write<E: Engine>(engine: &E, ctx: &Context, modifies: Vec<Modify>) {
         if !modifies.is_empty() {
@@ -405,7 +345,10 @@ pub mod tests {
         txn.prewrite(
             Mutation::Insert((Key::from_raw(key), value.to_vec())),
             pk,
-            &Options::default(),
+            false,
+            0,
+            0,
+            TimeStamp::default(),
         )?;
         write(engine, &ctx, txn.into_modifies());
         Ok(())
@@ -418,17 +361,29 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
         is_pessimistic_lock: bool,
-        options: Options,
+        lock_ttl: u64,
+        for_update_ts: TimeStamp,
+        txn_size: u64,
+        min_commit_ts: TimeStamp,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
-        if options.for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &options).unwrap();
-        } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+        if for_update_ts.is_zero() {
+            txn.prewrite(mutation, pk, false, lock_ttl, txn_size, min_commit_ts)
                 .unwrap();
+        } else {
+            txn.pessimistic_prewrite(
+                mutation,
+                pk,
+                is_pessimistic_lock,
+                lock_ttl,
+                for_update_ts,
+                txn_size,
+                min_commit_ts,
+            )
+            .unwrap();
         }
         write(engine, &ctx, txn.into_modifies());
     }
@@ -440,8 +395,18 @@ pub mod tests {
         pk: &[u8],
         ts: impl Into<TimeStamp>,
     ) {
-        let options = Options::default();
-        must_prewrite_put_impl(engine, key, value, pk, ts, false, options);
+        must_prewrite_put_impl(
+            engine,
+            key,
+            value,
+            pk,
+            ts,
+            false,
+            0,
+            TimeStamp::default(),
+            0,
+            TimeStamp::default(),
+        );
     }
 
     pub fn must_pessimistic_prewrite_put<E: Engine>(
@@ -453,9 +418,18 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
         is_pessimistic_lock: bool,
     ) {
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts.into();
-        must_prewrite_put_impl(engine, key, value, pk, ts, is_pessimistic_lock, options);
+        must_prewrite_put_impl(
+            engine,
+            key,
+            value,
+            pk,
+            ts,
+            is_pessimistic_lock,
+            0,
+            for_update_ts.into(),
+            0,
+            TimeStamp::default(),
+        );
     }
 
     pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
@@ -468,10 +442,18 @@ pub mod tests {
         is_pessimistic_lock: bool,
         lock_ttl: u64,
     ) {
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts.into();
-        options.lock_ttl = lock_ttl;
-        must_prewrite_put_impl(engine, key, value, pk, ts, is_pessimistic_lock, options);
+        must_prewrite_put_impl(
+            engine,
+            key,
+            value,
+            pk,
+            ts,
+            is_pessimistic_lock,
+            lock_ttl,
+            for_update_ts.into(),
+            0,
+            TimeStamp::default(),
+        );
     }
 
     pub fn must_prewrite_put_for_large_txn<E: Engine>(
@@ -483,12 +465,10 @@ pub mod tests {
         ttl: u64,
         for_update_ts: impl Into<TimeStamp>,
     ) {
-        let mut options = Options::default();
-        options.lock_ttl = ttl;
+        let lock_ttl = ttl;
         let ts = ts.into();
-        options.min_commit_ts = (ts.into_inner() + 1).into();
+        let min_commit_ts = (ts.into_inner() + 1).into();
         let for_update_ts = for_update_ts.into();
-        options.for_update_ts = for_update_ts;
         must_prewrite_put_impl(
             engine,
             key,
@@ -496,7 +476,10 @@ pub mod tests {
             pk,
             ts,
             !for_update_ts.is_zero(),
-            options,
+            lock_ttl,
+            for_update_ts,
+            0,
+            min_commit_ts,
         );
     }
 
@@ -512,15 +495,22 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        let mut options = Options::default();
-        let for_update_ts = for_update_ts.into();
-        options.for_update_ts = for_update_ts;
         let mutation = Mutation::Put((Key::from_raw(key), value.to_vec()));
+        let for_update_ts = for_update_ts.into();
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &options).unwrap_err()
-        } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
                 .unwrap_err()
+        } else {
+            txn.pessimistic_prewrite(
+                mutation,
+                pk,
+                is_pessimistic_lock,
+                0,
+                for_update_ts,
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap_err()
         }
     }
 
@@ -565,15 +555,22 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        let mut options = Options::default();
-        let for_update_ts = for_update_ts.into();
-        options.for_update_ts = for_update_ts;
         let mutation = Mutation::Delete(Key::from_raw(key));
+        let for_update_ts = for_update_ts.into();
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &options).unwrap();
-        } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
                 .unwrap();
+        } else {
+            txn.pessimistic_prewrite(
+                mutation,
+                pk,
+                is_pessimistic_lock,
+                0,
+                for_update_ts,
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap();
         }
         engine.write(&ctx, txn.into_modifies()).unwrap();
     }
@@ -609,15 +606,22 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
-        let mut options = Options::default();
         let for_update_ts = for_update_ts.into();
-        options.for_update_ts = for_update_ts;
         let mutation = Mutation::Lock(Key::from_raw(key));
         if for_update_ts.is_zero() {
-            txn.prewrite(mutation, pk, &options).unwrap();
-        } else {
-            txn.pessimistic_prewrite(mutation, pk, is_pessimistic_lock, &options)
+            txn.prewrite(mutation, pk, false, 0, 0, TimeStamp::default())
                 .unwrap();
+        } else {
+            txn.pessimistic_prewrite(
+                mutation,
+                pk,
+                is_pessimistic_lock,
+                0,
+                for_update_ts,
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap();
         }
         engine.write(&ctx, txn.into_modifies()).unwrap();
     }
@@ -641,7 +645,14 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts.into(), true);
         assert!(txn
-            .prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
+            .prewrite(
+                Mutation::Lock(Key::from_raw(key)),
+                pk,
+                false,
+                0,
+                0,
+                TimeStamp::default()
+            )
             .is_err());
     }
 
@@ -661,12 +672,13 @@ pub mod tests {
         key: &[u8],
         pk: &[u8],
         start_ts: impl Into<TimeStamp>,
-        options: Options,
+        lock_ttl: u64,
+        for_update_ts: TimeStamp,
     ) {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
+        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, lock_ttl, for_update_ts)
             .unwrap();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
@@ -692,10 +704,7 @@ pub mod tests {
         for_update_ts: impl Into<TimeStamp>,
         ttl: u64,
     ) {
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts.into();
-        options.lock_ttl = ttl;
-        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, options);
+        must_acquire_pessimistic_lock_impl(engine, key, pk, start_ts, ttl, for_update_ts.into());
     }
 
     pub fn must_acquire_pessimistic_lock_for_large_txn<E: Engine>(
@@ -719,9 +728,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
-        let mut options = Options::default();
-        options.for_update_ts = for_update_ts.into();
-        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
+        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, 0, for_update_ts.into())
             .unwrap_err()
     }
 
@@ -1104,38 +1111,5 @@ pub mod tests {
             reader.scan_keys(start.map(Key::from_raw), limit).unwrap(),
             expect
         );
-    }
-
-    #[test]
-    fn test_ts_set() {
-        let s = TsSet::new(vec![]);
-        assert_eq!(s, TsSet::Empty);
-        assert!(!s.contains(1.into()));
-
-        let s = TsSet::vec(vec![]);
-        assert_eq!(s, TsSet::Empty);
-
-        let s = TsSet::from_u64s(vec![1, 2]);
-        assert_eq!(s, TsSet::Vec(Arc::new(vec![1.into(), 2.into()])));
-        assert!(s.contains(1.into()));
-        assert!(s.contains(2.into()));
-        assert!(!s.contains(3.into()));
-
-        let s2 = TsSet::vec(vec![1.into(), 2.into()]);
-        assert_eq!(s2, s);
-
-        let big_ts_list: Vec<TimeStamp> =
-            (0..=TS_SET_USE_VEC_LIMIT as u64).map(Into::into).collect();
-        let s = TsSet::new(big_ts_list.clone());
-        assert_eq!(
-            s,
-            TsSet::Set(Arc::new(big_ts_list.clone().into_iter().collect()))
-        );
-        assert!(s.contains(1.into()));
-        assert!(s.contains((TS_SET_USE_VEC_LIMIT as u64).into()));
-        assert!(!s.contains((TS_SET_USE_VEC_LIMIT as u64 + 1).into()));
-
-        let s = TsSet::vec(big_ts_list.clone());
-        assert_eq!(s, TsSet::Vec(Arc::new(big_ts_list)));
     }
 }
