@@ -208,13 +208,6 @@ impl BackupRange {
         if let Some(end) = self.end_key.clone() {
             option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
-        /*
-        let mut cursor = snapshot.iter_cf(
-            Storage::<Engine, LockManager>::rawkv_cf(&self.cf)?,
-            option,
-            ScanMode::Forward,
-        )?;
-        */
         let mut cursor = snapshot.iter_cf(rawkv_cf(&self.cf)?, option, ScanMode::Forward)?;
         let raw: Vec<u8> = (0..0).collect();
         let empty_key = Key::from_raw(&raw);

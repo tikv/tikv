@@ -122,6 +122,28 @@ impl TestSuite {
         self.cluster.shutdown();
     }
 
+    fn must_raw_put(&self, k: Vec<u8>, v: Vec<u8>, cf: String) {
+        let mut request = RawPutRequest::default();
+        request.set_context(self.context.clone());
+        request.set_key(k);
+        request.set_value(v);
+        request.set_cf(cf);
+        let mut response = self.tikv_cli.raw_put(&request).unwrap();
+        retry_req!(
+            self.tikv_cli.raw_put(&request).unwrap(),
+            !response.has_region_error() && !response.error.is_empty(),
+            response,
+            5,
+            5000
+        );
+        assert!(
+            !response.has_region_error(),
+            "{:?}",
+            response.get_region_error(),
+        );
+        assert!(response.error.is_empty(), "{:?}", response.get_error());
+    }
+
     fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
         let mut prewrite_req = PrewriteRequest::default();
         prewrite_req.set_context(self.context.clone());
@@ -185,6 +207,30 @@ impl TestSuite {
         req.start_version = begin_ts.into_inner();
         req.end_version = backup_ts.into_inner();
         req.set_storage_backend(make_local_backend(path));
+        req.set_is_raw_kv(false);
+        let (tx, rx) = future_mpsc::unbounded();
+        for end in self.endpoints.values() {
+            let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
+            end.schedule(task).unwrap();
+        }
+        rx
+    }
+    fn backup_raw(
+        &self,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        cf: String,
+        backup_ts: TimeStamp,
+        path: &Path,
+    ) -> future_mpsc::UnboundedReceiver<BackupResponse> {
+        let mut req = BackupRequest::default();
+        req.set_start_key(start_key);
+        req.set_end_key(end_key);
+        req.start_version = backup_ts.into_inner();
+        req.end_version = backup_ts.into_inner();
+        req.set_storage_backend(make_local_backend(path));
+        req.set_is_raw_kv(true);
+        req.set_cf(cf);
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
@@ -217,6 +263,30 @@ impl TestSuite {
         let digest = crc64fast::Digest::new();
         while let Some((k, v)) = scanner.next().unwrap() {
             checksum = checksum_crc64_xor(checksum, digest.clone(), &k, &v);
+            total_kvs += 1;
+            total_bytes += (k.len() + v.len()) as u64;
+        }
+        (checksum, total_kvs, total_bytes)
+    }
+
+    fn gen_raw_kv(&self, key_idx: u64) -> (String, String) {
+        (format!("key_{}", key_idx), format!("value_{}", key_idx))
+    }
+
+    fn raw_admin_checksum(&self, key_count: u64) -> (u64, u64, u64) {
+        let mut checksum = 0;
+        let mut total_kvs = 0;
+        let mut total_bytes = 0;
+        let digest = crc64fast::Digest::new();
+
+        let (k, v) = (format!("{}", "foo"), format!("{}", "foo"));
+        checksum = checksum_crc64_xor(checksum, digest.clone(), &k.as_bytes(), &v.as_bytes());
+        total_kvs += 1;
+        total_bytes += (k.len() + v.len()) as u64;
+
+        for i in 0..key_count {
+            let (k, v) = self.gen_raw_kv(i);
+            checksum = checksum_crc64_xor(checksum, digest.clone(), &k.as_bytes(), &v.as_bytes());
             total_kvs += 1;
             total_bytes += (k.len() + v.len()) as u64;
         }
@@ -402,6 +472,156 @@ fn test_backup_meta() {
         total_bytes += f.get_total_bytes();
     }
     assert_eq!(total_kvs, key_count);
+    assert_eq!(total_kvs, admin_total_kvs);
+    assert_eq!(total_bytes, admin_total_bytes);
+    assert_eq!(checksum, admin_checksum);
+
+    suite.stop();
+}
+
+#[test]
+fn test_backup_rawkv() {
+    let mut suite = TestSuite::new(3);
+    let key_count = 60;
+
+    let cf = String::from(CF_DEFAULT);
+    for i in 0..key_count {
+        let (k, v) = suite.gen_raw_kv(i);
+        suite.must_raw_put(k.clone().into_bytes(), v.clone().into_bytes(), cf.clone());
+    }
+
+    // Push down backup request.
+    let tmp = Builder::new().tempdir().unwrap();
+    let backup_ts = suite.alloc_ts();
+    let storage_path = tmp.path().join(format!("{}", backup_ts));
+    let rx = suite.backup_raw(
+        vec![], // start
+        vec![], // end
+        cf.clone(),
+        backup_ts,
+        &storage_path,
+    );
+    let resps1 = rx.collect().wait().unwrap();
+    // Only leader can handle backup.
+    assert_eq!(resps1.len(), 1);
+    let files1 = resps1[0].files.clone();
+    // Short value is piggybacked in write cf, so we get 1 sst at least.
+    assert!(!resps1[0].get_files().is_empty());
+
+    // Delete all data, there should be no backup files.
+    suite.cluster.must_delete_range_cf(CF_DEFAULT, b"", b"");
+    // Backup file should have same contents.
+    // backup ts + 1 avoid file already exist.
+    let rx = suite.backup_raw(
+        vec![], // start
+        vec![], // end
+        cf.clone(),
+        backup_ts,
+        &tmp.path().join(format!("{}", backup_ts.next())),
+    );
+    let resps2 = rx.collect().wait().unwrap();
+    assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
+
+    // Use importer to restore backup files.
+    let backend = make_local_backend(&storage_path);
+    let storage = create_storage(&backend).unwrap();
+    let region = suite.cluster.get_region(b"");
+    let mut sst_meta = SstMeta::default();
+    sst_meta.region_id = region.get_id();
+    sst_meta.set_region_epoch(region.get_region_epoch().clone());
+    sst_meta.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
+    let mut metas = vec![];
+    for f in files1.clone().into_iter() {
+        let mut reader = storage.read(&f.name).unwrap();
+        let mut content = vec![];
+        reader.read_to_end(&mut content).unwrap();
+        let mut m = sst_meta.clone();
+        m.crc32 = calc_crc32_bytes(&content);
+        m.length = content.len() as _;
+        m.cf_name = name_to_cf(&f.name).to_owned();
+        metas.push((m, content));
+    }
+
+    for (m, c) in &metas {
+        for importer in suite.cluster.sim.rl().importers.values() {
+            let mut f = importer.create(m).unwrap();
+            f.append(c).unwrap();
+            f.finish().unwrap();
+        }
+
+        // Make ingest command.
+        let mut ingest = Request::default();
+        ingest.set_cmd_type(CmdType::IngestSst);
+        ingest.mut_ingest_sst().set_sst(m.clone());
+        let mut header = RaftRequestHeader::default();
+        let leader = suite.context.get_peer().clone();
+        header.set_peer(leader);
+        header.set_region_id(suite.context.get_region_id());
+        header.set_region_epoch(suite.context.get_region_epoch().clone());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.set_header(header);
+        cmd.mut_requests().push(ingest);
+        let resp = suite
+            .cluster
+            .call_command_on_leader(cmd, Duration::from_secs(5))
+            .unwrap();
+        assert!(!resp.get_header().has_error(), resp);
+    }
+
+    // Backup file should have same contents.
+    // backup ts + 2 avoid file already exist.
+    let rx = suite.backup_raw(
+        vec![], // start
+        vec![], // end
+        cf,
+        backup_ts,
+        &tmp.path().join(format!("{}", backup_ts.next().next())),
+    );
+    let resps3 = rx.collect().wait().unwrap();
+    assert_eq!(files1, resps3[0].files);
+
+    suite.stop();
+}
+
+#[test]
+fn test_backup_raw_meta() {
+    let mut suite = TestSuite::new(3);
+    let key_count: u64 = 60;
+    let cf = String::from(CF_DEFAULT);
+
+    for i in 0..key_count {
+        let (k, v) = suite.gen_raw_kv(i);
+        suite.must_raw_put(k.clone().into_bytes(), v.clone().into_bytes(), cf.clone());
+    }
+    let backup_ts = suite.alloc_ts();
+    // key are order by lexicographical order, 'a'-'z' will cover all
+    let (admin_checksum, admin_total_kvs, admin_total_bytes) = suite.raw_admin_checksum(key_count);
+
+    // Push down backup request.
+    let tmp = Builder::new().tempdir().unwrap();
+    let storage_path = tmp.path().join(format!("{}", backup_ts));
+    let rx = suite.backup_raw(
+        vec![], // start
+        vec![], // end
+        cf,
+        backup_ts,
+        &storage_path,
+    );
+    let resps1 = rx.collect().wait().unwrap();
+    // Only leader can handle backup.
+    assert_eq!(resps1.len(), 1);
+    let files: Vec<_> = resps1[0].files.clone().into_iter().collect();
+    // Short value is piggybacked in write cf, so we get 1 sst at least.
+    assert!(!files.is_empty());
+    let mut checksum = 0;
+    let mut total_kvs = 0;
+    let mut total_bytes = 0;
+    for f in files {
+        checksum ^= f.get_crc64xor();
+        total_kvs += f.get_total_kvs();
+        total_bytes += f.get_total_bytes();
+    }
+    assert_eq!(total_kvs, key_count + 1);
     assert_eq!(total_kvs, admin_total_kvs);
     assert_eq!(total_bytes, admin_total_bytes);
     assert_eq!(checksum, admin_checksum);

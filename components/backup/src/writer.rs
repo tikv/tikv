@@ -240,7 +240,7 @@ impl BackupRawKVWriter {
             };
             assert!(!k.is_empty());
             self.write.write(&k, &v)?;
-            self.write.update_raw_with(&k, &v, need_checksum);
+            self.write.update_raw_with(&k, &v, need_checksum)?;
         }
         Ok(())
     }
@@ -248,7 +248,7 @@ impl BackupRawKVWriter {
     /// Save buffered SST files to the given external storage.
     pub fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         let start = Instant::now();
-        let mut files = Vec::with_capacity(2);
+        let mut files = Vec::with_capacity(1);
         let mut buf = Vec::new();
         if !self.write.is_empty() {
             // Save default cf contents.
