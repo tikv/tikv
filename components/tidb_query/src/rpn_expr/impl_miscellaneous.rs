@@ -3,6 +3,7 @@
 use std::convert::{TryFrom, TryInto};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
+use uuid::Uuid;
 
 use tidb_query_codegen::rpn_fn;
 
@@ -136,6 +137,15 @@ pub fn is_ipv6(addr: &Option<Bytes>) -> Result<Option<Int>> {
     })
 }
 
+#[rpn_fn]
+#[inline]
+pub fn uuid() -> Result<Option<Bytes>> {
+    let result = Uuid::new_v4();
+    let mut buf = vec![0; uuid::adapter::Hyphenated::LENGTH];
+    result.to_hyphenated().encode_lower(&mut buf);
+    Ok(Some(buf))
+}
+
 #[cfg(test)]
 mod tests {
     use tipb::ScalarFuncSig;
@@ -143,6 +153,7 @@ mod tests {
     use super::*;
     use crate::expr::EvalContext;
     use crate::rpn_expr::test_util::RpnFnScalarEvaluator;
+    use bstr::ByteVec;
 
     fn hex(data: impl AsRef<[u8]>) -> Vec<u8> {
         hex::decode(data).unwrap()
@@ -534,5 +545,20 @@ mod tests {
                 .unwrap();
             assert_eq!(output, expect_output);
         }
+    }
+
+    #[test]
+    fn test_uuid() {
+        let got = RpnFnScalarEvaluator::new()
+            .evaluate::<Bytes>(ScalarFuncSig::Uuid)
+            .unwrap();
+        let r = got.unwrap().into_string().unwrap_or_default();
+        let v: Vec<&str> = r.split('-').collect();
+        assert_eq!(v.len(), 5);
+        assert_eq!(v[0].len(), 8);
+        assert_eq!(v[1].len(), 4);
+        assert_eq!(v[2].len(), 4);
+        assert_eq!(v[3].len(), 4);
+        assert_eq!(v[4].len(), 12);
     }
 }
