@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use tipb::{Expr, RpnExpr};
 use tipb::FieldType;
 use tipb::Selection;
+use tipb::{Expr, RpnExpr};
 
 use super::super::interface::*;
 use crate::codec::data_type::*;
@@ -63,13 +63,19 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         })
     }
 
-    pub fn new_rpn(config: Arc<EvalConfig>, src: Src, rpn_conditions_def: Vec<RpnExpr>) -> Result<Self> {
+    pub fn new_rpn(
+        config: Arc<EvalConfig>,
+        src: Src,
+        rpn_conditions_def: Vec<RpnExpr>,
+    ) -> Result<Self> {
         let mut ctx = EvalContext::new(config);
         let mut conditions = Vec::with_capacity(rpn_conditions_def.len());
         for def in rpn_conditions_def {
-            conditions.push(
-                RpnExpressionBuilder::build_from_rpn_def(def, &mut ctx, src.schema().len())?,
-            );
+            conditions.push(RpnExpressionBuilder::build_from_rpn_def(
+                def,
+                &mut ctx,
+                src.schema().len(),
+            )?);
         }
 
         Ok(Self {

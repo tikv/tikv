@@ -114,11 +114,15 @@ impl RpnExpressionBuilder {
     ) -> Result<RpnExpression> {
         let mut rpn_expr_nodes = Vec::with_capacity(rpn.get_exprs().len());
         for rpn_expr_def in rpn.take_exprs().into_iter() {
-            rpn_expr_nodes.push((match rpn_expr_def.get_tp() {
-                ExprType::ScalarFunc => map_rpn_node_fn_call(rpn_expr_def, super::super::map_expr_node_to_rpn_func),
-                ExprType::ColumnRef => map_rpn_node_column_ref(rpn_expr_def, max_columns),
-                _ => map_rpn_node_constant(rpn_expr_def, ctx),
-            })?);
+            rpn_expr_nodes.push(
+                (match rpn_expr_def.get_tp() {
+                    ExprType::ScalarFunc => {
+                        map_rpn_node_fn_call(rpn_expr_def, super::super::map_expr_node_to_rpn_func)
+                    }
+                    ExprType::ColumnRef => map_rpn_node_column_ref(rpn_expr_def, max_columns),
+                    _ => map_rpn_node_constant(rpn_expr_def, ctx),
+                })?,
+            );
         }
         Ok(RpnExpression::from(rpn_expr_nodes))
     }
@@ -276,10 +280,7 @@ where
 }
 
 #[inline]
-fn map_rpn_node_column_ref(
-    node: Expr,
-    max_columns: usize,
-) -> Result<RpnExpressionNode> {
+fn map_rpn_node_column_ref(node: Expr, max_columns: usize) -> Result<RpnExpressionNode> {
     let offset = node
         .get_val()
         .read_i64()
@@ -348,10 +349,7 @@ where
 }
 
 #[inline]
-fn map_rpn_node_fn_call<F>(
-    mut rpn_node_def: Expr,
-    fn_mapper: F,
-) -> Result<RpnExpressionNode>
+fn map_rpn_node_fn_call<F>(mut rpn_node_def: Expr, fn_mapper: F) -> Result<RpnExpressionNode>
 where
     F: Fn(&Expr) -> Result<RpnFnMeta> + Copy,
 {
@@ -379,13 +377,8 @@ where
 }
 
 #[inline]
-fn map_rpn_node_constant(
-    mut node: Expr,
-    ctx: &mut EvalContext,
-) -> Result<RpnExpressionNode> {
-    let eval_type = box_try!(EvalType::try_from(
-        node.get_field_type().as_accessor().tp()
-    ));
+fn map_rpn_node_constant(mut node: Expr, ctx: &mut EvalContext) -> Result<RpnExpressionNode> {
+    let eval_type = box_try!(EvalType::try_from(node.get_field_type().as_accessor().tp()));
 
     let scalar_value = match node.get_tp() {
         ExprType::Null => get_scalar_value_null(eval_type),
