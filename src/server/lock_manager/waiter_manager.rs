@@ -1144,7 +1144,7 @@ pub mod tests {
             // Waiters2's lifetime can't exceed it timeout.
             assert_elapsed(
                 || expect_write_conflict(f2.wait().unwrap(), 30.into(), lock_info2, 15.into()),
-                50,
+                30,
                 100,
             );
             tx.send(()).unwrap();
