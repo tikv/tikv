@@ -3,7 +3,8 @@ use ahash;
 use std::cmp::Eq;
 use std::hash::Hash;
 
-pub type HashMap<K, V> = std::collections::HashMap<K, V, std::hash::BuildHasherDefault<ahash::AHasher>>;
+pub type HashMap<K, V> =
+    std::collections::HashMap<K, V, std::hash::BuildHasherDefault<ahash::AHasher>>;
 pub type HashSet<T> = std::collections::HashSet<T, std::hash::BuildHasherDefault<ahash::AHasher>>;
 pub use std::collections::hash_map::Entry as HashMapEntry;
 
