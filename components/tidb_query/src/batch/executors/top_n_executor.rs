@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 
 use servo_arc::Arc;
 
-use tipb::{Expr, FieldType, TopN};
+use tipb::{Expr, FieldType, RpnExpr, TopN};
 
 use crate::batch::executors::util::*;
 use crate::batch::interface::*;
@@ -115,6 +115,40 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         for def in order_exprs_def {
             order_exprs.push(RpnExpressionBuilder::build_from_expr_tree(
                 def,
+                &mut ctx,
+                src.schema().len(),
+            )?);
+        }
+
+        Ok(Self {
+            // Avoid large N causing OOM
+            heap: BinaryHeap::with_capacity(n.min(1024)),
+            // Simply large enough to avoid repeated allocations
+            eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
+            order_exprs: order_exprs.into_boxed_slice(),
+            order_is_desc: order_is_desc.into_boxed_slice(),
+            n,
+
+            context: EvalContext::new(config),
+            src,
+            is_ended: false,
+        })
+    }
+
+    pub fn new_rpn(
+        config: std::sync::Arc<EvalConfig>,
+        src: Src,
+        rpn_order_exprs_def: Vec<RpnExpr>,
+        order_is_desc: Vec<bool>,
+        n: usize,
+    ) -> Result<Self> {
+        assert_eq!(rpn_order_exprs_def.len(), order_is_desc.len());
+
+        let mut order_exprs = Vec::with_capacity(rpn_order_exprs_def.len());
+        let mut ctx = EvalContext::new(config.clone());
+        for rpn_def in rpn_order_exprs_def {
+            order_exprs.push(RpnExpressionBuilder::build_from_rpn_def(
+                rpn_def,
                 &mut ctx,
                 src.schema().len(),
             )?);
