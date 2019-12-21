@@ -899,6 +899,8 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
 /// `DECIMAL_STRUCT_SIZE`is the struct size of `Decimal`.
 pub const DECIMAL_STRUCT_SIZE: usize = 40;
 
+const_assert_eq!(DECIMAL_STRUCT_SIZE, mem::size_of::<Decimal>());
+
 /// `Decimal` represents a decimal value.
 #[repr(C)]
 #[derive(Clone, Debug)]
@@ -2095,7 +2097,6 @@ pub trait DecimalEncoder: NumberEncoder {
     }
 
     fn write_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
-        const_assert_eq!(DECIMAL_STRUCT_SIZE, mem::size_of::<Decimal>());
         let data = unsafe {
             let p = v as *const Decimal as *const u8;
             std::slice::from_raw_parts(p, DECIMAL_STRUCT_SIZE)
