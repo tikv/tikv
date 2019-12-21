@@ -901,7 +901,7 @@ pub const DECIMAL_STRUCT_SIZE: usize = 40;
 
 /// `Decimal` represents a decimal value.
 #[repr(C)]
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Decimal {
     /// The number of *decimal* digits before the point.
     int_cnt: u8,
@@ -2095,6 +2095,7 @@ pub trait DecimalEncoder: NumberEncoder {
     }
 
     fn write_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
+        const_assert_eq!(DECIMAL_STRUCT_SIZE, mem::size_of::<Decimal>());
         let data = unsafe {
             let p = v as *const Decimal as *const u8;
             std::slice::from_raw_parts(p, DECIMAL_STRUCT_SIZE)
@@ -2243,9 +2244,12 @@ pub trait DecimalDecoder: NumberDecoder {
     /// `read_decimal_from_chunk` decode Decimal encoded by `write_decimal_to_chunk`.
     fn read_decimal_from_chunk(&mut self) -> Result<Decimal> {
         let buf = self.read_bytes(DECIMAL_STRUCT_SIZE)?;
-        let d = Decimal::default();
-        let dst = &d as *const Decimal as *mut u8;
-        unsafe { copy_nonoverlapping(buf.as_ptr(), dst, DECIMAL_STRUCT_SIZE) }
+        let d = unsafe {
+            let mut d = mem::MaybeUninit::<Decimal>::uninit();
+            let p = d.as_mut_ptr() as *mut u8;
+            copy_nonoverlapping(buf.as_ptr(), p, DECIMAL_STRUCT_SIZE);
+            d.assume_init()
+        };
         Ok(d)
     }
 }
