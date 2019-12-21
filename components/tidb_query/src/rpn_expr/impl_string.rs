@@ -366,23 +366,17 @@ pub fn instr_utf8(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<In
 #[inline]
 pub fn to_base64(s: &Option<Bytes>) -> Result<Option<Bytes>> {
     if let Some(s) = s {
-        let input = String::from_utf8(s.to_vec());
-        match input {
-            Ok(result) => {
-                if result.len() > tidb_query_datatype::MAX_BLOB_WIDTH as usize {
-                    return Ok(None);
-                }
-                if let Some(size) = encoded_size(s.len()) {
-                    let mut buf = vec![0; size as usize];
-                    let len_without_wrap =
-                        base64::encode_config_slice(result.as_bytes(), base64::STANDARD, &mut buf);
-                    line_wrap(&mut buf, len_without_wrap);
-                    Ok(Some(buf))
-                } else {
-                    Ok(None)
-                }
-            }
-            Err(_) => Ok(None),
+        if s.len() > tidb_query_datatype::MAX_BLOB_WIDTH as usize {
+            return Ok(None);
+        }
+        let input = s.to_vec();
+        if let Some(size) = encoded_size(s.len()) {
+            let mut buf = vec![0; size as usize];
+            let len_without_wrap = base64::encode_config_slice(&input, base64::STANDARD, &mut buf);
+            line_wrap(&mut buf, len_without_wrap);
+            Ok(Some(buf))
+        } else {
+            Ok(None)
         }
     } else {
         Ok(None)
@@ -1489,11 +1483,11 @@ mod tests {
             (Some(b"ab\tc".to_vec()), Some(b"YWIJYw==".to_vec())),
             (Some(b"qwerty123456".to_vec()), Some(b"cXdlcnR5MTIzNDU2".to_vec())),
             (Some(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".to_vec()), Some(b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrLw==".to_vec())),
-            (Some(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".to_vec()),Some(b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ01OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv".to_vec())),
+            (Some(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".to_vec()),Some(b"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nNTY3ODkrL0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4\neXowMTIzNDU2Nzg5Ky9BQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWmFiY2RlZmdoaWprbG1ub3Bx\ncnN0dXZ3eHl6MDEyMzQ1Njc4OSsv".to_vec())),
             (Some(b"ABCD  EFGHI\nJKLMNOPQRSTUVWXY\tZabcdefghijklmnopqrstuv  wxyz012\r3456789+/".to_vec()),Some(b"QUJDRCAgRUZHSEkKSktMTU5PUFFSU1RVVldYWQlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1diAgd3h5\nejAxMg0zNDU2Nzg5Ky8=".to_vec())),
             (Some(b"000000000000000000000000000000000000000000000000000000000".to_vec()),Some(b"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw".to_vec())),
             (Some(b"0000000000000000000000000000000000000000000000000000000000".to_vec()),Some(b"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMA==".to_vec())),
-            (Some(b"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000".to_vec()),Some(b"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw".to_vec())),
+            (Some(b"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000".to_vec()),Some(b"MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw".to_vec())),
         ];
         for (input, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
