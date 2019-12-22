@@ -19,7 +19,7 @@ Don't assume reviewers understand the original issue.
 
 ###  What is the type of the changes?
 <!--
-Pick one of the following and delete the others:
+Please select the type of your changes:
 -->
 - [ ] New feature (a change which adds functionality)
 - [ ] Improvement (a change which is an improvement to an existing feature)
