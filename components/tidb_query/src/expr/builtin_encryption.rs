@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::io::Read;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::Datum;
@@ -9,7 +10,6 @@ use flate2::read::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex;
 use openssl::hash::{self, MessageDigest};
-use std::io::Read;
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;

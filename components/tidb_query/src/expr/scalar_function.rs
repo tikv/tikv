@@ -1018,7 +1018,6 @@ dispatch_call! {
         OctInt => oct_int,
         RandomBytes => random_bytes,
 
-
         Conv => conv,
         Trim1Arg => trim_1_arg,
         Trim2Args => trim_2_args,
