@@ -384,7 +384,7 @@ impl ToInt for Decimal {
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         // TODO: avoid this clone
-        let dec = round_decimal_with_ctx(ctx, self.clone())?;
+        let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_i64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
@@ -394,7 +394,7 @@ impl ToInt for Decimal {
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
         // TODO: avoid this clone
-        let dec = round_decimal_with_ctx(ctx, self.clone())?;
+        let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_u64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
         let r = val.into_result_with_overflow_err(ctx, err)?;
@@ -579,7 +579,7 @@ pub fn produce_dec_with_specified_tp(
             ))?;
             dec = max_or_min_dec(dec.is_negative(), flen as u8, decimal as u8)
         } else if frac != decimal {
-            let old = dec.clone();
+            let old = dec;
             let rounded = dec
                 .round(decimal as i8, RoundMode::HalfEven)
                 .into_result_with_overflow_err(
@@ -2089,7 +2089,7 @@ mod tests {
         for (dec, flen, decimal, want) in cases {
             ft.set_flen(flen);
             ft.set_decimal(decimal);
-            let nd = produce_dec_with_specified_tp(&mut ctx, dec.clone(), &ft);
+            let nd = produce_dec_with_specified_tp(&mut ctx, dec, &ft);
             assert!(nd.is_ok());
             let nd = nd.unwrap();
             assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
@@ -2476,7 +2476,7 @@ mod tests {
                 }
 
                 // call produce_dec_with_specified_tp
-                let r = produce_dec_with_specified_tp(&mut ctx, input.clone(), &rft);
+                let r = produce_dec_with_specified_tp(&mut ctx, input, &rft);
 
                 // make log
                 let rs = r.as_ref().map(|x| x.to_string());

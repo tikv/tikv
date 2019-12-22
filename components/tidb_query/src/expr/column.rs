@@ -142,7 +142,7 @@ mod tests {
             Datum::I64(-30),
             Datum::U64(u64::MAX),
             Datum::F64(124.32),
-            Datum::Dec(dec.clone()),
+            Datum::Dec(dec),
             Datum::Bytes(s.clone()),
             Datum::Dur(dur),
         ];
@@ -152,7 +152,7 @@ mod tests {
             EvalResults(Some(-30), None, None, None, None, None, None),
             EvalResults(Some(-1), None, None, None, None, None, None),
             EvalResults(None, Some(124.32), None, None, None, None, None),
-            EvalResults(None, None, Some(dec.clone()), None, None, None, None),
+            EvalResults(None, None, Some(dec), None, None, None, None),
             EvalResults(None, None, None, Some(s.clone()), None, None, None),
             EvalResults(None, None, None, None, None, Some(dur), None),
         ];

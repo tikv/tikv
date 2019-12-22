@@ -903,7 +903,7 @@ const_assert_eq!(DECIMAL_STRUCT_SIZE, mem::size_of::<Decimal>());
 
 /// `Decimal` represents a decimal value.
 #[repr(C)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub struct Decimal {
     /// The number of *decimal* digits before the point.
     int_cnt: u8,
@@ -1135,7 +1135,7 @@ impl Decimal {
             return Ok(self);
         }
 
-        let tmp = self.clone();
+        let tmp = self;
         let ret = self.round(decimal as i8, RoundMode::HalfEven).unwrap();
         // TODO: process over_flow
         if !ret.is_zero() && frac > decimal && ret != tmp {
@@ -1934,7 +1934,7 @@ impl ToString for Decimal {
 
 impl Display for Decimal {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
-        let mut dec = self.clone();
+        let mut dec = *self;
         dec = dec
             .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
             .unwrap();
@@ -2339,6 +2339,7 @@ impl<'a, 'b> Div<&'a Decimal> for &'b Decimal {
 impl Rem for Decimal {
     type Output = Option<Res<Decimal>>;
 
+    #[allow(clippy::op_ref)]
     fn rem(self, rhs: Decimal) -> Option<Res<Decimal>> {
         &self % &rhs
     }
@@ -3552,20 +3553,20 @@ mod tests {
 
         for (pos, neg) in cases {
             let pos_dec: Decimal = pos.parse().unwrap();
-            let res = -pos_dec.clone();
+            let res = -pos_dec;
             assert_eq!(format!("{}", res), neg);
             assert!((&pos_dec + &res).is_zero());
 
             let neg_dec: Decimal = neg.parse().unwrap();
-            let res = -neg_dec.clone();
+            let res = -neg_dec;
             assert_eq!(format!("{}", res), pos);
             assert!((&neg_dec + &res).is_zero());
         }
 
         let max_dec = super::max_or_min_dec(false, 40, 20);
         let min_dec = super::max_or_min_dec(true, 40, 20);
-        assert_eq!(min_dec, -max_dec.clone());
-        assert_eq!(max_dec, -min_dec.clone());
+        assert_eq!(min_dec, -max_dec);
+        assert_eq!(max_dec, -min_dec);
     }
 
     #[test]
