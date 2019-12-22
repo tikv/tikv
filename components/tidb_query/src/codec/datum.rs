@@ -290,7 +290,7 @@ impl Datum {
             Datum::I64(i) => format!("{}", i),
             Datum::U64(u) => format!("{}", u),
             Datum::F64(f) => format!("{}", f),
-            Datum::Bytes(ref bs) => String::from_utf8(bs.to_vec())?,
+            Datum::Bytes(ref bs) => unsafe { String::from_utf8_unchecked(bs.to_vec()) },
             Datum::Time(t) => format!("{}", t),
             Datum::Dur(ref d) => format!("{}", d),
             Datum::Dec(ref d) => format!("{}", d),
@@ -304,7 +304,7 @@ impl Datum {
     /// source function name is `ToString`.
     pub fn into_string(self) -> Result<String> {
         if let Datum::Bytes(bs) = self {
-            let data = String::from_utf8(bs)?;
+            let data = unsafe { String::from_utf8_unchecked(bs) };
             Ok(data)
         } else {
             self.to_string()

@@ -4,11 +4,12 @@ use std::borrow::Cow;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::Datum;
+use crate::expr_util::rand::gen_random_bytes;
 use flate2::read::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex;
 use openssl::hash::{self, MessageDigest};
-use std::io::prelude::*;
+use std::io::Read;
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;
@@ -136,6 +137,21 @@ impl ScalarFunc {
             return Ok(Some(0));
         }
         Ok(Some(i64::from(LittleEndian::read_u32(&input[0..4]))))
+    }
+
+    #[inline]
+    pub fn random_bytes<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let length = try_opt!(self.children[0].eval_int(ctx, row));
+        if length < 1 || length > 1024 {
+            ctx.warnings
+                .append_warning(Error::incorrect_parameters("random_bytes"));
+            return Ok(None);
+        }
+        Ok(Some(Cow::Owned(gen_random_bytes(length))))
     }
 }
 
@@ -337,6 +353,30 @@ mod tests {
             let s = Datum::Bytes(hex::decode(s.as_bytes().to_vec()).unwrap());
             let got = eval_func(ScalarFuncSig::UncompressedLength, &[s]).unwrap();
             assert_eq!(got, Datum::I64(exp));
+        }
+    }
+
+    #[test]
+    fn test_random_bytes() {
+        let cases = vec![1, 32, 233, 1024];
+
+        for len in cases {
+            let got = eval_func(ScalarFuncSig::RandomBytes, &[Datum::I64(len)])
+                .ok()
+                .unwrap();
+            assert_eq!(got.to_string().unwrap().len() as i64, len);
+        }
+
+        let null_cases = vec![
+            (Datum::I64(-32), Datum::Null),
+            (Datum::I64(1025), Datum::Null),
+            (Datum::I64(0), Datum::Null),
+            (Datum::Null, Datum::Null),
+        ];
+
+        for (arg, exp) in null_cases {
+            let got = eval_func(ScalarFuncSig::RandomBytes, &[arg]).ok().unwrap();
+            assert_eq!(got, exp)
         }
     }
 }
