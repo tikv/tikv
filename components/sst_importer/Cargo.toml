@@ -7,20 +7,20 @@ publish = false
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
-	"engine_traits/protobuf-codec",
-	"external_storage/protobuf-codec",
-	"grpcio/protobuf-codec",
-	"keys/protobuf-codec",
-	"kvproto/protobuf-codec",
-	"txn_types/protobuf-codec",
+  "engine_traits/protobuf-codec",
+  "external_storage/protobuf-codec",
+  "grpcio/protobuf-codec",
+  "keys/protobuf-codec",
+  "kvproto/protobuf-codec",
+  "txn_types/protobuf-codec",
 ]
 prost-codec = [
-	"engine_traits/prost-codec",
-	"external_storage/prost-codec",
-	"grpcio/prost-codec",
-	"keys/prost-codec",
-	"kvproto/prost-codec",
-	"txn_types/prost-codec",
+  "engine_traits/prost-codec",
+  "external_storage/prost-codec",
+  "grpcio/prost-codec",
+  "keys/prost-codec",
+  "kvproto/prost-codec",
+  "txn_types/prost-codec",
 ]
 
 [dependencies]

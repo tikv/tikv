@@ -8,18 +8,18 @@ description = "A query engine to run TiDB pushed down executors"
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
-	"kvproto/protobuf-codec",
-	"tidb_query_datatype/protobuf-codec",
-	"tikv_util/protobuf-codec",
-	"tipb/protobuf-codec",
-	"tipb_helper/protobuf-codec",
+  "kvproto/protobuf-codec",
+  "tidb_query_datatype/protobuf-codec",
+  "tikv_util/protobuf-codec",
+  "tipb/protobuf-codec",
+  "tipb_helper/protobuf-codec",
 ]
 prost-codec = [
-	"kvproto/prost-codec",
-	"tidb_query_datatype/prost-codec",
-	"tikv_util/prost-codec",
-	"tipb/prost-codec",
-	"tipb_helper/prost-codec",
+  "kvproto/prost-codec",
+  "tidb_query_datatype/prost-codec",
+  "tikv_util/prost-codec",
+  "tipb/prost-codec",
+  "tipb_helper/prost-codec",
 ]
 
 [dependencies]

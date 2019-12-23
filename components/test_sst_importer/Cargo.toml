@@ -11,18 +11,18 @@ test = false
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
-	"engine/protobuf-codec",
-	"engine_rocks/protobuf-codec",
-	"engine_traits/protobuf-codec",
-	"keys/protobuf-codec",
-	"kvproto/protobuf-codec",
+  "engine/protobuf-codec",
+  "engine_rocks/protobuf-codec",
+  "engine_traits/protobuf-codec",
+  "keys/protobuf-codec",
+  "kvproto/protobuf-codec",
 ]
 prost-codec = [
-	"engine/prost-codec",
-	"engine_rocks/prost-codec",
-	"engine_traits/prost-codec",
-	"keys/prost-codec",
-	"kvproto/prost-codec",
+  "engine/prost-codec",
+  "engine_rocks/prost-codec",
+  "engine_traits/prost-codec",
+  "keys/prost-codec",
+  "kvproto/prost-codec",
 ]
 
 [dependencies]

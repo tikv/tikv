@@ -8,12 +8,12 @@ publish = false
 default = ["protobuf-codec"]
 failpoints = ["fail/failpoints"]
 protobuf-codec = [
-	"grpcio/protobuf-codec",
-	"raft/protobuf-codec",
+  "grpcio/protobuf-codec",
+  "raft/protobuf-codec",
 ]
 prost-codec = [
-	"grpcio/prost-codec",
-	"raft/prost-codec",
+  "grpcio/prost-codec",
+  "raft/prost-codec",
 ]
 
 [dependencies]

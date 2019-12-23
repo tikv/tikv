@@ -7,12 +7,12 @@ publish = false
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
-    "tidb_query_datatype/protobuf-codec",
-    "tipb/protobuf-codec"
+  "tidb_query_datatype/protobuf-codec",
+  "tipb/protobuf-codec"
 ]
 prost-codec = [
-    "tidb_query_datatype/prost-codec",
-    "tipb/prost-codec"
+  "tidb_query_datatype/prost-codec",
+  "tipb/prost-codec"
 ]
 
 [dependencies]
