@@ -341,10 +341,10 @@ impl BatchExecutor for BatchFixtureExecutor {
         for col in &mut self.columns {
             let mut column = LazyBatchColumn::raw_with_capacity(scan_rows);
             if col.len() > scan_rows {
-                column.mut_raw().extend_n(col.raw(), scan_rows);
+                column.mut_raw().copy_n_from(col.raw(), scan_rows);
                 col.mut_raw().shift(scan_rows);
             } else {
-                column.mut_raw().extend(col.raw());
+                column.mut_raw().copy_from(col.raw());
                 col.mut_raw().clear();
             }
             columns.push(column);

@@ -3,9 +3,9 @@
 use std::convert::TryFrom;
 
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tikv_util::buffer_vec::BufferVec;
 use tipb::FieldType;
 
-use super::BufferVec;
 use crate::codec::data_type::VectorValue;
 use crate::codec::raw_datum::RawDatumDecoder;
 use crate::codec::Result;
