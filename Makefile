@@ -241,7 +241,6 @@ test:
 # This is used for CI test
 ci_test:
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --all-targets --no-run --message-format=json
-	bash scripts/check-bins-for-jemalloc.sh
 
 ## Static analysis
 ## ---------------
