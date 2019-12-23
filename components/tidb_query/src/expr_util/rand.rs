@@ -1,3 +1,4 @@
+pub(crate) const MAX_RAND_BYTES_LENGTH: i64 = 1024;
 const MAX_RAND_VALUE: u32 = 0x3FFFFFFF;
 
 pub struct MySQLRng {

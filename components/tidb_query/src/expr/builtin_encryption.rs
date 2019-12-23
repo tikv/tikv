@@ -5,7 +5,7 @@ use std::io::Read;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::Datum;
-use crate::expr_util::rand::gen_random_bytes;
+use crate::expr_util::rand::{gen_random_bytes, MAX_RAND_BYTES_LENGTH};
 use flate2::read::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex;
@@ -146,7 +146,7 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let length = try_opt!(self.children[0].eval_int(ctx, row));
-        if length < 1 || length > 1024 {
+        if length < 1 || length > MAX_RAND_BYTES_LENGTH {
             ctx.warnings
                 .append_warning(Error::incorrect_parameters("random_bytes"));
             return Ok(None);
@@ -364,7 +364,11 @@ mod tests {
             let got = eval_func(ScalarFuncSig::RandomBytes, &[Datum::I64(len)])
                 .ok()
                 .unwrap();
-            assert_eq!(got.to_string().unwrap().len() as i64, len);
+            if let Datum::Bytes(bs) = got {
+                assert_eq!(bs.len() as i64, len);
+            } else {
+                panic!("Generate random bytes failed");
+            }
         }
 
         let null_cases = vec![
@@ -376,7 +380,7 @@ mod tests {
 
         for (arg, exp) in null_cases {
             let got = eval_func(ScalarFuncSig::RandomBytes, &[arg]).ok().unwrap();
-            assert_eq!(got, exp)
+            assert_eq!(got, exp);
         }
     }
 }

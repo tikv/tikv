@@ -6,7 +6,7 @@ use tidb_query_codegen::rpn_fn;
 use super::super::expr::{Error, EvalContext};
 
 use crate::codec::data_type::*;
-use crate::expr_util::rand::gen_random_bytes;
+use crate::expr_util::rand::{gen_random_bytes, MAX_RAND_BYTES_LENGTH};
 use crate::Result;
 
 const SHA0: i64 = 0;
@@ -86,7 +86,7 @@ pub fn uncompressed_length(ctx: &mut EvalContext, arg: &Option<Bytes>) -> Result
 pub fn random_bytes(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Bytes>> {
     match arg {
         Some(arg) => {
-            if *arg < 1 || *arg > 1024 {
+            if *arg < 1 || *arg > MAX_RAND_BYTES_LENGTH {
                 ctx.warnings
                     .append_warning(Error::incorrect_parameters("random_bytes"));
                 return Ok(None);
