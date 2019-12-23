@@ -29,10 +29,10 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, thread, u64};
 
+use fs2::FileExt;
 use protobuf::Message;
 use rand;
 use rand::rngs::ThreadRng;
-use fs2::FileExt;
 
 pub mod buffer_vec;
 pub mod codec;
@@ -575,11 +575,11 @@ pub fn is_zero_duration(d: &Duration) -> bool {
 mod tests {
     use super::*;
 
+    use fs2;
     use raft::eraftpb::Entry;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
-    use fs2;
 
     use tempfile::Builder;
 
@@ -777,11 +777,11 @@ mod tests {
         let cap1 = disk_stats_before.available_space();
         let reserve_size = 2 * 1024 * 1024;
         reserve_space_for_recover(data_dir, reserve_size);
-        let disk_stats_after= fs2::statvfs(data_dir).unwrap();
+        let disk_stats_after = fs2::statvfs(data_dir).unwrap();
         let cap2 = disk_stats_after.available_space();
         assert_eq!(cap1 - cap2, reserve_size);
         reserve_space_for_recover(data_dir, 0);
-        let disk_stats= fs2::statvfs(data_dir).unwrap();
+        let disk_stats = fs2::statvfs(data_dir).unwrap();
         let cap3 = disk_stats.available_space();
         assert_eq!(cap1, cap3);
     }
