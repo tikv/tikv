@@ -278,7 +278,7 @@ pub fn cpu_total(state: &pid::Stat) -> f64 {
         Ok(cpu_period) => ((state.utime + state.stime) as f64)
             .div(cpu_period as f64)
             .div(100.0),
-        Err(e) => 0.0,
+        Err(_) => 0.0,
     }
 }
 
