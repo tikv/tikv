@@ -21,11 +21,11 @@ Don't assume reviewers understand the original issue.
 <!--
 Please select the type of your changes:
 -->
-- [ ] New feature (a change which adds functionality)
-- [ ] Improvement (a change which is an improvement to an existing feature)
-- [ ] Bugfix (a change which fixes an issue)
-- [ ] Engineering (engineering change which doesn't change any feature or fix any issue)
-- [ ] Misc (other changes)
+- New feature (a change which adds functionality)
+- Improvement (a change which is an improvement to an existing feature)
+- Bugfix (a change which fixes an issue)
+- Engineering (engineering change which doesn't change any feature or fix any issue)
+- Misc (other changes)
 
 ###  How is the PR tested?
 <!--
