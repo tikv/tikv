@@ -18,6 +18,11 @@
 ## timestamp appended to its name and a new file will be created.
 # log-rotation-timespan = "24h"
 
+## Size of log file that triggers the log rotation.
+## Once the size of log file exceeds the threshold value, the log file will be rotated
+## and place the old log file in a new file named by orginal file name subbfixed by a timestamp.
+# log-rotation-size = "300MB"
+
 ## The interval at which to refresh the local config
 ## Set it small are good to debug and tuning.
 # refresh-config-interval = "30s"
@@ -297,7 +302,7 @@
 ## When it is set to `true`, TiKV will try to split a Region with table prefix if that Region
 ## crosses tables.
 ## It is recommended to turn off this option if there will be a large number of tables created.
-# split-region-on-table = true
+# split-region-on-table = false
 
 ## One split check produces several split keys in batch. This config limits the number of produced
 ## split keys in one batch.
@@ -455,14 +460,6 @@
 ## enabled, it can't fall back. Forced fallback may result in data loss.
 ## default: false
 # enabled = false
-
-## Specifies `Titan` blob files directory
-## default: "titandb" (if not specific or empty)
-# dirname = ""
-
-## Disable blob file gc
-# default: false
-# disable-gc = false
 
 ## Maximum number of threads of `Titan` background gc jobs.
 # default: 1
@@ -622,29 +619,10 @@
 # default: 0
 # blob-cache-size = "0GB"
 
-## The minimum batch size of one gc job. The total blob file size
-## of one gc job cannot smaller than this threshold.
-## default: 16MB
-# min-gc-batch-size = "16MB"
-
-## The maximum batch size of one gc job. The total blob file size
-## of one gc job cannot exceed this threshold.
-# max-gc-batch-size = "64MB"
-
 ## If the ratio of discardable size of a blob file is larger than
 ## this threshold, the blob file will be GCed out.
 # default: 0.5
 # discardable-ratio = 0.5
-
-## The gc job will sample the target blob files to see if its
-## discardable ratio is smaller than discardable-ratio metioned
-## above before gc start, if so the blob file will be exclude.
-# sample-ratio = 0.1
-
-## If the size of the blob file is smaller than this threshold,
-## the blob file will be merge.
-# default: 8MB
-# merge-small-file-threshold = "8MB"
 
 ## The mode used to process blob files. In read-only mode Titan
 ## stops writing value into blob log. In fallback mode Titan
@@ -764,13 +742,15 @@
 ## Enable pessimistic transaction
 # enabled = true
 
-## Time to wait in milliseconds before responding to TiDB when pessimistic
+## The default and maximum delay in milliseconds before responding to TiDB when pessimistic
 ## transactions encounter locks
 # wait-for-lock-timeout = 3000
 
-## Time to delay in milliseconds before responding to TiDB when other transactions
-## release locks that pessimistic transactions are waiting for(0 to disable).
-# wake-up-delay-duration = 1
+## If more than one transaction is waiting for the same lock, only the one with smallest
+## start timestamp will be waked up immediately when the lock is released. Others will
+## be waked up after `wake_up_delay_duration(ms)` to reduce contention and make the oldest
+## one more likely acquires the lock.
+# wake-up-delay-duration = 100
 
 [gc]
 ## The number of keys to GC in one batch.

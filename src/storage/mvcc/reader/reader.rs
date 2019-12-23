@@ -2,11 +2,9 @@
 
 use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::default_not_found_error;
-use crate::storage::mvcc::Result;
+use crate::storage::mvcc::{default_not_found_error, Result};
 use engine::rocks::TablePropertiesCollection;
-use engine::IterOption;
-use engine::{CF_LOCK, CF_WRITE};
+use engine::{IterOption, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
@@ -447,7 +445,6 @@ mod tests {
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use crate::storage::Options;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
@@ -513,7 +510,8 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.prewrite(m, pk, &Options::default()).unwrap();
+            txn.prewrite(m, pk, false, 0, 0, TimeStamp::default())
+                .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -526,8 +524,16 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            let options = Options::default();
-            txn.pessimistic_prewrite(m, pk, true, &options).unwrap();
+            txn.pessimistic_prewrite(
+                m,
+                pk,
+                true,
+                0,
+                TimeStamp::default(),
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -541,9 +547,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            let mut options = Options::default();
-            options.for_update_ts = for_update_ts.into();
-            txn.acquire_pessimistic_lock(k, pk, false, &options)
+            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into())
                 .unwrap();
             self.write(txn.into_modifies());
         }

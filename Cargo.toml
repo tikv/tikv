@@ -43,6 +43,8 @@ protobuf-codec = [
 name = "tikv"
 
 [dependencies]
+async-stream = "0.2"
+async-trait = "0.1"
 backtrace = "0.3.9"
 bitflags = "1.0.1"
 byteorder = "1.2"
@@ -62,6 +64,7 @@ fail = "0.3"
 failure = "0.1"
 fs2 = "0.4"
 futures = "0.1"
+futures03 = { package = "futures", version = "0.3.1", features = ["compat"] }
 futures-cpupool = "0.1"
 futures-locks = "0.1"
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
@@ -123,12 +126,12 @@ git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
+rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 features = ["nightly", "push", "process"]
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
+rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
@@ -189,7 +192,7 @@ debug = 1 # required for line numbers in tests, see tikv #5049
 codegen-units = 4
 lto = false
 incremental = true
-panic = 'abort'
+panic = 'unwind'
 debug-assertions = false
 overflow-checks = false
 rpath = false
@@ -200,7 +203,7 @@ debug = false
 codegen-units = 1
 lto = "thin"
 incremental = false
-panic = 'abort'
+panic = 'unwind'
 debug-assertions = false
 overflow-checks = false
 rpath = false
