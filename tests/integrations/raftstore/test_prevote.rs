@@ -130,7 +130,7 @@ fn test_prevote<T: Simulator>(
 
 #[test]
 fn test_prevote_partition_leader_in_majority_detect_in_majority() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // Since the leader is in the majority and not rebooted, it sees no prevote.
     test_prevote(
         &mut cluster,
@@ -144,7 +144,7 @@ fn test_prevote_partition_leader_in_majority_detect_in_majority() {
 // TODO: Enable detect after failure when we can reliably capture the prevote.
 #[test]
 fn test_prevote_partition_leader_in_majority_detect_in_minority() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
     // old leader.
     test_prevote(
@@ -159,7 +159,7 @@ fn test_prevote_partition_leader_in_majority_detect_in_minority() {
 // TODO: Enable detect after failure when we can reliably capture the prevote.
 #[test]
 fn test_prevote_partition_leader_in_minority_detect_in_majority() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
     // old leader.
     test_prevote(
@@ -174,7 +174,7 @@ fn test_prevote_partition_leader_in_minority_detect_in_majority() {
 // TODO: Enable detect after failure when we can reliably capture the prevote.
 #[test]
 fn test_prevote_partition_leader_in_minority_detect_in_minority() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // The follower is in the minority and is part of a prevote process. On rejoin it adopts the
     // old leader.
     test_prevote(
@@ -188,7 +188,7 @@ fn test_prevote_partition_leader_in_minority_detect_in_minority() {
 
 #[test]
 fn test_prevote_reboot_majority_followers() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // A prevote round will start, but nothing will succeed.
     test_prevote(
         &mut cluster,
@@ -201,7 +201,7 @@ fn test_prevote_reboot_majority_followers() {
 
 #[test]
 fn test_prevote_reboot_minority_followers() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     // A prevote round will start, but nothing will succeed until recovery.
     test_prevote(
         &mut cluster,
@@ -237,7 +237,7 @@ fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
 #[cfg(feature = "protobuf-codec")]
 #[test]
 fn test_server_pair_isolated() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     test_pair_isolated(&mut cluster);
 }
 
@@ -273,7 +273,7 @@ fn test_isolated_follower_leader_does_not_change<T: Simulator>(cluster: &mut Clu
 
 #[test]
 fn test_server_isolated_follower_leader_does_not_change() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_node_cluster(0, 5);
     test_isolated_follower_leader_does_not_change(&mut cluster);
 }
 
