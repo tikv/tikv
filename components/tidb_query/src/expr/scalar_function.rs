@@ -382,6 +382,7 @@ impl ScalarFunc {
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::SubTimeDateTimeNull
             | ScalarFuncSig::SubTimeDurationNull
+            | ScalarFuncSig::Uuid
             | ScalarFuncSig::Pi => (0, 0),
 
             // unimplemented signature
@@ -511,7 +512,6 @@ impl ScalarFunc {
             | ScalarFuncSig::UtcTimestampWithoutArg
             | ScalarFuncSig::UtcTimeWithArg
             | ScalarFuncSig::UtcTimeWithoutArg
-            | ScalarFuncSig::Uuid
             | ScalarFuncSig::ValuesDecimal
             | ScalarFuncSig::ValuesDuration
             | ScalarFuncSig::ValuesInt
@@ -1006,6 +1006,7 @@ dispatch_call! {
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
         Md5 => md5,
+        Uuid => uuid,
         Sha1 => sha1,
         Sha2 => sha2,
         Elt => elt,
@@ -1510,6 +1511,7 @@ mod tests {
                     ScalarFuncSig::SubTimeDateTimeNull,
                     ScalarFuncSig::SubTimeDurationNull,
                     ScalarFuncSig::Pi,
+                    ScalarFuncSig::Uuid,
                 ],
                 0,
                 0,
@@ -1660,7 +1662,6 @@ mod tests {
             ScalarFuncSig::UtcTimestampWithoutArg,
             ScalarFuncSig::UtcTimeWithArg,
             ScalarFuncSig::UtcTimeWithoutArg,
-            ScalarFuncSig::Uuid,
             ScalarFuncSig::ValuesDecimal,
             ScalarFuncSig::ValuesDuration,
             ScalarFuncSig::ValuesInt,
