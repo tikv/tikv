@@ -25,9 +25,9 @@ pub trait Iterator {
     fn prev(&mut self) -> Result<bool>;
     fn next(&mut self) -> Result<bool>;
 
-    /// Must be called when `self.valid() == Ok(true)`.
+    /// Only be called when `self.valid() == Ok(true)`.
     fn key(&self) -> &[u8];
-    /// Must be called when `self.valid() == Ok(true)`.
+    /// Only be called when `self.valid() == Ok(true)`.
     fn value(&self) -> &[u8];
 
     fn valid(&self) -> Result<bool>;
@@ -79,7 +79,8 @@ pub trait Iterable {
     fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut iter = self.iterator()?;
         if iter.seek(SeekKey::Key(key))? {
-            return Ok(Some((iter.key().to_vec(), iter.value().to_vec())));
+            let (k, v) = (iter.key().to_vec(), iter.value().to_vec());
+            return Ok(Some((k, v)));
         }
         Ok(None)
     }
@@ -99,9 +100,9 @@ where
     Iter: Iterator,
     F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
-    let mut it_valid = it.seek(SeekKey::Key(start_key))?;
-    while it_valid {
-        it_valid = f(it.key(), it.value())? && it.next()?;
+    let mut remained = it.seek(SeekKey::Key(start_key))?;
+    while remained {
+        remained = f(it.key(), it.value())? && it.next()?;
     }
     Ok(())
 }

@@ -164,9 +164,9 @@ pub trait Iterator: Send {
         Ok(())
     }
 
-    /// Must be called when `self.valid() == Ok(true)`.
+    /// Only be called when `self.valid() == Ok(true)`.
     fn key(&self) -> &[u8];
-    /// Must be called when `self.valid() == Ok(true)`.
+    /// Only be called when `self.valid() == Ok(true)`.
     fn value(&self) -> &[u8];
 }
 

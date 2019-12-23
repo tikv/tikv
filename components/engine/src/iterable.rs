@@ -154,9 +154,9 @@ fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], mut f: F) -> Result<(
 where
     F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
-    let mut it_valid = it.seek(start_key.into())?;
-    while it_valid {
-        it_valid = f(it.key(), it.value())? && it.next()?;
+    let mut remained = it.seek(start_key.into())?;
+    while remained {
+        remained = f(it.key(), it.value())? && it.next()?;
     }
     Ok(())
 }
