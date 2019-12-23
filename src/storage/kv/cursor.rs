@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 use std::cmp::Ordering;
+use std::ops::Bound;
 
 use engine::CfName;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
@@ -484,10 +485,10 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         };
         let mut iter_opt = IterOption::new(l_bound, u_bound, self.fill_cache);
         if let Some(ts) = self.hint_min_ts {
-            iter_opt.set_hint_min_ts(Bound::Included(ts.into()));
+            iter_opt.set_hint_min_ts(Bound::Included(ts.into_inner()));
         }
         if let Some(ts) = self.hint_max_ts {
-            iter_opt.set_hint_max_ts(Bound::Included(ts.into()));
+            iter_opt.set_hint_max_ts(Bound::Included(ts.into_inner()));
         }
         if self.prefix_seek {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
