@@ -59,7 +59,7 @@ pub fn delete_all_in_range_cf(
                 db.write(&wb)?;
                 wb.clear();
             }
-            it_valid = it.next().unwrap();
+            it_valid = it.next()?;
         }
     }
 
