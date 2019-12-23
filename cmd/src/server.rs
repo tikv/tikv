@@ -194,7 +194,8 @@ impl TiKVServer {
         tikv_util::reserve_space_for_recover(
             &self.config.storage.data_dir,
             self.config.storage.reserve_space_for_recover.0,
-        );
+        )
+        .unwrap();
     }
 
     fn init_engines(&mut self) {
