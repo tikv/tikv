@@ -55,6 +55,7 @@ use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::FutureScheduler;
+use tikv_util::Either;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -1807,13 +1808,14 @@ impl ConfigController {
     pub fn update_or_rollback(
         &mut self,
         mut incoming: TiKvConfig,
-    ) -> CfgResult<Option<ConfigChange>> {
+    ) -> CfgResult<Either<ConfigChange, bool>> {
         if incoming.validate().is_err() {
-            return Ok(Some(incoming.diff(&self.current)));
+            let diff = incoming.diff(&self.current);
+            return Ok(Either::Left(diff));
         }
         let diff = self.current.diff(&incoming);
         if diff.is_empty() {
-            return Ok(None);
+            return Ok(Either::Right(false));
         }
         let mut to_update = HashMap::with_capacity(diff.len());
         for (name, change) in diff.into_iter() {
@@ -1835,7 +1837,7 @@ impl ConfigController {
             }
         }
         self.current.update(to_update);
-        Ok(None)
+        Ok(Either::Right(true))
     }
 
     pub fn register(&mut self, module: &str, cfg_mgr: Box<dyn ConfigManager>) {
@@ -1929,16 +1931,18 @@ impl ConfigHandler {
             StatusCode::WrongVersion if cmp_version(&self.version, &version) == Ordering::Less => {
                 let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
                 match self.config_controller.update_or_rollback(incoming)? {
-                    Some(rollback_change) => {
+                    Either::Left(rollback_change) => {
                         debug!(
                             "tried to update local config to an invalid config";
-                            "version" => ?resp.version
+                            "version" => ?version
                         );
                         let entries = to_config_entry(rollback_change)?;
                         self.update_config(version, entries, pd_client)?;
                     }
-                    None => {
-                        info!("local config updated"; "version" => ?resp.version);
+                    Either::Right(updated) => {
+                        if updated {
+                            info!("local config updated"; "version" => ?version);
+                        }
                         self.version = version;
                     }
                 }

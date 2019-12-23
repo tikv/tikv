@@ -2276,7 +2276,7 @@ mod tests {
         let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
 
         // config should not change
-        assert_eq!(rollback, None);
+        assert_eq!(rollback.right(), Some(false));
         validate_store(&router, move |cfg: &Config| {
             assert_eq!(cfg, &raft_store);
         });
@@ -2290,7 +2290,7 @@ mod tests {
         let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
 
         // config should be updated
-        assert_eq!(rollback, None);
+        assert_eq!(rollback.right(), Some(true));
         validate_store(&router, move |cfg: &Config| {
             assert_eq!(cfg, &raft_store);
         });
@@ -2312,7 +2312,7 @@ mod tests {
         let rollback = cfg_controller.update_or_rollback(config.clone()).unwrap();
 
         // config should not change
-        assert_eq!(rollback, None);
+        assert_eq!(rollback.right(), Some(false));
         validate_store(&raft_router, move |cfg: &Config| {
             assert_eq!(cfg.sync_log, true);
         });
@@ -2326,7 +2326,7 @@ mod tests {
         let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
 
         // both configs should be updated
-        assert_eq!(rollback, None);
+        assert_eq!(rollback.right(), Some(true));
         validate_store(&raft_router, move |cfg: &Config| {
             assert_eq!(cfg.sync_log, false);
         });
