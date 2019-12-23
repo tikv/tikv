@@ -83,6 +83,8 @@ pub trait TxnEntryStore: Send {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        after_ts: TimeStamp,
+        output_delete: bool,
     ) -> Result<Self::Scanner>;
 }
 
@@ -288,6 +290,8 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        after_ts: TimeStamp,
+        output_delete: bool,
     ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
@@ -298,7 +302,7 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
                 .fill_cache(self.fill_cache)
                 .isolation_level(self.isolation_level)
                 .bypass_locks(self.bypass_locks.clone())
-                .build_entry_scanner()?;
+                .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
     }
@@ -518,7 +522,6 @@ mod tests {
         TestEngineBuilder,
     };
     use crate::storage::mvcc::{Mutation, MvccTxn};
-    use crate::storage::txn::commands::Options;
     use engine::{CfName, IterOption};
     use kvproto::kvrpcpb::Context;
 
@@ -564,7 +567,10 @@ mod tests {
                     txn.prewrite(
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
-                        &Options::default(),
+                        false,
+                        0,
+                        0,
+                        TimeStamp::default(),
                     )
                     .unwrap();
                 }
@@ -610,11 +616,11 @@ mod tests {
     struct MockRangeSnapshotIter {}
 
     impl Iterator for MockRangeSnapshotIter {
-        fn next(&mut self) -> bool {
-            true
+        fn next(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
-        fn prev(&mut self) -> bool {
-            true
+        fn prev(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
         fn seek(&mut self, _: &Key) -> EngineResult<bool> {
             Ok(true)
@@ -622,17 +628,14 @@ mod tests {
         fn seek_for_prev(&mut self, _: &Key) -> EngineResult<bool> {
             Ok(true)
         }
-        fn seek_to_first(&mut self) -> bool {
-            true
+        fn seek_to_first(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
-        fn seek_to_last(&mut self) -> bool {
-            true
+        fn seek_to_last(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
-        fn valid(&self) -> bool {
-            true
-        }
-        fn status(&self) -> EngineResult<()> {
-            Ok(())
+        fn valid(&self) -> EngineResult<bool> {
+            Ok(true)
         }
         fn validate_key(&self, _: &Key) -> EngineResult<()> {
             Ok(())
