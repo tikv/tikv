@@ -11,7 +11,7 @@ use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
 
 use procinfo::pid;
-use std::ops::{Div, Sub};
+use std::ops::{Div, Sub, Mul};
 
 /// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
@@ -122,8 +122,8 @@ impl Collector for ThreadsCollector {
                     .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                     .unwrap();
                 let past = cpu_total.get();
-                if let OK(cpus) = pid::cpu_count() {
-                    let total = total.clamp(0.0, cpus * 100.0);
+                if let Ok(cpus) = pid::cpu_count() {
+                    let total = total.max(0.0).min((cpus as f64).mul(100.0));
                     cpu_total.inc_by(total.sub(past));
                 }
 
@@ -275,8 +275,10 @@ fn state_to_str(state: &pid::State) -> &str {
 
 pub fn cpu_total(state: &pid::Stat) -> f64 {
     match pid::cpu_period() {
-        Ok(cpu_period) => (state.utime + state.stime as f64).div(cpu_period as f64).div(100.0),
-        Err(e) => 0.0
+        Ok(cpu_period) => ((state.utime + state.stime) as f64)
+            .div(cpu_period as f64)
+            .div(100.0),
+        Err(e) => 0.0,
     }
 }
 

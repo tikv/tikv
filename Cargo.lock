@@ -2363,7 +2363,7 @@ dependencies = [
 [[package]]
 name = "procinfo"
 version = "0.4.2"
-source = "git+https://github.com/tikv/procinfo-rs#5125fc1a69496b73b26b3c08b6e8afc3c665a56e"
+source = "git+https://github.com/tikv/procinfo-rs#309c751b31e644c318ff7c33cda015d43e39ec52"
 dependencies = [
  "byteorder",
  "libc",
