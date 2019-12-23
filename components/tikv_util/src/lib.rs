@@ -32,6 +32,7 @@ use std::{env, thread, u64};
 use protobuf::Message;
 use rand;
 use rand::rngs::ThreadRng;
+use fs2::FileExt;
 
 pub mod buffer_vec;
 pub mod codec;
@@ -55,6 +56,7 @@ pub mod timer;
 pub mod worker;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
+const RESERVE_FILE: &str = "reserve_file";
 
 pub fn panic_when_unexpected_key_or_data() -> bool {
     PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.load(Ordering::SeqCst)
@@ -88,6 +90,26 @@ pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
 pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
     let path = panic_mark_file_path(data_dir);
     file::file_exists(path)
+}
+
+// create a file with hole, to reserve space for TiKV.
+pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) {
+    let path = data_dir.as_ref().join(RESERVE_FILE);
+    if file_size == 0 {
+        file::delete_file_if_exist(path).unwrap();
+        file::sync_dir(data_dir).unwrap();
+    } else {
+        if file::file_exists(path.clone()) {
+            if file::get_file_size(path.clone()).unwrap() == file_size {
+                return;
+            }
+            file::delete_file_if_exist(path.clone()).unwrap();
+        }
+        let f = File::create(path).unwrap();
+        f.allocate(file_size).unwrap();
+        f.sync_all().unwrap();
+        file::sync_dir(data_dir).unwrap();
+    }
 }
 
 pub const NO_LIMIT: u64 = u64::MAX;
@@ -557,6 +579,7 @@ mod tests {
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
+    use fs2;
 
     use tempfile::Builder;
 
@@ -743,5 +766,23 @@ mod tests {
             // the test would fail.
         });
         res.unwrap_err();
+    }
+
+    #[test]
+    fn test_reserve_space_for_recover() {
+        let data_dir = Path::new("./");
+        file::delete_file_if_exist(data_dir.join(RESERVE_FILE)).unwrap();
+        file::sync_dir(data_dir).unwrap();
+        let disk_stats_before = fs2::statvfs(data_dir).unwrap();
+        let cap1 = disk_stats_before.available_space();
+        let reserve_size = 2 * 1024 * 1024;
+        reserve_space_for_recover(data_dir, reserve_size);
+        let disk_stats_after= fs2::statvfs(data_dir).unwrap();
+        let cap2 = disk_stats_after.available_space();
+        assert_eq!(cap1 - cap2, reserve_size);
+        reserve_space_for_recover(data_dir, 0);
+        let disk_stats= fs2::statvfs(data_dir).unwrap();
+        let cap3 = disk_stats.available_space();
+        assert_eq!(cap1, cap3);
     }
 }
