@@ -359,32 +359,24 @@ pub mod tests {
         let iter_op = IterOption::default();
         let tree = engine.get_cf(CF_DEFAULT).clone();
         let mut iter = BTreeEngineIterator::new(tree, iter_op);
-        assert!(!iter.valid());
+        assert!(!iter.valid().unwrap());
 
-        assert!(iter.seek_to_first());
-        assert!(iter.valid());
+        assert!(iter.seek_to_first().unwrap());
         assert_eq!(iter.key(), Key::from_raw(b"a1").as_encoded().as_slice());
-        assert!(!iter.prev());
-        assert!(!iter.valid());
-        assert!(iter.next());
-        assert!(iter.valid());
+        assert!(!iter.prev().unwrap());
+        assert!(iter.next().unwrap());
         assert_eq!(iter.key(), Key::from_raw(b"a3").as_encoded().as_slice());
 
         assert!(iter.seek(&Key::from_raw(b"a1")).unwrap());
-        assert!(iter.valid());
         assert_eq!(iter.key(), Key::from_raw(b"a1").as_encoded().as_slice());
 
-        assert!(iter.seek_to_last());
-        assert!(iter.valid());
+        assert!(iter.seek_to_last().unwrap());
         assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
-        assert!(!iter.next());
-        assert!(!iter.valid());
-        assert!(iter.prev());
-        assert!(iter.valid());
+        assert!(!iter.next().unwrap());
+        assert!(iter.prev().unwrap());
         assert_eq!(iter.key(), Key::from_raw(b"a5").as_encoded().as_slice());
 
         assert!(iter.seek(&Key::from_raw(b"a7")).unwrap());
-        assert!(iter.valid());
         assert_eq!(iter.key(), Key::from_raw(b"a7").as_encoded().as_slice());
 
         assert!(!iter.seek_for_prev(&Key::from_raw(b"a0")).unwrap());

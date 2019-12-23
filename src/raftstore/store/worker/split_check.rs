@@ -16,7 +16,7 @@ use kvproto::pdpb::CheckPolicy;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::coprocessor::SplitCheckerHost;
 use crate::raftstore::store::{Callback, CasualMessage, CasualRouter};
-use crate::raftstore::{Result};
+use crate::raftstore::Result;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Runnable;
 

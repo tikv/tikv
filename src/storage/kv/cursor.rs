@@ -350,7 +350,7 @@ impl<I: Iterator> Cursor<I> {
             Err(e) => {
                 self.handle_error_status(e)?;
                 unreachable!();
-            },
+            }
             Ok(t) => Ok(t),
         }
     }

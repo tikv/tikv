@@ -581,7 +581,7 @@ mod tests {
 
     use engine_traits::Error as TraitError;
     use engine_traits::ExternalSstFileInfo;
-    use engine_traits::{Iterable, Iterator, SeekKey, CF_DEFAULT};
+    use engine_traits::{collect, Iterable, Iterator, SeekKey, CF_DEFAULT};
     use tempfile::Builder;
     use test_sst_importer::{new_sst_reader, new_sst_writer, new_test_engine};
     use txn_types::{Value, WriteType};
@@ -875,9 +875,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (b"zt123_r01".to_vec(), b"abc".to_vec()),
                 (b"zt123_r04".to_vec(), b"xyz".to_vec()),
@@ -919,9 +919,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (b"zt567_r01".to_vec(), b"abc".to_vec()),
                 (b"zt567_r04".to_vec(), b"xyz".to_vec()),
@@ -959,9 +959,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (get_encoded_key(b"t123_r01", 16), b"abc".to_vec()),
                 (get_encoded_key(b"t123_r04", 16), b"xyz".to_vec()),
@@ -998,9 +998,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (
                     get_encoded_key(b"t123_r01", 16),
@@ -1059,9 +1059,9 @@ mod tests {
 
         // verifies the DB content is correct.
         let mut iter = db.iterator().unwrap();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (b"zt9102_r01".to_vec(), b"abc".to_vec()),
                 (b"zt9102_r04".to_vec(), b"xyz".to_vec()),
@@ -1098,9 +1098,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (b"zt123_r04".to_vec(), b"xyz".to_vec()),
                 (b"zt123_r07".to_vec(), b"pqrst".to_vec()),
@@ -1139,9 +1139,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (b"zt5_r04".to_vec(), b"xyz".to_vec()),
                 (b"zt5_r07".to_vec(), b"pqrst".to_vec()),

@@ -11,8 +11,8 @@ use std::{error, result};
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{
-    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, ReadOptions,
-    SeekKey, Writable, WriteBatch, WriteOptions, DB,
+    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, ReadOptions, SeekKey,
+    Writable, WriteBatch, WriteOptions, DB,
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
@@ -1315,7 +1315,7 @@ impl MvccInfoIterator {
     }
 
     fn next_grouped(iter: &mut DBIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
-        if iter.valid() .unwrap(){
+        if iter.valid().unwrap() {
             let prefix = Key::truncate_ts_for(iter.key()).unwrap().to_vec();
             let mut kvs = vec![(iter.key().to_vec(), iter.value().to_vec())];
             while iter.next().unwrap() && iter.key().starts_with(&prefix) {
@@ -1334,7 +1334,10 @@ impl MvccInfoIterator {
         let mut mvcc_info = MvccInfo::default();
         let mut min_prefix = Vec::new();
 
-        let (lock_ok, writes_ok) = match (self.lock_iter.valid().unwrap(), self.write_iter.valid().unwrap()) {
+        let (lock_ok, writes_ok) = match (
+            self.lock_iter.valid().unwrap(),
+            self.write_iter.valid().unwrap(),
+        ) {
             (false, false) => return Ok(None),
             (true, true) => {
                 let prefix1 = self.lock_iter.key();

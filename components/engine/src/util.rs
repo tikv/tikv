@@ -111,11 +111,11 @@ mod tests {
         for cf in cfs {
             let handle = get_cf_handle(db, cf).unwrap();
             let mut iter = db.iter_cf(handle);
-            iter.seek(SeekKey::Start);
+            iter.seek(SeekKey::Start).unwrap();
             for &(k, v) in expected {
                 assert_eq!(k, iter.key());
                 assert_eq!(v, iter.value());
-                iter.next();
+                iter.next().unwrap();
             }
             assert!(!iter.valid().unwrap());
         }

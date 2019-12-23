@@ -111,3 +111,19 @@ impl<'a> From<&'a [u8]> for SeekKey<'a> {
         SeekKey::Key(bs)
     }
 }
+
+/// Collect all items of `it` into a vector, generally used for tests.
+///
+/// # Panics
+///
+/// If any errors occur during iterator.
+pub fn collect<I: Iterator>(mut it: I) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut v = Vec::new();
+    let mut it_valid = it.valid().unwrap();
+    while it_valid {
+        let kv = (it.key().to_vec(), it.value().to_vec());
+        v.push(kv);
+        it_valid = it.next().unwrap();
+    }
+    v
+}

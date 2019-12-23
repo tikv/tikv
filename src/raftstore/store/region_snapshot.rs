@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::raftstore::store::{util, PeerStorage};
-use crate::raftstore::{Result, Error};
+use crate::raftstore::{Error, Result};
 use engine_rocks::RocksEngine;
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
@@ -331,7 +331,9 @@ where
     pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        self.iter.seek_for_prev(key.as_slice().into()).map_err(Error::from)
+        self.iter
+            .seek_for_prev(key.as_slice().into())
+            .map_err(Error::from)
     }
 
     pub fn prev(&mut self) -> Result<bool> {
@@ -667,11 +669,11 @@ mod tests {
         assert_eq!(data.len(), 1);
 
         let mut iter = snap.iter(IterOption::default());
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
@@ -695,11 +697,11 @@ mod tests {
         let mut iter = snap.iter(IterOption::default());
         assert!(iter.seek(b"a1").unwrap());
 
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
@@ -713,11 +715,11 @@ mod tests {
             Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
             true,
         ));
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
@@ -836,11 +838,11 @@ mod tests {
         let mut iter_opt = IterOption::default();
         iter_opt.set_lower_bound(b"a3", 1);
         let mut iter = snap.iter(iter_opt);
-        assert!(iter.seek_to_last());
+        assert!(iter.seek_to_last().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.prev() {
+            if !iter.prev().unwrap() {
                 break;
             }
         }
