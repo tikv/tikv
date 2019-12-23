@@ -434,6 +434,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Strcmp => strcmp_fn_meta(),
         ScalarFuncSig::InstrUtf8 => instr_utf8_fn_meta(),
         ScalarFuncSig::OctInt => oct_int_fn_meta(),
+        ScalarFuncSig::UnHex => un_hex_fn_meta(),
         // impl_time
         ScalarFuncSig::DateFormatSig => date_format_fn_meta(),
         ScalarFuncSig::WeekOfYear => week_of_year_fn_meta(),
@@ -451,7 +452,6 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::DayName => day_name_fn_meta(),
         ScalarFuncSig::PeriodAdd => period_add_fn_meta(),
         ScalarFuncSig::PeriodDiff => period_diff_fn_meta(),
-        ScalarFuncSig::UnHex => un_hex_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
