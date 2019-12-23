@@ -117,9 +117,7 @@
 //!   }
 //!
 //!   trait IOLimiter { }
-//!   ```
 //!
-//!   ```
 //!   // in engine_rust
 //!
 //!   impl IOLimiterExt for RocksEngine {

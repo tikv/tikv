@@ -4,17 +4,39 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
+[features]
+default = ["protobuf-codec"]
+protobuf-codec = [
+	"engine/protobuf-codec",
+	"engine_rocks/protobuf-codec",
+	"grpcio/protobuf-codec",
+	"keys/protobuf-codec",
+	"kvproto/protobuf-codec",
+	"pd_client/protobuf-codec",
+	"tikv/protobuf-codec",
+	"tikv_util/protobuf-codec",
+]
+prost-codec = [
+	"engine/prost-codec",
+	"engine_rocks/prost-codec",
+	"grpcio/prost-codec",
+	"keys/prost-codec",
+	"kvproto/prost-codec",
+	"pd_client/prost-codec",
+	"tikv/prost-codec",
+	"tikv_util/prost-codec",
+]
+
 [dependencies]
-engine = { path = "../engine" }
-engine_rocks = { path = "../engine_rocks" }
+engine = { path = "../engine", default-features = false }
+engine_rocks = { path = "../engine_rocks", default-features = false }
 futures = "0.1"
 futures-cpupool = "0.1"
 grpcio = { version = "0.5.0-alpha.5", features = ["openssl-vendored"], default-features = false }
 hex = "0.3"
-keys = { path = "../keys" }
+keys = { path = "../keys", default-features = false }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-pd_client = { path = "../pd_client" }
-protobuf = "2.8"
+pd_client = { path = "../pd_client", default-features = false }
 raft = { version = "0.6.0-alpha" , default-features = false }
 rand = "0.7"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
@@ -22,6 +44,6 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "0e23a5baff302a9d7bccd85f8f31e43339c2f2c1" }
 tempfile = "3.0"
 tikv = { path = "../../", default-features = false  }
-tikv_util = { path = "../tikv_util" }
+tikv_util = { path = "../tikv_util", default-features = false }
 tokio-threadpool = "0.1"
 tokio-timer = "0.2"

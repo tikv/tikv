@@ -4,11 +4,27 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
+[features]
+default = ["protobuf-codec"]
+protobuf-codec = [
+	"kvproto/protobuf-codec",
+	"test_raftstore/protobuf-codec",
+	"tikv/protobuf-codec",
+	"tikv_util/protobuf-codec",
+	"txn_types/protobuf-codec",
+]
+prost-codec = [
+	"kvproto/prost-codec",
+	"test_raftstore/prost-codec",
+	"tikv/prost-codec",
+	"tikv_util/prost-codec",
+	"txn_types/prost-codec",
+]
+
 [dependencies]
 futures = "0.1"
-keys = { path = "../keys" }
-txn_types = { path = "../txn_types" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
-test_raftstore = { path = "../test_raftstore" }
+test_raftstore = { path = "../test_raftstore", default-features = false }
 tikv = { path = "../../", default-features = false }
-tikv_util = { path = "../tikv_util" }
+tikv_util = { path = "../tikv_util", default-features = false }
+txn_types = { path = "../txn_types", default-features = false }
