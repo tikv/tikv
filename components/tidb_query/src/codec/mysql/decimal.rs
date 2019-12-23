@@ -1068,7 +1068,7 @@ impl Decimal {
     ///
     /// Result fitting in the buffer should be garanted.
     /// 'shift' have to be from 1 to DIGITS_PER_WORD - 1 (inclusive)
-    fn do_mini_left_shift(&mut self, shift: u8, beg: u8, end: u8) {
+    fn do_mini_left_shift(mut self, shift: u8, beg: u8, end: u8) -> Decimal {
         let shift = shift as usize;
         let mut buf_from = (beg / DIGITS_PER_WORD) as usize;
         let buf_end = ((end - 1) / DIGITS_PER_WORD) as usize;
@@ -1082,13 +1082,14 @@ impl Decimal {
             buf_from += 1;
         }
         self.word_buf[buf_from] = (self.word_buf[buf_from] % TEN_POW[c_shift]) * TEN_POW[shift];
+        self
     }
 
     /// `do_mini_right_shift` does right shift for alignment of data in buffer.
     ///
     /// Result fitting in the buffer should be garanted.
     /// 'shift' have to be from 1 to DIGITS_PER_WORD - 1 (inclusive)
-    fn do_mini_right_shift(&mut self, shift: u8, beg: u8, end: u8) {
+    fn do_mini_right_shift(mut self, shift: u8, beg: u8, end: u8) -> Decimal {
         let shift = shift as usize;
         let mut buf_from = ((end - 1) / DIGITS_PER_WORD) as usize;
         let buf_end = (beg / DIGITS_PER_WORD) as usize;
@@ -1103,6 +1104,7 @@ impl Decimal {
             buf_from -= 1;
         }
         self.word_buf[buf_from] /= TEN_POW[shift];
+        self
     }
 
     // TODO: remove this after merge the `refactor ScalarFunc::builtin_cast`
@@ -1412,10 +1414,10 @@ impl Decimal {
                 do_left = (DIGITS_PER_WORD * word_buf_len - end) < r_mini_shift;
             }
             if do_left {
-                res.do_mini_left_shift(l_mini_shift, beg, end);
+                res = res.map(|d| d.do_mini_left_shift(l_mini_shift, beg, end));
                 mini_shift = -(l_mini_shift as i8);
             } else {
-                res.do_mini_right_shift(r_mini_shift, beg, end);
+                res = res.map(|d| d.do_mini_right_shift(r_mini_shift, beg, end));
                 mini_shift = r_mini_shift as i8;
             }
             new_point += mini_shift as isize;
