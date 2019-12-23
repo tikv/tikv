@@ -3682,6 +3682,7 @@ dependencies = [
  "slog",
  "slog-global",
  "smallvec",
+ "static_assertions 1.1.0",
  "tidb_query_codegen",
  "tidb_query_datatype",
  "tikv_util",
