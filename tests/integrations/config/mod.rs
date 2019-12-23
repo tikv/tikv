@@ -500,6 +500,7 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
+        reserve_space_for_recover: ReadableSize::gb(2),
         block_cache: BlockCacheConfig {
             shared: true,
             capacity: Some(ReadableSize::gb(40)),
