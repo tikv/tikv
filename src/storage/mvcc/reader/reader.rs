@@ -741,16 +741,16 @@ mod tests {
 
             for (i, expect_ts) in res.iter().enumerate() {
                 if i == 0 {
-                    assert_eq!(iter.seek_to_first(), true);
+                    assert_eq!(iter.seek_to_first().unwrap(), true);
                 } else {
-                    assert_eq!(iter.next(), true);
+                    assert_eq!(iter.next().unwrap(), true);
                 }
 
                 let ts = Key::decode_ts_from(iter.key()).unwrap();
                 assert_eq!(ts.into_inner(), *expect_ts);
             }
 
-            assert_eq!(iter.next(), false);
+            assert_eq!(iter.next().unwrap(), false);
         }
     }
 
