@@ -483,6 +483,12 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             None
         };
         let mut iter_opt = IterOption::new(l_bound, u_bound, self.fill_cache);
+        if let Some(ts) = self.hint_min_ts {
+            iter_opt.set_hint_min_ts(Bound::Included(ts.into()));
+        }
+        if let Some(ts) = self.hint_max_ts {
+            iter_opt.set_hint_max_ts(Bound::Included(ts.into()));
+        }
         if self.prefix_seek {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
         }
