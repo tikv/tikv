@@ -1397,6 +1397,7 @@ impl Peer {
                     for (req, cb) in read.cmds.drain(..) {
                         // We should check epoch since the range could be changed
                         if req.get_header().get_replica_read() {
+                            info!("[test] execute replica read"; "read_index" => read.read_index.unwrap());
                             cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                         } else {
                             apply::notify_stale_req(term, cb);

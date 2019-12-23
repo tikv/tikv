@@ -945,6 +945,8 @@ impl ApplyDelegate {
         let mut exec_ctx = ctx.exec_ctx.take().unwrap();
         exec_ctx.apply_state.set_applied_index(index);
 
+        info!("[test] apply commands"; "applied index" => index);
+
         self.apply_state = exec_ctx.apply_state;
         self.applied_index_term = term;
 
@@ -1290,16 +1292,16 @@ impl ApplyDelegate {
                 &end_key,
                 use_delete_range,
             )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
-                    self.tag,
-                    hex::encode_upper(&start_key),
-                    hex::encode_upper(&end_key),
-                    cf,
-                    e
-                );
-            });
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "{} failed to delete all in range [{}, {}), cf: {}, err: {:?}",
+                        self.tag,
+                        hex::encode_upper(&start_key),
+                        hex::encode_upper(&end_key),
+                        cf,
+                        e
+                    );
+                });
         }
 
         // TODO: Should this be executed when `notify_only` is set?
@@ -1595,8 +1597,8 @@ impl ApplyDelegate {
             }
             if split_key
                 <= keys
-                    .back()
-                    .map_or_else(|| derived.get_start_key(), Vec::as_slice)
+                .back()
+                .map_or_else(|| derived.get_start_key(), Vec::as_slice)
             {
                 return Err(box_err!("invalid split request: {:?}", split_reqs));
             }
@@ -1646,9 +1648,9 @@ impl ApplyDelegate {
                 .mut_peers()
                 .iter_mut()
                 .zip(req.get_new_peer_ids())
-            {
-                peer.set_id(*peer_id);
-            }
+                {
+                    peer.set_id(*peer_id);
+                }
             write_peer_state(kv, kv_wb_mut, &new_region, PeerState::Normal, None)
                 .and_then(|_| write_initial_apply_state(kv, kv_wb_mut, new_region.get_id()))
                 .unwrap_or_else(|e| {
@@ -1721,12 +1723,12 @@ impl ApplyDelegate {
             PeerState::Merging,
             Some(merging_state.clone()),
         )
-        .unwrap_or_else(|e| {
-            panic!(
-                "{} failed to save merging state {:?} for region {:?}: {:?}",
-                self.tag, merging_state, region, e
-            )
-        });
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{} failed to save merging state {:?} for region {:?}: {:?}",
+                    self.tag, merging_state, region, e
+                )
+            });
         fail_point!("apply_after_prepare_merge");
         PEER_ADMIN_CMD_COUNTER_VEC
             .with_label_values(&["prepare_merge", "success"])
@@ -2632,16 +2634,16 @@ impl Fsm for ApplyFsm {
 
     #[inline]
     fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
-    where
-        Self: Sized,
+        where
+            Self: Sized,
     {
         self.mailbox = Some(mailbox.into_owned());
     }
 
     #[inline]
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
-    where
-        Self: Sized,
+        where
+            Self: Sized,
     {
         self.mailbox.take()
     }
@@ -2834,7 +2836,7 @@ impl ApplyRouter {
 pub type ApplyBatchSystem = BatchSystem<ApplyFsm, ControlFsm>;
 
 impl ApplyBatchSystem {
-    pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer>) {
+    pub fn schedule_all<'a>(&self, peers: impl Iterator<Item=&'a Peer>) {
         let mut mailboxes = Vec::with_capacity(peers.size_hint().0);
         for peer in peers {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
@@ -2888,7 +2890,7 @@ mod tests {
                 ALL_CFS,
                 None,
             )
-            .unwrap(),
+                .unwrap(),
         );
         let raft_db = Arc::new(
             rocks::util::new_engine(path.path().join("raft").to_str().unwrap(), None, &[], None)
@@ -2952,8 +2954,8 @@ mod tests {
     }
 
     fn validate<F>(router: &ApplyRouter, region_id: u64, validate: F)
-    where
-        F: FnOnce(&ApplyDelegate) + Send + 'static,
+        where
+            F: FnOnce(&ApplyDelegate) + Send + 'static,
     {
         let (validate_tx, validate_rx) = mpsc::channel();
         router.schedule_task(

@@ -99,11 +99,11 @@ impl<E: Engine> Endpoint<E> {
             REQ_TYPE_DAG => {
                 let mut dag = DAGRequest::new();
                 box_try!(dag.merge_from(&mut is));
-                // info!(
-                //     "[test] dag request is received";
-                //     "start_ts" => dag.get_start_ts(),
-                //     "region_id" => context.get_region_id(),
-                // );
+                info!(
+                    "[test] dag request is received";
+                    "start_ts" => dag.get_start_ts(),
+                    "region_id" => context.get_region_id(),
+                );
                 let mut table_scan = false;
                 let mut is_desc_scan = false;
                 if let Some(scan) = dag.get_executors().iter().next() {
@@ -201,7 +201,7 @@ impl<E: Engine> Endpoint<E> {
     fn async_snapshot(
         engine: &E,
         ctx: &kvrpcpb::Context,
-    ) -> impl Future<Item = E::Snap, Error = Error> {
+    ) -> impl Future<Item=E::Snap, Error=Error> {
         let (callback, future) = tikv_util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         future::result(val)
@@ -220,7 +220,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_unary_request_impl(
         tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Future<Item = coppb::Response, Error = Error> {
+    ) -> impl Future<Item=coppb::Response, Error=Error> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         future::result(tracker.req_ctx.deadline.check_if_exceeded())
@@ -257,19 +257,19 @@ impl<E: Engine> Endpoint<E> {
 
                 tracker.on_finish_all_items();
 
-                // let start_ts = tracker.req_ctx.txn_start_ts.unwrap();
-                // let region_id = tracker.req_ctx.context.get_region_id();
+                 let start_ts = tracker.req_ctx.txn_start_ts.unwrap();
+                 let region_id = tracker.req_ctx.context.get_region_id();
 
                 future::result(result)
                     .or_else(|e| Ok::<_, Error>(make_error_response(e)))
                     .map(move |mut resp| {
-                        // let resp_data = resp.write_to_bytes().unwrap();
-                        // info!(
-                        //     "[test] cop response";
-                        //     "start_ts" => start_ts,
-                        //     "region_id" => region_id,
-                        //     "resp" => hex::encode(resp_data),
-                        // );
+                         let resp_data = resp.write_to_bytes().unwrap();
+                         info!(
+                             "[test] cop response";
+                             "start_ts" => start_ts,
+                             "region_id" => region_id,
+                             "resp" => hex::encode(resp_data),
+                         );
                         COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
                         resp.set_exec_details(exec_details);
                         resp
@@ -285,7 +285,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<impl Future<Item = coppb::Response, Error = Error>> {
+    ) -> Result<impl Future<Item=coppb::Response, Error=Error>> {
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
@@ -305,7 +305,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Future<Item = coppb::Response, Error = ()> {
+    ) -> impl Future<Item=coppb::Response, Error=()> {
         let result_of_future =
             self.parse_request(req, peer, false)
                 .and_then(|(handler_builder, req_ctx)| {
@@ -389,13 +389,13 @@ impl<E: Engine> Endpoint<E> {
                                 }
                                 Ok((Some(resp), finished)) => (resp, finished),
                             };
-                            // let resp_data = resp.write_to_bytes().unwrap();
-                            // info!(
-                            //     "[test] cop response";
-                            //     "start_ts" => tracker.req_ctx.txn_start_ts.unwrap(),
-                            //     "region_id" => tracker.req_ctx.context.get_region_id(),
-                            //     "resp" => hex::encode(resp_data),
-                            // );
+                             let resp_data = resp.write_to_bytes().unwrap();
+                             info!(
+                                 "[test] cop response";
+                                 "start_ts" => tracker.req_ctx.txn_start_ts.unwrap(),
+                                 "region_id" => tracker.req_ctx.context.get_region_id(),
+                                 "resp" => hex::encode(resp_data),
+                             );
                             COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
                             resp.set_exec_details(exec_details);
 
@@ -409,13 +409,13 @@ impl<E: Engine> Endpoint<E> {
                         }
                     }
                 })
-                .filter_map(|resp_or_tracker| match resp_or_tracker {
-                    Either::Left(resp) => Some(resp),
-                    Either::Right(mut tracker) => {
-                        tracker.on_finish_all_items();
-                        None
-                    }
-                })
+                    .filter_map(|resp_or_tracker| match resp_or_tracker {
+                        Either::Left(resp) => Some(resp),
+                        Either::Right(mut tracker) => {
+                            tracker.on_finish_all_items();
+                            None
+                        }
+                    })
             })
             .flatten_stream()
     }
@@ -428,7 +428,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<impl Stream<Item = coppb::Response, Error = Error>> {
+    ) -> Result<impl Stream<Item=coppb::Response, Error=Error>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         let tracker = Box::new(Tracker::new(req_ctx));
@@ -451,7 +451,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req: coppb::Request,
         peer: Option<String>,
-    ) -> impl Stream<Item = coppb::Response, Error = ()> {
+    ) -> impl Stream<Item=coppb::Response, Error=()> {
         let result_of_stream =
             self.parse_request(req, peer, true)
                 .and_then(|(handler_builder, req_ctx)| {
@@ -628,8 +628,8 @@ mod tests {
 
     impl StreamFromClosure {
         pub fn new<F>(result_generator: F) -> StreamFromClosure
-        where
-            F: Fn(usize) -> HandlerStreamStepResult + Send + 'static,
+            where
+                F: Fn(usize) -> HandlerStreamStepResult + Send + 'static,
         {
             StreamFromClosure {
                 result_generator: Box::new(result_generator),
@@ -760,10 +760,10 @@ mod tests {
             max_tasks_per_worker_normal: 2,
             ..readpool::Config::default_for_test()
         })
-        .name_prefix("cop-test-full")
-        .after_start(move || set_tls_engine(engine_lock.lock().unwrap().clone()))
-        .before_stop(|| destroy_tls_engine::<RocksEngine>())
-        .build();
+            .name_prefix("cop-test-full")
+            .after_start(move || set_tls_engine(engine_lock.lock().unwrap().clone()))
+            .before_stop(|| destroy_tls_engine::<RocksEngine>())
+            .build();
 
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
@@ -1056,7 +1056,7 @@ mod tests {
                     Ok(coppb::Response::new()),
                     PAYLOAD_SMALL as u64,
                 )
-                .into_boxed())
+                    .into_boxed())
             });
             let resp_future_1 = cop
                 .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
@@ -1131,7 +1131,7 @@ mod tests {
                     Ok(coppb::Response::new()),
                     PAYLOAD_LARGE as u64,
                 )
-                .into_boxed())
+                    .into_boxed())
             });
             let resp_future_1 = cop
                 .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
@@ -1155,7 +1155,7 @@ mod tests {
                         PAYLOAD_SMALL as u64,
                     ],
                 )
-                .into_boxed())
+                    .into_boxed())
             });
             let resp_future_3 = cop
                 .handle_stream_request(req_with_exec_detail.clone(), handler_builder)
