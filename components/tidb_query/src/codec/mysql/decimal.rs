@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -342,9 +341,7 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
 fn do_sub<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     let (carry, mut frac_word_to, l_res, r_res) = calc_sub_carry(lhs, rhs);
     if carry.is_none() {
-        let mut res = lhs.to_owned();
-        res.reset_to_zero();
-        return Res::Ok(res);
+        return Res::Ok(Decimal::zero());
     }
     let (mut l_start, mut l_int_word_cnt, mut l_frac_word_cnt) = l_res;
     let (mut r_start, mut r_int_word_cnt, mut r_frac_word_cnt) = r_res;
@@ -875,7 +872,7 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
             idx += 1;
             if idx == end {
                 // we got decimal zero.
-                dec.reset_to_zero();
+                dec = Decimal::zero();
                 break;
             }
         }
@@ -970,15 +967,6 @@ impl Decimal {
 
     pub fn is_negative(&self) -> bool {
         self.negative
-    }
-
-    /// reset the decimal to zero.
-    fn reset_to_zero(&mut self) {
-        self.int_cnt = 1;
-        self.frac_cnt = 0;
-        self.result_frac_cnt = 0;
-        self.negative = false;
-        self.word_buf[0] = 0;
     }
 
     /// Creates a new decimal which is zero.
@@ -1155,7 +1143,7 @@ impl Decimal {
     }
 
     fn round_with_word_buf_len(
-        mut self,
+        self,
         mut frac: i8,
         word_buf_len: u8,
         round_mode: RoundMode,
@@ -1175,8 +1163,7 @@ impl Decimal {
             frac = frac_words_to * DIGITS_PER_WORD as i8;
             Res::Truncated(self)
         } else if self.int_cnt as i8 + frac < 0 {
-            self.reset_to_zero();
-            return Res::Ok(self);
+            return Res::Ok(Self::zero());
         } else {
             Res::Ok(self)
         };
@@ -1245,8 +1232,7 @@ impl Decimal {
                     res.word_buf[to_idx as usize] = WORD_BASE;
                 }
             } else if int_word_cnt as i8 + frac_words_to == 0 {
-                res.reset_to_zero();
-                return Res::Ok(res.unwrap());
+                return Res::Ok(Self::zero());
             }
         } else {
             // TODO - fix this code as it won't work for CEILING mode
@@ -1357,14 +1343,13 @@ impl Decimal {
         self.shift_with_word_buf_len(shift, WORD_BUF_LEN)
     }
 
-    fn shift_with_word_buf_len(mut self, shift: isize, word_buf_len: u8) -> Res<Decimal> {
+    fn shift_with_word_buf_len(self, shift: isize, word_buf_len: u8) -> Res<Decimal> {
         if shift == 0 {
             return Res::Ok(self);
         }
         let (mut beg, mut end) = self.digit_bounds();
         if beg == end {
-            self.reset_to_zero();
-            return Res::Ok(self);
+            return Res::Ok(Self::zero());
         }
 
         let upper = (DIGITS_PER_WORD * word_buf_len * 2) as isize;
@@ -1373,8 +1358,7 @@ impl Decimal {
             return Res::Overflow(self);
         } else if shift < -upper {
             // processor truncated by shift.
-            self.reset_to_zero();
-            return Res::Truncated(self);
+            return Res::Truncated(Self::zero());
         }
 
         let point = word_cnt!(self.int_cnt) * DIGITS_PER_WORD;
@@ -1401,8 +1385,7 @@ impl Decimal {
             let diff = frac_cnt - frac_word_cnt * DIGITS_PER_WORD as isize;
             frac_cnt = frac_word_cnt * DIGITS_PER_WORD as isize;
             if end as isize - diff <= beg as isize {
-                self.reset_to_zero();
-                return Res::Truncated(self);
+                return Res::Truncated(Self::zero());
             }
             end = (end as isize - diff) as u8;
             Res::Truncated(
@@ -1670,8 +1653,7 @@ impl Decimal {
                 )));
             }
             if exp < i64::from(i32::MIN) / 2 && !d.is_overflow() {
-                d.reset_to_zero();
-                return Ok(Res::Truncated(d.unwrap()));
+                return Ok(Res::Truncated(Self::zero()));
             }
             if !d.is_overflow() {
                 let is_truncated = d.is_truncated();
@@ -2236,7 +2218,7 @@ pub trait DecimalDecoder: NumberDecoder {
                 }
         }
         if d.int_cnt == 0 && d.frac_cnt == 0 {
-            d.reset_to_zero();
+            d = Decimal::zero();
         }
         d.result_frac_cnt = frac_cnt;
         Ok(d)
@@ -3598,26 +3580,6 @@ mod tests {
             negative_exp.push_str(exp);
             let res = negative.to_string();
             assert_eq!(res, negative_exp);
-        }
-    }
-
-    #[test]
-    fn test_reset_to_zero() {
-        let cases = vec![
-            "12345",
-            "0.99999",
-            "18446744073709551615",
-            "18446744073709551616",
-            "-1",
-            "1.23",
-            "9999999999999999999999999.000",
-        ];
-
-        for case in cases {
-            let mut dec: Decimal = case.parse().unwrap();
-            assert!(!dec.is_zero());
-            dec.reset_to_zero();
-            assert!(dec.is_zero());
         }
     }
 
