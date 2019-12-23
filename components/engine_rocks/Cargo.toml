@@ -35,9 +35,8 @@ rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 features = ["nightly", "push", "process"]
 
 [dependencies.rocksdb]
-# git = "https://github.com/pingcap/rust-rocksdb.git"
-# package = "rocksdb"
-path = "/home/qupeng/github.com/pingcap/rust-rocksdb"
+git = "https://github.com/pingcap/rust-rocksdb.git"
+package = "rocksdb"
 
 [dev-dependencies]
 tempfile = "3.0"
