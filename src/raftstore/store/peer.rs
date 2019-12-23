@@ -312,7 +312,7 @@ pub struct Peer {
     leader_lease: Lease,
     pending_reads: ReadIndexQueue,
     // Some requests carry an applied index, so it's not necessary to call `read_index`.
-    // Just wait the Raft applys to the given index and then response those requests.
+    // Just wait the Raft applying to the given index and then response those requests.
     pending_apply_reads: BinaryHeap<Reverse<ApplyRead>>,
 
     /// If it fails to send messages to leader.
