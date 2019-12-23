@@ -11,7 +11,7 @@ use prometheus::core::{Collector, Desc};
 use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
 
 use procinfo::pid;
-use std::ops::{Div, Sub, Mul};
+use std::ops::{Div, Mul, Sub};
 
 /// Monitors threads of the current process.
 pub fn monitor_threads<S: Into<String>>(namespace: S) -> Result<()> {
