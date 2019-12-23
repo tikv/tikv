@@ -298,14 +298,14 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek_to_first()
+        self.iter.seek_to_first().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek_to_last()
+        self.iter.seek_to_last().expect("Invalid Iterator")
     }
 
     #[inline]
@@ -330,14 +330,14 @@ impl<I: Iterator> Cursor<I> {
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.next += 1;
         self.mark_unread();
-        self.iter.next()
+        self.iter.next().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.prev += 1;
         self.mark_unread();
-        self.iter.prev()
+        self.iter.prev().expect("Invalid Iterator")
     }
 
     #[inline]
@@ -346,13 +346,12 @@ impl<I: Iterator> Cursor<I> {
     // (2) there is an error. In this case status() is not OK().
     // So check status when iterator is invalidated.
     pub fn valid(&self) -> Result<bool> {
-        if !self.iter.valid() {
-            if let Err(e) = self.iter.status() {
+        match self.iter.valid() {
+            Err(e) => {
                 self.handle_error_status(e)?;
+                unreachable!();
             }
-            Ok(false)
-        } else {
-            Ok(true)
+            Ok(t) => Ok(t),
         }
     }
 
