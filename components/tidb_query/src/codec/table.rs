@@ -2,6 +2,7 @@
 
 use std::convert::TryInto;
 use std::io::Write;
+use std::sync::Arc;
 use std::{cmp, u8};
 
 use kvproto::coprocessor::KeyRange;
@@ -13,7 +14,6 @@ use super::mysql::{Duration, Time};
 use super::{datum, datum::DatumDecoder, Datum, Error, Result};
 use crate::expr::EvalContext;
 use codec::prelude::*;
-use std::sync::Arc;
 use tikv_util::codec::BytesSlice;
 use tikv_util::collections::{HashMap, HashSet};
 
@@ -394,6 +394,12 @@ impl RowColsDict {
     }
 }
 
+/// `cut_row` cuts the encoded row into (col_id,offset,length)
+///  and returns interested columns' meta in RowColsDict
+///
+/// Encoded row can be either in row format v1 or v2.
+///
+/// `col_ids` must be consistent with `cols`. Otherwise the result is undefined.
 pub fn cut_row(
     data: Vec<u8>,
     col_ids: &HashSet<i64>,
@@ -408,13 +414,8 @@ pub fn cut_row(
     }
 }
 
-/// `cut_row` cuts the encoded row into (col_id,offset,length)
-///  and returns interested columns' meta in RowColsDict
-pub fn cut_row_v1(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
-    if cols.is_empty() || data.is_empty() || (data.len() == 1 && data[0] == datum::NIL_FLAG) {
-        return Ok(RowColsDict::new(HashMap::default(), data));
-    }
-
+/// Cuts a non-empty row in row format v1.
+fn cut_row_v1(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
     let meta_map = {
         let mut meta_map = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
         let length = data.len();
@@ -433,30 +434,36 @@ pub fn cut_row_v1(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
     Ok(RowColsDict::new(meta_map, data))
 }
 
-/// `cut_row_v2` cuts the encoded row from v2 format into v1 format
-///  and returns interested columns' meta in RowColsDict
-pub fn cut_row_v2(data: Vec<u8>, cols: Arc<Vec<ColumnInfo>>) -> Result<RowColsDict> {
-    use crate::codec::row::v2;
-    let mut meta_map = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
-    let mut result = Vec::with_capacity(data.len());
+/// Cuts a non-empty row in row format v2 and encodes into v1 format.
+fn cut_row_v2(data: Vec<u8>, cols: Arc<Vec<ColumnInfo>>) -> Result<RowColsDict> {
+    use crate::codec::datum_codec::{ColumnIdDatumEncoder, EvaluableDatumEncoder};
+    use crate::codec::row::v2::{RowSlice, V1CompatibleEncoder};
 
-    let row_slice = v2::RowSlice::from_bytes(&data)?;
+    let mut meta_map = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
+    let mut result = Vec::with_capacity(data.len() + cols.len() * 8);
+
+    let row_slice = RowSlice::from_bytes(&data)?;
     for col in cols.iter() {
-        let datum_offset = result.len();
         let id = col.get_column_id();
         if let Some((start, offset)) = row_slice.search_in_non_null_ids(id)? {
-            let value = &row_slice.values()[start..offset];
-            v2::encode_to_v1_binary(&mut result, value, col)?;
+            result.write_column_id_datum(id)?;
+            let v2_datum = &row_slice.values()[start..offset];
+            let result_offset = result.len();
+            result.write_v2_as_datum(v2_datum, col)?;
             meta_map.insert(
                 id,
-                RowColMeta::new(datum_offset, result.len() - datum_offset),
+                RowColMeta::new(result_offset, result.len() - result_offset),
             );
         } else if row_slice.search_in_null_ids(id) {
-            result.extend_from_slice(crate::codec::datum::DATUM_DATA_NULL);
+            result.write_column_id_datum(id)?;
+            let result_offset = result.len();
+            result.write_evaluable_datum_null()?;
             meta_map.insert(
                 id,
-                RowColMeta::new(datum_offset, result.len() - datum_offset),
+                RowColMeta::new(result_offset, result.len() - result_offset),
             );
+        } else {
+            // Otherwise the column does not exist.
         }
     }
     Ok(RowColsDict::new(meta_map, result))
@@ -553,69 +560,19 @@ mod tests {
     }
 
     fn cut_row_as_owned(bs: &[u8], col_id_set: &HashSet<i64>) -> HashMap<i64, Vec<u8>> {
-        let res = cut_row_v1(bs.to_vec(), col_id_set).unwrap();
+        let is_empty_row =
+            col_id_set.is_empty() || bs.is_empty() || (bs.len() == 1 && bs[0] == datum::NIL_FLAG);
+        let res = if is_empty_row {
+            RowColsDict::new(HashMap::default(), bs.to_vec())
+        } else {
+            cut_row_v1(bs.to_vec(), col_id_set).unwrap()
+        };
         to_hash_map(&res)
     }
 
     fn cut_idx_key_as_owned(bs: &[u8], ids: &[i64]) -> (HashMap<i64, Vec<u8>>, Option<i64>) {
         let (res, left) = cut_idx_key(bs.to_vec(), ids).unwrap();
         (to_hash_map(&res), left)
-    }
-
-    #[test]
-    fn test_cut_row_v2() {
-        use crate::codec::data_type::ScalarValue;
-        use crate::codec::row::{v2, v2::encoder::RowEncoder};
-        let mut ctx = EvalContext::default();
-        let row_v1 = map![
-            1 => Datum::I64(100),
-            2 => Datum::Bytes(b"abc".to_vec()),
-            6 => Datum::Null,
-            7 => Datum::Dur(Duration::parse(b"23:23:23.666",2 ).unwrap())
-        ];
-        let encoded_v1: HashMap<_, _> = row_v1
-            .into_iter()
-            .map(|(k, v)| (k, datum::encode_value(&mut ctx, &[v]).unwrap()))
-            .collect();
-        let row_v2 = vec![
-            v2::encoder::Column::new(1, 100),
-            v2::encoder::Column::new(2, b"abc".to_vec()),
-            v2::encoder::Column::new(6, ScalarValue::Int(None)),
-            v2::encoder::Column::new(7, Duration::parse(b"23:23:23.666", 2).unwrap()),
-        ];
-
-        let col_infos = vec![
-            {
-                let mut ci = ColumnInfo::default();
-                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ci.set_column_id(1);
-                ci
-            },
-            {
-                let mut ci = ColumnInfo::default();
-                ci.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
-                ci.set_column_id(2);
-                ci
-            },
-            {
-                let mut ci = ColumnInfo::default();
-                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ci.set_column_id(6);
-                ci
-            },
-            {
-                let mut ci = ColumnInfo::default();
-                ci.as_mut_accessor().set_tp(FieldTypeTp::Duration);
-                ci.set_column_id(7);
-                ci
-            },
-        ];
-
-        let mut encoded_v2 = vec![];
-        encoded_v2.write_row(&mut ctx, row_v2).unwrap();
-        let res = cut_row_v2(encoded_v2, Arc::new(col_infos)).unwrap();
-        let v2_to_v1 = to_hash_map(&res);
-        assert_eq!(encoded_v1, v2_to_v1);
     }
 
     #[test]

@@ -57,14 +57,6 @@ impl Column {
             value: value.into(),
         }
     }
-    pub fn new_with_ft(id: i64, value: impl Into<ScalarValue>, ft: FieldType) -> Self {
-        Column {
-            id,
-            ft,
-            value: value.into(),
-        }
-    }
-
     pub fn new_unsigned(id: i64, value: impl Into<ScalarValue>) -> Self {
         let mut ft = FieldType::default();
         ft.as_mut_accessor().set_flag(FieldTypeFlag::UNSIGNED);
@@ -73,10 +65,6 @@ impl Column {
             ft,
             value: value.into(),
         }
-    }
-
-    pub fn field_type(&self) -> &FieldType {
-        &self.ft
     }
 }
 
@@ -107,7 +95,7 @@ pub trait RowEncoder: NumberEncoder {
 
         for col in non_null_cols {
             non_null_ids.push(col.id);
-            value_wtr.write_value(ctx, &col)?;
+            value_wtr.write_value(ctx, col)?;
             offsets.push(value_wtr.len());
         }
         if value_wtr.len() > (u16::MAX as usize) {
@@ -165,17 +153,17 @@ pub trait RowEncoder: NumberEncoder {
 
 impl<T: BufferWriter> RowEncoder for T {}
 
-pub trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
+trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
     #[inline]
-    fn write_value(&mut self, ctx: &mut EvalContext, col: &Column) -> Result<()> {
-        match &col.value {
+    fn write_value(&mut self, ctx: &mut EvalContext, col: Column) -> Result<()> {
+        match col.value {
             ScalarValue::Int(Some(v)) if col.ft.is_unsigned() => {
-                self.encode_u64(*v as u64).map_err(Error::from)
+                self.encode_u64(v as u64).map_err(Error::from)
             }
-            ScalarValue::Int(Some(v)) => self.encode_i64(*v).map_err(Error::from),
+            ScalarValue::Int(Some(v)) => self.encode_i64(v).map_err(Error::from),
             ScalarValue::Decimal(Some(v)) => {
                 let (prec, frac) = v.prec_and_frac();
-                self.write_decimal(v, prec, frac)?;
+                self.write_decimal(&v, prec, frac)?;
                 Ok(())
             }
             ScalarValue::Real(Some(v)) => self.encode_u64(v.to_bits()).map_err(Error::from),

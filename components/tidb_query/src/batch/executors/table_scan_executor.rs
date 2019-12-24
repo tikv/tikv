@@ -149,7 +149,6 @@ impl TableScanExecutorImpl {
         key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
-        columns_len: usize,
         decoded_columns: &mut usize,
     ) -> Result<()> {
         use crate::codec::datum;
@@ -157,6 +156,7 @@ impl TableScanExecutorImpl {
         // The layout of value is: [col_id_1, value_1, col_id_2, value_2, ...]
         // where each element is datum encoded.
         // The column id datum must be in var i64 type.
+        let columns_len = columns.columns_len();
         let mut remaining = value;
         while !remaining.is_empty() && *decoded_columns < columns_len {
             if remaining[0] != datum::VAR_INT_FLAG {
@@ -200,20 +200,22 @@ impl TableScanExecutorImpl {
         decoded_columns: &mut usize,
     ) -> Result<()> {
         use crate::codec::datum;
-        use crate::codec::row::v2::RowSlice;
+        use crate::codec::row::v2::{RowSlice, V1CompatibleEncoder};
 
         let row = RowSlice::from_bytes(value)?;
         for (col_id, idx) in &self.column_id_index {
             if let Some((start, offset)) = row.search_in_non_null_ids(*col_id)? {
-                columns[*idx]
-                    .mut_raw()
-                    .push_v2(&row.values()[start..offset], &self.schema[*idx])?;
+                let mut buffer_to_write = columns[*idx].mut_raw().begin_concat_extend();
+                buffer_to_write
+                    .write_v2_as_datum(&row.values()[start..offset], &self.schema[*idx])?;
                 *decoded_columns += 1;
                 self.is_column_filled[*idx] = true;
             } else if row.search_in_null_ids(*col_id) {
                 columns[*idx].mut_raw().push(datum::DATUM_DATA_NULL);
                 *decoded_columns += 1;
                 self.is_column_filled[*idx] = true;
+            } else {
+                // This column is missing. It will be filled with default values later.
             }
         }
         Ok(())
@@ -306,7 +308,7 @@ impl ScanExecutorImpl for TableScanExecutorImpl {
         } else {
             match value[0] {
                 row::v2::CODEC_VERSION => self.process_v2(value, columns, &mut decoded_columns)?,
-                _ => self.process_v1(key, value, columns, columns_len, &mut decoded_columns)?,
+                _ => self.process_v1(key, value, columns, &mut decoded_columns)?,
             }
         }
 
@@ -359,8 +361,6 @@ mod tests {
 
     use crate::codec::batch::LazyBatchColumnVec;
     use crate::codec::data_type::*;
-    use crate::codec::row::v2;
-    use crate::codec::row::v2::encoder::RowEncoder;
     use crate::codec::{datum, table, Datum};
     use crate::execute_stats::*;
     use crate::expr::EvalConfig;
@@ -430,13 +430,6 @@ mod tests {
                     ],
                 ),
             ];
-            let data_v2 = vec![(
-                7,
-                vec![
-                    v2::encoder::Column::new(2, i64::from(u16::max_value())),
-                    v2::encoder::Column::new(4, 4.5),
-                ],
-            )];
 
             let expect_rows = vec![
                 (1, Some(10), Real::new(5.2).ok()),
@@ -444,7 +437,6 @@ mod tests {
                 (4, None, Real::new(4.5).ok()),
                 (5, None, Real::new(0.1).ok()),
                 (6, None, Real::new(4.5).ok()),
-                (7, Some(i64::from(u16::max_value())), Real::new(4.5).ok()),
             ];
 
             let mut ctx = EvalContext::default();
@@ -480,7 +472,7 @@ mod tests {
             ];
 
             let store = {
-                let mut kv: Vec<_> = data
+                let kv: Vec<_> = data
                     .iter()
                     .map(|(row_id, columns)| {
                         let key = table::encode_row_key(TABLE_ID, *row_id);
@@ -492,16 +484,6 @@ mod tests {
                         (key, value)
                     })
                     .collect();
-                let kv_v2: Vec<_> = data_v2
-                    .into_iter()
-                    .map(|(row_id, columns)| {
-                        let key = table::encode_row_key(TABLE_ID, row_id);
-                        let mut value = vec![];
-                        value.write_row(&mut ctx, columns).unwrap();
-                        (key, value)
-                    })
-                    .collect();
-                kv.extend(kv_v2);
                 FixtureStorage::from(kv)
             };
 
@@ -754,10 +736,10 @@ mod tests {
         executor.collect_exec_stats(&mut s);
 
         assert_eq!(s.scanned_rows_per_range.len(), 1);
-        assert_eq!(s.scanned_rows_per_range[0], 3);
+        assert_eq!(s.scanned_rows_per_range[0], 2);
         assert_eq!(s.summary_per_executor[0], ExecSummary::default());
         let exec_summary = s.summary_per_executor[1];
-        assert_eq!(3, exec_summary.num_produced_rows);
+        assert_eq!(2, exec_summary.num_produced_rows);
         assert_eq!(1, exec_summary.num_iterations);
     }
 

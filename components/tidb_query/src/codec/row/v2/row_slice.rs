@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![allow(dead_code)]
 use crate::codec::{Error, Result};
 use codec::prelude::*;
 use num_traits::PrimInt;
@@ -106,6 +105,7 @@ impl RowSlice<'_> {
         }
     }
 
+    #[inline]
     fn id_valid(&self, id: i64) -> bool {
         let upper: i64 = if self.is_big() {
             i64::from(u32::max_value())
@@ -115,6 +115,7 @@ impl RowSlice<'_> {
         id > 0 && id <= upper
     }
 
+    #[inline]
     fn is_big(&self) -> bool {
         match self {
             RowSlice::Big { .. } => true,
@@ -122,6 +123,7 @@ impl RowSlice<'_> {
         }
     }
 
+    #[inline]
     pub fn values(&self) -> &[u8] {
         match self {
             RowSlice::Big { values, .. } => values,
