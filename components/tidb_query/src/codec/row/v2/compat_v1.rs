@@ -6,7 +6,7 @@ use codec::number::NumberCodec;
 use codec::prelude::BufferWriter;
 use tidb_query_datatype::{FieldTypeAccessor, FieldTypeTp};
 
-use crate::codec::datum_codec::DatumPayloadEncoder;
+use crate::codec::datum_codec::DatumFlagAndPayloadEncoder;
 use crate::codec::{datum, Error, Result};
 
 #[inline]
@@ -35,21 +35,22 @@ fn decode_v2_i64(v: &[u8]) -> Result<i64> {
     }
 }
 
-/// See `fieldType2Flag.go` in TiDB.
-pub trait V1CompatibleEncoder: DatumPayloadEncoder {
+pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
     fn write_v2_as_datum_i64(&mut self, src: &[u8]) -> Result<()> {
-        self.write_u8(datum::INT_FLAG)?;
-        self.write_datum_payload_i64(decode_v2_i64(src)?)?;
-        Ok(())
+        self.write_datum_i64(decode_v2_i64(src)?)
     }
 
     fn write_v2_as_datum_u64(&mut self, src: &[u8]) -> Result<()> {
-        self.write_u8(datum::UINT_FLAG)?;
-        self.write_datum_payload_u64(decode_v2_u64(src)?)?;
-        Ok(())
+        self.write_datum_u64(decode_v2_u64(src)?)
+    }
+
+    fn write_v2_as_datum_duration(&mut self, src: &[u8]) -> Result<()> {
+        self.write_u8(datum::DURATION_FLAG)?;
+        self.write_datum_payload_i64(decode_v2_i64(src)?)
     }
 
     fn write_v2_as_datum(&mut self, src: &[u8], ft: &dyn FieldTypeAccessor) -> Result<()> {
+        // See `fieldType2Flag.go` in TiDB.
         match ft.tp() {
             FieldTypeTp::Tiny
             | FieldTypeTp::Short
@@ -64,6 +65,7 @@ pub trait V1CompatibleEncoder: DatumPayloadEncoder {
             }
             FieldTypeTp::Float | FieldTypeTp::Double => {
                 self.write_u8(datum::FLOAT_FLAG)?;
+                // Copy datum payload as it is
                 self.write_bytes(src)?;
             }
             FieldTypeTp::VarChar
@@ -73,8 +75,7 @@ pub trait V1CompatibleEncoder: DatumPayloadEncoder {
             | FieldTypeTp::MediumBlob
             | FieldTypeTp::LongBlob
             | FieldTypeTp::Blob => {
-                self.write_u8(datum::COMPACT_BYTES_FLAG)?;
-                self.write_compact_bytes(src)?;
+                self.write_datum_compact_bytes(src)?;
             }
             FieldTypeTp::Date
             | FieldTypeTp::DateTime
@@ -84,15 +85,24 @@ pub trait V1CompatibleEncoder: DatumPayloadEncoder {
             | FieldTypeTp::Set => {
                 self.write_v2_as_datum_u64(src)?;
             }
-            FieldTypeTp::Duration | FieldTypeTp::Year => {
+            FieldTypeTp::Year => {
                 self.write_v2_as_datum_i64(src)?;
+            }
+            FieldTypeTp::Duration => {
+                // This implementation is different from TiDB. TiDB encodes v2 duration into v1
+                // with datum flag VarInt, but we will encode with datum flag Duration, since
+                // Duration datum flag results in fixed-length datum payload, which is faster
+                // to encode and decode.
+                self.write_v2_as_datum_duration(src)?;
             }
             FieldTypeTp::NewDecimal => {
                 self.write_u8(datum::DECIMAL_FLAG)?;
+                // Copy datum payload as it is
                 self.write_bytes(src)?;
             }
             FieldTypeTp::JSON => {
                 self.write_u8(datum::JSON_FLAG)?;
+                // Copy datum payload as it is
                 self.write_bytes(src)?;
             }
             FieldTypeTp::Null => {
