@@ -500,7 +500,7 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
         }
         TickerType::TitanNumGet => {
             STORE_ENGINE_BLOB_LOCATE_VEC
-                .with_label_values(&[name, "number_blob_seek"])
+                .with_label_values(&[name, "number_blob_get"])
                 .inc_by(v);
         }
         TickerType::TitanNumSeek => {
