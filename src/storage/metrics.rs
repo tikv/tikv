@@ -13,7 +13,6 @@ use tikv_util::collections::HashMap;
 use tikv_util::metrics::*;
 
 struct StorageLocalMetrics {
-    local_sched_histogram_vec: LocalHistogramVec,
     local_sched_processing_read_histogram_vec: LocalHistogramVec,
     local_kv_command_keyread_histogram_vec: LocalHistogramVec,
     local_kv_command_counter_vec: LocalIntCounterVec,
@@ -25,7 +24,6 @@ struct StorageLocalMetrics {
 thread_local! {
     static TLS_STORAGE_METRICS: RefCell<StorageLocalMetrics> = RefCell::new(
         StorageLocalMetrics {
-            local_sched_histogram_vec: SCHED_HISTOGRAM_VEC.local(),
             local_sched_processing_read_histogram_vec: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             local_kv_command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             local_kv_command_counter_vec: KV_COMMAND_COUNTER_VEC.local(),
@@ -40,7 +38,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         // Flush Prometheus metrics
-        m.local_sched_histogram_vec.flush();
         m.local_sched_processing_read_histogram_vec.flush();
         m.local_kv_command_keyread_histogram_vec.flush();
         m.local_kv_command_counter_vec.flush();
