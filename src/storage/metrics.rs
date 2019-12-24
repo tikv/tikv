@@ -13,7 +13,6 @@ use tikv_util::collections::HashMap;
 use tikv_util::metrics::*;
 
 struct StorageLocalMetrics {
-    local_kv_command_keyread_histogram_vec: LocalHistogramVec,
     local_kv_command_counter_vec: LocalIntCounterVec,
     local_sched_commands_pri_counter_vec: LocalIntCounterVec,
     local_scan_details: HashMap<&'static str, Statistics>,
@@ -23,7 +22,6 @@ struct StorageLocalMetrics {
 thread_local! {
     static TLS_STORAGE_METRICS: RefCell<StorageLocalMetrics> = RefCell::new(
         StorageLocalMetrics {
-            local_kv_command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             local_kv_command_counter_vec: KV_COMMAND_COUNTER_VEC.local(),
             local_sched_commands_pri_counter_vec: SCHED_COMMANDS_PRI_COUNTER_VEC.local(),
             local_scan_details: HashMap::default(),
@@ -36,7 +34,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         // Flush Prometheus metrics
-        m.local_kv_command_keyread_histogram_vec.flush();
         m.local_kv_command_counter_vec.flush();
         m.local_sched_commands_pri_counter_vec.flush();
 
@@ -85,12 +82,7 @@ pub fn tls_collect_command_duration(cmd: CommandKind, duration: Duration) {
 }
 
 pub fn tls_collect_key_reads(cmd: CommandKind, count: usize) {
-    TLS_STORAGE_METRICS.with(|m| {
-        m.borrow_mut()
-            .local_kv_command_keyread_histogram_vec
-            .with_label_values(&[cmd.get_str()])
-            .observe(count as f64)
-    });
+    KEYREAD_HISTOGRAM_VEC_STATIC.may_flush(|m| m.get(cmd).observe(count as f64))
 }
 
 pub fn tls_processing_read_observe_duration<F, R>(cmd: CommandKind, f: F) -> R
@@ -197,6 +189,10 @@ make_static_metric! {
     }
 
     pub struct SchedLatchDurationVec: Histogram {
+        "type" => CommandKind,
+    }
+
+    pub struct KvCommandKeysReadVec: LocalHistogram {
         "type" => CommandKind,
     }
 
@@ -320,4 +316,6 @@ thread_local! {
          TLSMetricGroup::new(SchedDurationVec::from(&SCHED_HISTOGRAM_VEC));
     pub static SCHED_PROCESSING_VEC_STATIC: TLSMetricGroup<SchedProcessingReadVec> =
          TLSMetricGroup::new(SchedProcessingReadVec::from(&SCHED_PROCESSING_READ_HISTOGRAM_VEC));
+    pub static KEYREAD_HISTOGRAM_VEC_STATIC: TLSMetricGroup<KvCommandKeysReadVec> =
+         TLSMetricGroup::new(KvCommandKeysReadVec::from(&KV_COMMAND_KEYREAD_HISTOGRAM_VEC));
 }
