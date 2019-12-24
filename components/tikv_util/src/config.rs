@@ -898,7 +898,7 @@ impl<T> VersionTrack<T> {
         }
     }
 
-    /// Update partial of the value
+    /// Update the value
     pub fn update<F>(&self, f: F)
     where
         F: FnOnce(&mut T),
