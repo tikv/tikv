@@ -47,7 +47,7 @@ use engine::{CfName, IterOption, ALL_CFS, CF_DEFAULT, DATA_CFS, DATA_KEY_PREFIX_
 use futures::{future, Future};
 use kvproto::kvrpcpb::{Context, KeyRange, LockInfo};
 use std::sync::{atomic, Arc};
-use tikv_util::{collections::HashMap, future_pool::FuturePool};
+use tikv_util::{collections::HashMap, future_pool::FuturePool, metrics::TLSExt};
 use txn_types::{Key, KvPair, Mutation, TimeStamp, TsSet, Value};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -504,7 +504,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         let cmd = commands::Pause::new(keys, duration, ctx);
         self.schedule(cmd, StorageCallback::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.pause.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.pause.inc());
         Ok(())
     }
 
@@ -540,7 +540,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             ctx,
         );
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.prewrite.inc());
         Ok(())
     }
 
@@ -581,7 +581,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             ctx,
         );
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.prewrite.inc());
         Ok(())
     }
 
@@ -621,7 +621,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             ctx,
         );
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.acquire_pessimistic_lock.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.acquire_pessimistic_lock.inc());
         Ok(())
     }
 
@@ -638,7 +638,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         let cmd = commands::Commit::new(keys, lock_ts, commit_ts, ctx);
         self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.commit.inc());
         Ok(())
     }
 
@@ -674,7 +674,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             modifies,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.delete_range.inc());
         Ok(())
     }
 
@@ -691,7 +691,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         let cmd = commands::Cleanup::new(key, start_ts, current_ts, ctx);
         self.schedule(cmd, StorageCallback::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.cleanup.inc());
         Ok(())
     }
 
@@ -707,7 +707,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         let cmd = commands::Rollback::new(keys, start_ts, ctx);
         self.schedule(cmd, StorageCallback::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.rollback.inc());
         Ok(())
     }
 
@@ -729,7 +729,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
 
         let cmd = commands::PessimisticRollback::new(keys, start_ts, for_update_ts, ctx);
         self.schedule(cmd, StorageCallback::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_rollback.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.pessimistic_rollback.inc());
         Ok(())
     }
 
@@ -746,7 +746,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         let cmd = commands::TxnHeartBeat::new(primary_key, start_ts, advise_ttl, ctx);
         self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.txn_heart_beat.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.txn_heart_beat.inc());
         Ok(())
     }
 
@@ -779,7 +779,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             ctx,
         );
         self.schedule(cmd, StorageCallback::TxnStatus(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.check_txn_status.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.check_txn_status.inc());
         Ok(())
     }
 
@@ -805,7 +805,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             ctx,
         );
         self.schedule(cmd, StorageCallback::Locks(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.scan_lock.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.scan_lock.inc());
         Ok(())
     }
 
@@ -826,7 +826,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         let cmd = commands::ResolveLock::new(txn_status, None, vec![], ctx);
         self.schedule(cmd, StorageCallback::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.resolve_lock.inc());
         Ok(())
     }
 
@@ -846,7 +846,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         let cmd = commands::ResolveLockLite::new(start_ts, commit_ts, resolve_keys, ctx);
         self.schedule(cmd, StorageCallback::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.resolve_lock_lite.inc());
         Ok(())
     }
 
@@ -1028,7 +1028,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             )],
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.raw_put.inc());
         Ok(())
     }
 
@@ -1057,7 +1057,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             requests,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.raw_batch_put.inc());
         Ok(())
     }
 
@@ -1076,7 +1076,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.raw_delete.inc());
         Ok(())
     }
 
@@ -1106,7 +1106,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             vec![Modify::DeleteRange(cf, start_key, end_key, false)],
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.raw_delete_range.inc());
         Ok(())
     }
 
@@ -1130,7 +1130,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
             requests,
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.raw_batch_delete.inc());
         Ok(())
     }
 
@@ -1419,7 +1419,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     pub fn mvcc_by_key(&self, ctx: Context, key: Key, callback: Callback<MvccInfo>) -> Result<()> {
         let cmd = commands::MvccByKey::new(key, ctx);
         self.schedule(cmd, StorageCallback::MvccInfoByKey(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.key_mvcc.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.key_mvcc.inc());
 
         Ok(())
     }
@@ -1434,7 +1434,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
     ) -> Result<()> {
         let cmd = commands::MvccByStartTs::new(start_ts, ctx);
         self.schedule(cmd, StorageCallback::MvccInfoByStartTs(callback))?;
-        KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| m.start_ts_mvcc.inc());
         Ok(())
     }
 }

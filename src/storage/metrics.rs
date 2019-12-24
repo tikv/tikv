@@ -13,7 +13,6 @@ use tikv_util::collections::HashMap;
 use tikv_util::metrics::*;
 
 struct StorageLocalMetrics {
-    local_kv_command_counter_vec: LocalIntCounterVec,
     local_sched_commands_pri_counter_vec: LocalIntCounterVec,
     local_scan_details: HashMap<&'static str, Statistics>,
     local_read_flow_stats: HashMap<u64, FlowStatistics>,
@@ -22,7 +21,6 @@ struct StorageLocalMetrics {
 thread_local! {
     static TLS_STORAGE_METRICS: RefCell<StorageLocalMetrics> = RefCell::new(
         StorageLocalMetrics {
-            local_kv_command_counter_vec: KV_COMMAND_COUNTER_VEC.local(),
             local_sched_commands_pri_counter_vec: SCHED_COMMANDS_PRI_COUNTER_VEC.local(),
             local_scan_details: HashMap::default(),
             local_read_flow_stats: HashMap::default(),
@@ -34,7 +32,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         // Flush Prometheus metrics
-        m.local_kv_command_counter_vec.flush();
         m.local_sched_commands_pri_counter_vec.flush();
 
         for (cmd, stat) in m.local_scan_details.drain() {
@@ -61,17 +58,18 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
 }
 
 pub fn tls_collect_command_count(cmd: CommandKind, priority: CommandPriority) {
+    //todo replace
     TLS_STORAGE_METRICS.with(|m| {
         let mut storage_metrics = m.borrow_mut();
-        storage_metrics
-            .local_kv_command_counter_vec
-            .with_label_values(&[cmd.get_str()])
-            .inc();
         storage_metrics
             .local_sched_commands_pri_counter_vec
             .with_label_values(&[priority.get_str()])
             .inc();
     });
+
+    KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| {
+        m.get(cmd).inc();
+    })
 }
 
 pub fn tls_collect_command_duration(cmd: CommandKind, duration: Duration) {
@@ -179,7 +177,7 @@ make_static_metric! {
         "type" => CommandKind,
     }
 
-    pub struct KvCommandCounterVec: IntCounter {
+    pub struct KvCommandCounterVec: LocalIntCounter {
         "type" => CommandKind,
     }
 
@@ -216,8 +214,6 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref KV_COMMAND_COUNTER_VEC_STATIC: KvCommandCounterVec =
-        KvCommandCounterVec::from(&KV_COMMAND_COUNTER_VEC);
     pub static ref SCHED_STAGE_COUNTER_VEC: SchedStageCounterVec = {
         register_static_int_counter_vec!(
             SchedStageCounterVec,
@@ -318,4 +314,6 @@ thread_local! {
          TLSMetricGroup::new(SchedProcessingReadVec::from(&SCHED_PROCESSING_READ_HISTOGRAM_VEC));
     pub static KEYREAD_HISTOGRAM_VEC_STATIC: TLSMetricGroup<KvCommandKeysReadVec> =
          TLSMetricGroup::new(KvCommandKeysReadVec::from(&KV_COMMAND_KEYREAD_HISTOGRAM_VEC));
+    pub static KV_COMMAND_COUNTER_VEC_STATIC: TLSMetricGroup<KvCommandCounterVec> =
+        TLSMetricGroup::new(KvCommandCounterVec::from(&KV_COMMAND_COUNTER_VEC));
 }
