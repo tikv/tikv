@@ -3,7 +3,6 @@
 pub mod config;
 pub mod engine_metrics;
 mod event_listener;
-pub mod io_limiter;
 pub mod metrics_flusher;
 pub mod security;
 pub mod stats;
@@ -52,6 +51,20 @@ pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
         .cf_handle(cf)
         .ok_or_else(|| Error::RocksDb(format!("cf {} not found", cf)))?;
     Ok(handle)
+}
+
+pub fn ingest_maybe_slowdown_writes(db: &DB, cf: &str) -> bool {
+    let handle = get_cf_handle(db, cf).unwrap();
+    if let Some(n) = get_cf_num_files_at_level(db, handle, 0) {
+        let options = db.get_options_cf(handle);
+        let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
+        // Leave enough buffer to tolerate heavy write workload,
+        // which may flush some memtables in a short time.
+        if n > u64::from(slowdown_trigger) / 2 {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn open_opt(
@@ -489,7 +502,7 @@ pub fn compact_files_in_range_cf(
 
     let mut opts = CompactionOptions::new();
     opts.set_compression(output_compression);
-    let max_subcompactions = sys_info::cpu_num().unwrap();
+    let max_subcompactions = sysinfo::get_logical_cores();
     let max_subcompactions = cmp::min(max_subcompactions, 32);
     opts.set_max_subcompactions(max_subcompactions as i32);
     opts.set_output_file_size_limit(output_file_size_limit);

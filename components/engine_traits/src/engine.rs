@@ -12,6 +12,8 @@ pub trait KvEngine:
     + CFHandleExt
     + ImportExt
     + SstExt
+    + IOLimiterExt
+    + TablePropertiesExt
     + Send
     + Sync
     + Clone
@@ -31,4 +33,8 @@ pub trait KvEngine:
     fn sync(&self) -> Result<()>;
 
     fn cf_names(&self) -> Vec<&str>;
+
+    /// This only exists as a temporary hack during refactoring.
+    /// It cannot be used forever.
+    fn bad_downcast<T: 'static>(&self) -> &T;
 }

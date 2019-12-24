@@ -2,16 +2,15 @@
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 
-use keys::TimeStamp;
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine};
 use tikv::storage::mvcc::{Error as MvccError, ErrorInner as MvccErrorInner, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::{
-    self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, Key, KvPair, Mutation,
-    Value,
+    self, Engine, Error as StorageError, ErrorInner as StorageErrorInner, TxnStatus,
 };
 use tikv_util::HandyRwLock;
+use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 use super::*;
 
@@ -258,12 +257,14 @@ impl<E: Engine> AssertionStorage<E> {
         }
     }
 
-    fn expect_invalid_tso_err(
+    fn expect_invalid_tso_err<T>(
         &self,
-        resp: Result<(), storage::Error>,
+        resp: Result<T, storage::Error>,
         sts: impl Into<TimeStamp>,
         cmt_ts: impl Into<TimeStamp>,
-    ) {
+    ) where
+        T: std::fmt::Debug,
+    {
         assert!(resp.is_err());
         let err = resp.unwrap_err();
         match err {
@@ -506,11 +507,14 @@ impl<E: Engine> AssertionStorage<E> {
         keys: Vec<&[u8]>,
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
+        actual_commit_ts: impl Into<TimeStamp>,
     ) {
         let keys: Vec<Key> = keys.iter().map(|x| Key::from_raw(x)).collect();
-        self.store
+        let txn_status = self
+            .store
             .commit(self.ctx.clone(), keys, start_ts.into(), commit_ts.into())
             .unwrap();
+        assert_eq!(txn_status, TxnStatus::committed(actual_commit_ts.into()));
     }
 
     pub fn commit_with_illegal_tso(

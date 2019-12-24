@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+use std::ops::Bound;
 use tikv_util::keybuilder::KeyBuilder;
-
-use crate::SeekMode;
 
 #[derive(Clone)]
 pub struct ReadOptions {}
@@ -43,12 +42,22 @@ impl Default for WriteOptions {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
+pub enum SeekMode {
+    TotalOrder,
+    Prefix,
+}
+
 pub struct IterOptions {
-    pub lower_bound: Option<KeyBuilder>,
-    pub upper_bound: Option<KeyBuilder>,
+    lower_bound: Option<KeyBuilder>,
+    upper_bound: Option<KeyBuilder>,
     prefix_same_as_start: bool,
     fill_cache: bool,
+    // hint for we will only scan data with commit ts >= hint_min_ts
+    hint_min_ts: Option<u64>,
+    // hint for we will only scan data with commit ts <= hint_max_ts
+    hint_max_ts: Option<u64>,
+    // only supported when Titan enabled, otherwise it doesn't take effect.
     key_only: bool,
     seek_mode: SeekMode,
 }
@@ -64,40 +73,78 @@ impl IterOptions {
             upper_bound,
             prefix_same_as_start: false,
             fill_cache,
+            hint_min_ts: None,
+            hint_max_ts: None,
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
         }
     }
 
+    #[inline]
     pub fn use_prefix_seek(mut self) -> IterOptions {
         self.seek_mode = SeekMode::Prefix;
         self
     }
 
+    #[inline]
     pub fn total_order_seek_used(&self) -> bool {
         self.seek_mode == SeekMode::TotalOrder
     }
 
-    pub fn set_fill_cache(&mut self, v: bool) {
-        self.fill_cache = v;
-    }
-
+    #[inline]
     pub fn fill_cache(&self) -> bool {
         self.fill_cache
     }
 
-    pub fn set_key_only(&mut self, v: bool) {
-        self.key_only = v;
+    #[inline]
+    pub fn set_fill_cache(&mut self, v: bool) {
+        self.fill_cache = v;
     }
 
+    #[inline]
+    pub fn set_hint_min_ts(&mut self, bound_ts: Bound<u64>) {
+        match bound_ts {
+            Bound::Included(ts) => self.hint_min_ts = Some(ts),
+            Bound::Excluded(ts) => self.hint_min_ts = Some(ts + 1),
+            Bound::Unbounded => self.hint_min_ts = None,
+        }
+    }
+
+    #[inline]
+    pub fn hint_min_ts(&self) -> Option<u64> {
+        self.hint_min_ts
+    }
+
+    #[inline]
+    pub fn hint_max_ts(&self) -> Option<u64> {
+        self.hint_max_ts
+    }
+
+    #[inline]
+    pub fn set_hint_max_ts(&mut self, bound_ts: Bound<u64>) {
+        match bound_ts {
+            Bound::Included(ts) => self.hint_max_ts = Some(ts),
+            Bound::Excluded(ts) => self.hint_max_ts = Some(ts - 1),
+            Bound::Unbounded => self.hint_max_ts = None,
+        }
+    }
+
+    #[inline]
     pub fn key_only(&self) -> bool {
         self.key_only
     }
 
+    #[inline]
+    pub fn set_key_only(&mut self, v: bool) {
+        self.key_only = v;
+    }
+
+    #[inline]
     pub fn lower_bound(&self) -> Option<&[u8]> {
         self.lower_bound.as_ref().map(|v| v.as_slice())
     }
 
+    #[inline]
     pub fn set_lower_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
         let builder = KeyBuilder::from_slice(bound, reserved_prefix_len, 0);
         self.lower_bound = Some(builder);
@@ -113,10 +160,12 @@ impl IterOptions {
         }
     }
 
+    #[inline]
     pub fn upper_bound(&self) -> Option<&[u8]> {
         self.upper_bound.as_ref().map(|v| v.as_slice())
     }
 
+    #[inline]
     pub fn set_upper_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
         let builder = KeyBuilder::from_slice(bound, reserved_prefix_len, 0);
         self.upper_bound = Some(builder);
@@ -132,12 +181,22 @@ impl IterOptions {
         }
     }
 
-    pub fn set_prefix_same_as_start(&mut self, enable: bool) {
-        self.prefix_same_as_start = enable;
+    #[inline]
+    pub fn build_bounds(self) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+        let lower = self.lower_bound.map(KeyBuilder::build);
+        let upper = self.upper_bound.map(KeyBuilder::build);
+        (lower, upper)
     }
 
+    #[inline]
     pub fn prefix_same_as_start(&self) -> bool {
         self.prefix_same_as_start
+    }
+
+    #[inline]
+    pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOptions {
+        self.prefix_same_as_start = enable;
+        self
     }
 }
 
@@ -147,9 +206,34 @@ impl Default for IterOptions {
             lower_bound: None,
             upper_bound: None,
             prefix_same_as_start: false,
-            fill_cache: false,
+            fill_cache: true,
+            hint_min_ts: None,
+            hint_max_ts: None,
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ops::Bound;
+
+    #[test]
+    fn test_hint_ts() {
+        let mut ops = IterOptions::default();
+        assert_eq!(ops.hint_min_ts(), None);
+        assert_eq!(ops.hint_max_ts(), None);
+
+        ops.set_hint_min_ts(Bound::Included(1));
+        ops.set_hint_max_ts(Bound::Included(10));
+        assert_eq!(ops.hint_min_ts(), Some(1));
+        assert_eq!(ops.hint_max_ts(), Some(10));
+
+        ops.set_hint_min_ts(Bound::Excluded(1));
+        ops.set_hint_max_ts(Bound::Excluded(10));
+        assert_eq!(ops.hint_min_ts(), Some(2));
+        assert_eq!(ops.hint_max_ts(), Some(9));
     }
 }

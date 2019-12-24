@@ -1,17 +1,16 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::{f64, i64};
 
-use crc::{crc32, Hasher32};
 use num::traits::Pow;
-use rand::{Rng, SeedableRng};
-use rand_xorshift::XorShiftRng;
-use time;
+use tikv_util::file::calc_crc32_bytes;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use crate::codec::Datum;
+use crate::expr_util::rand::MySQLRng;
 
 impl ScalarFunc {
     #[inline]
@@ -155,45 +154,29 @@ impl ScalarFunc {
 
     #[inline]
     pub fn rand(&self, _: &mut EvalContext, _: &[Datum]) -> Result<Option<f64>> {
-        let mut cus_rng = self.cus_rng.rng.borrow_mut();
-        if cus_rng.is_none() {
-            let mut rand = get_rand(None);
-            let res = rand.gen::<f64>();
-            *cus_rng = Some(rand);
-            Ok(Some(res))
-        } else {
-            let rand = cus_rng.as_mut().unwrap();
-            let res = rand.gen::<f64>();
-            Ok(Some(res))
-        }
+        let res = MYSQL_RNG.with(|mysql_rng| mysql_rng.borrow_mut().gen());
+        Ok(Some(res))
     }
 
     #[inline]
-    pub fn rand_with_seed(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn rand_with_seed_first_gen(
+        &self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<f64>> {
         let seed = match self.children[0].eval_int(ctx, row)? {
-            Some(v) => Some(v as u64),
+            Some(v) => Some(v),
             _ => None,
         };
-
-        let mut cus_rng = self.cus_rng.rng.borrow_mut();
-        if cus_rng.is_none() {
-            let mut rand = get_rand(seed);
-            let res = rand.gen::<f64>();
-            *cus_rng = Some(rand);
-            Ok(Some(res))
-        } else {
-            let rand = cus_rng.as_mut().unwrap();
-            let res = rand.gen::<f64>();
-            Ok(Some(res))
-        }
+        let mut rng = MySQLRng::new_with_seed(seed.unwrap_or(0));
+        let res = rng.gen();
+        Ok(Some(res))
     }
 
     #[inline]
     pub fn crc32(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let d = try_opt!(self.children[0].eval_string(ctx, row));
-        let mut digest = crc32::Digest::new(crc32::IEEE);
-        digest.write(&d);
-        Ok(Some(i64::from(digest.sum32())))
+        Ok(Some(i64::from(calc_crc32_bytes(&d))))
     }
 
     #[inline]
@@ -455,105 +438,20 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
+        use crate::expr_util::conv::conv as conv_impl;
         let n = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        let mut from_base = try_opt!(self.children[1].eval_int(ctx, row));
-        let mut to_base = try_opt!(self.children[2].eval_int(ctx, row));
-
-        let mut negative = false;
-        let mut signed = false;
-        let mut ignore_sign = false;
-
-        if from_base < 0 {
-            from_base = -from_base;
-            signed = true;
-        }
-        if to_base < 0 {
-            to_base = -to_base;
-            ignore_sign = true;
-        }
-        if from_base > 36 || from_base < 2 || to_base > 36 || to_base < 2 {
-            return Ok(None);
-        }
-
-        let n = n.trim_start();
-        let mut start = 0;
-        let mut end = n.len();
-        for (idx, c) in n.char_indices() {
-            if idx == 0 {
-                negative = c == '-';
-                if c == '+' || c == '-' {
-                    start = 1;
-                    continue;
-                }
-            }
-            if !c.is_digit(from_base as u32) {
-                end = idx;
-                break;
-            }
-        }
-        let n = n.get(start..end).unwrap();
-        if n.is_empty() {
-            return Ok(Some(Cow::Borrowed(b"0")));
-        }
-
-        let mut value = u64::from_str_radix(n, from_base as u32).unwrap();
-        if signed {
-            value = if negative {
-                value.min(-i64::min_value() as u64)
-            } else {
-                value.min(i64::max_value() as u64)
-            };
-        }
-        let mut value = value as i64;
-        if negative {
-            value = -value;
-        }
-        negative = value < 0;
-
-        if negative && ignore_sign {
-            value = -value;
-        }
-        let mut r = format_radix(value as u64, to_base as u32);
-        if negative && ignore_sign {
-            r.insert(0, '-');
-        }
-        Ok(Some(Cow::Owned(r.into_bytes())))
+        let from_base = try_opt!(self.children[1].eval_int(ctx, row));
+        let to_base = try_opt!(self.children[2].eval_int(ctx, row));
+        Ok(conv_impl(n.as_ref(), from_base, to_base).map(Cow::Owned))
     }
 }
 
-fn format_radix(mut x: u64, radix: u32) -> String {
-    let mut r = vec![];
-    loop {
-        let m = x % u64::from(radix);
-        x /= u64::from(radix);
-        r.push(
-            std::char::from_digit(m as u32, radix)
-                .unwrap()
-                .to_ascii_uppercase(),
-        );
-        if x == 0 {
-            break;
-        }
-    }
-    r.iter().rev().collect::<String>()
-}
-
-fn get_rand(arg: Option<u64>) -> XorShiftRng {
-    let seed = match arg {
-        Some(v) => v,
-        None => {
-            let current_time = time::get_time();
-            let nsec = current_time.nsec as u64;
-            let sec = (current_time.sec * 1000000000) as u64;
-            sec + nsec
-        }
-    };
-    SeedableRng::seed_from_u64(seed)
+thread_local! {
+   static MYSQL_RNG: RefCell<MySQLRng> = RefCell::new(MySQLRng::new())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::f64::consts::{FRAC_1_SQRT_2, PI};
     use std::{f64, i64, u64};
 
@@ -857,50 +755,57 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_rand() {
-        let got = eval_func(ScalarFuncSig::Rand, &[Datum::Null])
+        let got1 = eval_func(ScalarFuncSig::Rand, &[Datum::Null])
             .unwrap()
             .as_real()
+            .unwrap()
             .unwrap();
 
-        assert!(got.is_some());
-        assert!(got.unwrap() < 1.0);
-        assert!(got.unwrap() >= 0.0);
+        let got2 = eval_func(ScalarFuncSig::Rand, &[Datum::Null])
+            .unwrap()
+            .as_real()
+            .unwrap()
+            .unwrap();
+
+        assert!(got1 < 1.0);
+        assert!(got1 >= 0.0);
+        assert!(got2 < 1.0);
+        assert!(got2 >= 0.0);
+        assert_ne!(got1, got2);
     }
 
     #[test]
-    fn test_rand_with_seed() {
-        let seed: i64 = 20160101;
-        let expect = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(seed)])
+    #[allow(clippy::float_cmp)]
+    fn test_rand_with_seed_first_gen() {
+        let tests: Vec<(i64, f64)> = vec![
+            (0, 0.15522042769493574),
+            (1, 0.40540353712197724),
+            (-1, 0.9050373219931845),
+            (622337, 0.3608469249315997),
+            (10000000009, 0.3472714008272359),
+            (-1845798578934, 0.5058874688166077),
+            (922337203685, 0.40536338501178043),
+            (922337203685477580, 0.5550739490939993),
+            (9223372036854775807, 0.9050373219931845),
+        ];
+
+        for (seed, exp) in tests {
+            let got = eval_func(ScalarFuncSig::RandWithSeedFirstGen, &[Datum::I64(seed)])
+                .unwrap()
+                .as_real()
+                .unwrap()
+                .unwrap();
+            assert_eq!(got, exp);
+        }
+
+        let none_case_got = eval_func(ScalarFuncSig::RandWithSeedFirstGen, &[Datum::Null])
             .unwrap()
             .as_real()
             .unwrap()
-            .unwrap()
-            .to_bits();
-        for _ in 1..3 {
-            let got = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(seed)])
-                .unwrap()
-                .as_real()
-                .unwrap();
-
-            assert!(got.is_some());
-            assert_eq!(got.unwrap().to_bits(), expect);
-        }
-        let mut set: HashSet<u64> = HashSet::new();
-        let test_cnt = 1024;
-        for i in seed + 1..=seed + test_cnt {
-            let got = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(i)])
-                .unwrap()
-                .as_real()
-                .unwrap()
-                .unwrap()
-                .to_bits();
-            set.insert(got);
-        }
-        // If this assert failed, try to find another seed and retry.
-        // If `test_cnt-set.len()` is not very large,
-        // then this fail may be legal but not logical error of the code.
-        assert_eq!(set.len(), test_cnt as usize);
+            .unwrap();
+        assert_eq!(none_case_got, 0.15522042769493574);
     }
 
     #[test]

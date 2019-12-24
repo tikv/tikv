@@ -11,7 +11,7 @@ use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use crate::raftstore::store::{CasualMessage, CasualRouter};
 
 use super::super::error::Result;
 use super::super::metrics::*;
@@ -347,10 +347,7 @@ pub mod tests {
     use super::Checker;
     use crate::raftstore::coprocessor::properties::RangePropertiesCollectorFactory;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use crate::raftstore::store::{
-        keys, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask,
-    };
-    use crate::storage::Key;
+    use crate::raftstore::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
@@ -363,6 +360,7 @@ pub mod tests {
     use tempfile::Builder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
+    use txn_types::Key;
 
     use super::*;
 

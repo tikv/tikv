@@ -5,7 +5,6 @@ use std::sync::*;
 
 use futures::{future, Future, Stream};
 use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
-
 use kvproto::coprocessor::*;
 use kvproto::debugpb::DebugClient;
 use kvproto::kvrpcpb::*;
@@ -19,16 +18,16 @@ use engine::*;
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
 use tempfile::Builder;
 use test_raftstore::*;
+use tikv::config::ConfigController;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::keys;
 use tikv::raftstore::store::SnapManager;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
-use tikv::storage::Key;
 use tikv_util::worker::FutureWorker;
 use tikv_util::HandyRwLock;
+use txn_types::Key;
 
 fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let count = 1;
@@ -129,6 +128,7 @@ fn must_kv_commit(
     keys: Vec<Vec<u8>>,
     start_ts: u64,
     commit_ts: u64,
+    expect_commit_ts: u64,
 ) {
     let mut commit_req = CommitRequest::default();
     commit_req.set_context(ctx);
@@ -142,6 +142,7 @@ fn must_kv_commit(
         commit_resp.get_region_error()
     );
     assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
+    assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
 }
 
 #[test]
@@ -174,6 +175,7 @@ fn test_mvcc_basic() {
         ctx.clone(),
         vec![k.clone()],
         prewrite_start_version,
+        commit_version,
         commit_version,
     );
 
@@ -252,6 +254,7 @@ fn test_mvcc_rollback_and_cleanup() {
         ctx.clone(),
         vec![k.clone()],
         prewrite_start_version,
+        commit_version,
         commit_version,
     );
 
@@ -361,6 +364,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
         ctx.clone(),
         vec![k.clone()],
         prewrite_start_version,
+        commit_version,
         commit_version,
     );
 
@@ -837,6 +841,7 @@ fn test_double_run_node() {
     };
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
+    let cfg_controller = ConfigController::new(Default::default());
     let e = node
         .start(
             engines,
@@ -846,6 +851,7 @@ fn test_double_run_node() {
             store_meta,
             coprocessor_host,
             importer,
+            cfg_controller,
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

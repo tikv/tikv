@@ -8,8 +8,10 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64};
 
-use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
-use engine::{Engines, Peekable};
+use engine::rocks::{WriteBatch, WriteOptions};
+use engine::Engines;
+use engine_rocks::{Compat, RocksEngine};
+use engine_traits::{KvEngine, Peekable, Snapshot};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -34,11 +36,11 @@ use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
 };
-use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::PdTask;
-use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
+use crate::raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
+use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -57,7 +59,7 @@ const SHRINK_CACHE_CAPACITY: usize = 64;
 
 struct ReadIndexRequest {
     id: Uuid,
-    cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
+    cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksEngine>)>,
     renew_lease_time: Timespec,
     read_index: Option<u64>,
 }
@@ -68,7 +70,7 @@ impl ReadIndexRequest {
         self.id.as_bytes()
     }
 
-    fn push_command(&mut self, req: RaftCmdRequest, cb: Callback) {
+    fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<RocksEngine>) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         self.cmds.push((req, cb));
     }
@@ -76,7 +78,7 @@ impl ReadIndexRequest {
     fn with_command(
         id: Uuid,
         req: RaftCmdRequest,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
         renew_lease_time: Timespec,
     ) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
@@ -505,7 +507,12 @@ impl Peer {
             );
             return None;
         }
+        // If initialized is false, it implicitly means applyfsm does not exist now.
         let initialized = self.get_store().is_initialized();
+        // If async_remove is true, it means peerfsm needs to be removed after its
+        // corresponding applyfsm was removed.
+        // If it is false, it means either applyfsm does not exist or there is no task
+        // in applyfsm so it's ok to remove peerfsm immediately.
         let async_remove = if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
                 info!(
@@ -1690,7 +1697,7 @@ impl Peer {
     pub fn propose<T, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
     ) -> bool {
@@ -1750,7 +1757,7 @@ impl Peer {
         poll_ctx: &mut PollContext<T, C>,
         mut meta: ProposalMeta,
         is_conf_change: bool,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
         if poll_ctx.current_time.is_none() {
@@ -1815,7 +1822,7 @@ impl Peer {
                     "peer_id" => self.peer.get_id(),
                     "request" => ?change_peer,
                 );
-                return Err(box_err!("invalid conf change request"));
+                return Err(box_err!("{} invalid conf change request", self.tag));
             }
             _ => {}
         }
@@ -1830,7 +1837,7 @@ impl Peer {
                 "peer_id" => self.peer.get_id(),
                 "request" => ?change_peer,
             );
-            return Err(box_err!("ignore remove leader"));
+            return Err(box_err!("{} ignore remove leader", self.tag));
         }
 
         let status = self.raft_group.status_ref();
@@ -1934,7 +1941,12 @@ impl Peer {
         last_index <= progress.get(peer_id).unwrap().matched + ctx.cfg.leader_transfer_max_log_lag
     }
 
-    fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C>, req: RaftCmdRequest, cb: Callback) {
+    fn read_local<T, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+        req: RaftCmdRequest,
+        cb: Callback<RocksEngine>,
+    ) {
         ctx.raft_metrics.propose.local_read += 1;
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
     }
@@ -1945,16 +1957,19 @@ impl Peer {
             |s| if s.map_or(true, |s| s.parse().unwrap_or(true)) {
                 Ok(())
             } else {
-                Err(box_err!("can not read due to injected failure"))
+                Err(box_err!(
+                    "{} can not read due to injected failure",
+                    self.tag
+                ))
             }
         );
 
         // See more in ready_to_handle_read().
         if self.is_splitting() {
-            return Err(box_err!("can not read index due to split"));
+            return Err(box_err!("{} can not read index due to split", self.tag));
         }
         if self.is_merging() {
-            return Err(box_err!("can not read index due to merge"));
+            return Err(box_err!("{} can not read index due to merge", self.tag));
         }
         Ok(())
     }
@@ -1969,7 +1984,7 @@ impl Peer {
         poll_ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
     ) -> bool {
         if let Err(e) = self.pre_read_index() {
             debug!(
@@ -2014,7 +2029,7 @@ impl Peer {
         if !self.is_leader() && self.leader_id() == INVALID_ID {
             cmd_resp::bind_error(
                 &mut err_resp,
-                box_err!("can not read index due to no leader"),
+                box_err!("{} can not read index due to no leader", self.tag),
             );
             poll_ctx.raft_metrics.invalid_proposal.read_index_no_leader += 1;
             cb.invoke_with_response(err_resp);
@@ -2114,7 +2129,10 @@ impl Peer {
         for entry in self.raft_group.raft.raft_log.entries(min_index, NO_LIMIT)? {
             entry_size += entry.get_data().len();
             if entry.get_entry_type() == EntryType::EntryConfChange {
-                return Err(box_err!("log gap contains conf change, skip merging."));
+                return Err(box_err!(
+                    "{} log gap contains conf change, skip merging.",
+                    self.tag
+                ));
             }
             if entry.get_data().is_empty() {
                 continue;
@@ -2186,7 +2204,10 @@ impl Peer {
         if self.pending_merge_state.is_some()
             && req.get_admin_request().get_cmd_type() != AdminCmdType::RollbackMerge
         {
-            return Err(box_err!("peer in merging mode, can't do proposal."));
+            return Err(box_err!(
+                "{} peer in merging mode, can't do proposal.",
+                self.tag
+            ));
         }
 
         poll_ctx.raft_metrics.propose.normal += 1;
@@ -2239,7 +2260,7 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
     ) -> bool {
         ctx.raft_metrics.propose.transfer_leader += 1;
 
@@ -2277,7 +2298,10 @@ impl Peer {
         req: &RaftCmdRequest,
     ) -> Result<u64> {
         if self.pending_merge_state.is_some() {
-            return Err(box_err!("peer in merging mode, can't do proposal."));
+            return Err(box_err!(
+                "{} peer in merging mode, can't do proposal.",
+                self.tag
+            ));
         }
         if self.raft_group.raft.pending_conf_index > self.get_store().applied_index() {
             info!(
@@ -2332,9 +2356,9 @@ impl Peer {
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
-    ) -> ReadResponse {
+    ) -> ReadResponse<RocksEngine> {
         let mut resp = ReadExecutor::new(
-            ctx.engines.kv.clone(),
+            ctx.engines.kv.c().clone(),
             check_epoch,
             false, /* we don't need snapshot time */
         )
@@ -2530,7 +2554,7 @@ pub trait RequestInspector {
             }
 
             if has_read && has_write {
-                return Err(box_err!("read and write can't be mixed in one batch."));
+                return Err(box_err!("read and write can't be mixed in one batch"));
             }
         }
 
@@ -2586,16 +2610,19 @@ impl RequestInspector for Peer {
 }
 
 #[derive(Debug)]
-pub struct ReadExecutor {
+pub struct ReadExecutor<E: KvEngine> {
     check_epoch: bool,
-    engine: Arc<DB>,
-    snapshot: Option<SyncSnapshot>,
+    engine: E,
+    snapshot: Option<<E::Snapshot as Snapshot>::SyncSnapshot>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
 }
 
-impl ReadExecutor {
-    pub fn new(engine: Arc<DB>, check_epoch: bool, need_snapshot_time: bool) -> Self {
+impl<E> ReadExecutor<E>
+where
+    E: KvEngine,
+{
+    pub fn new(engine: E, check_epoch: bool, need_snapshot_time: bool) -> Self {
         ReadExecutor {
             check_epoch,
             engine,
@@ -2616,8 +2643,7 @@ impl ReadExecutor {
         if self.snapshot.is_some() {
             return;
         }
-        let engine = self.engine.clone();
-        self.snapshot = Some(Snapshot::new(engine).into_sync());
+        self.snapshot = Some(self.engine.snapshot().into_sync());
         // Reading current timespec after snapshot, in case we do not
         // expire lease in time.
         atomic::fence(atomic::Ordering::Release);
@@ -2672,7 +2698,7 @@ impl ReadExecutor {
         msg: &RaftCmdRequest,
         region: &metapb::Region,
         read_index: Option<u64>,
-    ) -> ReadResponse {
+    ) -> ReadResponse<E> {
         if self.check_epoch {
             if let Err(e) = check_region_epoch(msg, region, true) {
                 debug!(
@@ -2809,6 +2835,7 @@ fn make_transfer_leader_response() -> RaftCmdResponse {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "protobuf-codec")]
     use protobuf::ProtobufEnum;
 
     use super::*;

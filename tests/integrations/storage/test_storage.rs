@@ -15,7 +15,8 @@ use test_storage::*;
 use tikv::server::gc_worker::DEFAULT_GC_BATCH_KEYS;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
-use tikv::storage::{Engine, Key, Mutation, TimeStamp};
+use tikv::storage::Engine;
+use txn_types::{Key, Mutation, TimeStamp};
 
 #[test]
 fn test_txn_store_get() {
@@ -81,7 +82,7 @@ fn test_txn_store_cleanup_commit() {
     );
     store.get_err(b"secondary", 8);
     store.get_err(b"secondary", 12);
-    store.commit_ok(vec![b"primary"], 5, 10);
+    store.commit_ok(vec![b"primary"], 5, 10, 10);
     store.cleanup_err(b"primary", 5, 0);
     store.rollback_err(vec![b"primary"], 5);
 }

@@ -29,8 +29,14 @@ impl ImportExt for RocksEngine {
         files: &[&str],
     ) -> Result<()> {
         let cf = cf.as_inner();
-        self.as_inner()
-            .ingest_external_file_cf(&cf, &opts.0, files)?;
+        // This is calling a specially optimized version of
+        // ingest_external_file_cf. In cases where the memtable needs to be
+        // flushed it avoids blocking writers while doing the flush. The unused
+        // return value here just indicates whether the fallback path requiring
+        // the manual memtable flush was taken.
+        let _did_nonblocking_memtable_flush = self
+            .as_inner()
+            .ingest_external_file_optimized(&cf, &opts.0, files)?;
         Ok(())
     }
 
@@ -188,7 +194,10 @@ mod tests {
 
     fn check_db_with_kvs(db: &RocksEngine, cf: &str, kvs: &[(&str, &str)]) {
         for &(k, v) in kvs {
-            assert_eq!(db.get_cf(cf, k.as_bytes()).unwrap().unwrap(), v.as_bytes());
+            assert_eq!(
+                db.get_value_cf(cf, k.as_bytes()).unwrap().unwrap(),
+                v.as_bytes()
+            );
         }
     }
 
