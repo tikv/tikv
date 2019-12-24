@@ -1,11 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
+use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::FieldType;
 
 use super::*;
 use crate::codec::data_type::scalar::ScalarValueRef;
-use crate::codec::datum;
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::Result;
 
@@ -268,29 +267,18 @@ impl VectorValue {
         ctx: &mut EvalContext,
         output: &mut Vec<u8>,
     ) -> Result<()> {
-        use crate::codec::mysql::DecimalEncoder;
-        use crate::codec::mysql::JsonEncoder;
-        use codec::prelude::{CompactByteEncoder, NumberEncoder};
+        use crate::codec::datum_codec::EvaluableDatumEncoder;
 
         match self {
             VectorValue::Int(ref vec) => {
                 match vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
                         // Always encode to INT / UINT instead of VAR INT to be efficient.
-                        if field_type
-                            .as_accessor()
-                            .flag()
-                            .contains(FieldTypeFlag::UNSIGNED)
-                        {
-                            output.push(datum::UINT_FLAG);
-                            output.write_u64(val as u64)?;
-                        } else {
-                            output.push(datum::INT_FLAG);
-                            output.write_i64(val)?;
-                        }
+                        let is_unsigned = field_type.as_accessor().is_unsigned();
+                        output.write_evaluable_datum_int(val, is_unsigned)?;
                     }
                 }
                 Ok(())
@@ -298,11 +286,10 @@ impl VectorValue {
             VectorValue::Real(ref vec) => {
                 match vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.push(datum::FLOAT_FLAG);
-                        output.write_f64(val.into_inner())?;
+                        output.write_evaluable_datum_real(val.into_inner())?;
                     }
                 }
                 Ok(())
@@ -310,12 +297,10 @@ impl VectorValue {
             VectorValue::Decimal(ref vec) => {
                 match &vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_evaluable_datum_null()?;
                     }
                     Some(val) => {
-                        output.push(datum::DECIMAL_FLAG);
-                        let (prec, frac) = val.prec_and_frac();
-                        output.write_decimal(val, prec, frac)?;
+                        output.write_evaluable_datum_decimal(val)?;
                     }
                 }
                 Ok(())
@@ -323,35 +308,32 @@ impl VectorValue {
             VectorValue::Bytes(ref vec) => {
                 match &vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_evaluable_datum_null()?;
                     }
                     Some(ref val) => {
-                        output.push(datum::COMPACT_BYTES_FLAG);
-                        output.write_compact_bytes(val)?;
+                        output.write_evaluable_datum_bytes(val)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::DateTime(ref vec) => {
-                match &vec[row_index] {
+                match vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
-                        output.push(datum::UINT_FLAG);
-                        output.write_u64(val.to_packed_u64(ctx)?)?;
+                    Some(val) => {
+                        output.write_evaluable_datum_date_time(val, ctx)?;
                     }
                 }
                 Ok(())
             }
             VectorValue::Duration(ref vec) => {
-                match &vec[row_index] {
+                match vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_evaluable_datum_null()?;
                     }
-                    Some(ref val) => {
-                        output.push(datum::DURATION_FLAG);
-                        output.write_i64(val.to_nanos())?;
+                    Some(val) => {
+                        output.write_evaluable_datum_duration(val)?;
                     }
                 }
                 Ok(())
@@ -359,11 +341,10 @@ impl VectorValue {
             VectorValue::Json(ref vec) => {
                 match &vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_evaluable_datum_null()?;
                     }
                     Some(ref val) => {
-                        output.push(datum::JSON_FLAG);
-                        output.write_json(val)?;
+                        output.write_evaluable_datum_json(val)?;
                     }
                 }
                 Ok(())
