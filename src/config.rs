@@ -1854,10 +1854,6 @@ impl ConfigController {
         }
     }
 
-    pub fn register(&mut self, module: &str, cfg_mgr: Box<dyn ConfigManager>) {
-        unimplemented!()
-    }
-
     pub fn get_current(&self) -> &TiKvConfig {
         &self.current
     }

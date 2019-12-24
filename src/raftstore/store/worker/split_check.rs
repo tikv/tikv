@@ -394,9 +394,9 @@ mod tests {
         let cop_config = cfg.coprocessor.clone();
         let mut incoming = cfg.clone();
         incoming.raft_store.raft_log_gc_threshold = 2000;
-        let rollback = cfg_controller.update_or_rollback(incoming);
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
         // update of other module's config should not effect split check config
-        assert_eq!(rollback, None);
+        assert_eq!(rollback.right(), Some(true));
         validate(&scheduler, move |cfg: &Config| {
             assert_eq!(cfg, &cop_config);
         });
@@ -410,9 +410,9 @@ mod tests {
         };
         let mut incoming = cfg;
         incoming.coprocessor = cop_config.clone();
-        let rollback = cfg_controller.update_or_rollback(incoming);
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
         // config should be updated
-        assert_eq!(rollback, None);
+        assert_eq!(rollback.right(), Some(true));
         validate(&scheduler, move |cfg: &Config| {
             assert_eq!(cfg, &cop_config);
         });
