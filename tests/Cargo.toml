@@ -51,6 +51,7 @@ prost-codec = ["tikv/prost-codec", "test_coprocessor/prost-codec", "external_sto
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
+configuration = { path = "../components/configuration" }
 engine = { path = "../components/engine" }
 txn_types = { path = "../components/txn_types" }
 futures = "0.1"
