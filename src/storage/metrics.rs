@@ -13,7 +13,6 @@ use tikv_util::collections::HashMap;
 use tikv_util::metrics::*;
 
 struct StorageLocalMetrics {
-    local_sched_processing_read_histogram_vec: LocalHistogramVec,
     local_kv_command_keyread_histogram_vec: LocalHistogramVec,
     local_kv_command_counter_vec: LocalIntCounterVec,
     local_sched_commands_pri_counter_vec: LocalIntCounterVec,
@@ -24,7 +23,6 @@ struct StorageLocalMetrics {
 thread_local! {
     static TLS_STORAGE_METRICS: RefCell<StorageLocalMetrics> = RefCell::new(
         StorageLocalMetrics {
-            local_sched_processing_read_histogram_vec: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             local_kv_command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
             local_kv_command_counter_vec: KV_COMMAND_COUNTER_VEC.local(),
             local_sched_commands_pri_counter_vec: SCHED_COMMANDS_PRI_COUNTER_VEC.local(),
@@ -38,7 +36,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         // Flush Prometheus metrics
-        m.local_sched_processing_read_histogram_vec.flush();
         m.local_kv_command_keyread_histogram_vec.flush();
         m.local_kv_command_counter_vec.flush();
         m.local_sched_commands_pri_counter_vec.flush();
@@ -100,13 +97,10 @@ pub fn tls_processing_read_observe_duration<F, R>(cmd: CommandKind, f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    TLS_STORAGE_METRICS.with(|m| {
+    SCHED_PROCESSING_VEC_STATIC.may_flush(|m| {
         let now = tikv_util::time::Instant::now_coarse();
         let ret = f();
-        m.borrow_mut()
-            .local_sched_processing_read_histogram_vec
-            .with_label_values(&[cmd.get_str()])
-            .observe(now.elapsed_secs());
+        m.get(cmd).observe(now.elapsed_secs());
         ret
     })
 }
@@ -187,6 +181,9 @@ make_static_metric! {
     }
 
     pub struct SchedDurationVec: LocalHistogram {
+        "type" => CommandKind,
+    }
+    pub struct SchedProcessingReadVec: LocalHistogram {
         "type" => CommandKind,
     }
 
@@ -321,4 +318,6 @@ lazy_static! {
 thread_local! {
     pub static SCHED_HISTOGRAM_VEC_STATIC: TLSMetricGroup<SchedDurationVec> =
          TLSMetricGroup::new(SchedDurationVec::from(&SCHED_HISTOGRAM_VEC));
+    pub static SCHED_PROCESSING_VEC_STATIC: TLSMetricGroup<SchedProcessingReadVec> =
+         TLSMetricGroup::new(SchedProcessingReadVec::from(&SCHED_PROCESSING_READ_HISTOGRAM_VEC));
 }
