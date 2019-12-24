@@ -12,13 +12,14 @@ use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
 use engine::*;
-use tikv::config::TiKvConfig;
+use engine_rocks::RocksEngine;
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::router::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
-use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
@@ -196,7 +197,7 @@ impl Simulator for NodeCluster {
         };
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router.clone());
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
@@ -209,6 +210,7 @@ impl Simulator for NodeCluster {
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let cfg_controller = ConfigController::new(cfg);
         node.start(
             engines.clone(),
             simulate_trans.clone(),
@@ -217,6 +219,7 @@ impl Simulator for NodeCluster {
             store_meta,
             coprocessor_host,
             importer,
+            cfg_controller,
         )?;
         assert!(engines
             .kv
@@ -285,7 +288,7 @@ impl Simulator for NodeCluster {
         &self,
         node_id: u64,
         request: RaftCmdRequest,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
     ) -> Result<()> {
         if !self
             .trans

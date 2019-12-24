@@ -212,7 +212,6 @@ impl DAGSelect {
 
         let mut dag = DagRequest::default();
         dag.set_executors(self.execs.into());
-        dag.set_start_ts(next_id() as u64);
         dag.set_flags(flags.iter().fold(0, |acc, f| acc | *f));
         dag.set_collect_range_counts(true);
 
@@ -224,6 +223,7 @@ impl DAGSelect {
         dag.set_output_offsets(output_offsets);
 
         let mut req = Request::default();
+        req.set_start_ts(next_id() as u64);
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
         req.set_ranges(vec![self.key_range].into());

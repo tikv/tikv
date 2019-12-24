@@ -5,9 +5,9 @@ edition = "2018"
 publish = false
 
 [dependencies]
-tikv_util = { path = "../tikv_util" }
-tikv_alloc = { path = "../tikv_alloc" }
-time = "0.1"
 rand = "0.6.5"
 rand_isaac = "0.1.1"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+tikv_alloc = { path = "../tikv_alloc" }
+tikv_util = { path = "../tikv_util" }
+time = "0.1"

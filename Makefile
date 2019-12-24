@@ -68,6 +68,13 @@ ifeq ($(FAIL_POINT),1)
 ENABLE_FEATURES += failpoints
 endif
 
+# Use Prost instead of rust-protobuf to encode and decode protocol buffers.
+ifeq ($(PROST),1)
+ENABLE_FEATURES += prost-codec
+else
+ENABLE_FEATURES += protobuf-codec
+endif
+
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 DEPS_PATH = $(CURDIR)/tmp
@@ -83,6 +90,7 @@ export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${
 export TIKV_BUILD_GIT_TAG := $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+export TIKV_ENABLE_FEATURES := ${ENABLE_FEATURES}
 
 # Turn on cargo pipelining to add more build parallelism. This has shown decent
 # speedups in TiKV.
@@ -107,6 +115,7 @@ all: format build test
 dev: format clippy
 	@env FAIL_POINT=1 make test
 
+build: export TIKV_PROFILE=debug
 build:
 	cargo build --no-default-features --features "${ENABLE_FEATURES}"
 
@@ -120,6 +129,7 @@ build:
 # with RocksDB compiled with the "portable" option, for -march=x86-64 (an
 # sse2-level instruction set), but with sse4.2 and the PCLMUL instruction
 # enabled (the "sse" option)
+release: export TIKV_PROFILE=release
 release:
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}"
 
@@ -155,8 +165,10 @@ dist_release:
 
 # Build with release flag as if it were for distribution, but without
 # additional sanity checks and file movement.
+build_dist_release: export TIKV_PROFILE=dist_release
 build_dist_release:
 	make x-build-dist
+ifeq ($(shell uname),Linux) # Macs don't have objcopy
 	# Reduce binary size by compressing binaries.
 	# FIXME: Currently errors with `Couldn't find DIE referenced by DW_AT_abstract_origin`
 	# dwz ${CARGO_TARGET_DIR}/release/tikv-server
@@ -164,6 +176,7 @@ build_dist_release:
 	# dwz ${CARGO_TARGET_DIR}/release/tikv-ctl
 	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-server
 	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-ctl
+endif
 
 # Distributable bins with SSE4.2 optimizations
 dist_unportable_release:
@@ -207,18 +220,18 @@ docker-tag-with-git-tag:
 # submitting pull requests. Note though that the CI system tests TiKV
 # through its own scripts and does not use this rule.
 test:
-        # When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
-        # again here. LOCAL_DIR is defined in .travis.yml.
-        # The special linux case below is testing the mem-profiling
-        # features in tikv_alloc, which are marked #[ignore] since
-        # they require special compile-time and run-time setup
-        # Forturately rebuilding with the mem-profiling feature will only
-        # rebuild starting at jemalloc-sys.
+	# When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
+	# again here. LOCAL_DIR is defined in .travis.yml.
+	# The special linux case below is testing the mem-profiling
+	# features in tikv_alloc, which are marked #[ignore] since
+	# they require special compile-time and run-time setup
+	# Forturately rebuilding with the mem-profiling feature will only
+	# rebuild starting at jemalloc-sys.
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  $(TEST_THREADS) && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  $(TEST_THREADS) && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
@@ -228,7 +241,6 @@ test:
 # This is used for CI test
 ci_test:
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --all-targets --no-run --message-format=json
-	bash scripts/check-bins-for-jemalloc.sh
 
 ## Static analysis
 ## ---------------
@@ -248,14 +260,16 @@ pre-clippy: unset-override
 	@rustup component add clippy
 
 clippy: pre-clippy
-	@cargo clippy --all --all-targets -- \
+	@cargo clippy --all --all-targets --no-default-features --features "${ENABLE_FEATURES}" -- \
 		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cognitive_complexity \
 		-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
 		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
 		-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
 		-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
 		-A clippy::needless_range_loop -A clippy::redundant_closure \
-		-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call
+		-A clippy::match_wild_err_arm -A clippy::blacklisted_name -A clippy::redundant_closure_call \
+		-A clippy::identity_conversion -A clippy::new_ret_no_self
+
 pre-audit:
 	$(eval LATEST_AUDIT_VERSION := $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }')))
 	$(eval CURRENT_AUDIT_VERSION = $(strip $(shell (cargo audit --version 2> /dev/null || echo "noop 0") | awk '{ print $$2 }')))

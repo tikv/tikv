@@ -18,7 +18,7 @@ const STAT_OVER_SEEK_BOUND: &str = "over_seek_bound";
 
 /// Statistics collects the ops taken when fetching data.
 #[derive(Default, Clone, Debug)]
-pub struct CFStatistics {
+pub struct CfStatistics {
     // How many keys that's effective to user. This counter should be increased
     // by the caller.
     pub processed: usize,
@@ -60,7 +60,7 @@ impl FlowStatistics {
     }
 }
 
-impl CFStatistics {
+impl CfStatistics {
     #[inline]
     pub fn total_op_count(&self) -> usize {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
@@ -100,9 +100,9 @@ impl CFStatistics {
 
 #[derive(Default, Clone, Debug)]
 pub struct Statistics {
-    pub lock: CFStatistics,
-    pub write: CFStatistics,
-    pub data: CFStatistics,
+    pub lock: CfStatistics,
+    pub write: CfStatistics,
+    pub data: CfStatistics,
 }
 
 impl Statistics {
@@ -136,7 +136,7 @@ impl Statistics {
         detail
     }
 
-    pub fn mut_cf_statistics(&mut self, cf: &str) -> &mut CFStatistics {
+    pub fn mut_cf_statistics(&mut self, cf: &str) -> &mut CfStatistics {
         if cf.is_empty() {
             return &mut self.data;
         }

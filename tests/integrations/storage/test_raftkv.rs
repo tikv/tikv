@@ -11,9 +11,10 @@ use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
 use test_raftstore::*;
 use tikv::storage::kv::*;
-use tikv::storage::{CFStatistics, Key};
+use tikv::storage::CfStatistics;
 use tikv_util::codec::bytes;
 use tikv_util::HandyRwLock;
+use txn_types::Key;
 
 #[test]
 fn test_raftkv() {
@@ -310,7 +311,7 @@ fn assert_seek<E: Engine>(ctx: &Context, engine: &E, key: &[u8], pair: (&[u8], &
     let mut cursor = snapshot
         .iter(IterOption::default(), ScanMode::Mixed)
         .unwrap();
-    let mut statistics = CFStatistics::default();
+    let mut statistics = CfStatistics::default();
     cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
     assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
     assert_eq!(cursor.value(&mut statistics), pair.1);
@@ -327,14 +328,14 @@ fn assert_seek_cf<E: Engine>(
     let mut cursor = snapshot
         .iter_cf(cf, IterOption::default(), ScanMode::Mixed)
         .unwrap();
-    let mut statistics = CFStatistics::default();
+    let mut statistics = CfStatistics::default();
     cursor.seek(&Key::from_raw(key), &mut statistics).unwrap();
     assert_eq!(cursor.key(&mut statistics), &*bytes::encode_bytes(pair.0));
     assert_eq!(cursor.value(&mut statistics), pair.1);
 }
 
 fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
-    let mut statistics = CFStatistics::default();
+    let mut statistics = CfStatistics::default();
     assert!(
         cursor
             .near_seek(&Key::from_raw(key), &mut statistics)
@@ -346,7 +347,7 @@ fn assert_near_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8
 }
 
 fn assert_near_reverse_seek<I: Iterator>(cursor: &mut Cursor<I>, key: &[u8], pair: (&[u8], &[u8])) {
-    let mut statistics = CFStatistics::default();
+    let mut statistics = CfStatistics::default();
     assert!(
         cursor
             .near_reverse_seek(&Key::from_raw(key), &mut statistics)
@@ -402,7 +403,7 @@ fn seek<E: Engine>(ctx: &Context, engine: &E) {
     let mut iter = snapshot
         .iter(IterOption::default(), ScanMode::Mixed)
         .unwrap();
-    let mut statistics = CFStatistics::default();
+    let mut statistics = CfStatistics::default();
     assert!(!iter
         .seek(&Key::from_raw(b"z\x00"), &mut statistics)
         .unwrap());
@@ -423,7 +424,7 @@ fn near_seek<E: Engine>(ctx: &Context, engine: &E) {
     assert_near_reverse_seek(&mut cursor, b"x1", (b"x", b"1"));
     assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
     assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
-    let mut statistics = CFStatistics::default();
+    let mut statistics = CfStatistics::default();
     assert!(!cursor
         .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
         .unwrap());

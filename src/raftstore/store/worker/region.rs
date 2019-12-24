@@ -13,7 +13,8 @@ use engine::rocks;
 use engine::rocks::Writable;
 use engine::WriteBatch;
 use engine::CF_RAFT;
-use engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
+use engine::{util as engine_util, Engines, Mutable, Peekable};
+use engine_rocks::{Compat, RocksSnapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -22,9 +23,7 @@ use crate::raftstore::store::peer_storage::{
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
 use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
-use crate::raftstore::store::{
-    self, check_abort, keys, ApplyOptions, SnapEntry, SnapKey, SnapManager,
-};
+use crate::raftstore::store::{self, check_abort, ApplyOptions, SnapEntry, SnapKey, SnapManager};
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time;
 use tikv_util::timer::Timer;
@@ -47,8 +46,8 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 pub enum Task {
     Gen {
         region_id: u64,
-        raft_snap: Snapshot,
-        kv_snap: Snapshot,
+        raft_snap: RocksSnapshot,
+        kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     },
     Apply {
@@ -217,8 +216,8 @@ impl SnapContext {
     fn generate_snap(
         &self,
         region_id: u64,
-        raft_snap: Snapshot,
-        kv_snap: Snapshot,
+        raft_snap: RocksSnapshot,
+        kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) -> Result<()> {
         // do we need to check leader here?
@@ -245,8 +244,8 @@ impl SnapContext {
     fn handle_gen(
         &self,
         region_id: u64,
-        raft_snap: Snapshot,
-        kv_snap: Snapshot,
+        raft_snap: RocksSnapshot,
+        kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) {
         SNAP_COUNTER_VEC
@@ -323,7 +322,7 @@ impl SnapContext {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: Arc::clone(&self.engines.kv),
+            db: self.engines.kv.c().clone(),
             region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
@@ -503,16 +502,8 @@ impl SnapContext {
             if plain_file_used(cf) {
                 continue;
             }
-
-            let handle = rocks::util::get_cf_handle(&self.engines.kv, cf).unwrap();
-            if let Some(n) = rocks::util::get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
-                let options = self.engines.kv.get_options_cf(handle);
-                let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
-                // Leave enough buffer to tolerate heavy write workload,
-                // which may flush some memtables in a short time.
-                if n > u64::from(slowdown_trigger) / 2 {
-                    return true;
-                }
+            if rocks::util::ingest_maybe_slowdown_writes(&self.engines.kv, cf) {
+                return true;
             }
         }
         false
@@ -567,6 +558,7 @@ impl Runner {
 
     /// Tries to apply pending tasks if there is some.
     fn handle_pending_applies(&mut self) {
+        fail_point!("apply_pending_snapshot", |_| {});
         while !self.pending_applies.is_empty() {
             // should not handle too many applies than the number of files that can be ingested.
             // check level 0 every time because we can not make sure how does the number of level 0 files change.
@@ -670,12 +662,13 @@ mod tests {
     use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
-    use crate::raftstore::store::{keys, SnapKey, SnapManager};
+    use crate::raftstore::store::{SnapKey, SnapManager};
     use engine::rocks;
-    use engine::rocks::{ColumnFamilyOptions, Snapshot, Writable, WriteBatch};
+    use engine::rocks::{ColumnFamilyOptions, Writable, WriteBatch};
     use engine::Engines;
     use engine::{Mutable, Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
+    use engine_rocks::RocksSnapshot;
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
     use tikv_util::time;
@@ -821,8 +814,8 @@ mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    raft_snap: Snapshot::new(engines.raft.clone()),
-                    kv_snap: Snapshot::new(engines.kv.clone()),
+                    raft_snap: RocksSnapshot::new(engines.raft.clone()),
+                    kv_snap: RocksSnapshot::new(engines.kv.clone()),
                     notifier: tx,
                 })
                 .unwrap();

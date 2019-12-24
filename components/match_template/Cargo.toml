@@ -8,6 +8,6 @@ publish = false
 proc-macro = true
 
 [dependencies]
-syn = { version = "1", features = ["full", "extra-traits", "fold"] }
-quote = "1"
 proc-macro2 = "1"
+quote = "1"
+syn = { version = "1", features = ["full", "extra-traits", "fold"] }

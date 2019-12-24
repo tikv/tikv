@@ -3,6 +3,8 @@
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
+use std::hash::{Hash, Hasher};
+use std::intrinsics::copy_nonoverlapping;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::string::ToString;
@@ -308,7 +310,7 @@ fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, Sub
         }
         // here l_end is the last nonzero index in l.word_buf, attention:it may in the range of (0,l_int_word_cnt)
         l_frac_word_cnt = cmp::max(0, l_end + 1 - l_stop as isize) as u8;
-        // here r_end is the last nonzero index in r.word_buf, attention:it may in the range of (0,l_int_word_cnt)
+        // here r_end is the last nonzero index in r.word_buf, attention:it may in the range of (0,r_int_word_cnt)
         r_frac_word_cnt = cmp::max(0, r_end + 1 - r_stop as isize) as u8;
         while l_idx as isize <= l_end
             && r_idx as isize <= r_end
@@ -897,7 +899,10 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
 /// `DECIMAL_STRUCT_SIZE`is the struct size of `Decimal`.
 pub const DECIMAL_STRUCT_SIZE: usize = 40;
 
+const_assert_eq!(DECIMAL_STRUCT_SIZE, mem::size_of::<Decimal>());
+
 /// `Decimal` represents a decimal value.
+#[repr(C)]
 #[derive(Clone, Debug)]
 pub struct Decimal {
     /// The number of *decimal* digits before the point.
@@ -906,8 +911,6 @@ pub struct Decimal {
     /// The number of decimal digits after the point.
     frac_cnt: u8,
 
-    /// The number of significant digits of the decimal.
-    precision: u8,
     /// The number of calculated or printed result fraction digits.
     result_frac_cnt: u8,
 
@@ -959,7 +962,6 @@ impl Decimal {
         Decimal {
             int_cnt,
             frac_cnt,
-            precision: 0,
             result_frac_cnt: 0,
             negative,
             word_buf: [0; 9],
@@ -1027,16 +1029,12 @@ impl Decimal {
 
     /// Get the least precision and fraction count to encode this decimal completely.
     pub fn prec_and_frac(&self) -> (u8, u8) {
-        if self.precision == 0 {
-            let (_, int_cnt) = self.remove_leading_zeroes(self.int_cnt);
-            let prec = int_cnt + self.frac_cnt;
-            if prec == 0 {
-                (1, self.frac_cnt)
-            } else {
-                (prec, self.frac_cnt)
-            }
+        let (_, int_cnt) = self.remove_leading_zeroes(self.int_cnt);
+        let prec = int_cnt + self.frac_cnt;
+        if prec == 0 {
+            (1, self.frac_cnt)
         } else {
-            (self.precision, self.result_frac_cnt)
+            (prec, self.frac_cnt)
         }
     }
 
@@ -2099,14 +2097,11 @@ pub trait DecimalEncoder: NumberEncoder {
     }
 
     fn write_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
-        self.write_u8(v.int_cnt)?;
-        self.write_u8(v.frac_cnt)?;
-        self.write_u8(v.result_frac_cnt)?;
-        self.write_u8(v.negative as u8)?;
-        let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
-        for id in 0..len as usize {
-            self.write_i32_le(v.word_buf[id] as i32)?;
-        }
+        let data = unsafe {
+            let p = v as *const Decimal as *const u8;
+            std::slice::from_raw_parts(p, DECIMAL_STRUCT_SIZE)
+        };
+        self.write_bytes(data)?;
         Ok(())
     }
 }
@@ -2197,7 +2192,6 @@ pub trait DecimalDecoder: NumberDecoder {
             return Err(box_err!("decoding decimal failed: {:?}", res));
         }
         let mut d = Decimal::new(int_cnt, frac_cnt, mask != 0);
-        d.precision = prec;
         d.result_frac_cnt = frac_cnt;
         let mut word_idx = 0;
         let mut is_first = true;
@@ -2233,10 +2227,13 @@ pub trait DecimalDecoder: NumberDecoder {
         }
         if trailing_digits > 0 {
             let x = read_word(self, DIG_2_BYTES[trailing_digits] as usize, &mut is_first)? ^ mask;
-            d.word_buf[word_idx] = x * TEN_POW[DIGITS_PER_WORD as usize - trailing_digits];
-            if d.word_buf[word_idx] > WORD_MAX {
-                return Err(box_err!("invalid trailing digits for decimal number"));
-            }
+            d.word_buf[word_idx] =
+                match x.checked_mul(TEN_POW[DIGITS_PER_WORD as usize - trailing_digits]) {
+                    Some(v) if v <= WORD_MAX => v,
+                    _ => {
+                        return Err(box_err!("invalid trailing digits for decimal number"));
+                    }
+                }
         }
         if d.int_cnt == 0 && d.frac_cnt == 0 {
             d.reset_to_zero();
@@ -2247,22 +2244,13 @@ pub trait DecimalDecoder: NumberDecoder {
 
     /// `read_decimal_from_chunk` decode Decimal encoded by `write_decimal_to_chunk`.
     fn read_decimal_from_chunk(&mut self) -> Result<Decimal> {
-        let buf = self.bytes();
-        if buf.len() <= 4 {
-            return Err(Error::unexpected_eof());
-        }
-        let int_cnt = buf[0];
-        let frac_cnt = buf[1];
-        let result_frac_cnt = buf[2];
-        let negative = buf[3] == 1;
-        self.advance(4);
-
-        let mut d = Decimal::new(int_cnt, frac_cnt, negative);
-        d.result_frac_cnt = result_frac_cnt;
-
-        for id in 0..WORD_BUF_LEN {
-            d.word_buf[id as usize] = self.read_i32_le()? as u32;
-        }
+        let buf = self.read_bytes(DECIMAL_STRUCT_SIZE)?;
+        let d = unsafe {
+            let mut d = mem::MaybeUninit::<Decimal>::uninit();
+            let p = d.as_mut_ptr() as *mut u8;
+            copy_nonoverlapping(buf.as_ptr(), p, DECIMAL_STRUCT_SIZE);
+            d.assume_init()
+        };
         Ok(d)
     }
 }
@@ -2379,6 +2367,32 @@ impl Neg for Decimal {
     }
 }
 
+impl Hash for Decimal {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let (int_word_cnt, frac_word_cnt) = (word_cnt!(self.int_cnt), word_cnt!(self.frac_cnt));
+
+        let (stop, mut idx) = (int_word_cnt as usize, 0usize);
+        while idx < stop && self.word_buf[idx] == 0 {
+            idx += 1;
+        }
+        let start = idx as usize;
+        let int_word_cnt = stop - idx;
+
+        int_word_cnt.hash(state);
+        let mut end = (stop + frac_word_cnt as usize - 1) as isize;
+        // trims suffix 0(also trims the suffix 0 before the point
+        // when there is no digit after point).
+        while start as isize <= end && self.word_buf[end as usize] == 0 {
+            end -= 1;
+        }
+
+        self.word_buf[start..((end + 1) as usize)].hash(state);
+        // -0 should be not negative.
+        let negative = self.negative && (start as isize <= end);
+        negative.hash(state);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2387,6 +2401,7 @@ mod tests {
     use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
     use crate::expr::{EvalConfig, Flag};
     use std::cmp::Ordering;
+    use std::collections::hash_map::DefaultHasher;
     use std::f64::EPSILON;
     use std::iter::repeat;
     use std::sync::Arc;
@@ -3113,6 +3128,16 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_chunk_from_tidb() {
+        let src: Vec<u8> = vec![
+            3, 3, 3, 0, 123, 0, 0, 0, 0, 2, 46, 27, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let decoded = src.as_slice().read_decimal_from_chunk().unwrap();
+        assert_eq!(Decimal::from_f64(123.456).unwrap(), decoded);
+    }
+
+    #[test]
     fn test_cmp() {
         let cases = vec![
             ("12", "13", Ordering::Less),
@@ -3133,6 +3158,27 @@ mod tests {
             let lhs = lhs_str.parse::<Decimal>().unwrap();
             let rhs = rhs_str.parse::<Decimal>().unwrap();
             assert_eq!(lhs.cmp(&rhs), exp);
+        }
+    }
+
+    #[test]
+    fn test_hash() {
+        let cases = vec![
+            ("1.00", "1"),
+            ("-1.11", "-1.11000000"),
+            ("30.20", "30.2"),
+            ("0", "-0"),
+            ("0.001", "0.001000"),
+        ];
+
+        for (lhs_str, rhs_str) in cases {
+            let lhs = lhs_str.parse::<Decimal>().unwrap();
+            let rhs = rhs_str.parse::<Decimal>().unwrap();
+            let mut lhasher = DefaultHasher::new();
+            lhs.hash(&mut lhasher);
+            let mut rhasher = DefaultHasher::new();
+            rhs.hash(&mut rhasher);
+            assert_eq!(lhasher.finish(), rhasher.finish());
         }
     }
 
