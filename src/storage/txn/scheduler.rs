@@ -28,7 +28,8 @@ use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
-use tikv_util::{collections::HashMap, time::SlowTimer};
+use tikv_util::metrics::*;
+use tikv_util::{collections::HashMap, time::Instant, time::SlowTimer};
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::kv::{with_tls_engine, Engine, Result as EngineResult};
@@ -112,13 +113,13 @@ struct TaskContext {
     task: Option<Task>,
 
     lock: Lock,
-    cb: StorageCallback,
+    cb: Option<StorageCallback>,
     write_bytes: usize,
     tag: metrics::CommandKind,
     // How long it waits on latches.
     latch_timer: Option<HistogramTimer>,
     // Total duration of a command.
-    _cmd_timer: HistogramTimer,
+    _cmd_timer: Instant,
 }
 
 impl TaskContext {
@@ -138,16 +139,24 @@ impl TaskContext {
         TaskContext {
             task: Some(task),
             lock,
-            cb,
+            cb: Some(cb),
             write_bytes,
             tag,
             latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.get(tag).start_coarse_timer()),
-            _cmd_timer: SCHED_HISTOGRAM_VEC_STATIC.get(tag).start_coarse_timer(),
+            _cmd_timer: Instant::now_coarse(),
         }
     }
 
     fn on_schedule(&mut self) {
         self.latch_timer.take();
+    }
+}
+
+impl Drop for TaskContext {
+    fn drop(&mut self) {
+        SCHED_HISTOGRAM_VEC_STATIC.may_flush(|m| {
+            m.get(self.tag).observe_elapsed(self._cmd_timer);
+        })
     }
 }
 
@@ -392,14 +401,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
     /// Calls the callback with an error.
     fn finish_with_err(&self, cid: u64, err: Error) {
         debug!("write command finished with error"; "cid" => cid);
-        let tctx = self.inner.dequeue_task_context(cid);
+        let mut tctx = self.inner.dequeue_task_context(cid);
 
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).error.inc();
 
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
         };
-        tctx.cb.execute(pr);
+        tctx.cb.take().unwrap().execute(pr);
 
         self.release_lock(&tctx.lock, cid);
     }
@@ -412,12 +421,12 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         SCHED_STAGE_COUNTER_VEC.get(tag).read_finish.inc();
 
         debug!("read command finished"; "cid" => cid);
-        let tctx = self.inner.dequeue_task_context(cid);
+        let mut tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb);
+            self.schedule_command(cmd, tctx.cb.take().unwrap());
         } else {
-            tctx.cb.execute(pr);
+            tctx.cb.take().unwrap().execute(pr);
         }
 
         self.release_lock(&tctx.lock, cid);
@@ -434,7 +443,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
 
         debug!("write command finished"; "cid" => cid);
-        let tctx = self.inner.dequeue_task_context(cid);
+        let mut tctx = self.inner.dequeue_task_context(cid);
         let pr = match result {
             Ok(()) => pr,
             Err(e) => ProcessResult::Failed {
@@ -443,9 +452,9 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            self.schedule_command(cmd, tctx.cb);
+            self.schedule_command(cmd, tctx.cb.take().unwrap());
         } else {
-            tctx.cb.execute(pr);
+            tctx.cb.take().unwrap().execute(pr);
         }
 
         self.release_lock(&tctx.lock, cid);
@@ -462,11 +471,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         wait_timeout: Option<WaitTimeout>,
     ) {
         debug!("command waits for lock released"; "cid" => cid);
-        let tctx = self.inner.dequeue_task_context(cid);
+        let mut tctx = self.inner.dequeue_task_context(cid);
         SCHED_STAGE_COUNTER_VEC.get(tctx.tag).lock_wait.inc();
         self.inner.lock_mgr.as_ref().unwrap().wait_for(
             start_ts,
-            tctx.cb,
+            tctx.cb.take().unwrap(),
             pr,
             lock,
             is_first_lock,

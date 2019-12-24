@@ -245,7 +245,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
-        const CMD: &str = "get";
+        const CMD: CommandKind = CommandKind::get;
         let priority = get_priority_tag(ctx.get_priority());
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
@@ -301,7 +301,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         &self,
         gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "batch_get_command";
+        const CMD: CommandKind = CommandKind::batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
@@ -360,7 +360,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         keys: Vec<Key>,
         start_ts: TimeStamp,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "batch_get";
+        const CMD: CommandKind = CommandKind::batch_get;
         let priority = get_priority_tag(ctx.get_priority());
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
@@ -433,7 +433,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key_only: bool,
         reverse_scan: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "scan";
+        const CMD: CommandKind = CommandKind::scan;
         let priority = get_priority_tag(ctx.get_priority());
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
@@ -857,7 +857,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         key: Vec<u8>,
     ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
-        const CMD: &str = "raw_get";
+        const CMD: CommandKind = CommandKind::raw_get;
         let priority = get_priority_tag(ctx.get_priority());
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
@@ -910,7 +910,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         gets: Vec<PointGetCommand>,
     ) -> impl Future<Item = Vec<Result<Option<Vec<u8>>>>, Error = Error> {
-        const CMD: &str = "raw_batch_get_command";
+        const CMD: CommandKind = CommandKind::raw_batch_get_command;
         // all requests in a batch have the same region, epoch, term, replica_read
         let ctx = gets[0].ctx.clone();
         let priority = get_priority_tag(ctx.get_priority());
@@ -951,7 +951,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         cf: String,
         keys: Vec<Vec<u8>>,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_batch_get";
+        const CMD: CommandKind = CommandKind::raw_batch_get;
         let priority = get_priority_tag(ctx.get_priority());
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
@@ -1230,7 +1230,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key_only: bool,
         reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_scan";
+        const CMD: CommandKind = CommandKind::raw_scan;
         let priority = get_priority_tag(ctx.get_priority());
 
         let res = self.get_read_pool(priority).spawn_handle(move || {
@@ -1335,7 +1335,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
         key_only: bool,
         reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
-        const CMD: &str = "raw_batch_scan";
+        const CMD: CommandKind = CommandKind::raw_batch_scan;
         let priority = get_priority_tag(ctx.get_priority());
 
         let res = self.get_read_pool(priority).spawn_handle(move || {

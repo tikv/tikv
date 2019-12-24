@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use crate::storage::kv::{FlowStatistics, FlowStatsReporter, Statistics};
 use tikv_util::collections::HashMap;
+use tikv_util::metrics::*;
 
 struct StorageLocalMetrics {
     local_sched_histogram_vec: LocalHistogramVec,
@@ -68,12 +69,12 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     });
 }
 
-pub fn tls_collect_command_count(cmd: &str, priority: CommandPriority) {
+pub fn tls_collect_command_count(cmd: CommandKind, priority: CommandPriority) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut storage_metrics = m.borrow_mut();
         storage_metrics
             .local_kv_command_counter_vec
-            .with_label_values(&[cmd])
+            .with_label_values(&[cmd.get_str()])
             .inc();
         storage_metrics
             .local_sched_commands_pri_counter_vec
@@ -82,25 +83,23 @@ pub fn tls_collect_command_count(cmd: &str, priority: CommandPriority) {
     });
 }
 
-pub fn tls_collect_command_duration(cmd: &str, duration: Duration) {
-    TLS_STORAGE_METRICS.with(|m| {
-        m.borrow_mut()
-            .local_sched_histogram_vec
-            .with_label_values(&[cmd])
+pub fn tls_collect_command_duration(cmd: CommandKind, duration: Duration) {
+    SCHED_HISTOGRAM_VEC_STATIC.may_flush(|m| {
+        m.get(cmd)
             .observe(tikv_util::time::duration_to_sec(duration))
     });
 }
 
-pub fn tls_collect_key_reads(cmd: &str, count: usize) {
+pub fn tls_collect_key_reads(cmd: CommandKind, count: usize) {
     TLS_STORAGE_METRICS.with(|m| {
         m.borrow_mut()
             .local_kv_command_keyread_histogram_vec
-            .with_label_values(&[cmd])
+            .with_label_values(&[cmd.get_str()])
             .observe(count as f64)
     });
 }
 
-pub fn tls_processing_read_observe_duration<F, R>(cmd: &str, f: F) -> R
+pub fn tls_processing_read_observe_duration<F, R>(cmd: CommandKind, f: F) -> R
 where
     F: FnOnce() -> R,
 {
@@ -109,17 +108,17 @@ where
         let ret = f();
         m.borrow_mut()
             .local_sched_processing_read_histogram_vec
-            .with_label_values(&[cmd])
+            .with_label_values(&[cmd.get_str()])
             .observe(now.elapsed_secs());
         ret
     })
 }
 
-pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
+pub fn tls_collect_scan_details(cmd: CommandKind, stats: &Statistics) {
     TLS_STORAGE_METRICS.with(|m| {
         m.borrow_mut()
             .local_scan_details
-            .entry(cmd)
+            .entry(cmd.get_str())
             .or_insert_with(Default::default)
             .add(stats);
     });
@@ -136,6 +135,11 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &Statistics) {
 
 make_static_metric! {
     pub label_enum CommandKind {
+        get,
+        batch_get_command,
+        batch_get,
+        scan,
+        raw_batch_get_command,
         prewrite,
         acquire_pessimistic_lock,
         commit,
@@ -185,7 +189,7 @@ make_static_metric! {
         high,
     }
 
-    pub struct SchedDurationVec: Histogram {
+    pub struct SchedDurationVec: LocalHistogram {
         "type" => CommandKind,
     }
 
@@ -250,8 +254,6 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref SCHED_HISTOGRAM_VEC_STATIC: SchedDurationVec =
-        SchedDurationVec::from(&SCHED_HISTOGRAM_VEC);
     pub static ref SCHED_LATCH_HISTOGRAM_VEC: SchedLatchDurationVec =
         register_static_histogram_vec!(
             SchedLatchDurationVec,
@@ -317,4 +319,9 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
+}
+
+thread_local! {
+    pub static SCHED_HISTOGRAM_VEC_STATIC: TLSMetricGroup<SchedDurationVec> =
+         TLSMetricGroup::new(SchedDurationVec::from(&SCHED_HISTOGRAM_VEC));
 }
