@@ -11,11 +11,12 @@ use crate::codec::{datum, Error, Result};
 
 #[inline]
 fn decode_v2_u64(v: &[u8]) -> Result<u64> {
+    // See `decodeInt` in TiDB.
     match v.len() {
         1 => Ok(u64::from(v[0])),
         2 => Ok(u64::from(NumberCodec::decode_u16_le(v))),
         4 => Ok(u64::from(NumberCodec::decode_u32_le(v))),
-        8 => Ok(NumberCodec::decode_u64_le(v)),
+        8 => Ok(u64::from(NumberCodec::decode_u64_le(v))),
         _ => Err(Error::InvalidDataType(
             "Failed to decode row v2 data as u64".to_owned(),
         )),
@@ -24,11 +25,12 @@ fn decode_v2_u64(v: &[u8]) -> Result<u64> {
 
 #[inline]
 fn decode_v2_i64(v: &[u8]) -> Result<i64> {
+    // See `decodeUint` in TiDB.
     match v.len() {
-        1 => Ok(i64::from(v[0])),
-        2 => Ok(i64::from(NumberCodec::decode_i16_le(v))),
-        4 => Ok(i64::from(NumberCodec::decode_i32_le(v))),
-        8 => Ok(NumberCodec::decode_i64_le(v)),
+        1 => Ok(i64::from(v[0] as i8)),
+        2 => Ok(i64::from(NumberCodec::decode_u16_le(v) as i16)),
+        4 => Ok(i64::from(NumberCodec::decode_u32_le(v) as i32)),
+        8 => Ok(NumberCodec::decode_u64_le(v) as i64),
         _ => Err(Error::InvalidDataType(
             "Failed to decode row v2 data as i64".to_owned(),
         )),
