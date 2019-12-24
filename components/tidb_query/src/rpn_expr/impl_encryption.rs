@@ -81,6 +81,7 @@ pub fn uncompressed_length(ctx: &mut EvalContext, arg: &Option<Bytes>) -> Result
         }
     }))
 }
+
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn random_bytes(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Bytes>> {

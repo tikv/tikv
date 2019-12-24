@@ -25,6 +25,7 @@ impl MySQLRng {
         f64::from(self.seed1) / f64::from(MAX_RAND_VALUE)
     }
 }
+
 /// Generate random bytes.
 pub fn gen_random_bytes(len: i64) -> Vec<u8> {
     (0..len).map(|_| rand::random::<u8>()).collect()
@@ -67,6 +68,7 @@ mod tests {
             assert_eq!(res2, exp2);
         }
     }
+
     #[test]
     fn test_gen_random_bytes() {
         let tests = vec![1, 256, 1024, 2333];
