@@ -57,7 +57,7 @@ pub mod timer;
 pub mod worker;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
-const RESERVE_FILE: &str = "reserve_file";
+const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 
 pub fn panic_when_unexpected_key_or_data() -> bool {
     PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.load(Ordering::SeqCst)
@@ -95,7 +95,7 @@ pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
 
 // create a file with hole, to reserve space for TiKV.
 pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) -> io::Result<()> {
-    let path = data_dir.as_ref().join(RESERVE_FILE);
+    let path = data_dir.as_ref().join(SPACE_PLACEHOLDER_FILE);
     if file_size == 0 {
         file::delete_file_if_exist(path)?;
         file::sync_dir(data_dir)?;
@@ -773,7 +773,7 @@ mod tests {
     #[test]
     fn test_reserve_space_for_recover() {
         let data_dir = Path::new("./");
-        file::delete_file_if_exist(data_dir.join(RESERVE_FILE)).unwrap();
+        file::delete_file_if_exist(data_dir.join(SPACE_PLACEHOLDER_FILE)).unwrap();
         file::sync_dir(data_dir).unwrap();
         let disk_stats_before = fs2::statvfs(data_dir).unwrap();
         let cap1 = disk_stats_before.available_space();
