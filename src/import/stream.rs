@@ -148,7 +148,7 @@ impl RangeIterator {
     }
 
     pub fn next(&mut self) -> Result<bool> {
-        if !self.iter.next() {
+        if !self.iter.next().unwrap() {
             return Ok(false);
         }
         {
@@ -163,7 +163,7 @@ impl RangeIterator {
 
     fn seek_next(&mut self) -> Result<bool> {
         while let Some(range) = self.ranges.get(self.ranges_index) {
-            if !self.iter.seek(SeekKey::Key(range.get_start())) {
+            if !self.iter.seek(SeekKey::Key(range.get_start())).unwrap() {
                 break;
             }
             assert!(self.iter.key() >= range.get_start());
@@ -184,13 +184,10 @@ impl RangeIterator {
     }
 
     pub fn valid(&self) -> Result<bool> {
-        if !self.iter.valid() {
-            if let Err(e) = self.iter.status() {
-                return Err(Error::RocksDB(e));
-            }
-            Ok(false)
-        } else {
-            Ok(self.ranges_index < self.ranges.len())
+        match self.iter.valid() {
+            Err(e) => Err(Error::RocksDB(e)),
+            Ok(false) => Ok(false),
+            _ => Ok(self.ranges_index < self.ranges.len()),
         }
     }
 }

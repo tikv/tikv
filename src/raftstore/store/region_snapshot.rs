@@ -1,16 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
-use engine::{
-    self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
-    SyncSnapshot,
-};
+use engine::rocks::{DBIterator, DBVector, TablePropertiesCollection, DB};
+use engine::{self, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot};
 use kvproto::metapb::Region;
 use std::sync::Arc;
 
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
+use crate::storage::kv::Iterator;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
@@ -91,18 +89,11 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        if !it.seek(start_key)? {
-            return Ok(());
+        let mut it_valid = it.seek(start_key)?;
+        while it_valid {
+            it_valid = f(it.key(), it.value())? && it.next()?;
         }
-        while it.valid() {
-            let r = f(it.key(), it.value())?;
-
-            if !r || !it.next() {
-                break;
-            }
-        }
-
-        it.status()
+        Ok(())
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
@@ -198,10 +189,7 @@ impl Peekable for RegionSnapshot {
 /// db only contains one region.
 pub struct RegionIterator {
     iter: DBIterator<Arc<DB>>,
-    valid: bool,
     region: Arc<Region>,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
 }
 
 fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
@@ -233,16 +221,8 @@ impl RegionIterator {
     pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
-        let start_key = iter_opt.lower_bound().unwrap().to_vec();
-        let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator(iter_opt);
-        RegionIterator {
-            iter,
-            valid: false,
-            start_key,
-            end_key,
-            region,
-        }
+        RegionIterator { iter, region }
     }
 
     pub fn new_cf(
@@ -253,128 +233,77 @@ impl RegionIterator {
     ) -> RegionIterator {
         update_lower_bound(&mut iter_opt, &region);
         update_upper_bound(&mut iter_opt, &region);
-        let start_key = iter_opt.lower_bound().unwrap().to_vec();
-        let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
-        RegionIterator {
-            iter,
-            valid: false,
-            start_key,
-            end_key,
-            region,
-        }
+        RegionIterator { iter, region }
     }
 
-    pub fn seek_to_first(&mut self) -> bool {
-        self.valid = self.iter.seek(self.start_key.as_slice().into());
-
-        self.update_valid(true)
+    pub fn seek_to_first(&mut self) -> Result<bool> {
+        self.iter.seek_to_first().map_err(|e| box_err!(e))
     }
 
-    #[inline]
-    fn update_valid(&mut self, forward: bool) -> bool {
-        if self.valid {
-            let key = self.iter.key();
-            self.valid = if forward {
-                key < self.end_key.as_slice()
-            } else {
-                key >= self.start_key.as_slice()
-            };
-        }
-        self.valid
-    }
-
-    pub fn seek_to_last(&mut self) -> bool {
-        if !self.iter.seek(self.end_key.as_slice().into()) && !self.iter.seek(SeekKey::End) {
-            self.valid = false;
-            return self.valid;
-        }
-
-        while self.iter.key() >= self.end_key.as_slice() && self.iter.prev() {}
-
-        self.valid = self.iter.valid();
-        self.update_valid(false)
+    pub fn seek_to_last(&mut self) -> Result<bool> {
+        self.iter.seek_to_last().map_err(|e| box_err!(e))
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        if key == self.end_key {
-            self.valid = false;
-        } else {
-            self.valid = self.iter.seek(key.as_slice().into());
-        }
-
-        Ok(self.update_valid(true))
+        self.iter
+            .seek(key.as_slice().into())
+            .map_err(|e| box_err!(e))
     }
 
     pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        self.valid = self.iter.seek_for_prev(key.as_slice().into());
-        if self.valid && self.iter.key() == self.end_key.as_slice() {
-            self.valid = self.iter.prev();
-        }
-        Ok(self.update_valid(false))
+        self.iter
+            .seek_for_prev(key.as_slice().into())
+            .map_err(|e| box_err!(e))
     }
 
-    pub fn prev(&mut self) -> bool {
-        if !self.valid {
-            return false;
-        }
-        self.valid = self.iter.prev();
-
-        self.update_valid(false)
+    pub fn prev(&mut self) -> Result<bool> {
+        self.iter.prev().map_err(|e| box_err!(e))
     }
 
-    pub fn next(&mut self) -> bool {
-        if !self.valid {
-            return false;
-        }
-        self.valid = self.iter.next();
-
-        self.update_valid(true)
+    pub fn next(&mut self) -> Result<bool> {
+        self.iter.next().map_err(|e| box_err!(e))
     }
 
     #[inline]
     pub fn key(&self) -> &[u8] {
-        assert!(self.valid);
         keys::origin_key(self.iter.key())
     }
 
     #[inline]
     pub fn value(&self) -> &[u8] {
-        assert!(self.valid);
         self.iter.value()
     }
 
     #[inline]
-    pub fn valid(&self) -> bool {
-        self.valid
-    }
-
-    #[inline]
-    pub fn status(&self) -> Result<()> {
-        self.iter
-            .status()
-            .map_err(|e| EngineError::RocksDb(e))
-            .map_err(From::from)
+    pub fn valid(&self) -> Result<bool> {
+        self.iter.valid().map_err(|e| box_err!(e))
     }
 
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
-            CRITICAL_ERROR
-                .with_label_values(&["key not in region"])
-                .inc();
-            if panic_when_unexpected_key_or_data() {
-                set_panic_mark();
-                panic!("key exceed bound: {:?}", e);
-            } else {
-                return Err(e);
-            }
+            return handle_check_key_in_region_error(e);
         }
         Ok(())
+    }
+}
+
+#[inline(never)]
+fn handle_check_key_in_region_error(e: crate::raftstore::Error) -> Result<()> {
+    // Split out the error case to reduce hot-path code size.
+    CRITICAL_ERROR
+        .with_label_values(&["key not in region"])
+        .inc();
+    if panic_when_unexpected_key_or_data() {
+        set_panic_mark();
+        panic!("key exceed bound: {:?}", e);
+    } else {
+        Err(e)
     }
 }
 
@@ -652,11 +581,11 @@ mod tests {
         assert_eq!(data.len(), 1);
 
         let mut iter = snap.iter(IterOption::default());
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
@@ -680,11 +609,11 @@ mod tests {
         let mut iter = snap.iter(IterOption::default());
         assert!(iter.seek(b"a1").unwrap());
 
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
@@ -698,11 +627,11 @@ mod tests {
             Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
             true,
         ));
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
@@ -748,14 +677,14 @@ mod tests {
             .reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
             .is_err());
 
-        assert!(iter.seek_to_last(&mut statistics));
+        assert!(iter.seek_to_last(&mut statistics).unwrap());
         let mut res = vec![];
         loop {
             res.push((
                 iter.key(&mut statistics).to_vec(),
                 iter.value(&mut statistics).to_vec(),
             ));
-            if !iter.prev(&mut statistics) {
+            if !iter.prev(&mut statistics).unwrap() {
                 break;
             }
         }
@@ -795,14 +724,14 @@ mod tests {
             assert_eq!(pair, kv_pairs[0]);
         }
 
-        assert!(iter.seek_to_last(&mut statistics));
+        assert!(iter.seek_to_last(&mut statistics).unwrap());
         let mut res = vec![];
         loop {
             res.push((
                 iter.key(&mut statistics).to_vec(),
                 iter.value(&mut statistics).to_vec(),
             ));
-            if !iter.prev(&mut statistics) {
+            if !iter.prev(&mut statistics).unwrap() {
                 break;
             }
         }
@@ -821,11 +750,11 @@ mod tests {
         let mut iter_opt = IterOption::default();
         iter_opt.set_lower_bound(b"a3", 1);
         let mut iter = snap.iter(iter_opt);
-        assert!(iter.seek_to_last());
+        assert!(iter.seek_to_last().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.prev() {
+            if !iter.prev().unwrap() {
                 break;
             }
         }
