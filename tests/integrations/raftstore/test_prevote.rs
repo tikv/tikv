@@ -45,7 +45,7 @@ fn test_prevote<T: Simulator>(
     cluster.cfg.raft_store.prevote = true;
     // To stable the test, we use a large election timeout to make
     // leader's readiness get handle within an election timeout
-    configure_for_lease_read(cluster, Some(10), Some(50));
+    configure_for_lease_read(cluster, Some(20), Some(10));
 
     let leader_id = 1;
     let detect_during_failure = detect_during_failure.into();
