@@ -1786,7 +1786,7 @@ impl From<&str> for Module {
             "import" => Module::Import,
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
-            name => Module::Unknown(name.to_owned()),
+            n => Module::Unknown(n.to_owned()),
         }
     }
 }
