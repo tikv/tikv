@@ -1336,6 +1336,8 @@ impl ReadPoolConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[config(skip)]
+    pub dynamic_config: bool,
+    #[config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
     #[config(skip)]
@@ -1379,6 +1381,7 @@ pub struct TiKvConfig {
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
+            dynamic_config: false,
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
@@ -1870,14 +1873,13 @@ impl ConfigHandler {
         id: String,
         controller: ConfigController,
         version: configpb::Version,
-        _scheduler: FutureScheduler<PdTask>,
+        scheduler: FutureScheduler<PdTask>,
     ) -> CfgResult<Self> {
-        // TODO: currently we can't handle RefreshConfig task, because
-        // PD have not implement such service yet.
-
-        // if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
-        //     return Err(format!("failed to schedule refresh config task: {:?}", e).into());
-        // }
+        if controller.get_current().dynamic_config {
+            if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
+                return Err(format!("failed to schedule refresh config task: {:?}", e).into());
+            }
+        }
         Ok(ConfigHandler {
             id,
             version,
@@ -1907,15 +1909,28 @@ impl ConfigHandler {
     pub fn create(
         id: String,
         pd_client: Arc<impl PdClient>,
-        cfg: TiKvConfig,
+        mut config: TiKvConfig,
     ) -> CfgResult<(configpb::Version, TiKvConfig)> {
-        let cfg = toml::to_string(&cfg)?;
+        let cfg = toml::to_string(&config)?;
         let version = configpb::Version::default();
         let mut resp = pd_client.register_config(id, version, cfg)?;
         match resp.get_status().get_code() {
-            StatusCode::Ok | StatusCode::WrongVersion => {
-                let cfg: TiKvConfig = toml::from_str(resp.get_config())?;
-                Ok((resp.take_version(), cfg))
+            StatusCode::Ok => {
+                let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
+                let version = resp.take_version();
+                let diff = config.diff(&incoming);
+                if !diff.is_empty() {
+                    let local_cfg = config.clone();
+                    config.update(diff);
+                    if config.validate().is_err() {
+                        warn!(
+                            "config from pd is invalid, fallback to local config";
+                            "version" => ?version
+                        );
+                        config = local_cfg;
+                    }
+                }
+                Ok((version, config))
             }
             code => {
                 debug!("failed to register config"; "status" => ?code);

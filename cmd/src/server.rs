@@ -29,6 +29,7 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
+use tikv::config::ConfigHandler;
 use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::{
     config::{ConfigController, TiKvConfig},
@@ -63,11 +64,15 @@ use tikv_util::{
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(config: TiKvConfig) {
+pub fn run_tikv(mut config: TiKvConfig) {
+    let (pd_client, security_mgr) = TiKVServer::init_pd_connect(&mut config);
+
+    config = TiKVServer::init_config(config, Arc::clone(&pd_client));
+
     // Do some prepare works before start.
     pre_start(&config);
 
-    let mut tikv = TiKVServer::init(config);
+    let mut tikv = TiKVServer::init(config, security_mgr, pd_client);
 
     let _m = Monitor::default();
 
@@ -117,15 +122,12 @@ struct Servers {
 }
 
 impl TiKVServer {
-    fn init(mut config: TiKvConfig) -> TiKVServer {
+    fn init(
+        config: TiKvConfig,
+        security_mgr: Arc<SecurityManager>,
+        pd_client: Arc<RpcClient>,
+    ) -> TiKVServer {
         let store_path = Path::new(&config.storage.data_dir).to_owned();
-
-        let security_mgr =
-            Arc::new(SecurityManager::new(&config.security).unwrap_or_else(|e| {
-                fatal!("failed to create security manager: {}", e.description())
-            }));
-
-        let pd_client = Self::connect_to_pd_cluster(&mut config, security_mgr.clone());
 
         let (resolve_worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
             .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
@@ -147,10 +149,39 @@ impl TiKVServer {
         }
     }
 
-    fn connect_to_pd_cluster(
-        config: &mut TiKvConfig,
-        security_mgr: Arc<SecurityManager>,
-    ) -> Arc<RpcClient> {
+    fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> TiKvConfig {
+        if config.dynamic_config {
+            let (_, cfg) =
+                ConfigHandler::create(config.server.addr.clone(), Arc::clone(&pd_client), config)
+                    .unwrap_or_else(|e| fatal!("failed to register config from pd: {}", e));
+            config = cfg;
+        }
+
+        validate_and_persist_config(&mut config, true);
+
+        // Print version information.
+        tikv::log_tikv_info();
+        info!(
+            "using config";
+            "config" => serde_json::to_string(&config).unwrap(),
+        );
+
+        config.write_into_metrics();
+
+        if config.panic_when_unexpected_key_or_data {
+            info!("panic-when-unexpected-key-or-data is on");
+            tikv_util::set_panic_when_unexpected_key_or_data(true);
+        }
+
+        config
+    }
+
+    fn init_pd_connect(config: &mut TiKvConfig) -> (Arc<RpcClient>, Arc<SecurityManager>) {
+        let security_mgr =
+            Arc::new(SecurityManager::new(&config.security).unwrap_or_else(|e| {
+                fatal!("failed to create security manager: {}", e.description())
+            }));
+
         let pd_client = Arc::new(
             RpcClient::new(&config.pd, security_mgr.clone())
                 .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
@@ -168,7 +199,7 @@ impl TiKVServer {
             "cluster_id" => cluster_id
         );
 
-        pd_client
+        (pd_client, security_mgr)
     }
 
     fn init_fs(&self) {
@@ -579,22 +610,8 @@ fn pre_start(config: &TiKvConfig) {
     initial_logger(&config);
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
-    // Print version information.
-    tikv::log_tikv_info();
-    info!(
-        "using config";
-        "config" => serde_json::to_string(&config).unwrap(),
-    );
-
-    config.write_into_metrics();
-
     check_system_config(&config);
     check_environment_variables();
-
-    if config.panic_when_unexpected_key_or_data {
-        info!("panic-when-unexpected-key-or-data is on");
-        tikv_util::set_panic_when_unexpected_key_or_data(true);
-    }
 }
 
 fn check_system_config(config: &TiKvConfig) {
