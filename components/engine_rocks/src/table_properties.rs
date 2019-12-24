@@ -34,7 +34,7 @@ impl RocksTablePropertiesCollection {
 
     // for test
     pub fn get_raw(&self) -> &RawTablePropertiesCollection {
-        return &self.0;
+        &self.0
     }
 }
 
