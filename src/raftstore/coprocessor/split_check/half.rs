@@ -6,7 +6,6 @@ use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
-use crate::raftstore::store::keys;
 use tikv_util::config::ReadableSize;
 
 use super::super::error::Result;
@@ -175,11 +174,11 @@ mod tests {
     use tempfile::Builder;
 
     use crate::raftstore::coprocessor::properties::RangePropertiesCollectorFactory;
-    use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::Key;
+    use crate::raftstore::store::{SplitCheckRunner, SplitCheckTask};
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;
     use tikv_util::worker::Runnable;
+    use txn_types::Key;
 
     use super::super::size::tests::must_split_at;
     use super::*;

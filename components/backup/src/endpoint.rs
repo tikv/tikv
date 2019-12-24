@@ -14,7 +14,6 @@ use external_storage::*;
 use futures::lazy;
 use futures::prelude::Future;
 use futures::sync::mpsc::*;
-use keys::TimeStamp;
 use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
@@ -22,10 +21,11 @@ use raft::StateRole;
 use tikv::raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, RegionInfoProvider};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
-use tikv::storage::{Key, Statistics};
+use tikv::storage::Statistics;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
+use txn_types::{Key, TimeStamp};
 
 use crate::metrics::*;
 use crate::*;
@@ -83,7 +83,7 @@ impl Task {
             None
         };
         let storage = LimitedStorage {
-            storage: create_storage(req.get_path())?,
+            storage: create_storage(req.get_storage_backend())?,
             limiter,
         };
 
@@ -123,6 +123,7 @@ impl BackupRange {
         writer: &mut BackupWriter,
         engine: &E,
         backup_ts: TimeStamp,
+        begin_ts: TimeStamp,
     ) -> Result<Statistics> {
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
@@ -144,7 +145,11 @@ impl BackupRange {
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
-        let mut scanner = snap_store.entry_scanner(start_key, end_key).unwrap();
+        // Incremental backup needs to output delete records.
+        let incremental = !begin_ts.is_zero();
+        let mut scanner = snap_store
+            .entry_scanner(start_key, end_key, begin_ts, incremental)
+            .unwrap();
 
         let start = Instant::now();
         let mut batch = EntryBatch::with_capacity(1024);
@@ -359,9 +364,6 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
         cancel: Arc<AtomicBool>,
     ) {
-        // TODO: support incremental backup
-        let _ = start_ts;
-
         let backup_ts = end_ts;
         let engine = self.engine.clone();
         let db = self.db.clone();
@@ -378,10 +380,12 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     return Ok(());
                 }
                 // TODO: make file_name unique and short
-                let key = brange
-                    .start_key
-                    .clone()
-                    .map(|k| hex::encode(k.into_raw().unwrap()));
+                let key = brange.start_key.clone().and_then(|k| {
+                    // use start_key sha256 instead of start_key to avoid file name too long os error
+                    tikv_util::file::sha256(&k.into_raw().unwrap())
+                        .ok()
+                        .map(|b| hex::encode(b))
+                });
 
                 let name = backup_file_name(store_id, &brange.region, key);
                 let mut writer = match BackupWriter::new(db.clone(), &name, storage.limiter.clone())
@@ -392,7 +396,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         return tx.send((brange, Err(e))).map_err(|_| ());
                     }
                 };
-                let stat = match brange.backup(&mut writer, &engine, backup_ts) {
+                let stat = match brange.backup(&mut writer, &engine, backup_ts, start_ts) {
                     Ok(s) => s,
                     Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
                 };
@@ -502,16 +506,8 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
             return;
         }
         info!("run backup task"; "task" => %task);
-        if task.start_ts == task.end_ts {
-            self.handle_backup_task(task);
-            self.pool.borrow_mut().heartbeat();
-        } else {
-            // TODO: support incremental backup
-            BACKUP_RANGE_ERROR_VEC
-                .with_label_values(&["incremental"])
-                .inc();
-            error!("incremental backup is not supported yet");
-        }
+        self.handle_backup_task(task);
+        self.pool.borrow_mut().heartbeat();
     }
 }
 
@@ -588,7 +584,7 @@ fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> Stri
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use external_storage::LocalStorage;
+    use external_storage::{make_local_backend, make_noop_backend, LocalStorage};
     use futures::{self, Future, Stream};
     use kvproto::metapb;
     use rand;
@@ -599,9 +595,9 @@ pub mod tests {
     use tikv::raftstore::store::util::new_peer;
     use tikv::storage::kv::Result as EngineResult;
     use tikv::storage::mvcc::tests::*;
-    use tikv::storage::SHORT_VALUE_MAX_LEN;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::time::Instant;
+    use txn_types::SHORT_VALUE_MAX_LEN;
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
@@ -844,7 +840,7 @@ pub mod tests {
             let mut req = BackupRequest::default();
             req.set_start_key(vec![]);
             req.set_end_key(vec![b'5']);
-            req.set_start_version(ts.into_inner());
+            req.set_start_version(0);
             req.set_end_version(ts.into_inner());
             req.set_concurrency(4);
             let (tx, rx) = unbounded();
@@ -852,10 +848,7 @@ pub mod tests {
             Task::new(req.clone(), tx.clone()).unwrap_err();
 
             // Set an unique path to avoid AlreadyExists error.
-            req.set_path(format!(
-                "local://{}",
-                tmp.path().join(format!("{}", ts)).display()
-            ));
+            req.set_storage_backend(make_local_backend(&tmp.path().join(ts.to_string())));
             if len % 2 == 0 {
                 req.set_rate_limit(10 * 1024 * 1024);
             }
@@ -911,10 +904,7 @@ pub mod tests {
         req.set_end_version(now.into_inner());
         req.set_concurrency(4);
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", now)).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req.clone(), tx).unwrap();
         endpoint.handle_backup_task(task);
@@ -935,10 +925,7 @@ pub mod tests {
         req.set_start_version(now.into_inner());
         req.set_end_version(now.into_inner());
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", now)).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req.clone(), tx).unwrap();
         endpoint.handle_backup_task(task);
@@ -984,7 +971,7 @@ pub mod tests {
         req.set_start_version(now.into_inner());
         req.set_end_version(now.into_inner());
         req.set_concurrency(4);
-        req.set_path(format!("local://{}", temp.path().display()));
+        req.set_storage_backend(make_local_backend(temp.path()));
 
         // Cancel the task before starting the task.
         let (tx, rx) = unbounded();
@@ -1021,7 +1008,7 @@ pub mod tests {
         req.set_start_version(1);
         req.set_end_version(1);
         req.set_concurrency(4);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req.clone(), tx).unwrap();
@@ -1052,7 +1039,7 @@ pub mod tests {
         req.set_end_key(vec![]);
         req.set_start_version(1);
         req.set_end_version(1);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, _) = unbounded();
 
@@ -1113,7 +1100,7 @@ pub mod tests {
         req.set_start_version(1);
         req.set_end_version(1);
         req.set_concurrency(10);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, _) = futures::sync::mpsc::unbounded();
         let (task, _) = Task::new(req, tx).unwrap();

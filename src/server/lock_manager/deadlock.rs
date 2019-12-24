@@ -8,7 +8,6 @@ use super::{Error, Result};
 use crate::raftstore::coprocessor::{Coprocessor, ObserverContext, RoleObserver};
 use crate::server::resolve::StoreAddrResolver;
 use crate::storage::lock_manager::Lock;
-use crate::storage::TimeStamp;
 use futures::{Future, Sink, Stream};
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
@@ -28,6 +27,7 @@ use tikv_util::security::SecurityManager;
 use tikv_util::time::{Duration, Instant};
 use tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use tokio_core::reactor::Handle;
+use txn_types::TimeStamp;
 
 /// `Locks` is a set of locks belonging to one transaction.
 struct Locks {
@@ -98,8 +98,25 @@ impl DetectTable {
 
     /// Returns the key hash which causes deadlock.
     pub fn detect(&mut self, txn_ts: TimeStamp, lock_ts: TimeStamp, lock_hash: u64) -> Option<u64> {
-        let _timer = DETECTOR_HISTOGRAM_VEC.detect.start_coarse_timer();
-        TASK_COUNTER_VEC.detect.inc();
+        DETECTOR_HISTOGRAM_METRICS.with(|m| {
+            let res = m
+                .detect
+                .observe_closure_duration(|| self.detect_inner(txn_ts, lock_ts, lock_hash));
+            m.may_flush_all();
+            res
+        })
+    }
+
+    fn detect_inner(
+        &mut self,
+        txn_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        lock_hash: u64,
+    ) -> Option<u64> {
+        TASK_COUNTER_METRICS.with(|m| {
+            m.detect.inc();
+            m.may_flush_all()
+        });
 
         self.now = Instant::now_coarse();
         self.active_expire();
@@ -110,7 +127,10 @@ impl DetectTable {
         }
 
         if let Some(deadlock_key_hash) = self.do_detect(txn_ts, lock_ts) {
-            ERROR_COUNTER_VEC.deadlock.inc();
+            ERROR_COUNTER_METRICS.with(|m| {
+                m.deadlock.inc();
+                m.may_flush_all()
+            });
             return Some(deadlock_key_hash);
         }
         self.register(txn_ts, lock_ts, lock_hash);
@@ -184,13 +204,19 @@ impl DetectTable {
                 }
             }
         }
-        TASK_COUNTER_VEC.clean_up_wait_for.inc();
+        TASK_COUNTER_METRICS.with(|m| {
+            m.clean_up_wait_for.inc();
+            m.may_flush_all()
+        });
     }
 
     /// Removes the entries of the transaction.
     fn clean_up(&mut self, txn_ts: TimeStamp) {
         self.wait_for_map.remove(&txn_ts);
-        TASK_COUNTER_VEC.clean_up.inc();
+        TASK_COUNTER_METRICS.with(|m| {
+            m.clean_up.inc();
+            m.may_flush_all()
+        });
     }
 
     /// Clears the whole detect table.
@@ -224,7 +250,12 @@ const LEADER_KEY: &[u8] = b"";
 
 /// Returns true if the region containing the LEADER_KEY.
 fn is_leader_region(region: &'_ Region) -> bool {
-    region.get_start_key() <= LEADER_KEY
+    // The key range of a new created region is empty which misleads the leader
+    // of the deadlock detector stepping down.
+    //
+    // If the peers of a region is not empty, the region info is complete.
+    !region.get_peers().is_empty()
+        && region.get_start_key() <= LEADER_KEY
         && (region.get_end_key().is_empty() || LEADER_KEY < region.get_end_key())
 }
 
@@ -470,7 +501,10 @@ where
             }
 
             None => {
-                ERROR_COUNTER_VEC.leader_not_found.inc();
+                ERROR_COUNTER_METRICS.with(|m| {
+                    m.leader_not_found.inc();
+                    m.may_flush_all()
+                });
                 Ok(None)
             }
         }
@@ -523,8 +557,10 @@ where
     /// Reconnects the leader. The leader info must exist.
     fn reconnect_leader(&mut self, handle: &Handle) {
         assert!(self.leader_client.is_none() && self.leader_info.is_some());
-        ERROR_COUNTER_VEC.reconnect_leader.inc();
-
+        ERROR_COUNTER_METRICS.with(|m| {
+            m.reconnect_leader.inc();
+            m.may_flush_all()
+        });
         let (leader_id, leader_addr) = self.leader_info.as_ref().unwrap();
         // Create the connection to the leader and registers the callback to receive
         // the deadlock response.
@@ -634,7 +670,10 @@ where
             // If a request which causes deadlock is dropped, it leads to the waiter timeout.
             // TiDB will retry to acquire the lock and detect deadlock again.
             warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "lock" => ?lock);
-            ERROR_COUNTER_VEC.dropped.inc();
+            ERROR_COUNTER_METRICS.with(|m| {
+                m.dropped.inc();
+                m.may_flush_all()
+            });
         }
     }
 
@@ -651,7 +690,10 @@ where
                 Some("I'm not the leader of deadlock detector".to_string()),
             );
             handle.spawn(sink.fail(status).map_err(|_| ()));
-            ERROR_COUNTER_VEC.not_leader.inc();
+            ERROR_COUNTER_METRICS.with(|m| {
+                m.not_leader.inc();
+                m.may_flush_all()
+            });
             return;
         }
 
@@ -662,7 +704,10 @@ where
                 // It's possible the leader changes after registering this handler.
                 let mut inner = inner.borrow_mut();
                 if inner.role != Role::Leader {
-                    ERROR_COUNTER_VEC.not_leader.inc();
+                    ERROR_COUNTER_METRICS.with(|m| {
+                        m.not_leader.inc();
+                        m.may_flush_all()
+                    });
                     return Err(Error::Other(box_err!("leader changed")));
                 }
 

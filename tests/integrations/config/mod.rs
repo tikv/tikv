@@ -16,11 +16,13 @@ use tikv::import::Config as ImportConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
-use tikv::server::gc_worker::GCConfig;
+use tikv::server::gc_worker::GcConfig;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::{BlockCacheConfig, Config as StorageConfig};
+use tikv::storage::config::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
+
+mod test_config_client;
 
 #[test]
 fn test_toml_serde() {
@@ -508,7 +510,7 @@ fn test_serde_custom_tikv_config() {
         },
     };
     value.coprocessor = CopConfig {
-        split_region_on_table: true,
+        split_region_on_table: false,
         batch_split_limit: 1,
         region_max_size: ReadableSize::mb(12),
         region_split_size: ReadableSize::mb(12),
@@ -527,7 +529,7 @@ fn test_serde_custom_tikv_config() {
         stream_channel_window: 123,
     };
     value.panic_when_unexpected_key_or_data = true;
-    value.gc = GCConfig {
+    value.gc = GcConfig {
         ratio_threshold: 1.2,
         batch_keys: 256,
         max_write_bytes_per_sec: ReadableSize::mb(10),

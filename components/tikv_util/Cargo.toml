@@ -11,11 +11,14 @@ prost-codec = ["prost"]
 [dependencies]
 backtrace = "0.3.9"
 byteorder = "1.2"
+configuration = { path = "../configuration" }
 chrono = "0.4"
+coarsetime = "0.1"
 crc32fast = "1.2"
 crossbeam = "0.7.2"
 fail = "0.3"
 futures = "0.1"
+futures03 = { package = "futures", version = "0.3" }
 futures-cpupool = "0.1"
 fxhash = "0.2.1"
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
@@ -52,12 +55,12 @@ zeroize = { version = "0.10", features = [ "alloc" ] }
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
+rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 features = ["nightly", "push", "process"]
 
 [dependencies.prometheus-static-metric]
 git = "https://github.com/pingcap/rust-prometheus.git"
-rev = "b668f3911d6569de2e1e8b2672fccec1cc8298be"
+rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }

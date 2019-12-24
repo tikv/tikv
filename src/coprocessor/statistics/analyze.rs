@@ -2,11 +2,11 @@
 
 use std::mem;
 
-use rand::rngs::ThreadRng;
-use rand::{thread_rng, Rng};
-
+use async_trait::async_trait;
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
+use rand::rngs::ThreadRng;
+use rand::{thread_rng, Rng};
 use tidb_query::codec::datum;
 use tidb_query::executor::{Executor, IndexScanExecutor, ScanExecutor, TableScanExecutor};
 use tidb_query::expr::EvalContext;
@@ -31,12 +31,13 @@ impl<S: Snapshot> AnalyzeContext<S> {
     pub fn new(
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
+        start_ts: u64,
         snap: S,
         req_ctx: &ReqContext,
     ) -> Result<Self> {
         let store = SnapshotStore::new(
             snap,
-            req.get_start_ts().into(),
+            start_ts.into(),
             req_ctx.context.get_isolation_level(),
             !req_ctx.context.get_not_fill_cache(),
             req_ctx.bypass_locks.clone(),
@@ -99,8 +100,9 @@ impl<S: Snapshot> AnalyzeContext<S> {
     }
 }
 
+#[async_trait]
 impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
-    fn handle_request(&mut self) -> Result<Response> {
+    async fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();

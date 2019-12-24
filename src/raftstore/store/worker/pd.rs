@@ -5,13 +5,15 @@ use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::Future;
 use tokio_core::reactor::Handle;
+use tokio_timer::Delay;
 
 use engine::rocks::util::*;
 use engine::rocks::DB;
+use engine_rocks::RocksEngine;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -20,6 +22,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 
+use crate::config::ConfigHandler;
 use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
 use crate::raftstore::store::util::is_epoch_stale;
@@ -28,11 +31,11 @@ use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
-use keys::UnixSecs;
 use pd_client::metrics::*;
 use pd_client::{Error, PdClient, RegionStat};
 use tikv_util::collections::HashMap;
 use tikv_util::metrics::ThreadInfoStatistics;
+use tikv_util::time::UnixSecs;
 use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
@@ -45,7 +48,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     },
     AskBatchSplit {
         region: metapb::Region,
@@ -53,7 +56,7 @@ pub enum Task {
         peer: metapb::Peer,
         // If true, right Region derives origin region_id.
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     },
     Heartbeat {
         term: u64,
@@ -89,6 +92,7 @@ pub enum Task {
         read_io_rates: RecordPairVec,
         write_io_rates: RecordPairVec,
     },
+    RefreshConfig,
 }
 
 pub struct StoreStat {
@@ -201,6 +205,7 @@ impl Display for Task {
                 "get store's informations: cpu_usages {:?}, read_io_rates {:?}, write_io_rates {:?}",
                 cpu_usages, read_io_rates, write_io_rates,
             ),
+            Task::RefreshConfig => write!(f, "refresh config"),
         }
     }
 }
@@ -285,6 +290,7 @@ impl StatsMonitor {
 pub struct Runner<T: PdClient> {
     store_id: u64,
     pd_client: Arc<T>,
+    config_handler: ConfigHandler,
     router: RaftRouter,
     db: Arc<DB>,
     region_peers: HashMap<u64, PeerStat>,
@@ -306,6 +312,7 @@ impl<T: PdClient> Runner<T> {
     pub fn new(
         store_id: u64,
         pd_client: Arc<T>,
+        config_handler: ConfigHandler,
         router: RaftRouter,
         db: Arc<DB>,
         scheduler: Scheduler<Task>,
@@ -320,6 +327,7 @@ impl<T: PdClient> Runner<T> {
         Runner {
             store_id,
             pd_client,
+            config_handler,
             router,
             db,
             is_hb_receiver_scheduled: false,
@@ -338,7 +346,7 @@ impl<T: PdClient> Runner<T> {
         split_key: Vec<u8>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     ) {
         let router = self.router.clone();
         let f = self.pd_client.ask_split(region.clone()).then(move |resp| {
@@ -379,7 +387,7 @@ impl<T: PdClient> Runner<T> {
         mut split_keys: Vec<Vec<u8>>,
         peer: metapb::Peer,
         right_derive: bool,
-        callback: Callback,
+        callback: Callback<RocksEngine>,
     ) {
         let router = self.router.clone();
         let scheduler = self.scheduler.clone();
@@ -768,6 +776,34 @@ impl<T: PdClient> Runner<T> {
         self.store_stat.store_read_io_rates = read_io_rates;
         self.store_stat.store_write_io_rates = write_io_rates;
     }
+
+    fn handle_refresh_config(&mut self, handle: &Handle) {
+        let config_handler = &mut self.config_handler;
+        info!(
+            "refresh config";
+            "component id" => config_handler.get_id(),
+            "version" => ?config_handler.get_version()
+        );
+        if let Err(e) = config_handler.refresh_config(self.pd_client.clone()) {
+            error!(
+                "failed to refresh config";
+                "component id" => config_handler.get_id(),
+                "version" => ?config_handler.get_version(),
+                "err" => ?e
+            )
+        }
+        let scheduler = self.scheduler.clone();
+        let when = Instant::now() + config_handler.get_refresh_interval();
+        let f = Delay::new(when)
+            .map_err(|e| warn!("timeout timer delay errored"; "err" => ?e))
+            .then(move |_| {
+                if let Err(e) = scheduler.schedule(Task::RefreshConfig) {
+                    error!("failed to schedule refresh config task"; "err" => ?e)
+                }
+                Ok(())
+            });
+        handle.spawn(f);
+    }
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
@@ -883,6 +919,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
                 read_io_rates,
                 write_io_rates,
             } => self.handle_store_infos(cpu_usages, read_io_rates, write_io_rates),
+            Task::RefreshConfig => self.handle_refresh_config(handle),
         };
     }
 
@@ -955,7 +992,7 @@ fn send_admin_request(
     epoch: metapb::RegionEpoch,
     peer: metapb::Peer,
     request: AdminRequest,
-    callback: Callback,
+    callback: Callback<RocksEngine>,
 ) {
     let cmd_type = request.get_cmd_type();
 

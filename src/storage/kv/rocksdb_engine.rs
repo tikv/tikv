@@ -13,15 +13,15 @@ use engine::rocks::{
     ColumnFamilyOptions, DBIterator, SeekKey as DBSeekKey, Writable, WriteBatch, DB,
 };
 use engine::Engines;
-use engine::Error as EngineError;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::RocksEngineIterator;
 use engine_traits::{Iterable, Iterator, Peekable, SeekKey};
 use kvproto::kvrpcpb::Context;
 use tempfile::{Builder, TempDir};
+use txn_types::{Key, Value};
 
-use crate::storage::{BlockCacheConfig, Key, Value};
+use crate::storage::config::BlockCacheConfig;
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -328,39 +328,32 @@ impl Snapshot for RocksSnapshot {
 }
 
 impl EngineIterator for RocksEngineIterator {
-    fn next(&mut self) -> bool {
-        Iterator::next(self)
+    fn next(&mut self) -> Result<bool> {
+        Iterator::next(self).map_err(Error::from)
     }
 
-    fn prev(&mut self) -> bool {
-        Iterator::prev(self)
+    fn prev(&mut self) -> Result<bool> {
+        Iterator::prev(self).map_err(Error::from)
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Ok(Iterator::seek(self, key.as_encoded().as_slice().into()))
+        Iterator::seek(self, key.as_encoded().as_slice().into()).map_err(Error::from)
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        Ok(Iterator::seek_for_prev(
-            self,
-            key.as_encoded().as_slice().into(),
-        ))
+        Iterator::seek_for_prev(self, key.as_encoded().as_slice().into()).map_err(Error::from)
     }
 
-    fn seek_to_first(&mut self) -> bool {
-        Iterator::seek(self, SeekKey::Start)
+    fn seek_to_first(&mut self) -> Result<bool> {
+        Iterator::seek(self, SeekKey::Start).map_err(Error::from)
     }
 
-    fn seek_to_last(&mut self) -> bool {
-        Iterator::seek(self, SeekKey::End)
+    fn seek_to_last(&mut self) -> Result<bool> {
+        Iterator::seek(self, SeekKey::End).map_err(Error::from)
     }
 
-    fn valid(&self) -> bool {
-        Iterator::valid(self)
-    }
-
-    fn status(&self) -> Result<()> {
-        Iterator::status(self).map_err(From::from)
+    fn valid(&self) -> Result<bool> {
+        Iterator::valid(self).map_err(Error::from)
     }
 
     fn key(&self) -> &[u8] {
@@ -373,41 +366,32 @@ impl EngineIterator for RocksEngineIterator {
 }
 
 impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
-    fn next(&mut self) -> bool {
-        DBIterator::next(self)
+    fn next(&mut self) -> Result<bool> {
+        DBIterator::next(self).map_err(|e| box_err!(e))
     }
 
-    fn prev(&mut self) -> bool {
-        DBIterator::prev(self)
+    fn prev(&mut self) -> Result<bool> {
+        DBIterator::prev(self).map_err(|e| box_err!(e))
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek(self, key.as_encoded().as_slice().into()))
+        DBIterator::seek(self, key.as_encoded().as_slice().into()).map_err(|e| box_err!(e))
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek_for_prev(
-            self,
-            key.as_encoded().as_slice().into(),
-        ))
+        DBIterator::seek_for_prev(self, key.as_encoded().as_slice().into()).map_err(|e| box_err!(e))
     }
 
-    fn seek_to_first(&mut self) -> bool {
-        DBIterator::seek(self, DBSeekKey::Start)
+    fn seek_to_first(&mut self) -> Result<bool> {
+        DBIterator::seek(self, DBSeekKey::Start).map_err(|e| box_err!(e))
     }
 
-    fn seek_to_last(&mut self) -> bool {
-        DBIterator::seek(self, DBSeekKey::End)
+    fn seek_to_last(&mut self) -> Result<bool> {
+        DBIterator::seek(self, DBSeekKey::End).map_err(|e| box_err!(e))
     }
 
-    fn valid(&self) -> bool {
-        DBIterator::valid(self)
-    }
-
-    fn status(&self) -> Result<()> {
-        DBIterator::status(self)
-            .map_err(|e| EngineError::RocksDb(e))
-            .map_err(Error::from)
+    fn valid(&self) -> Result<bool> {
+        DBIterator::valid(self).map_err(|e| box_err!(e))
     }
 
     fn key(&self) -> &[u8] {
@@ -421,11 +405,10 @@ impl<D: Borrow<DB> + Send> EngineIterator for DBIterator<D> {
 
 #[cfg(test)]
 mod tests {
-    pub use super::super::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
+    use super::super::perf_context::PerfStatisticsInstant;
     use super::super::tests::*;
-    use super::super::CFStatistics;
+    use super::super::CfStatistics;
     use super::*;
-    use tempfile::Builder;
 
     #[test]
     fn test_rocksdb() {
@@ -456,7 +439,10 @@ mod tests {
 
     #[test]
     fn rocksdb_reopen() {
-        let dir = Builder::new().prefix("rocksdb_test").tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("rocksdb_test")
+            .tempdir()
+            .unwrap();
         {
             let engine = TestEngineBuilder::new()
                 .path(dir.path())
@@ -484,7 +470,7 @@ mod tests {
         test_perf_statistics(&engine);
     }
 
-    pub fn test_perf_statistics<E: Engine>(engine: &E) {
+    fn test_perf_statistics<E: Engine>(engine: &E) {
         must_put(engine, b"foo", b"bar1");
         must_put(engine, b"foo2", b"bar2");
         must_put(engine, b"foo3", b"bar3"); // deleted
@@ -501,7 +487,7 @@ mod tests {
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();
 
-        let mut statistics = CFStatistics::default();
+        let mut statistics = CfStatistics::default();
 
         let perf_statistics = PerfStatisticsInstant::new();
         iter.seek(&Key::from_raw(b"foo30"), &mut statistics)

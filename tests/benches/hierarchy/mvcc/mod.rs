@@ -4,8 +4,8 @@ use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
-use tikv::storage::mvcc::{self, MvccReader, MvccTxn, TimeStamp};
-use tikv::storage::{Key, Mutation, Options};
+use tikv::storage::mvcc::{self, MvccReader, MvccTxn};
+use txn_types::{Key, Mutation, TimeStamp};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};
 
@@ -20,7 +20,7 @@ where
 {
     let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
-    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true).unwrap();
+    let mut txn = MvccTxn::new(snapshot, start_ts.into(), true);
 
     let kvs = KvGenerator::with_seed(
         config.key_length,
@@ -32,7 +32,10 @@ where
         txn.prewrite(
             Mutation::Put((Key::from_raw(&k), v.clone())),
             &k.clone(),
-            &Options::default(),
+            false,
+            0,
+            0,
+            TimeStamp::default(),
         )
         .unwrap();
     }
@@ -46,7 +49,6 @@ where
 fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
-    let option = Options::default();
     b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> = KvGenerator::with_seed(
@@ -59,12 +61,13 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
             .map(|(k, v)| (Mutation::Put((Key::from_raw(&k), v.clone())), k.clone()))
             .collect();
             let snapshot = engine.snapshot(&ctx).unwrap();
-            (mutations, snapshot, &option)
+            (mutations, snapshot)
         },
-        |(mutations, snapshot, option)| {
+        |(mutations, snapshot)| {
             for (mutation, primary) in mutations {
                 let mut txn = mvcc::new_txn!(snapshot.clone(), 1, true);
-                txn.prewrite(mutation, &primary, option).unwrap();
+                txn.prewrite(mutation, &primary, false, 0, 0, TimeStamp::default())
+                    .unwrap();
             }
         },
         BatchSize::SmallInput,
