@@ -237,7 +237,7 @@ fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
 #[cfg(feature = "protobuf-codec")]
 #[test]
 fn test_server_pair_isolated() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_server_cluster(0, 5);
     test_pair_isolated(&mut cluster);
 }
 
@@ -273,7 +273,7 @@ fn test_isolated_follower_leader_does_not_change<T: Simulator>(cluster: &mut Clu
 
 #[test]
 fn test_server_isolated_follower_leader_does_not_change() {
-    let mut cluster = new_node_cluster(0, 5);
+    let mut cluster = new_server_cluster(0, 5);
     test_isolated_follower_leader_does_not_change(&mut cluster);
 }
 
