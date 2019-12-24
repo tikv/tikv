@@ -15,7 +15,7 @@ use crate::expr::EvalContext;
 
 /// A decoder to decode the payload part of a datum.
 ///
-/// The types this decode outputs are not fully 1:1 mapping to evaluable types.
+/// The types this decoder outputs are not fully 1:1 mapping to evaluable types.
 pub trait DatumPayloadDecoder:
     NumberDecoder + CompactByteDecoder + MemComparableByteDecoder + JsonDecoder + DecimalDecoder
 {
@@ -84,7 +84,7 @@ impl<T: BufferReader> DatumPayloadDecoder for T {}
 
 /// An encoder to encode the payload part of a datum.
 ///
-/// The types this decode accepts are not fully 1:1 mapping to evaluable types.
+/// The types this encoder accepts are not fully 1:1 mapping to evaluable types.
 pub trait DatumPayloadEncoder:
     NumberEncoder + CompactByteEncoder + JsonEncoder + DecimalEncoder
 {
@@ -100,6 +100,14 @@ pub trait DatumPayloadEncoder:
         self.write_u64(v).map_err(|_| {
             Error::InvalidDataType("Failed to encode datum payload from u64".to_owned())
         })
+    }
+
+    #[inline]
+    fn write_datum_payload_var_i64(&mut self, v: i64) -> Result<()> {
+        self.write_var_i64(v).map_err(|_| {
+            Error::InvalidDataType("Failed to encode datum payload from var_i64".to_owned())
+        })?;
+        Ok(())
     }
 
     #[inline]
@@ -134,35 +142,45 @@ pub trait DatumPayloadEncoder:
 
 impl<T: BufferWriter> DatumPayloadEncoder for T {}
 
-/// An encoder to encode an evaluable type to datum bytes, which includes a datum flag
-/// and a datum payload.
-pub trait EvaluableDatumEncoder: BufferWriter + DatumPayloadEncoder {
+/// An encoder to encode a datum, i.e. 1 byte flag + variable bytes payload.
+///
+/// The types this encoder accepts are not fully 1:1 mapping to evaluable types.
+pub trait DatumFlagAndPayloadEncoder: BufferWriter + DatumPayloadEncoder {
     #[inline]
-    fn write_evaluable_datum_null(&mut self) -> Result<()> {
+    fn write_datum_null(&mut self) -> Result<()> {
         self.write_u8(datum::NIL_FLAG)?;
         Ok(())
     }
 
     #[inline]
-    fn write_evaluable_datum_int(&mut self, val: i64, is_unsigned: bool) -> Result<()> {
-        if is_unsigned {
-            self.write_u8(datum::UINT_FLAG)?;
-            self.write_datum_payload_u64(val as u64)?;
-        } else {
-            self.write_u8(datum::INT_FLAG)?;
-            self.write_datum_payload_i64(val)?;
-        }
+    fn write_datum_u64(&mut self, val: u64) -> Result<()> {
+        self.write_u8(datum::UINT_FLAG)?;
+        self.write_datum_payload_u64(val)?;
         Ok(())
     }
 
     #[inline]
-    fn write_evaluable_datum_real(&mut self, val: f64) -> Result<()> {
+    fn write_datum_i64(&mut self, val: i64) -> Result<()> {
+        self.write_u8(datum::INT_FLAG)?;
+        self.write_datum_payload_i64(val)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_datum_var_i64(&mut self, val: i64) -> Result<()> {
+        self.write_u8(datum::VAR_INT_FLAG)?;
+        self.write_datum_payload_var_i64(val)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_datum_f64(&mut self, val: f64) -> Result<()> {
         self.write_u8(datum::FLOAT_FLAG)?;
         self.write_datum_payload_f64(val)?;
         Ok(())
     }
 
-    fn write_evaluable_datum_decimal(&mut self, val: &Decimal) -> Result<()> {
+    fn write_datum_decimal(&mut self, val: &Decimal) -> Result<()> {
         self.write_u8(datum::DECIMAL_FLAG)?;
         let (prec, frac) = val.prec_and_frac();
         self.write_datum_payload_decimal(val, prec, frac)?;
@@ -170,10 +188,55 @@ pub trait EvaluableDatumEncoder: BufferWriter + DatumPayloadEncoder {
     }
 
     #[inline]
-    fn write_evaluable_datum_bytes(&mut self, val: &[u8]) -> Result<()> {
+    fn write_datum_compact_bytes(&mut self, val: &[u8]) -> Result<()> {
         self.write_u8(datum::COMPACT_BYTES_FLAG)?;
         self.write_datum_payload_compact_bytes(val)?;
         Ok(())
+    }
+
+    fn write_datum_duration(&mut self, val: Duration) -> Result<()> {
+        self.write_u8(datum::DURATION_FLAG)?;
+        self.write_datum_payload_i64(val.to_nanos())?;
+        Ok(())
+    }
+
+    fn write_datum_json(&mut self, val: &Json) -> Result<()> {
+        self.write_u8(datum::JSON_FLAG)?;
+        self.write_datum_payload_json(val)?;
+        Ok(())
+    }
+}
+
+impl<T: BufferWriter> DatumFlagAndPayloadEncoder for T {}
+
+/// An encoder to encode an evaluable type to datum bytes.
+pub trait EvaluableDatumEncoder: DatumFlagAndPayloadEncoder {
+    #[inline]
+    fn write_evaluable_datum_null(&mut self) -> Result<()> {
+        self.write_datum_null()
+    }
+
+    #[inline]
+    fn write_evaluable_datum_int(&mut self, val: i64, is_unsigned: bool) -> Result<()> {
+        if is_unsigned {
+            self.write_datum_u64(val as u64)
+        } else {
+            self.write_datum_i64(val)
+        }
+    }
+
+    #[inline]
+    fn write_evaluable_datum_real(&mut self, val: f64) -> Result<()> {
+        self.write_datum_f64(val)
+    }
+
+    fn write_evaluable_datum_decimal(&mut self, val: &Decimal) -> Result<()> {
+        self.write_datum_decimal(val)
+    }
+
+    #[inline]
+    fn write_evaluable_datum_bytes(&mut self, val: &[u8]) -> Result<()> {
+        self.write_datum_compact_bytes(val)
     }
 
     #[inline]
@@ -182,25 +245,31 @@ pub trait EvaluableDatumEncoder: BufferWriter + DatumPayloadEncoder {
         val: DateTime,
         ctx: &mut EvalContext,
     ) -> Result<()> {
-        self.write_u8(datum::UINT_FLAG)?;
-        self.write_datum_payload_u64(val.to_packed_u64(ctx)?)?;
-        Ok(())
+        self.write_datum_u64(val.to_packed_u64(ctx)?)
     }
 
+    #[inline]
     fn write_evaluable_datum_duration(&mut self, val: Duration) -> Result<()> {
-        self.write_u8(datum::DURATION_FLAG)?;
-        self.write_datum_payload_i64(val.to_nanos())?;
-        Ok(())
+        self.write_datum_duration(val)
     }
 
+    #[inline]
     fn write_evaluable_datum_json(&mut self, val: &Json) -> Result<()> {
-        self.write_u8(datum::JSON_FLAG)?;
-        self.write_datum_payload_json(val)?;
-        Ok(())
+        self.write_datum_json(val)
     }
 }
 
 impl<T: BufferWriter> EvaluableDatumEncoder for T {}
+
+/// An encoder to encode a datum storing column id.
+pub trait ColumnIdDatumEncoder: DatumFlagAndPayloadEncoder {
+    #[inline]
+    fn write_column_id_datum(&mut self, col_id: i64) -> Result<()> {
+        self.write_datum_var_i64(col_id)
+    }
+}
+
+impl<T: BufferWriter> ColumnIdDatumEncoder for T {}
 
 // TODO: Refactor the code below to be a EvaluableDatumDecoder.
 
