@@ -32,6 +32,7 @@ impl RocksTablePropertiesCollection {
         RocksTablePropertiesCollection(raw)
     }
 
+    // for test
     pub fn get_raw(&self) -> &RawTablePropertiesCollection {
         return &self.0;
     }
