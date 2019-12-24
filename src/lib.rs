@@ -28,6 +28,7 @@
 #![feature(specialization)]
 #![feature(ascii_ctype)]
 #![feature(const_int_ops)]
+#![feature(tool_lints)]
 #![feature(use_extern_macros)]
 #![recursion_limit = "200"]
 // Currently this raises some false positives, so we allow it:

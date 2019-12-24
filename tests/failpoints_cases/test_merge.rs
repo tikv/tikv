@@ -511,7 +511,12 @@ fn test_node_merge_restart_after_apply_premerge_before_apply_compact_log() {
     for i in 0..count {
         sleep_ms(10);
 
-        if pd_client.get_region_by_id(left.get_id()).wait().unwrap().is_none() {
+        if pd_client
+            .get_region_by_id(left.get_id())
+            .wait()
+            .unwrap()
+            .is_none()
+        {
             break;
         }
         if i == count - 1 {
