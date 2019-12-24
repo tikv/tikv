@@ -1288,7 +1288,6 @@ mod tests {
     use futures::Future;
     use kvproto::metapb;
     use std::collections::BTreeMap;
-    use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
     use txn_types::Mutation;
 
