@@ -2,16 +2,16 @@
 
 use std::cell::Cell;
 use std::cmp::Ordering;
+use std::ops::Bound;
 
 use engine::CfName;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+use txn_types::{Key, TimeStamp};
 
-use crate::storage::kv::{
-    CfStatistics, Error, Iterator, Key, Result, ScanMode, Snapshot, SEEK_BOUND,
-};
+use crate::storage::kv::{CfStatistics, Error, Iterator, Result, ScanMode, Snapshot, SEEK_BOUND};
 
 pub struct Cursor<I: Iterator> {
     iter: I,
@@ -298,14 +298,14 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek_to_first()
+        self.iter.seek_to_first().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
-        self.iter.seek_to_last()
+        self.iter.seek_to_last().expect("Invalid Iterator")
     }
 
     #[inline]
@@ -330,14 +330,14 @@ impl<I: Iterator> Cursor<I> {
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.next += 1;
         self.mark_unread();
-        self.iter.next()
+        self.iter.next().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
         statistics.prev += 1;
         self.mark_unread();
-        self.iter.prev()
+        self.iter.prev().expect("Invalid Iterator")
     }
 
     #[inline]
@@ -346,13 +346,12 @@ impl<I: Iterator> Cursor<I> {
     // (2) there is an error. In this case status() is not OK().
     // So check status when iterator is invalidated.
     pub fn valid(&self) -> Result<bool> {
-        if !self.iter.valid() {
-            if let Err(e) = self.iter.status() {
+        match self.iter.valid() {
+            Err(e) => {
                 self.handle_error_status(e)?;
+                unreachable!();
             }
-            Ok(false)
-        } else {
-            Ok(true)
+            Ok(t) => Ok(t),
         }
     }
 
@@ -390,6 +389,10 @@ pub struct CursorBuilder<'a, S: Snapshot> {
     prefix_seek: bool,
     upper_bound: Option<Key>,
     lower_bound: Option<Key>,
+    // hint for we will only scan data with commit ts >= hint_min_ts
+    hint_min_ts: Option<TimeStamp>,
+    // hint for we will only scan data with commit ts <= hint_max_ts
+    hint_max_ts: Option<TimeStamp>,
 }
 
 impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
@@ -404,6 +407,8 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             prefix_seek: false,
             upper_bound: None,
             lower_bound: None,
+            hint_min_ts: None,
+            hint_max_ts: None,
         }
     }
 
@@ -445,6 +450,24 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         self
     }
 
+    /// Set the hint for the minimum commit ts we want to scan.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn hint_min_ts(mut self, min_ts: Option<TimeStamp>) -> Self {
+        self.hint_min_ts = min_ts;
+        self
+    }
+
+    /// Set the hint for the maximum commit ts we want to scan.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn hint_max_ts(mut self, max_ts: Option<TimeStamp>) -> Self {
+        self.hint_max_ts = max_ts;
+        self
+    }
+
     /// Build `Cursor` from the current configuration.
     pub fn build(self) -> Result<Cursor<S::Iter>> {
         let l_bound = if let Some(b) = self.lower_bound {
@@ -460,6 +483,12 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             None
         };
         let mut iter_opt = IterOption::new(l_bound, u_bound, self.fill_cache);
+        if let Some(ts) = self.hint_min_ts {
+            iter_opt.set_hint_min_ts(Bound::Included(ts.into_inner()));
+        }
+        if let Some(ts) = self.hint_max_ts {
+            iter_opt.set_hint_max_ts(Bound::Included(ts.into_inner()));
+        }
         if self.prefix_seek {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
         }
