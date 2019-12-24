@@ -341,9 +341,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.inner.enqueue_task(task, callback);
         self.try_to_wake_up(cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
-        SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
-            .get(priority_tag)
-            .inc();
+        SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC.may_flush(|m| m.get(priority_tag).inc());
     }
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,

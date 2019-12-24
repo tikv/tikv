@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use prometheus::local::*;
 use prometheus::*;
 use prometheus_static_metric::*;
 
@@ -13,7 +12,6 @@ use tikv_util::collections::HashMap;
 use tikv_util::metrics::*;
 
 struct StorageLocalMetrics {
-    local_sched_commands_pri_counter_vec: LocalIntCounterVec,
     local_scan_details: HashMap<&'static str, Statistics>,
     local_read_flow_stats: HashMap<u64, FlowStatistics>,
 }
@@ -21,7 +19,6 @@ struct StorageLocalMetrics {
 thread_local! {
     static TLS_STORAGE_METRICS: RefCell<StorageLocalMetrics> = RefCell::new(
         StorageLocalMetrics {
-            local_sched_commands_pri_counter_vec: SCHED_COMMANDS_PRI_COUNTER_VEC.local(),
             local_scan_details: HashMap::default(),
             local_read_flow_stats: HashMap::default(),
         }
@@ -32,7 +29,6 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut m = m.borrow_mut();
         // Flush Prometheus metrics
-        m.local_sched_commands_pri_counter_vec.flush();
 
         for (cmd, stat) in m.local_scan_details.drain() {
             for (cf, cf_details) in stat.details().iter() {
@@ -58,17 +54,12 @@ pub fn tls_flush<R: FlowStatsReporter>(reporter: &R) {
 }
 
 pub fn tls_collect_command_count(cmd: CommandKind, priority: CommandPriority) {
-    //todo replace
-    TLS_STORAGE_METRICS.with(|m| {
-        let mut storage_metrics = m.borrow_mut();
-        storage_metrics
-            .local_sched_commands_pri_counter_vec
-            .with_label_values(&[priority.get_str()])
-            .inc();
-    });
-
     KV_COMMAND_COUNTER_VEC_STATIC.may_flush(|m| {
         m.get(cmd).inc();
+    });
+
+    SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC.with(|m| {
+        m.get(priority).inc();
     })
 }
 
@@ -202,7 +193,7 @@ make_static_metric! {
         "type" => CommandKind,
     }
 
-    pub struct SchedCommandPriCounterVec: IntCounter {
+    pub struct SchedCommandPriCounterVec: LocalIntCounter {
         "priority" => CommandPriority,
     }
 }
@@ -270,8 +261,6 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC: SchedCommandPriCounterVec =
-        SchedCommandPriCounterVec::from(&SCHED_COMMANDS_PRI_COUNTER_VEC);
     pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_commands_pri_total",
         "Total count of different priority commands",
@@ -316,4 +305,6 @@ thread_local! {
          TLSMetricGroup::new(KvCommandKeysReadVec::from(&KV_COMMAND_KEYREAD_HISTOGRAM_VEC));
     pub static KV_COMMAND_COUNTER_VEC_STATIC: TLSMetricGroup<KvCommandCounterVec> =
         TLSMetricGroup::new(KvCommandCounterVec::from(&KV_COMMAND_COUNTER_VEC));
+    pub static SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC: TLSMetricGroup<SchedCommandPriCounterVec> =
+        TLSMetricGroup::new(SchedCommandPriCounterVec::from(&SCHED_COMMANDS_PRI_COUNTER_VEC));
 }
