@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::raftstore::store::{util, PeerStorage};
-use crate::raftstore::Result;
+use crate::raftstore::{Error, Result};
 use engine_rocks::RocksEngine;
 use engine_traits::util::check_key_in_range;
 use engine_traits::CF_RAFT;
@@ -132,18 +132,11 @@ where
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        if !it.seek(start_key)? {
-            return Ok(());
+        let mut it_valid = it.seek(start_key)?;
+        while it_valid {
+            it_valid = f(it.key(), it.value())? && it.next()?;
         }
-        while it.valid() {
-            let r = f(it.key(), it.value())?;
-
-            if !r || !it.next() {
-                break;
-            }
-        }
-
-        it.status()
+        Ok(())
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
@@ -318,12 +311,12 @@ where
         RegionIterator { iter, region }
     }
 
-    pub fn seek_to_first(&mut self) -> bool {
-        self.iter.seek_to_first()
+    pub fn seek_to_first(&mut self) -> Result<bool> {
+        self.iter.seek_to_first().map_err(Error::from)
     }
 
-    pub fn seek_to_last(&mut self) -> bool {
-        self.iter.seek_to_last()
+    pub fn seek_to_last(&mut self) -> Result<bool> {
+        self.iter.seek_to_last().map_err(Error::from)
     }
 
     pub fn seek(&mut self, key: &[u8]) -> Result<bool> {
@@ -332,27 +325,23 @@ where
         });
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        Ok(self.iter.seek(key.as_slice().into()))
+        self.iter.seek(key.as_slice().into()).map_err(Error::from)
     }
 
     pub fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
         self.should_seekable(key)?;
         let key = keys::data_key(key);
-        Ok(self.iter.seek_for_prev(key.as_slice().into()))
+        self.iter
+            .seek_for_prev(key.as_slice().into())
+            .map_err(Error::from)
     }
 
-    pub fn prev(&mut self) -> bool {
-        if !self.valid() {
-            return false;
-        }
-        self.iter.prev()
+    pub fn prev(&mut self) -> Result<bool> {
+        self.iter.prev().map_err(Error::from)
     }
 
-    pub fn next(&mut self) -> bool {
-        if !self.valid() {
-            return false;
-        }
-        self.iter.next()
+    pub fn next(&mut self) -> Result<bool> {
+        self.iter.next().map_err(Error::from)
     }
 
     #[inline]
@@ -366,13 +355,8 @@ where
     }
 
     #[inline]
-    pub fn valid(&self) -> bool {
-        self.iter.valid()
-    }
-
-    #[inline]
-    pub fn status(&self) -> Result<()> {
-        self.iter.status().map_err(From::from)
+    pub fn valid(&self) -> Result<bool> {
+        self.iter.valid().map_err(Error::from)
     }
 
     #[inline]
@@ -685,11 +669,11 @@ mod tests {
         assert_eq!(data.len(), 1);
 
         let mut iter = snap.iter(IterOption::default());
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
@@ -713,11 +697,11 @@ mod tests {
         let mut iter = snap.iter(IterOption::default());
         assert!(iter.seek(b"a1").unwrap());
 
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
@@ -731,11 +715,11 @@ mod tests {
             Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
             true,
         ));
-        assert!(iter.seek_to_first());
+        assert!(iter.seek_to_first().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.next() {
+            if !iter.next().unwrap() {
                 break;
             }
         }
@@ -854,11 +838,11 @@ mod tests {
         let mut iter_opt = IterOption::default();
         iter_opt.set_lower_bound(b"a3", 1);
         let mut iter = snap.iter(iter_opt);
-        assert!(iter.seek_to_last());
+        assert!(iter.seek_to_last().unwrap());
         let mut res = vec![];
         loop {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
-            if !iter.prev() {
+            if !iter.prev().unwrap() {
                 break;
             }
         }

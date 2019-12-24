@@ -178,7 +178,8 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
     let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));
 
     // the last key
-    if iter.seek(SeekKey::End) {
+    let found: Result<bool> = iter.seek(SeekKey::End).map_err(|e| box_err!(e));
+    if found? {
         let key = iter.key().to_vec();
         last_key = Some(key);
     } // else { No data in this CF }
