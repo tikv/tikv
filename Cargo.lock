@@ -3556,6 +3556,7 @@ version = "0.0.1"
 dependencies = [
  "arrow",
  "byteorder",
+ "configuration",
  "crc32fast",
  "crc64fast",
  "criterion",
