@@ -77,8 +77,8 @@ impl<S: Snapshot> BackwardScanner<S> {
                     &mut self.statistics.lock,
                 )?;
             } else {
-                self.write_cursor.seek_to_last(&mut self.statistics.write);
-                self.lock_cursor.seek_to_last(&mut self.statistics.lock);
+                self.write_cursor.seek_to_last(&mut self.statistics.write)?;
+                self.lock_cursor.seek_to_last(&mut self.statistics.lock)?;
             }
             self.is_started = true;
         }
@@ -143,7 +143,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                     }
                     IsolationLevel::RC => {}
                 }
-                self.lock_cursor.prev(&mut self.statistics.lock);
+                self.lock_cursor.prev(&mut self.statistics.lock)?;
             }
             if has_write {
                 if result.is_ok() {
@@ -185,7 +185,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                 // We are already pointing at the smallest version, so we don't need to prev()
                 // for the first iteration. So we will totally call `prev()` function
                 // `REVERSE_SEEK_BOUND - 1` times.
-                self.write_cursor.prev(&mut self.statistics.write);
+                self.write_cursor.prev(&mut self.statistics.write)?;
                 if !self.write_cursor.valid()? {
                     // Key space ended. We use `last_version` as the return.
                     return Ok(self.handle_last_version(last_version, user_key)?);
@@ -265,7 +265,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                 WriteType::Delete => return Ok(None),
                 WriteType::Lock | WriteType::Rollback => {
                     // Continue iterate next `write`.
-                    self.write_cursor.next(&mut self.statistics.write);
+                    self.write_cursor.next(&mut self.statistics.write)?;
                     assert!(self.write_cursor.valid()?);
                 }
             }
@@ -329,7 +329,7 @@ impl<S: Snapshot> BackwardScanner<S> {
     fn move_write_cursor_to_prev_user_key(&mut self, current_user_key: &Key) -> Result<()> {
         for i in 0..SEEK_BOUND {
             if i > 0 {
-                self.write_cursor.prev(&mut self.statistics.write);
+                self.write_cursor.prev(&mut self.statistics.write)?;
             }
             if !self.write_cursor.valid()? {
                 // Key space ended. We are done here.
