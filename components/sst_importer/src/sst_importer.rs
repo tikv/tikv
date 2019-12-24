@@ -191,7 +191,7 @@ impl SSTImporter {
                 // must iterate if we perform key rewrite
                 return Ok(None);
             }
-            if !iter.seek(SeekKey::Start) {
+            if !iter.seek(SeekKey::Start)? {
                 // the SST is empty, so no need to iterate at all (should be impossible?)
                 return Ok(Some(meta.get_range().clone()));
             }
@@ -203,7 +203,7 @@ impl SSTImporter {
             let start_key = start_key.to_vec();
 
             // seek to end and fetch the last (inclusive) key of the SST.
-            iter.seek(SeekKey::End);
+            iter.seek(SeekKey::End)?;
             let last_key = keys::origin_key(iter.key());
             if is_after_end_bound(last_key, &range_end) {
                 // SST's end is after the range to consume
@@ -230,11 +230,11 @@ impl SSTImporter {
         let mut first_key = None;
 
         match range_start {
-            Bound::Unbounded => iter.seek(SeekKey::Start),
-            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s))),
+            Bound::Unbounded => iter.seek(SeekKey::Start)?,
+            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s)))?,
             Bound::Excluded(_) => unreachable!(),
         };
-        while iter.valid() {
+        while iter.valid()? {
             let old_key = keys::origin_key(iter.key());
             if is_after_end_bound(&old_key, &range_end) {
                 break;
@@ -276,12 +276,11 @@ impl SSTImporter {
             }
 
             sst_writer.put(&key, &value)?;
-            iter.next();
+            iter.next()?;
             if first_key.is_none() {
                 first_key = Some(keys::origin_key(&key).to_vec());
             }
         }
-        iter.status()?;
 
         let _ = fs::remove_file(&path.temp);
 
@@ -582,7 +581,7 @@ mod tests {
 
     use engine_traits::Error as TraitError;
     use engine_traits::ExternalSstFileInfo;
-    use engine_traits::{Iterable, Iterator, SeekKey, CF_DEFAULT};
+    use engine_traits::{collect, Iterable, Iterator, SeekKey, CF_DEFAULT};
     use tempfile::Builder;
     use test_sst_importer::{new_sst_reader, new_sst_writer, new_test_engine};
     use txn_types::{Value, WriteType};
@@ -876,9 +875,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (b"zt123_r01".to_vec(), b"abc".to_vec()),
                 (b"zt123_r04".to_vec(), b"xyz".to_vec()),
@@ -920,9 +919,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (b"zt567_r01".to_vec(), b"abc".to_vec()),
                 (b"zt567_r04".to_vec(), b"xyz".to_vec()),
@@ -960,9 +959,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (get_encoded_key(b"t123_r01", 16), b"abc".to_vec()),
                 (get_encoded_key(b"t123_r04", 16), b"xyz".to_vec()),
@@ -999,9 +998,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (
                     get_encoded_key(b"t123_r01", 16),
@@ -1060,9 +1059,9 @@ mod tests {
 
         // verifies the DB content is correct.
         let mut iter = db.iterator().unwrap();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (b"zt9102_r01".to_vec(), b"abc".to_vec()),
                 (b"zt9102_r04".to_vec(), b"xyz".to_vec()),
@@ -1099,9 +1098,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (b"zt123_r04".to_vec(), b"xyz".to_vec()),
                 (b"zt123_r07".to_vec(), b"pqrst".to_vec()),
@@ -1140,9 +1139,9 @@ mod tests {
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            collect(iter),
             vec![
                 (b"zt5_r04".to_vec(), b"xyz".to_vec()),
                 (b"zt5_r07".to_vec(), b"pqrst".to_vec()),

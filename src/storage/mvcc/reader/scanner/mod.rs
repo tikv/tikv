@@ -76,6 +76,24 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    /// Set the hint for the minimum commit ts we want to scan.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn hint_min_ts(mut self, min_ts: Option<TimeStamp>) -> Self {
+        self.0.hint_min_ts = min_ts;
+        self
+    }
+
+    /// Set the hint for the maximum commit ts we want to scan.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn hint_max_ts(mut self, max_ts: Option<TimeStamp>) -> Self {
+        self.0.hint_max_ts = max_ts;
+        self
+    }
+
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
         let lock_cursor = self.0.create_cf_cursor(CF_LOCK)?;
@@ -149,6 +167,10 @@ pub struct ScannerConfig<S: Snapshot> {
     /// created.
     lower_bound: Option<Key>,
     upper_bound: Option<Key>,
+    // hint for we will only scan data with commit ts >= hint_min_ts
+    hint_min_ts: Option<TimeStamp>,
+    // hint for we will only scan data with commit ts <= hint_max_ts
+    hint_max_ts: Option<TimeStamp>,
 
     ts: TimeStamp,
     desc: bool,
@@ -165,6 +187,8 @@ impl<S: Snapshot> ScannerConfig<S> {
             isolation_level: IsolationLevel::Si,
             lower_bound: None,
             upper_bound: None,
+            hint_min_ts: None,
+            hint_max_ts: None,
             ts,
             desc,
             bypass_locks: Default::default(),
@@ -188,10 +212,18 @@ impl<S: Snapshot> ScannerConfig<S> {
         } else {
             (self.lower_bound.clone(), self.upper_bound.clone())
         };
+        // FIXME: Try to find out how to filter default CF SSTs by start ts
+        let (hint_min_ts, hint_max_ts) = if cf == CF_WRITE {
+            (self.hint_min_ts, self.hint_max_ts)
+        } else {
+            (None, None)
+        };
         let cursor = CursorBuilder::new(&self.snapshot, cf)
             .range(lower, upper)
             .fill_cache(self.fill_cache)
             .scan_mode(self.scan_mode())
+            .hint_min_ts(hint_min_ts)
+            .hint_max_ts(hint_max_ts)
             .build()?;
         Ok(cursor)
     }
