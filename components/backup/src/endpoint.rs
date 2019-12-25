@@ -93,6 +93,11 @@ impl Task {
             limiter,
         };
 
+        let mut cf = req.get_cf().to_string();
+        if cf.len() == 0 {
+            cf = CF_DEFAULT.to_string();
+        }
+
         Ok((
             Task {
                 start_key: req.get_start_key().to_owned(),
@@ -104,7 +109,7 @@ impl Task {
                 concurrency: req.get_concurrency(),
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
-                cf: req.get_cf().to_string(),
+                cf,
             },
             cancel,
         ))
@@ -533,12 +538,20 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let start_key = if task.start_key.is_empty() {
             None
         } else {
-            Some(Key::from_raw(&task.start_key.clone()))
+            if task.is_raw_kv {
+                Some(Key::from_encoded(task.start_key))
+            } else {
+                Some(Key::from_raw(&task.start_key.clone()))
+            }
         };
         let end_key = if task.end_key.is_empty() {
             None
         } else {
-            Some(Key::from_raw(&task.end_key.clone()))
+            if task.is_raw_kv {
+                Some(Key::from_encoded(task.end_key))
+            } else {
+                Some(Key::from_raw(&task.end_key.clone()))
+            }
         };
 
         let (res_tx, res_rx) = mpsc::channel();
@@ -568,12 +581,16 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let mut summary = Statistics::default();
         let resp = task.resp;
         for (brange, res) in res_rx {
-            let start_key = brange
-                .start_key
-                .map_or_else(|| vec![], |k| k.into_raw().unwrap());
-            let end_key = brange
-                .end_key
-                .map_or_else(|| vec![], |k| k.into_raw().unwrap());
+            let start_key = if task.is_raw_kv {
+                brange.start_key.map_or_else(|| vec![], |k| k.into_encoded())
+            } else {
+                brange.start_key.map_or_else(|| vec![], |k| k.into_raw().unwrap())
+            };
+            let end_key = if task.is_raw_kv {
+                brange.end_key.map_or_else(|| vec![], |k| k.into_encoded())
+            } else {
+                brange.end_key.map_or_else(|| vec![], |k| k.into_raw().unwrap())
+            };
             let mut response = BackupResponse::default();
             match res {
                 Ok((mut files, stat)) => {

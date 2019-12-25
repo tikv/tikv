@@ -134,7 +134,7 @@ impl TestSuite {
             !response.has_region_error() && !response.error.is_empty(),
             response,
             10,
-            5000
+            1000
         );
         assert!(
             !response.has_region_error(),
@@ -156,7 +156,7 @@ impl TestSuite {
             self.tikv_cli.kv_prewrite(&prewrite_req).unwrap(),
             !prewrite_resp.has_region_error() && prewrite_resp.errors.is_empty(),
             prewrite_resp,
-            5,    // retry 5 times
+            10,    // retry 5 times
             5000  // 5s timeout
         );
         assert!(
@@ -182,7 +182,7 @@ impl TestSuite {
             self.tikv_cli.kv_commit(&commit_req).unwrap(),
             !commit_resp.has_region_error() && !commit_resp.has_error(),
             commit_resp,
-            5,    // retry 5 times
+            10,    // retry 5 times
             5000  // 5s timeout
         );
         assert!(
