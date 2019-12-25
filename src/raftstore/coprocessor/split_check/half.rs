@@ -175,10 +175,10 @@ mod tests {
 
     use crate::raftstore::coprocessor::properties::RangePropertiesCollectorFactory;
     use crate::raftstore::store::{SplitCheckRunner, SplitCheckTask};
-    use keys::Key;
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;
     use tikv_util::worker::Runnable;
+    use txn_types::Key;
 
     use super::super::size::tests::must_split_at;
     use super::*;

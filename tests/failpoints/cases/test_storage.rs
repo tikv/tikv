@@ -9,13 +9,13 @@ use grpcio::*;
 use kvproto::kvrpcpb::{self, Context, Op, PrewriteRequest, RawPutRequest};
 use kvproto::tikvpb::TikvClient;
 
-use keys::Key;
 use test_raftstore::{must_get_equal, must_get_none, new_server_cluster};
 use tikv::storage;
 use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::*;
 use tikv_util::HandyRwLock;
+use txn_types::Key;
 
 #[test]
 fn test_scheduler_leader_change_twice() {
