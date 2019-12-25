@@ -35,7 +35,7 @@ features = ["nightly"]
 [dependencies.engine_rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
 package = "rocksdb"
-branch = "tikv-3.0"
+branch = "tikv-3.x"
 
 [dev-dependencies]
 tempdir = "0.3"
