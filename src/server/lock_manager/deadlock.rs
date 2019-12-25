@@ -770,6 +770,12 @@ where
         debug!("handle change role"; "role" => ?role);
         self.change_role(role);
     }
+
+    fn handle_change_ttl(&mut self, ttl: Duration) {
+        let mut inner = self.inner.borrow_mut();
+        inner.detect_table.reset_ttl(ttl);
+        info!("Dead lock detector config updated"; "ttl" => ?ttl);
+    }
 }
 
 impl<S, P> FutureRunnable<Task> for Detector<S, P>
@@ -786,10 +792,7 @@ where
                 self.handle_detect_rpc(handle, stream, sink);
             }
             Task::ChangeRole(role) => self.handle_change_role(role),
-            Task::ChangeTTL(ttl) => {
-                let mut inner = self.inner.borrow_mut();
-                inner.detect_table.reset_ttl(ttl);
-            }
+            Task::ChangeTTL(ttl) => self.handle_change_ttl(ttl),
         }
     }
 }

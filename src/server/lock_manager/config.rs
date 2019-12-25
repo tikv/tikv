@@ -2,14 +2,17 @@
 
 use super::deadlock::Scheduler as DeadlockScheduler;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
-use crate::config::{ConfigManager, TiKvConfig};
+use crate::config::ConfigManager;
+
+use configuration::{ConfigChange, Configuration};
 
 use std::error::Error;
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    #[config(skip)]
     pub enabled: bool,
     pub wait_for_lock_timeout: u64,
     pub wake_up_delay_duration: u64,
@@ -34,30 +37,37 @@ impl Config {
     }
 }
 
-pub struct ConfigMgr {
+pub struct LockManagerConfigManager {
     waiter_mgr_scheduler: WaiterMgrScheduler,
     detector_scheduler: DeadlockScheduler,
 }
 
-impl ConfigMgr {
+impl LockManagerConfigManager {
     pub fn new(
         waiter_mgr_scheduler: WaiterMgrScheduler,
         detector_scheduler: DeadlockScheduler,
     ) -> Self {
-        ConfigMgr {
+        LockManagerConfigManager {
             waiter_mgr_scheduler,
             detector_scheduler,
         }
     }
 }
 
-impl ConfigManager for ConfigMgr {
-    fn update(&mut self, incomming: &TiKvConfig) {
-        let cfg = &incomming.pessimistic_txn;
-        self.waiter_mgr_scheduler
-            .change_config(cfg.wait_for_lock_timeout, cfg.wake_up_delay_duration);
-        self.detector_scheduler
-            .change_ttl(cfg.wait_for_lock_timeout);
+impl ConfigManager for LockManagerConfigManager {
+    fn dispatch(&mut self, mut change: ConfigChange) -> Result<(), Box<dyn Error>> {
+        match (
+            change.remove("wait_for_lock_timeout").map(Into::into),
+            change.remove("wake_up_delay_duration").map(Into::into),
+        ) {
+            (timeout @ Some(_), delay) => {
+                self.waiter_mgr_scheduler.change_config(timeout, delay);
+                self.detector_scheduler.change_ttl(timeout.unwrap());
+            }
+            (None, delay @ Some(_)) => self.waiter_mgr_scheduler.change_config(None, delay),
+            (None, None) => {}
+        };
+        Ok(())
     }
 }
 

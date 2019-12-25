@@ -117,8 +117,8 @@ pub enum Task {
         deadlock_key_hash: u64,
     },
     ChangeConfig {
-        timeout: u64,
-        delay: u64,
+        timeout: Option<u64>,
+        delay: Option<u64>,
     },
 }
 
@@ -141,7 +141,7 @@ impl Display for Task {
             Task::Deadlock { start_ts, .. } => write!(f, "txn:{} deadlock", start_ts),
             Task::ChangeConfig { timeout, delay } => write!(
                 f,
-                "change config to default_wait_for_lock_timeout: {}, wake_up_delay_duration: {}",
+                "change config to default_wait_for_lock_timeout: {:?}, wake_up_delay_duration: {:?}",
                 timeout, delay
             ),
         }
@@ -417,7 +417,7 @@ impl Scheduler {
         });
     }
 
-    pub fn change_config(&self, timeout: u64, delay: u64) {
+    pub fn change_config(&self, timeout: Option<u64>, delay: Option<u64>) {
         self.notify_scheduler(Task::ChangeConfig { timeout, delay });
     }
 }
@@ -525,6 +525,20 @@ impl WaiterManager {
                 Some(())
             });
     }
+
+    fn handle_config_change(&mut self, timeout: Option<u64>, delay: Option<u64>) {
+        if let Some(timeout) = timeout {
+            self.default_wait_for_lock_timeout = timeout;
+        }
+        if let Some(delay) = delay {
+            self.wake_up_delay_duration = delay;
+        }
+        info!(
+            "Waiter manager config change";
+            "default_wait_for_lock_timeout" => timeout,
+            "wake_up_delay_duration" => delay
+        );
+    }
 }
 
 impl FutureRunnable<Task> for WaiterManager {
@@ -569,10 +583,7 @@ impl FutureRunnable<Task> for WaiterManager {
             } => {
                 self.handle_deadlock(start_ts, lock, deadlock_key_hash);
             }
-            Task::ChangeConfig { timeout, delay } => {
-                self.default_wait_for_lock_timeout = timeout;
-                self.wake_up_delay_duration = delay;
-            }
+            Task::ChangeConfig { timeout, delay } => self.handle_config_change(timeout, delay),
         }
     }
 }
