@@ -71,8 +71,8 @@ pub fn delete_all_in_range_cf(
             iter_opt.titan_key_only(true);
         }
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
-        it.seek(start_key.into());
-        while it.valid() {
+        it.seek(start_key.into())?;
+        while it.valid()? {
             wb.delete_cf(handle, it.key())?;
             if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Can't use write_without_wal here.
@@ -81,11 +81,10 @@ pub fn delete_all_in_range_cf(
                 wb.clear();
             }
 
-            if !it.next() {
+            if !it.next()? {
                 break;
             }
         }
-        it.status()?;
     }
 
     if wb.count() > 0 {
@@ -136,13 +135,13 @@ mod tests {
         for cf in cfs {
             let handle = get_cf_handle(db, cf).unwrap();
             let mut iter = db.iter_cf(handle);
-            iter.seek(SeekKey::Start);
+            iter.seek(SeekKey::Start).unwrap();
             for &(k, v) in expected {
                 assert_eq!(k, iter.key());
                 assert_eq!(v, iter.value());
-                iter.next();
+                iter.next().unwrap();
             }
-            assert!(!iter.valid());
+            assert!(!iter.valid().unwrap());
         }
     }
 
