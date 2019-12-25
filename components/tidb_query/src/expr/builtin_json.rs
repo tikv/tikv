@@ -222,41 +222,58 @@ mod tests {
     fn test_json_length() {
         let cases = vec![
             (None, None, None),
+            (None, Some(Datum::Null), None),
             (Some("null"), None, None),
-            (Some(r#"{"a":{"a":1},"b":2}"#), Some(b"$".to_vec()), Some(2)),
+            (
+                Some(r#"{"a":{"a":1},"b":2}"#),
+                Some(Datum::Bytes(b"$".to_vec())),
+                Some(2),
+            ),
             (Some("1"), None, Some(1)),
             (
                 Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
-                Some(b"$.*".to_vec()),
+                Some(Datum::Bytes(b"$.*".to_vec())),
                 None,
             ),
-            (Some(r#"{"a":{"a":1},"b":2}"#), Some(b"$".to_vec()), Some(2)),
+            (
+                Some(r#"{"a":{"a":1},"b":2}"#),
+                Some(Datum::Bytes(b"$".to_vec())),
+                Some(2),
+            ),
             // Tests with path expression
             (
                 Some(r#"[1,2,[1,[5,[3]]]]"#),
-                Some(b"$[2]".to_vec()),
+                Some(Datum::Bytes(b"$[2]".to_vec())),
                 Some(2),
             ),
-            (Some(r#"[{"a":1}]"#), Some(b"$".to_vec()), Some(1)),
+            (
+                Some(r#"[{"a":1}]"#),
+                Some(Datum::Bytes(b"$".to_vec())),
+                Some(1),
+            ),
             (
                 Some(r#"[{"a":1,"b":2}]"#),
-                Some(b"$[0].a".to_vec()),
-                Some(1),
-            ),
-            (Some(r#"{"a":{"a":1},"b":2}"#), Some(b"$".to_vec()), Some(2)),
-            (
-                Some(r#"{"a":{"a":1},"b":2}"#),
-                Some(b"$.a".to_vec()),
+                Some(Datum::Bytes(b"$[0].a".to_vec())),
                 Some(1),
             ),
             (
                 Some(r#"{"a":{"a":1},"b":2}"#),
-                Some(b"$.a.a".to_vec()),
+                Some(Datum::Bytes(b"$".to_vec())),
+                Some(2),
+            ),
+            (
+                Some(r#"{"a":{"a":1},"b":2}"#),
+                Some(Datum::Bytes(b"$.a".to_vec())),
+                Some(1),
+            ),
+            (
+                Some(r#"{"a":{"a":1},"b":2}"#),
+                Some(Datum::Bytes(b"$.a.a".to_vec())),
                 Some(1),
             ),
             (
                 Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
-                Some(b"$.a[2].aa".to_vec()),
+                Some(Datum::Bytes(b"$.a[2].aa".to_vec())),
                 Some(1),
             ),
             // Tests without path expression
@@ -275,33 +292,33 @@ mod tests {
             // Tests path expression contains any asterisk
             (
                 Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
-                Some(b"$.*".to_vec()),
+                Some(Datum::Bytes(b"$.*".to_vec())),
                 None,
             ),
             (
                 Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
-                Some(b"$[*]".to_vec()),
+                Some(Datum::Bytes(b"$[*]".to_vec())),
                 None,
             ),
             (
                 Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
-                Some(b"$**.a".to_vec()),
+                Some(Datum::Bytes(b"$**.a".to_vec())),
                 None,
             ),
             // Tests path expression does not identify a section of the target document
             (
                 Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
-                Some(b"$.c".to_vec()),
+                Some(Datum::Bytes(b"$.c".to_vec())),
                 None,
             ),
             (
                 Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
-                Some(b"$.a[3]".to_vec()),
+                Some(Datum::Bytes(b"$.a[3]".to_vec())),
                 None,
             ),
             (
                 Some(r#"{"a": [1, 2, {"aa": "xx"}]}"#),
-                Some(b"$.a[2].b".to_vec()),
+                Some(Datum::Bytes(b"$.a[2].b".to_vec())),
                 None,
             ),
         ];
@@ -311,12 +328,11 @@ mod tests {
                 None => Datum::Null,
                 Some(s) => Datum::Json(s.parse().unwrap()),
             });
-            let param = datum_expr(match param {
-                None => Datum::Null,
-                Some(b) => Datum::Bytes(b),
-            });
-
-            let op = scalar_func_expr(ScalarFuncSig::JsonLengthSig, &[json, param]);
+            let op = if let Some(b) = param {
+                scalar_func_expr(ScalarFuncSig::JsonLengthSig, &[json, datum_expr(b)])
+            } else {
+                scalar_func_expr(ScalarFuncSig::JsonLengthSig, &[json])
+            };
             let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = match exp {
