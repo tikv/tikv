@@ -49,7 +49,7 @@ pub fn sha2(
                 SHA512 => MessageDigest::sha512(),
                 _ => {
                     ctx.warnings
-                        .append_warning(Error::incorrect_parameters(hash_length, "sha2"));
+                        .append_warning(Error::incorrect_parameters("sha2"));
                     return Ok(None);
                 }
             };
@@ -89,7 +89,7 @@ pub fn random_bytes(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<B
         Some(arg) => {
             if *arg < 1 || *arg > MAX_RAND_BYTES_LENGTH {
                 ctx.warnings
-                    .append_warning(Error::incorrect_parameters(*arg, "random_bytes"));
+                    .append_warning(Error::overflow(*arg, "random_bytes"));
                 return Ok(None);
             }
             Ok(Some(gen_random_bytes(*arg as usize)))

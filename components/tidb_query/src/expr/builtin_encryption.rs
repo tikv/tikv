@@ -51,7 +51,7 @@ impl ScalarFunc {
             SHA512 => MessageDigest::sha512(),
             _ => {
                 ctx.warnings
-                    .append_warning(Error::incorrect_parameters(hash_length, "sha2"));
+                    .append_warning(Error::incorrect_parameters("sha2"));
                 return Ok(None);
             }
         };
@@ -148,7 +148,7 @@ impl ScalarFunc {
         let length = try_opt!(self.children[0].eval_int(ctx, row));
         if length < 1 || length > MAX_RAND_BYTES_LENGTH {
             ctx.warnings
-                .append_warning(Error::incorrect_parameters(length, "random_bytes"));
+                .append_warning(Error::overflow(length, "random_bytes"));
             return Ok(None);
         }
         Ok(Some(Cow::Owned(gen_random_bytes(length as usize))))

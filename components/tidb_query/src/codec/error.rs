@@ -145,10 +145,10 @@ impl Error {
         Error::Eval("ZLIB: Input data corrupted".into(), ZLIB_DATA_CORRUPTED)
     }
 
-    pub fn incorrect_parameters(val: impl Display, fn_name: &str) -> Error {
+    pub fn incorrect_parameters(val: &str) -> Error {
         let msg = format!(
-            "Incorrect parameters {} in the call to native function '{}'",
-            val, fn_name
+            "Incorrect parameters in the call to native function '{}'",
+            val
         );
         Error::Eval(msg, ERR_INCORRECT_PARAMETERS)
     }
