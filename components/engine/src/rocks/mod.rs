@@ -13,7 +13,7 @@ pub use rocksdb::{
     DBCompressionType, DBEntryType, DBIterator, DBOptions, DBRateLimiterMode, DBRecoveryMode,
     DBStatisticsHistogramType, DBStatisticsTickerType, DBTitanDBBlobRunMode, DBVector, Env,
     EnvOptions, EventListener, ExternalSstFileInfo, FlushJobInfo, HistogramData,
-    IngestExternalFileOptions, IngestionInfo, Kv, LRUCacheOptions, MapProperty, MemoryAllocator,
+    IngestExternalFileOptions, IngestionInfo, LRUCacheOptions, MapProperty, MemoryAllocator,
     PerfContext, Range, RateLimiter, ReadOptions, SeekKey, SequentialFile, SliceTransform,
     TableFilter, TableProperties, TablePropertiesCollection, TablePropertiesCollector,
     TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions, UserCollectedProperties,

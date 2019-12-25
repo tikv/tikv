@@ -17,7 +17,7 @@ use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::Callback;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::{RocksEngine, RocksIOLimiter};
-use engine_traits::IOLimiter;
+use engine_traits::{IOLimiter, SstExt, SstWriterBuilder};
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
@@ -164,6 +164,11 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
+        let engine = Arc::clone(&self.engine);
+        let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
+            .set_db(RocksEngine::from_ref(&engine))
+            .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
+            .unwrap();
 
         ctx.spawn(self.threads.spawn_fn(move || {
             let res = importer.download::<RocksEngine>(
@@ -172,6 +177,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
+                sst_writer,
             );
 
             future::result(res)

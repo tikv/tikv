@@ -361,6 +361,10 @@ pub enum StoreMsg {
     Start {
         store: metapb::Store,
     },
+
+    /// Messge only used for test
+    #[cfg(test)]
+    Validate(Box<dyn FnOnce(&crate::raftstore::store::Config) + Send>),
 }
 
 impl fmt::Debug for StoreMsg {
@@ -383,6 +387,8 @@ impl fmt::Debug for StoreMsg {
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
+            #[cfg(test)]
+            StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
     }
 }
