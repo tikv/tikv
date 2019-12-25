@@ -1526,8 +1526,8 @@ fn future_commit<E: Engine, L: LockMgr>(
         } else if let Err(e) = v {
             resp.set_error(extract_key_error(&e));
         } else {
-            let handles = req1.get_keys().iter().map(|x| table::decode_handle(x)).collect();
-            log!(
+            let handles: Vec<i64> = req1.get_keys().iter().map(|x| table::decode_handle(x).unwrap_or(0)).collect();
+            info!(
                 "[test] commit entries";
                 "region_id" => req1.get_context().get_region_id(),
                 "start_ts" => req1.get_start_version(),
@@ -1543,6 +1543,7 @@ fn future_cleanup<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: CleanupRequest,
 ) -> impl Future<Item=CleanupResponse, Error=Error> {
+    let req1 = req.clone();
     let (cb, f) = paired_future_callback();
     let res = storage.async_cleanup(
         req.take_context(),
@@ -1552,7 +1553,7 @@ fn future_cleanup<E: Engine, L: LockMgr>(
         cb,
     );
 
-    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+    AndThenWith::new(res, f.map_err(Error::from)).map(move |v| {
         let mut resp = CleanupResponse::new();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
@@ -1562,6 +1563,15 @@ fn future_cleanup<E: Engine, L: LockMgr>(
             } else {
                 resp.set_error(extract_key_error(&e));
             }
+        } else {
+            let handle = table::decode_handle(req1.get_key()).unwrap_or(0);
+            info!(
+                "[test] commit entries";
+                "region_id" => req1.get_context().get_region_id(),
+                "start_ts" => req1.get_start_version(),
+                "current_ts" => req.get_current_ts(),
+                "handle" => handle,
+            );
         }
         resp
     })
