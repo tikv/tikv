@@ -2,14 +2,10 @@
 
 use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
-use crate::storage::mvcc::lock::Lock;
-use crate::storage::mvcc::write::{Write, WriteType};
-use crate::storage::mvcc::{default_not_found_error, WriteRef};
-use crate::storage::mvcc::{Result, TimeStamp};
-use engine::IterOption;
-use engine::{CF_LOCK, CF_WRITE};
-use keys::{Key, Value};
+use crate::storage::mvcc::{default_not_found_error, Result};
+use engine::{IterOption, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
+use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -158,7 +154,9 @@ impl<S: Snapshot> MvccReader<S> {
     /// Returns the blocking lock as the `Err` variant.
     fn check_lock(&mut self, key: &Key, ts: TimeStamp) -> Result<()> {
         if let Some(lock) = self.load_lock(key)? {
-            return lock.check_ts_conflict(key, ts, &Default::default());
+            return lock
+                .check_ts_conflict(key, ts, &Default::default())
+                .map_err(From::from);
         }
         Ok(())
     }
@@ -433,18 +431,18 @@ mod tests {
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
-    use crate::storage::mvcc::lock::LockType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use crate::storage::{Mutation, Options};
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
-    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine::{IterOption, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_rocks::RocksEngine;
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
+    use std::ops::Bound;
     use std::sync::Arc;
     use std::u64;
+    use txn_types::{LockType, Mutation};
 
     struct RegionEngine {
         db: Arc<DB>,
@@ -499,7 +497,8 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.prewrite(m, pk, &Options::default()).unwrap();
+            txn.prewrite(m, pk, false, 0, 0, TimeStamp::default())
+                .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -512,8 +511,16 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            let options = Options::default();
-            txn.pessimistic_prewrite(m, pk, true, &options).unwrap();
+            txn.pessimistic_prewrite(
+                m,
+                pk,
+                true,
+                0,
+                TimeStamp::default(),
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -527,9 +534,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            let mut options = Options::default();
-            options.for_update_ts = for_update_ts.into();
-            txn.acquire_pessimistic_lock(k, pk, false, &options)
+            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into())
                 .unwrap();
             self.write(txn.into_modifies());
         }
@@ -681,6 +686,72 @@ mod tests {
         // After this flush, we have a SST file without properties.
         // Without properties, we always need GC.
         assert!(check_need_gc(Arc::clone(&db), region.clone(), 10, true).is_none());
+    }
+
+    #[test]
+    fn test_ts_filter() {
+        let path = tempfile::Builder::new()
+            .prefix("test_ts_filter")
+            .tempdir()
+            .unwrap();
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![0], vec![13]);
+
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(&db, &region);
+
+        engine.put(&[2], 1, 2);
+        engine.put(&[4], 3, 4);
+        engine.flush();
+        engine.put(&[6], 5, 6);
+        engine.put(&[8], 7, 8);
+        engine.flush();
+        engine.put(&[10], 9, 10);
+        engine.put(&[12], 11, 12);
+        engine.flush();
+
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
+
+        let tests = vec![
+            // set nothing.
+            (
+                Bound::Unbounded,
+                Bound::Unbounded,
+                vec![2u64, 4, 6, 8, 10, 12],
+            ),
+            // test set both hint_min_ts and hint_max_ts.
+            (Bound::Included(6), Bound::Included(8), vec![6u64, 8]),
+            (Bound::Excluded(5), Bound::Included(8), vec![6u64, 8]),
+            (Bound::Included(6), Bound::Excluded(9), vec![6u64, 8]),
+            (Bound::Excluded(5), Bound::Excluded(9), vec![6u64, 8]),
+            // test set only hint_min_ts.
+            (Bound::Included(10), Bound::Unbounded, vec![10u64, 12]),
+            (Bound::Excluded(9), Bound::Unbounded, vec![10u64, 12]),
+            // test set only hint_max_ts.
+            (Bound::Unbounded, Bound::Included(7), vec![2u64, 4, 6, 8]),
+            (Bound::Unbounded, Bound::Excluded(8), vec![2u64, 4, 6, 8]),
+        ];
+
+        for (_, &(min, max, ref res)) in tests.iter().enumerate() {
+            let mut iopt = IterOption::default();
+            iopt.set_hint_min_ts(min);
+            iopt.set_hint_max_ts(max);
+
+            let mut iter = snap.iter_cf(CF_WRITE, iopt).unwrap();
+
+            for (i, expect_ts) in res.iter().enumerate() {
+                if i == 0 {
+                    assert_eq!(iter.seek_to_first().unwrap(), true);
+                } else {
+                    assert_eq!(iter.next().unwrap(), true);
+                }
+
+                let ts = Key::decode_ts_from(iter.key()).unwrap();
+                assert_eq!(ts.into_inner(), *expect_ts);
+            }
+
+            assert_eq!(iter.next().unwrap(), false);
+        }
     }
 
     fn test_with_properties(path: &str, region: &Region) {

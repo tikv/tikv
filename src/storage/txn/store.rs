@@ -2,16 +2,14 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
+use super::{Error, ErrorInner, Result};
+use crate::storage::kv::{Snapshot, Statistics};
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{
-    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, Scanner as MvccScanner,
-    ScannerBuilder, WriteRef,
+    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, PointGetter,
+    PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
 };
-use crate::storage::mvcc::{PointGetter, PointGetterBuilder, TimeStamp, TsSet};
-use crate::storage::{Snapshot, Statistics};
-use keys::{Key, KvPair, Value};
-
-use super::{Error, ErrorInner, Result};
+use txn_types::{Key, KvPair, TimeStamp, TsSet, Value, WriteRef};
 
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
@@ -85,6 +83,8 @@ pub trait TxnEntryStore: Send {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        after_ts: TimeStamp,
+        output_delete: bool,
     ) -> Result<Self::Scanner>;
 }
 
@@ -134,7 +134,9 @@ impl TxnEntry {
                 } else {
                     let k = Key::from_encoded(write.0).truncate_ts()?;
                     let k = k.into_raw()?;
-                    let v = WriteRef::parse(&write.1)?.to_owned();
+                    let v = WriteRef::parse(&write.1)
+                        .map_err(MvccError::from)?
+                        .to_owned();
                     let v = v.short_value.unwrap();
                     Ok((k, v))
                 }
@@ -288,6 +290,8 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        after_ts: TimeStamp,
+        output_delete: bool,
     ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
@@ -298,7 +302,9 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
                 .fill_cache(self.fill_cache)
                 .isolation_level(self.isolation_level)
                 .bypass_locks(self.bypass_locks.clone())
-                .build_entry_scanner()?;
+                .hint_min_ts(Some(after_ts.next()))
+                .hint_max_ts(Some(self.start_ts))
+                .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
     }
@@ -514,11 +520,11 @@ impl Scanner for FixtureStoreScanner {
 mod tests {
     use super::*;
     use crate::storage::kv::{
-        Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+        Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+        TestEngineBuilder,
     };
-    use crate::storage::mvcc::MvccTxn;
-    use crate::storage::{CfName, Cursor, Iterator, Mutation, Options, TestEngineBuilder};
-    use engine::IterOption;
+    use crate::storage::mvcc::{Mutation, MvccTxn};
+    use engine::{CfName, IterOption};
     use kvproto::kvrpcpb::Context;
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -563,7 +569,10 @@ mod tests {
                     txn.prewrite(
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
-                        &Options::default(),
+                        false,
+                        0,
+                        0,
+                        TimeStamp::default(),
                     )
                     .unwrap();
                 }
@@ -609,11 +618,11 @@ mod tests {
     struct MockRangeSnapshotIter {}
 
     impl Iterator for MockRangeSnapshotIter {
-        fn next(&mut self) -> bool {
-            true
+        fn next(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
-        fn prev(&mut self) -> bool {
-            true
+        fn prev(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
         fn seek(&mut self, _: &Key) -> EngineResult<bool> {
             Ok(true)
@@ -621,17 +630,14 @@ mod tests {
         fn seek_for_prev(&mut self, _: &Key) -> EngineResult<bool> {
             Ok(true)
         }
-        fn seek_to_first(&mut self) -> bool {
-            true
+        fn seek_to_first(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
-        fn seek_to_last(&mut self) -> bool {
-            true
+        fn seek_to_last(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
-        fn valid(&self) -> bool {
-            true
-        }
-        fn status(&self) -> EngineResult<()> {
-            Ok(())
+        fn valid(&self) -> EngineResult<bool> {
+            Ok(true)
         }
         fn validate_key(&self, _: &Key) -> EngineResult<()> {
             Ok(())
@@ -877,7 +883,7 @@ mod tests {
         data.insert(
             Key::from_raw(b"zz"),
             Err(Error::from(ErrorInner::Mvcc(MvccError::from(
-                MvccErrorInner::BadFormatLock,
+                txn_types::Error::BadFormatLock,
             )))),
         );
 

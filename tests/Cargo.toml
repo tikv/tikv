@@ -51,9 +51,12 @@ prost-codec = ["tikv/prost-codec", "test_coprocessor/prost-codec", "external_sto
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.7.2"
+configuration = { path = "../components/configuration" }
 engine = { path = "../components/engine" }
+txn_types = { path = "../components/txn_types" }
 futures = "0.1"
 futures-cpupool = "0.1"
+futures03 = { package = "futures", version = "0.3", features = ["executor"] }
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
 hex = "0.3"
 kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }

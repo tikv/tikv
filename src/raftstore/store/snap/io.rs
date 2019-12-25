@@ -140,7 +140,7 @@ where
     let cf_handle = box_try!(db.cf_handle(cf));
     let mut ingest_opt = <E as ImportExt>::IngestExternalFileOptions::new();
     ingest_opt.move_files(true);
-    box_try!(db.ingest_external_file_optimized(cf_handle, &ingest_opt, &[path]));
+    box_try!(db.ingest_external_file_cf(cf_handle, &ingest_opt, &[path]));
     Ok(())
 }
 

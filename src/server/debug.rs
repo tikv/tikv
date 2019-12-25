@@ -11,8 +11,8 @@ use std::{error, result};
 
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::{
-    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
-    SeekKey, Writable, WriteBatch, WriteOptions, DB,
+    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, ReadOptions, SeekKey,
+    Writable, WriteBatch, WriteOptions, DB,
 };
 use engine::IterOptionsExt;
 use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
@@ -38,13 +38,13 @@ use crate::raftstore::store::{
 use crate::server::gc_worker::GcWorker;
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
 use crate::storage::{Engine, Iterator as EngineIterator};
-use keys::Key;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
 use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
+use txn_types::Key;
 
 const GC_IO_LIMITER_CONFIG_NAME: &str = "gc.max_write_bytes_per_sec";
 
@@ -290,12 +290,12 @@ impl<E: Engine> Debugger<E> {
             read_opt.set_iterate_upper_bound(end.to_vec());
         }
         let mut iter = db.iter_cf_opt(cf_handle, read_opt);
-        if !iter.seek_to_first() {
+        if !iter.seek_to_first().unwrap() {
             return Ok(vec![]);
         }
 
         let mut res = vec![(iter.key().to_vec(), iter.value().to_vec())];
-        while res.len() < limit && iter.next() {
+        while res.len() < limit && iter.next().unwrap() {
             res.push((iter.key().to_vec(), iter.value().to_vec()));
         }
 
@@ -476,7 +476,7 @@ impl<E: Engine> Debugger<E> {
         .build_read_opts();
         let handle = box_try!(get_cf_handle(&self.engines.kv, CF_RAFT));
         let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
-        iter.seek(SeekKey::from(from.as_ref()));
+        iter.seek(SeekKey::from(from.as_ref())).unwrap();
 
         let fake_snap_worker = Worker::new("fake-snap-worker");
 
@@ -974,7 +974,7 @@ impl MvccChecker {
             .build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
-            iter.seek(SeekKey::Start);
+            iter.seek(SeekKey::Start).unwrap();
             Ok(iter)
         };
 
@@ -992,7 +992,7 @@ impl MvccChecker {
     }
 
     fn min_key(key: Option<Vec<u8>>, iter: &DBIterator, f: fn(&[u8]) -> &[u8]) -> Option<Vec<u8>> {
-        let iter_key = if iter.valid() {
+        let iter_key = if iter.valid().unwrap() {
             Some(f(keys::origin_key(iter.key())).to_vec())
         } else {
             None
@@ -1154,16 +1154,16 @@ impl MvccChecker {
     }
 
     fn next_lock(&mut self, key: &[u8]) -> Result<Option<Lock>> {
-        if self.lock_iter.valid() && keys::origin_key(self.lock_iter.key()) == key {
+        if self.lock_iter.valid().unwrap() && keys::origin_key(self.lock_iter.key()) == key {
             let lock = box_try!(Lock::parse(self.lock_iter.value()));
-            self.lock_iter.next();
+            self.lock_iter.next().unwrap();
             return Ok(Some(lock));
         }
         Ok(None)
     }
 
     fn next_default(&mut self, key: &[u8]) -> Result<Option<TimeStamp>> {
-        if self.default_iter.valid()
+        if self.default_iter.valid().unwrap()
             && box_try!(Key::truncate_ts_for(keys::origin_key(
                 self.default_iter.key()
             ))) == key
@@ -1171,21 +1171,21 @@ impl MvccChecker {
             let start_ts = box_try!(Key::decode_ts_from(keys::origin_key(
                 self.default_iter.key()
             )));
-            self.default_iter.next();
+            self.default_iter.next().unwrap();
             return Ok(Some(start_ts));
         }
         Ok(None)
     }
 
     fn next_write(&mut self, key: &[u8]) -> Result<Option<(TimeStamp, Write)>> {
-        if self.write_iter.valid()
+        if self.write_iter.valid().unwrap()
             && box_try!(Key::truncate_ts_for(keys::origin_key(
                 self.write_iter.key()
             ))) == key
         {
             let write = box_try!(WriteRef::parse(self.write_iter.value())).to_owned();
             let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(self.write_iter.key())));
-            self.write_iter.next();
+            self.write_iter.next().unwrap();
             return Ok(Some((commit_ts, write)));
         }
         Ok(None)
@@ -1225,6 +1225,8 @@ pub struct MvccInfoIterator {
     write_iter: DBIterator,
 }
 
+pub type Kv = (Vec<u8>, Vec<u8>);
+
 impl MvccInfoIterator {
     fn new(db: &Arc<DB>, from: &[u8], to: &[u8], limit: u64) -> Result<Self> {
         if !keys::validate_data_key(from) {
@@ -1243,7 +1245,7 @@ impl MvccInfoIterator {
             let readopts = IterOption::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
-            iter.seek(SeekKey::from(from));
+            iter.seek(SeekKey::from(from)).unwrap();
             Ok(iter)
         };
         Ok(MvccInfoIterator {
@@ -1313,10 +1315,10 @@ impl MvccInfoIterator {
     }
 
     fn next_grouped(iter: &mut DBIterator) -> Option<(Vec<u8>, Vec<Kv>)> {
-        if iter.valid() {
+        if iter.valid().unwrap() {
             let prefix = Key::truncate_ts_for(iter.key()).unwrap().to_vec();
             let mut kvs = vec![(iter.key().to_vec(), iter.value().to_vec())];
-            while iter.next() && iter.key().starts_with(&prefix) {
+            while iter.next().unwrap() && iter.key().starts_with(&prefix) {
                 kvs.push((iter.key().to_vec(), iter.value().to_vec()));
             }
             return Some((prefix, kvs));
@@ -1332,7 +1334,10 @@ impl MvccInfoIterator {
         let mut mvcc_info = MvccInfo::default();
         let mut min_prefix = Vec::new();
 
-        let (lock_ok, writes_ok) = match (self.lock_iter.valid(), self.write_iter.valid()) {
+        let (lock_ok, writes_ok) = match (
+            self.lock_iter.valid().unwrap(),
+            self.write_iter.valid().unwrap(),
+        ) {
             (false, false) => return Ok(None),
             (true, true) => {
                 let prefix1 = self.lock_iter.key();
@@ -1358,7 +1363,7 @@ impl MvccInfoIterator {
                 min_prefix = prefix;
             }
         }
-        if self.default_iter.valid() {
+        if self.default_iter.valid().unwrap() {
             match box_try!(Key::truncate_ts_for(self.default_iter.key())).cmp(&min_prefix) {
                 Ordering::Equal => {
                     if let Some((_, values)) = self.next_default()? {

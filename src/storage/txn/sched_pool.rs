@@ -9,9 +9,8 @@ use tikv_util::collections::HashMap;
 use tikv_util::future_pool::Builder as FuturePoolBuilder;
 use tikv_util::future_pool::FuturePool;
 
-use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine, Engine, Statistics};
 use crate::storage::metrics::*;
-use crate::storage::{Engine, Statistics};
 
 pub struct SchedLocalMetrics {
     local_scan_details: HashMap<&'static str, Statistics>,

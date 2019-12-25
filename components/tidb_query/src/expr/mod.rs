@@ -1,11 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::convert::TryInto;
 use std::str;
-
-use rand_xorshift::XorShiftRng;
 
 use codec::prelude::NumberDecoder;
 use tidb_query_datatype::prelude::*;
@@ -14,7 +11,7 @@ use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::codec::mysql::charset;
 use crate::codec::mysql::{Decimal, DecimalDecoder, Duration, Json, JsonDecoder, Time, MAX_FSP};
-use crate::codec::{datum, Datum};
+use crate::codec::Datum;
 
 mod builtin_arithmetic;
 mod builtin_cast;
@@ -37,7 +34,7 @@ mod scalar_function;
 pub use self::ctx::*;
 pub use crate::codec::{Error, Result};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum Expression {
     Constant(Constant),
     ColumnRef(Column),
@@ -57,30 +54,12 @@ pub struct Constant {
 }
 
 /// A single scalar function call
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
+    metadata: Option<Box<dyn protobuf::Message>>,
     field_type: FieldType,
-    implicit_args: Vec<Datum>,
-    cus_rng: CusRng,
-}
-
-#[derive(Clone)]
-struct CusRng {
-    rng: RefCell<Option<XorShiftRng>>,
-}
-
-impl std::fmt::Debug for CusRng {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "()")
-    }
-}
-
-impl PartialEq for CusRng {
-    fn eq(&self, other: &CusRng) -> bool {
-        self == other
-    }
 }
 
 impl Expression {
@@ -287,7 +266,6 @@ impl Expression {
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
                 ScalarFunc::check_args(expr.get_sig(), expr.get_children().len())?;
-                let implicit_args = datum::decode(&mut expr.get_val())?;
                 expr.take_children()
                     .into_iter()
                     .map(|child| Expression::build(ctx, child))
@@ -297,10 +275,7 @@ impl Expression {
                             sig: expr.get_sig(),
                             children,
                             field_type,
-                            implicit_args,
-                            cus_rng: CusRng {
-                                rng: RefCell::new(None),
-                            },
+                            metadata: None,
                         })
                     })
             }
