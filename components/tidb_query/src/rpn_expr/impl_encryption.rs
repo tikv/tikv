@@ -84,13 +84,11 @@ pub fn uncompressed_length(ctx: &mut EvalContext, arg: &Option<Bytes>) -> Result
 
 #[rpn_fn(capture = [ctx])]
 #[inline]
-pub fn random_bytes(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Bytes>> {
+pub fn random_bytes(_ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<Bytes>> {
     match arg {
         Some(arg) => {
             if *arg < 1 || *arg > MAX_RAND_BYTES_LENGTH {
-                ctx.warnings
-                    .append_warning(Error::overflow(*arg, "random_bytes"));
-                return Ok(None);
+                return Err(Error::overflow("length", "random_bytes").into());
             }
             Ok(Some(gen_random_bytes(*arg as usize)))
         }
@@ -285,19 +283,26 @@ mod tests {
             assert_eq!(got.unwrap().len(), len);
         }
 
-        let null_cases = vec![
+        let overflow_tests = vec![
             ScalarValue::Int(Some(-32)),
             ScalarValue::Int(Some(1025)),
             ScalarValue::Int(Some(0)),
-            ScalarValue::Int(None),
         ];
 
-        for arg in null_cases {
-            assert!(RpnFnScalarEvaluator::new()
-                .push_param(arg)
-                .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
-                .unwrap()
-                .is_none());
+        for len in overflow_tests {
+            assert!(
+                RpnFnScalarEvaluator::new()
+                    .push_param(len)
+                    .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+                    .is_err(),
+            );
         }
+
+        //test NULL case
+        assert!(RpnFnScalarEvaluator::new()
+            .push_param(ScalarValue::Int(None))
+            .evaluate::<Bytes>(ScalarFuncSig::RandomBytes)
+            .unwrap()
+            .is_none())
     }
 }

@@ -147,9 +147,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let length = try_opt!(self.children[0].eval_int(ctx, row));
         if length < 1 || length > MAX_RAND_BYTES_LENGTH {
-            ctx.warnings
-                .append_warning(Error::overflow(length, "random_bytes"));
-            return Ok(None);
+            return Err(Error::overflow("length", "random_bytes"));
         }
         Ok(Some(Cow::Owned(gen_random_bytes(length as usize))))
     }
@@ -165,7 +163,7 @@ fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use crate::codec::Datum;
-    use crate::expr::tests::{datum_expr, eval_func, scalar_func_expr};
+    use crate::expr::tests::{check_overflow, datum_expr, eval_func, scalar_func_expr};
     use crate::expr::{EvalContext, Expression};
     use hex;
     use tipb::ScalarFuncSig;
@@ -371,16 +369,19 @@ mod tests {
             }
         }
 
-        let null_cases = vec![
-            (Datum::I64(-32), Datum::Null),
-            (Datum::I64(1025), Datum::Null),
-            (Datum::I64(0), Datum::Null),
-            (Datum::Null, Datum::Null),
-        ];
+        let overflow_tests = vec![Datum::I64(-32), Datum::I64(1025), Datum::I64(0)];
 
-        for (arg, exp) in null_cases {
-            let got = eval_func(ScalarFuncSig::RandomBytes, &[arg]).ok().unwrap();
-            assert_eq!(got, exp);
+        for len in overflow_tests {
+            let got = eval_func(ScalarFuncSig::RandomBytes, &[len]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
         }
+
+        //test NULL case
+        assert_eq!(
+            eval_func(ScalarFuncSig::RandomBytes, &[Datum::Null])
+                .ok()
+                .unwrap(),
+            Datum::Null
+        );
     }
 }
