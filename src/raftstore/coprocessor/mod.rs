@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::DB;
+use engine::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
@@ -82,6 +83,23 @@ pub trait QueryObserver: Coprocessor {
 
     /// Hook to call after applying write request.
     fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut Vec<Response>) {}
+}
+
+pub trait ApplySnapshotObserver: Coprocessor {
+    /// Hook to call before applying key from plain file.
+    /// This may be invoked multiple times for each plain file, and each time a batch of key-value
+    /// pairs will be passed to the function.
+    fn pre_apply_plain_kvs(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: CfName,
+        _: &[(Vec<u8>, Vec<u8>)],
+    ) {
+    }
+
+    /// Hook to call before applying sst file. Currently the content of the snapshot can't be
+    /// passed to the observer.
+    fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use
