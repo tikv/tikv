@@ -1945,6 +1945,11 @@ impl ConfigHandler {
                     Either::Right(updated) => {
                         if updated {
                             info!("local config updated"; "version" => ?version);
+                        } else {
+                            info!(
+                                "remote config upated, which will take effect after restarting the node";
+                                "version" => ?version
+                            );
                         }
                         self.version = version;
                     }
