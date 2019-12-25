@@ -196,21 +196,24 @@ impl CoprocessorHost {
         }
     }
 
-    pub fn add_split_checker(
+    pub fn new_split_checker_host<'a>(
         &self,
-        host: &mut SplitCheckerHost<'_>,
+        cfg: &'a Config,
         region: &Region,
         engine: &DB,
+        auto_split: bool,
         policy: CheckPolicy,
-    ) {
+    ) -> SplitCheckerHost<'a> {
+        let mut host = SplitCheckerHost::new(auto_split, cfg);
         loop_ob!(
             region,
             &self.registry.split_check_observers,
             add_checker,
-            host,
+            &mut host,
             engine,
             policy
         );
+        host
     }
 
     pub fn on_role_change(&self, region: &Region, role: StateRole) {

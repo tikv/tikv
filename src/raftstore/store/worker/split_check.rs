@@ -196,9 +196,13 @@ impl<S: CasualRouter> Runner<S> {
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
-        let mut host = SplitCheckerHost::new(auto_split, &self.cfg);
-        self.coprocessor
-            .add_split_checker(&mut host, region, &self.engine, policy);
+        let mut host = self.coprocessor.new_split_checker_host(
+            &self.cfg,
+            region,
+            &self.engine,
+            auto_split,
+            policy,
+        );
         if host.skip() {
             debug!("skip split check"; "region_id" => region.get_id());
             return;
@@ -302,8 +306,11 @@ impl<S: CasualRouter> Runner<S> {
     }
 
     fn change_cfg(&mut self, change: ConfigChange) {
+        info!(
+            "split check config updated!";
+            "change" => ?change
+        );
         self.cfg.update(change);
-        info!("split check config updated!");
     }
 }
 
