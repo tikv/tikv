@@ -55,7 +55,7 @@ use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
 use crate::raftstore::store::{
-    util, CasualMessage, Config, PdTask, PeerMsg, PeerTicks, RaftCommand, RequestInspector,
+    util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, RequestInspector,
     SignificantMsg, SnapKey, SnapshotDeleter, StoreMsg,
 };
 
