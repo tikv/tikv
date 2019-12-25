@@ -12,7 +12,6 @@ use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
 use crate::expr::{EvalConfig, EvalContext};
 use crate::metrics::*;
-use crate::rpn_expr::ExprDefinition;
 use crate::storage::Storage;
 use crate::Result;
 

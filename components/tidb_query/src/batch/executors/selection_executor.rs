@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use tipb::FieldType;
 use tipb::Selection;
-use tipb::{Expr, RpnExpr};
 
 use super::super::interface::*;
 use crate::codec::data_type::*;
