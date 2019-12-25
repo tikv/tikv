@@ -64,8 +64,9 @@ impl<S: Snapshot> ForwardScanner<S> {
                     &mut self.statistics.lock,
                 )?;
             } else {
-                self.write_cursor.seek_to_first(&mut self.statistics.write);
-                self.lock_cursor.seek_to_first(&mut self.statistics.lock);
+                self.write_cursor
+                    .seek_to_first(&mut self.statistics.write)?;
+                self.lock_cursor.seek_to_first(&mut self.statistics.lock)?;
             }
             self.is_started = true;
         }
@@ -168,7 +169,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                     }
                     IsolationLevel::RC => {}
                 }
-                self.lock_cursor.next(&mut self.statistics.lock);
+                self.lock_cursor.next(&mut self.statistics.lock)?;
             }
             if has_write {
                 // We don't need to read version if there is a lock error already.
@@ -214,7 +215,7 @@ impl<S: Snapshot> ForwardScanner<S> {
 
         for i in 0..SEEK_BOUND {
             if i > 0 {
-                self.write_cursor.next(&mut self.statistics.write);
+                self.write_cursor.next(&mut self.statistics.write)?;
                 if !self.write_cursor.valid()? {
                     // Key space ended.
                     return Ok(None);
@@ -266,7 +267,7 @@ impl<S: Snapshot> ForwardScanner<S> {
                 }
             }
 
-            self.write_cursor.next(&mut self.statistics.write);
+            self.write_cursor.next(&mut self.statistics.write)?;
 
             if !self.write_cursor.valid()? {
                 // Key space ended.
@@ -320,7 +321,7 @@ impl<S: Snapshot> ForwardScanner<S> {
     fn move_write_cursor_to_next_user_key(&mut self, current_user_key: &Key) -> Result<()> {
         for i in 0..SEEK_BOUND {
             if i > 0 {
-                self.write_cursor.next(&mut self.statistics.write);
+                self.write_cursor.next(&mut self.statistics.write)?;
             }
             if !self.write_cursor.valid()? {
                 // Key space ended. We are done here.
