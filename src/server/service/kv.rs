@@ -15,6 +15,7 @@ use crate::storage::lock_manager::LockMgr;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
 use crate::storage::{self, Engine, Key, Mutation, Options, Storage, Value};
+use crate::coprocessor::codec::table;
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
 use grpcio::{
@@ -1042,7 +1043,7 @@ fn response_batch_commands_request<F>(
     tx: Sender<(u64, BatchCommandsResponse_Response)>,
     timer: HistogramTimer,
 ) where
-    F: Future<Item = BatchCommandsResponse_Response, Error = ()> + Send + 'static,
+    F: Future<Item=BatchCommandsResponse_Response, Error=()> + Send + 'static,
 {
     let f = resp.and_then(move |resp| {
         if tx.send_and_notify((id, resp)).is_err() {
@@ -1057,14 +1058,16 @@ fn response_batch_commands_request<F>(
 
 // BatchCommandsNotify is used to make business pool notifiy completion queues directly.
 struct BatchCommandsNotify<F>(Arc<Mutex<Option<Spawn<F>>>>);
+
 impl<F> Clone for BatchCommandsNotify<F> {
     fn clone(&self) -> BatchCommandsNotify<F> {
         BatchCommandsNotify(Arc::clone(&self.0))
     }
 }
+
 impl<F> Notify for BatchCommandsNotify<F>
-where
-    F: Future<Item = (), Error = ()> + Send + 'static,
+    where
+        F: Future<Item=(), Error=()> + Send + 'static,
 {
     fn notify(&self, id: usize) {
         let n = Arc::new(self.clone());
@@ -1076,7 +1079,7 @@ where
     }
 }
 
-fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
+fn poll_future_notify<F: Future<Item=(), Error=()> + Send + 'static>(f: F) {
     let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
     let notify = BatchCommandsNotify(spawn);
     notify.notify(0);
@@ -1321,7 +1324,7 @@ fn handle_batch_commands_request<E: Engine, L: LockMgr>(
 
 fn future_handle_empty(
     req: BatchCommandsEmptyRequest,
-) -> impl Future<Item = BatchCommandsEmptyResponse, Error = Error> {
+) -> impl Future<Item=BatchCommandsEmptyResponse, Error=Error> {
     tikv_util::timer::GLOBAL_TIMER_HANDLE
         .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
         .map(move |_| {
@@ -1335,7 +1338,7 @@ fn future_handle_empty(
 fn future_get<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: GetRequest,
-) -> impl Future<Item = GetResponse, Error = Error> {
+) -> impl Future<Item=GetResponse, Error=Error> {
     storage
         .async_get(
             req.take_context(),
@@ -1360,7 +1363,7 @@ fn future_get<E: Engine, L: LockMgr>(
 fn future_scan<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: ScanRequest,
-) -> impl Future<Item = ScanResponse, Error = Error> {
+) -> impl Future<Item=ScanResponse, Error=Error> {
     let end_key = if req.get_end_key().is_empty() {
         None
     } else {
@@ -1394,7 +1397,7 @@ fn future_scan<E: Engine, L: LockMgr>(
 fn future_prewrite<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: PrewriteRequest,
-) -> impl Future<Item = PrewriteResponse, Error = Error> {
+) -> impl Future<Item=PrewriteResponse, Error=Error> {
     let mutations = req
         .take_mutations()
         .into_iter()
@@ -1437,7 +1440,7 @@ fn future_prewrite<E: Engine, L: LockMgr>(
 fn future_acquire_pessimistic_lock<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: PessimisticLockRequest,
-) -> impl Future<Item = PessimisticLockResponse, Error = Error> {
+) -> impl Future<Item=PessimisticLockResponse, Error=Error> {
     let keys = req
         .take_mutations()
         .into_iter()
@@ -1479,7 +1482,7 @@ fn future_acquire_pessimistic_lock<E: Engine, L: LockMgr>(
 fn future_pessimistic_rollback<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: PessimisticRollbackRequest,
-) -> impl Future<Item = PessimisticRollbackResponse, Error = Error> {
+) -> impl Future<Item=PessimisticRollbackResponse, Error=Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let (cb, f) = paired_future_callback();
     let res = storage.async_pessimistic_rollback(
@@ -1504,7 +1507,8 @@ fn future_pessimistic_rollback<E: Engine, L: LockMgr>(
 fn future_commit<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: CommitRequest,
-) -> impl Future<Item = CommitResponse, Error = Error> {
+) -> impl Future<Item=CommitResponse, Error=Error> {
+    let req1 = req.clone();
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     let (cb, f) = paired_future_callback();
     let res = storage.async_commit(
@@ -1515,12 +1519,21 @@ fn future_commit<E: Engine, L: LockMgr>(
         cb,
     );
 
-    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+    AndThenWith::new(res, f.map_err(Error::from)).map(move |v| {
         let mut resp = CommitResponse::new();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
             resp.set_error(extract_key_error(&e));
+        } else {
+            let handles = req1.get_keys().iter().map(|x| table::decode_handle(x)).collect();
+            log!(
+                "[test] commit entries";
+                "region_id" => req1.get_context().get_region_id(),
+                "start_ts" => req1.get_start_version(),
+                "commit_ts" => req1.get_commit_version(),
+                "handles" => ?handles,
+            );
         }
         resp
     })
@@ -1529,7 +1542,7 @@ fn future_commit<E: Engine, L: LockMgr>(
 fn future_cleanup<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: CleanupRequest,
-) -> impl Future<Item = CleanupResponse, Error = Error> {
+) -> impl Future<Item=CleanupResponse, Error=Error> {
     let (cb, f) = paired_future_callback();
     let res = storage.async_cleanup(
         req.take_context(),
@@ -1557,7 +1570,7 @@ fn future_cleanup<E: Engine, L: LockMgr>(
 fn future_batch_get<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: BatchGetRequest,
-) -> impl Future<Item = BatchGetResponse, Error = Error> {
+) -> impl Future<Item=BatchGetResponse, Error=Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     storage
         .async_batch_get(req.take_context(), keys, req.get_version())
@@ -1575,7 +1588,7 @@ fn future_batch_get<E: Engine, L: LockMgr>(
 fn future_batch_rollback<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: BatchRollbackRequest,
-) -> impl Future<Item = BatchRollbackResponse, Error = Error> {
+) -> impl Future<Item=BatchRollbackResponse, Error=Error> {
     let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
     let (cb, f) = paired_future_callback();
@@ -1595,7 +1608,7 @@ fn future_batch_rollback<E: Engine, L: LockMgr>(
 fn future_txn_heart_beat<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: TxnHeartBeatRequest,
-) -> impl Future<Item = TxnHeartBeatResponse, Error = Error> {
+) -> impl Future<Item=TxnHeartBeatResponse, Error=Error> {
     let primary_key = Key::from_raw(req.get_primary_lock());
 
     let (cb, f) = paired_future_callback();
@@ -1624,7 +1637,7 @@ fn future_txn_heart_beat<E: Engine, L: LockMgr>(
 fn future_scan_lock<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: ScanLockRequest,
-) -> impl Future<Item = ScanLockResponse, Error = Error> {
+) -> impl Future<Item=ScanLockResponse, Error=Error> {
     let (cb, f) = paired_future_callback();
     let res = storage.async_scan_locks(
         req.take_context(),
@@ -1651,7 +1664,7 @@ fn future_scan_lock<E: Engine, L: LockMgr>(
 fn future_resolve_lock<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: ResolveLockRequest,
-) -> impl Future<Item = ResolveLockResponse, Error = Error> {
+) -> impl Future<Item=ResolveLockResponse, Error=Error> {
     let resolve_keys: Vec<Key> = req
         .get_keys()
         .iter()
@@ -1694,7 +1707,7 @@ fn future_resolve_lock<E: Engine, L: LockMgr>(
 fn future_gc<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: GCRequest,
-) -> impl Future<Item = GCResponse, Error = Error> {
+) -> impl Future<Item=GCResponse, Error=Error> {
     let (cb, f) = paired_future_callback();
     let res = storage.async_gc(req.take_context(), req.get_safe_point(), cb);
 
@@ -1712,7 +1725,7 @@ fn future_gc<E: Engine, L: LockMgr>(
 fn future_delete_range<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: DeleteRangeRequest,
-) -> impl Future<Item = DeleteRangeResponse, Error = Error> {
+) -> impl Future<Item=DeleteRangeResponse, Error=Error> {
     let (cb, f) = paired_future_callback();
     let res = storage.async_delete_range(
         req.take_context(),
@@ -1736,7 +1749,7 @@ fn future_delete_range<E: Engine, L: LockMgr>(
 fn future_raw_get<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: RawGetRequest,
-) -> impl Future<Item = RawGetResponse, Error = Error> {
+) -> impl Future<Item=RawGetResponse, Error=Error> {
     storage
         .async_raw_get(req.take_context(), req.take_cf(), req.take_key())
         .then(|v| {
@@ -1757,7 +1770,7 @@ fn future_raw_get<E: Engine, L: LockMgr>(
 fn future_raw_batch_get<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: RawBatchGetRequest,
-) -> impl Future<Item = RawBatchGetResponse, Error = Error> {
+) -> impl Future<Item=RawBatchGetResponse, Error=Error> {
     let keys = req.take_keys().into_vec();
     storage
         .async_raw_batch_get(req.take_context(), req.take_cf(), keys)
@@ -1775,7 +1788,7 @@ fn future_raw_batch_get<E: Engine, L: LockMgr>(
 fn future_raw_put<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: RawPutRequest,
-) -> impl Future<Item = RawPutResponse, Error = Error> {
+) -> impl Future<Item=RawPutResponse, Error=Error> {
     let (cb, future) = paired_future_callback();
     let res = storage.async_raw_put(
         req.take_context(),
@@ -1799,7 +1812,7 @@ fn future_raw_put<E: Engine, L: LockMgr>(
 fn future_raw_batch_put<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: RawBatchPutRequest,
-) -> impl Future<Item = RawBatchPutResponse, Error = Error> {
+) -> impl Future<Item=RawBatchPutResponse, Error=Error> {
     let cf = req.take_cf();
     let pairs = req
         .take_pairs()
@@ -1824,7 +1837,7 @@ fn future_raw_batch_put<E: Engine, L: LockMgr>(
 fn future_raw_delete<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: RawDeleteRequest,
-) -> impl Future<Item = RawDeleteResponse, Error = Error> {
+) -> impl Future<Item=RawDeleteResponse, Error=Error> {
     let (cb, f) = paired_future_callback();
     let res = storage.async_raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
 
@@ -1842,7 +1855,7 @@ fn future_raw_delete<E: Engine, L: LockMgr>(
 fn future_raw_batch_delete<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: RawBatchDeleteRequest,
-) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
+) -> impl Future<Item=RawBatchDeleteResponse, Error=Error> {
     let cf = req.take_cf();
     let keys = req.take_keys().into_vec();
     let (cb, f) = paired_future_callback();
@@ -1862,7 +1875,7 @@ fn future_raw_batch_delete<E: Engine, L: LockMgr>(
 fn future_raw_scan<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: RawScanRequest,
-) -> impl Future<Item = RawScanResponse, Error = Error> {
+) -> impl Future<Item=RawScanResponse, Error=Error> {
     let end_key = if req.get_end_key().is_empty() {
         None
     } else {
@@ -1892,7 +1905,7 @@ fn future_raw_scan<E: Engine, L: LockMgr>(
 fn future_raw_batch_scan<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: RawBatchScanRequest,
-) -> impl Future<Item = RawBatchScanResponse, Error = Error> {
+) -> impl Future<Item=RawBatchScanResponse, Error=Error> {
     storage
         .async_raw_batch_scan(
             req.take_context(),
@@ -1916,7 +1929,7 @@ fn future_raw_batch_scan<E: Engine, L: LockMgr>(
 fn future_raw_delete_range<E: Engine, L: LockMgr>(
     storage: &Storage<E, L>,
     mut req: RawDeleteRangeRequest,
-) -> impl Future<Item = RawDeleteRangeResponse, Error = Error> {
+) -> impl Future<Item=RawDeleteRangeResponse, Error=Error> {
     let (cb, f) = paired_future_callback();
     let res = storage.async_raw_delete_range(
         req.take_context(),
@@ -1941,7 +1954,7 @@ fn future_cop<E: Engine>(
     cop: &Endpoint<E>,
     req: Request,
     peer: Option<String>,
-) -> impl Future<Item = Response, Error = Error> {
+) -> impl Future<Item=Response, Error=Error> {
     cop.parse_and_handle_unary_request(req, peer)
         .map_err(|_| unreachable!())
 }
@@ -1988,13 +2001,13 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         }
         // failed in prewrite or pessimistic lock
         storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict {
-            start_ts,
-            conflict_start_ts,
-            conflict_commit_ts,
-            ref key,
-            ref primary,
-            ..
-        })) => {
+                                               start_ts,
+                                               conflict_start_ts,
+                                               conflict_commit_ts,
+                                               ref key,
+                                               ref primary,
+                                               ..
+                                           })) => {
             let mut write_conflict = WriteConflict::new();
             write_conflict.set_start_ts(start_ts);
             write_conflict.set_conflict_ts(conflict_start_ts);
@@ -2016,11 +2029,11 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             key_error.set_retryable(format!("{:?}", err));
         }
         storage::Error::Txn(TxnError::Mvcc(MvccError::Deadlock {
-            lock_ts,
-            ref lock_key,
-            deadlock_key_hash,
-            ..
-        })) => {
+                                               lock_ts,
+                                               ref lock_key,
+                                               deadlock_key_hash,
+                                               ..
+                                           })) => {
             warn!("txn deadlocks"; "err" => ?err);
             let mut deadlock = Deadlock::new();
             deadlock.set_lock_ts(lock_ts);
@@ -2186,7 +2199,7 @@ mod tests {
                 assert_eq!(thread::current().name(), Some("source"));
                 tx1.send(i + 100).unwrap();
             })
-            .map_err(|_| ()),
+                .map_err(|_| ()),
         );
         signal_tx.send(()).unwrap();
         assert_eq!(rx1.wait().unwrap(), 200);
@@ -2211,7 +2224,7 @@ mod tests {
                 assert_ne!(thread::current().name(), Some("source"));
                 tx1.send(i + 100).unwrap();
             })
-            .map_err(|_| ()),
+                .map_err(|_| ()),
         );
         assert_eq!(rx1.wait().unwrap(), 200);
     }

@@ -945,7 +945,7 @@ impl ApplyDelegate {
         let mut exec_ctx = ctx.exec_ctx.take().unwrap();
         exec_ctx.apply_state.set_applied_index(index);
 
-        info!("[test] apply commands"; "applied index" => index);
+        info!("[test] apply commands"; "applied index" => index, "region_id" => self.region_id());
 
         self.apply_state = exec_ctx.apply_state;
         self.applied_index_term = term;
