@@ -65,14 +65,17 @@ use tikv_util::{
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
 pub fn run_tikv(mut config: TiKvConfig) {
+    // It is okay use pd config and security config before `init_config`,
+    // because these configs must be provided by command line, and only
+    // used during startup process.
     let (pd_client, security_mgr) = TiKVServer::init_pd_connect(&mut config);
 
-    config = TiKVServer::init_config(config, Arc::clone(&pd_client));
+    let cfg_controller = TiKVServer::init_config(config, Arc::clone(&pd_client));
 
     // Do some prepare works before start.
-    pre_start(&config);
+    pre_start(cfg_controller.get_current());
 
-    let mut tikv = TiKVServer::init(config, security_mgr, pd_client);
+    let mut tikv = TiKVServer::init(cfg_controller, security_mgr, pd_client);
 
     let _m = Monitor::default();
 
@@ -95,6 +98,7 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 /// A complete TiKV server.
 struct TiKVServer {
     config: TiKvConfig,
+    cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter,
@@ -123,10 +127,11 @@ struct Servers {
 
 impl TiKVServer {
     fn init(
-        config: TiKvConfig,
+        cfg_controller: ConfigController,
         security_mgr: Arc<SecurityManager>,
         pd_client: Arc<RpcClient>,
     ) -> TiKVServer {
+        let config = cfg_controller.get_current().clone();
         let store_path = Path::new(&config.storage.data_dir).to_owned();
 
         let (resolve_worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
@@ -137,6 +142,7 @@ impl TiKVServer {
 
         TiKVServer {
             config,
+            cfg_controller: Some(cfg_controller),
             security_mgr,
             pd_client,
             router,
@@ -149,11 +155,13 @@ impl TiKVServer {
         }
     }
 
-    fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> TiKvConfig {
+    fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> ConfigController {
+        let mut version = Default::default();
         if config.dynamic_config {
-            let (_, cfg) =
+            let (v, cfg) =
                 ConfigHandler::create(config.server.addr.clone(), Arc::clone(&pd_client), config)
                     .unwrap_or_else(|e| fatal!("failed to register config from pd: {}", e));
+            version = v;
             config = cfg;
         }
 
@@ -163,6 +171,7 @@ impl TiKVServer {
         tikv::log_tikv_info();
         info!(
             "using config";
+            "version" => ?version,
             "config" => serde_json::to_string(&config).unwrap(),
         );
 
@@ -173,7 +182,7 @@ impl TiKVServer {
             tikv_util::set_panic_when_unexpected_key_or_data(true);
         }
 
-        config
+        ConfigController::new(config, version)
     }
 
     fn init_pd_connect(config: &mut TiKvConfig) -> (Arc<RpcClient>, Arc<SecurityManager>) {
@@ -228,8 +237,8 @@ impl TiKVServer {
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
         let mut raft_db_opts = self.config.raftdb.build_opt();
         // Create encrypted env from cipher file
-        let encrypted_env = if !self.config.security.cipher_file.is_empty() {
-            match encrypted_env_from_cipher_file(&self.config.security.cipher_file, None) {
+        let encrypted_env = if !self.security_mgr.cipher_file().is_empty() {
+            match encrypted_env_from_cipher_file(&self.security_mgr.cipher_file(), None) {
                 Err(e) => fatal!(
                     "failed to create encrypted env from cipher file, err {:?}",
                     e
@@ -382,7 +391,6 @@ impl TiKVServer {
             &self.config.raft_store,
             self.pd_client.clone(),
         );
-        let cfg_controller = ConfigController::new(self.config.clone());
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -391,7 +399,7 @@ impl TiKVServer {
             engines.store_meta.clone(),
             coprocessor_host,
             importer.clone(),
-            cfg_controller,
+            self.cfg_controller.take().unwrap(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 

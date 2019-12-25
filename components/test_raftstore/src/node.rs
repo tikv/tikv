@@ -210,7 +210,7 @@ impl Simulator for NodeCluster {
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
-        let cfg_controller = ConfigController::new(cfg);
+        let cfg_controller = ConfigController::new(cfg, Default::default());
         node.start(
             engines.clone(),
             simulate_trans.clone(),

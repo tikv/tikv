@@ -246,7 +246,7 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let cfg_controller = ConfigController::new(cfg);
+        let cfg_controller = ConfigController::new(cfg, Default::default());
         node.start(
             engines.clone(),
             simulate_trans.clone(),

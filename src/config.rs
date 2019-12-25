@@ -1801,13 +1801,15 @@ impl From<&str> for Module {
 pub struct ConfigController {
     current: TiKvConfig,
     config_mgrs: HashMap<Module, Box<dyn ConfigManager>>,
+    start_version: Option<configpb::Version>,
 }
 
 impl ConfigController {
-    pub fn new(current: TiKvConfig) -> Self {
+    pub fn new(current: TiKvConfig, version: configpb::Version) -> Self {
         ConfigController {
             current,
             config_mgrs: HashMap::new(),
+            start_version: Some(version),
         }
     }
 
@@ -1871,8 +1873,7 @@ pub struct ConfigHandler {
 impl ConfigHandler {
     pub fn start(
         id: String,
-        controller: ConfigController,
-        version: configpb::Version,
+        mut controller: ConfigController,
         scheduler: FutureScheduler<PdTask>,
     ) -> CfgResult<Self> {
         if controller.get_current().dynamic_config {
@@ -1880,6 +1881,7 @@ impl ConfigHandler {
                 return Err(format!("failed to schedule refresh config task: {:?}", e).into());
             }
         }
+        let version = controller.start_version.take().unwrap_or_default();
         Ok(ConfigHandler {
             id,
             version,
@@ -1905,32 +1907,30 @@ impl ConfigHandler {
 }
 
 impl ConfigHandler {
-    /// Register the local config to pd
+    /// Register the local config to pd and get the latest
+    /// version and config
     pub fn create(
         id: String,
         pd_client: Arc<impl PdClient>,
-        mut config: TiKvConfig,
+        local_config: TiKvConfig,
     ) -> CfgResult<(configpb::Version, TiKvConfig)> {
-        let cfg = toml::to_string(&config)?;
+        let cfg = toml::to_string(&local_config)?;
         let version = configpb::Version::default();
         let mut resp = pd_client.register_config(id, version, cfg)?;
         match resp.get_status().get_code() {
-            StatusCode::Ok => {
-                let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
-                let version = resp.take_version();
-                let diff = config.diff(&incoming);
-                if !diff.is_empty() {
-                    let local_cfg = config.clone();
-                    config.update(diff);
-                    if config.validate().is_err() {
-                        warn!(
-                            "config from pd is invalid, fallback to local config";
-                            "version" => ?version
-                        );
-                        config = local_cfg;
-                    }
+            StatusCode::Ok | StatusCode::WrongVersion => {
+                let mut incoming: TiKvConfig = toml::from_str(resp.get_config())?;
+                let mut version = resp.take_version();
+                if let Err(e) = incoming.validate() {
+                    warn!(
+                        "config from pd is invalid, fallback to local config";
+                        "version" => ?version,
+                        "error" => ?e,
+                    );
+                    version = configpb::Version::default();
+                    incoming = local_config;
                 }
-                Ok((version, config))
+                Ok((version, incoming))
             }
             code => {
                 debug!("failed to register config"; "status" => ?code);

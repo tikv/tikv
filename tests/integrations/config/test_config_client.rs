@@ -46,8 +46,7 @@ impl MockPdClient {
         let (version, cfg) = ConfigHandler::create(id.to_owned(), self, cfg).unwrap();
         ConfigHandler::start(
             id.to_owned(),
-            ConfigController::new(cfg),
-            version,
+            ConfigController::new(cfg, version),
             FutureWorker::new("test-pd-worker").scheduler(),
         )
         .unwrap()
@@ -282,12 +281,11 @@ fn test_dispatch_change() {
     let mut cfg_handler = {
         let (version, cfg) = ConfigHandler::create(id.to_owned(), pd_client.clone(), cfg).unwrap();
         *mgr.0.lock().unwrap() = cfg.raft_store.clone();
-        let mut controller = ConfigController::new(cfg);
+        let mut controller = ConfigController::new(cfg, version);
         controller.register("raft_store", Box::new(mgr.clone()));
         ConfigHandler::start(
             id.to_owned(),
             controller,
-            version,
             FutureWorker::new("test-pd-worker").scheduler(),
         )
         .unwrap()

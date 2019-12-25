@@ -6,7 +6,6 @@ use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
-use kvproto::configpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
@@ -1138,7 +1137,6 @@ impl RaftBatchSystem {
         let config_client = box_try!(ConfigHandler::start(
             cfg_controller.get_current().server.addr.clone(),
             cfg_controller,
-            configpb::Version::new(), // TODO: we can reuse the returned Version of ConfigHandler::create
             workers.pd_worker.scheduler(),
         ));
         let pd_runner = PdRunner::new(
@@ -2199,7 +2197,7 @@ mod tests {
             .clone();
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("raft_store", Box::new(cfg_track.clone()));
         let builder = RaftPollerBuilder {
             cfg: cfg_track,
