@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::collections::HashMap;
 use tipb::Aggregation;
-use tipb::{Expr, FieldType};
+use tipb::{Expr, FieldType, RpnExpr};
 
 use crate::aggr_fn::*;
 use crate::batch::executors::util::aggr_executor::*;

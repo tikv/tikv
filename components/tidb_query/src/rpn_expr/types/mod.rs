@@ -8,6 +8,6 @@ pub mod function;
 pub mod test_util;
 
 pub use self::expr::{RpnExpression, RpnExpressionNode};
-pub use self::expr_builder::RpnExpressionBuilder;
+pub use self::expr_builder::{ExprDefinition, RpnExpressionBuilder};
 pub use self::expr_eval::RpnStackNode;
 pub use self::function::{RpnFnCallExtra, RpnFnMeta};

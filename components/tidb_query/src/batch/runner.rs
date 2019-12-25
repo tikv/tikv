@@ -12,6 +12,7 @@ use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
 use crate::expr::{EvalConfig, EvalContext};
 use crate::metrics::*;
+use crate::rpn_expr::ExprDefinition;
 use crate::storage::Storage;
 use crate::Result;
 
@@ -175,7 +176,7 @@ pub fn build_executors<S: Storage + 'static>(
 
                 Box::new(
                     (if is_rpn_expr {
-                        BatchSelectionExecutor::new_rpn(
+                        BatchSelectionExecutor::new(
                             config.clone(),
                             executor,
                             ed.take_selection().take_rpn_conditions().into(),
@@ -258,24 +259,20 @@ pub fn build_executors<S: Storage + 'static>(
 
                 let mut d = ed.take_top_n();
                 let order_bys = d.get_order_by().len();
-                if is_rpn_expr {
-                    let mut rpn_order_exprs_def = Vec::with_capacity(order_bys);
+                let top_n_executor = if is_rpn_expr {
+                    let mut order_exprs_def = Vec::with_capacity(order_bys);
                     let mut order_is_desc = Vec::with_capacity(order_bys);
                     for mut item in d.take_order_by().into_iter() {
-                        rpn_order_exprs_def.push(item.take_rpn_expr());
+                        order_exprs_def.push(item.take_rpn_expr());
                         order_is_desc.push(item.get_desc());
                     }
-
-                    Box::new(
-                        BatchTopNExecutor::new_rpn(
-                            config.clone(),
-                            executor,
-                            rpn_order_exprs_def,
-                            order_is_desc,
-                            d.get_limit() as usize,
-                        )?
-                        .collect_summary(summary_slot_index),
-                    )
+                    BatchTopNExecutor::new(
+                        config.clone(),
+                        executor,
+                        order_exprs_def,
+                        order_is_desc,
+                        d.get_limit() as usize,
+                    )?
                 } else {
                     let mut order_exprs_def = Vec::with_capacity(order_bys);
                     let mut order_is_desc = Vec::with_capacity(order_bys);
@@ -283,18 +280,16 @@ pub fn build_executors<S: Storage + 'static>(
                         order_exprs_def.push(item.take_expr());
                         order_is_desc.push(item.get_desc());
                     }
+                    BatchTopNExecutor::new(
+                        config.clone(),
+                        executor,
+                        order_exprs_def,
+                        order_is_desc,
+                        d.get_limit() as usize,
+                    )?
+                };
 
-                    Box::new(
-                        BatchTopNExecutor::new(
-                            config.clone(),
-                            executor,
-                            order_exprs_def,
-                            order_is_desc,
-                            d.get_limit() as usize,
-                        )?
-                        .collect_summary(summary_slot_index),
-                    )
-                }
+                Box::new(top_n_executor.collect_summary(summary_slot_index))
             }
             _ => {
                 return Err(other_err!(

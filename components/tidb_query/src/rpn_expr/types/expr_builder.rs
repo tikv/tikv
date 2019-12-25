@@ -17,6 +17,42 @@ use crate::Result;
 #[derive(Debug)]
 pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 
+pub trait ExprDefinition {
+    fn expand_to_rpn(self, ctx: &mut EvalContext, max_columns: usize) -> Result<RpnExpression>;
+}
+
+impl ExprDefinition for Expr {
+    fn expand_to_rpn(self, ctx: &mut EvalContext, max_columns: usize) -> Result<RpnExpression> {
+        let mut expr_nodes = Vec::new();
+        append_rpn_nodes_recursively(
+            self,
+            &mut expr_nodes,
+            ctx,
+            super::super::map_expr_node_to_rpn_func,
+            max_columns,
+        )?;
+        Ok(RpnExpression::from(expr_nodes))
+    }
+}
+
+impl ExprDefinition for RpnExpr {
+    fn expand_to_rpn(mut self, ctx: &mut EvalContext, max_columns: usize) -> Result<RpnExpression> {
+        let mut rpn_expr_nodes = Vec::with_capacity(self.get_exprs().len());
+        for rpn_expr_def in self.take_exprs().into_iter() {
+            rpn_expr_nodes.push(
+                (match rpn_expr_def.get_tp() {
+                    ExprType::ScalarFunc => {
+                        map_rpn_node_fn_call(rpn_expr_def, super::super::map_expr_node_to_rpn_func)
+                    }
+                    ExprType::ColumnRef => map_rpn_node_column_ref(rpn_expr_def, max_columns),
+                    _ => map_rpn_node_constant(rpn_expr_def, ctx),
+                })?,
+            );
+        }
+        Ok(RpnExpression::from(rpn_expr_nodes))
+    }
+}
+
 impl RpnExpressionBuilder {
     /// Checks whether the given expression definition tree is supported.
     pub fn check_expr_tree_supported(c: &Expr) -> Result<()> {
@@ -69,21 +105,21 @@ impl RpnExpressionBuilder {
         }
     }
 
+    pub fn build_from_expr_def<E: ExprDefinition>(
+        expr_def: E,
+        ctx: &mut EvalContext,
+        max_columns: usize,
+    ) -> Result<RpnExpression> {
+        expr_def.expand_to_rpn(ctx, max_columns)
+    }
+
     /// Builds the RPN expression node list from an expression definition tree.
     pub fn build_from_expr_tree(
         tree_node: Expr,
         ctx: &mut EvalContext,
         max_columns: usize,
     ) -> Result<RpnExpression> {
-        let mut expr_nodes = Vec::new();
-        append_rpn_nodes_recursively(
-            tree_node,
-            &mut expr_nodes,
-            ctx,
-            super::super::map_expr_node_to_rpn_func,
-            max_columns,
-        )?;
-        Ok(RpnExpression::from(expr_nodes))
+        Self::build_from_expr_def(tree_node, ctx, max_columns)
     }
 
     /// Only used in tests, with a customized function mapper.
@@ -108,23 +144,11 @@ impl RpnExpressionBuilder {
     }
 
     pub fn build_from_rpn_def(
-        mut rpn: RpnExpr,
+        rpn_def: RpnExpr,
         ctx: &mut EvalContext,
         max_columns: usize,
     ) -> Result<RpnExpression> {
-        let mut rpn_expr_nodes = Vec::with_capacity(rpn.get_exprs().len());
-        for rpn_expr_def in rpn.take_exprs().into_iter() {
-            rpn_expr_nodes.push(
-                (match rpn_expr_def.get_tp() {
-                    ExprType::ScalarFunc => {
-                        map_rpn_node_fn_call(rpn_expr_def, super::super::map_expr_node_to_rpn_func)
-                    }
-                    ExprType::ColumnRef => map_rpn_node_column_ref(rpn_expr_def, max_columns),
-                    _ => map_rpn_node_constant(rpn_expr_def, ctx),
-                })?,
-            );
-        }
-        Ok(RpnExpression::from(rpn_expr_nodes))
+        Self::build_from_expr_def(rpn_def, ctx, max_columns)
     }
 
     /// Creates a new builder instance.

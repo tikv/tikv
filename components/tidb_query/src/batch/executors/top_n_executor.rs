@@ -15,7 +15,7 @@ use crate::codec::data_type::*;
 use crate::expr::EvalWarnings;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::rpn_expr::RpnStackNode;
-use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::rpn_expr::{ExprDefinition, RpnExpression, RpnExpressionBuilder};
 use crate::storage::IntervalRange;
 use crate::Result;
 
@@ -101,10 +101,10 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         }
     }
 
-    pub fn new(
+    pub fn new<E: ExprDefinition>(
         config: std::sync::Arc<EvalConfig>,
         src: Src,
-        order_exprs_def: Vec<Expr>,
+        order_exprs_def: Vec<E>,
         order_is_desc: Vec<bool>,
         n: usize,
     ) -> Result<Self> {
@@ -113,42 +113,8 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         let mut order_exprs = Vec::with_capacity(order_exprs_def.len());
         let mut ctx = EvalContext::new(config.clone());
         for def in order_exprs_def {
-            order_exprs.push(RpnExpressionBuilder::build_from_expr_tree(
+            order_exprs.push(RpnExpressionBuilder::build_from_expr_def(
                 def,
-                &mut ctx,
-                src.schema().len(),
-            )?);
-        }
-
-        Ok(Self {
-            // Avoid large N causing OOM
-            heap: BinaryHeap::with_capacity(n.min(1024)),
-            // Simply large enough to avoid repeated allocations
-            eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
-            order_exprs: order_exprs.into_boxed_slice(),
-            order_is_desc: order_is_desc.into_boxed_slice(),
-            n,
-
-            context: EvalContext::new(config),
-            src,
-            is_ended: false,
-        })
-    }
-
-    pub fn new_rpn(
-        config: std::sync::Arc<EvalConfig>,
-        src: Src,
-        rpn_order_exprs_def: Vec<RpnExpr>,
-        order_is_desc: Vec<bool>,
-        n: usize,
-    ) -> Result<Self> {
-        assert_eq!(rpn_order_exprs_def.len(), order_is_desc.len());
-
-        let mut order_exprs = Vec::with_capacity(rpn_order_exprs_def.len());
-        let mut ctx = EvalContext::new(config.clone());
-        for rpn_def in rpn_order_exprs_def {
-            order_exprs.push(RpnExpressionBuilder::build_from_rpn_def(
-                rpn_def,
                 &mut ctx,
                 src.schema().len(),
             )?);

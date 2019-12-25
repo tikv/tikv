@@ -10,7 +10,7 @@ use super::super::interface::*;
 use crate::codec::data_type::*;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::rpn_expr::RpnStackNode;
-use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::rpn_expr::{ExprDefinition, RpnExpression, RpnExpressionBuilder};
 use crate::storage::IntervalRange;
 use crate::Result;
 
@@ -45,33 +45,15 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         }
     }
 
-    pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
+    pub fn new<E: ExprDefinition>(
+        config: Arc<EvalConfig>,
+        src: Src,
+        conditions_def: Vec<E>,
+    ) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
         let mut ctx = EvalContext::new(config);
         for def in conditions_def {
-            conditions.push(RpnExpressionBuilder::build_from_expr_tree(
-                def,
-                &mut ctx,
-                src.schema().len(),
-            )?);
-        }
-
-        Ok(Self {
-            context: ctx,
-            src,
-            conditions,
-        })
-    }
-
-    pub fn new_rpn(
-        config: Arc<EvalConfig>,
-        src: Src,
-        rpn_conditions_def: Vec<RpnExpr>,
-    ) -> Result<Self> {
-        let mut ctx = EvalContext::new(config);
-        let mut conditions = Vec::with_capacity(rpn_conditions_def.len());
-        for def in rpn_conditions_def {
-            conditions.push(RpnExpressionBuilder::build_from_rpn_def(
+            conditions.push(RpnExpressionBuilder::build_from_expr_def(
                 def,
                 &mut ctx,
                 src.schema().len(),
