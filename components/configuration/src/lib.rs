@@ -22,8 +22,8 @@ pub enum ConfigValue {
 impl Display for ConfigValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            ConfigValue::Duration(v) => write!(f, "{}b", v),
-            ConfigValue::Size(v) => write!(f, "{}ms", v),
+            ConfigValue::Duration(v) => write!(f, "{}ms", v),
+            ConfigValue::Size(v) => write!(f, "{}b", v),
             ConfigValue::U64(v) => write!(f, "{}", v),
             ConfigValue::F64(v) => write!(f, "{}", v),
             ConfigValue::Usize(v) => write!(f, "{}", v),
