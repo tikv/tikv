@@ -64,13 +64,22 @@ use tikv_util::{
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
-pub fn run_tikv(mut config: TiKvConfig) {
+pub fn run_tikv(config: TiKvConfig) {
     // It is okay use pd config and security config before `init_config`,
     // because these configs must be provided by command line, and only
     // used during startup process.
-    let (pd_client, security_mgr) = TiKVServer::init_pd_connect(&mut config);
+    let security_mgr = Arc::new(
+        SecurityManager::new(&config.security)
+            .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e.description())),
+    );
+    let pd_client = Arc::new(
+        RpcClient::new(&config.pd, security_mgr.clone())
+            .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
+    );
 
-    let cfg_controller = TiKVServer::init_config(config, Arc::clone(&pd_client));
+    let mut cfg_controller = TiKVServer::init_config(config, Arc::clone(&pd_client));
+
+    TiKVServer::init_pd_connect(cfg_controller.get_current_mut(), Arc::clone(&pd_client));
 
     // Do some prepare works before start.
     pre_start(cfg_controller.get_current());
@@ -158,12 +167,19 @@ impl TiKVServer {
     fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> ConfigController {
         let mut version = Default::default();
         if config.dynamic_config {
-            let (v, cfg) =
-                ConfigHandler::create(config.server.addr.clone(), Arc::clone(&pd_client), config)
-                    .unwrap_or_else(|e| fatal!("failed to register config from pd: {}", e));
+            // Server address should not be changed
+            let addr = config.server.addr.clone();
+            let (v, mut cfg) = ConfigHandler::create(addr.clone(), Arc::clone(&pd_client), config)
+                .unwrap_or_else(|e| fatal!("failed to register config from pd: {}", e));
+            cfg.server.addr = addr;
             version = v;
             config = cfg;
         }
+
+        // Sets the global logger ASAP.
+        // It is okay to use the config w/o `validate()`,
+        // because `initial_logger()` handles various conditions.
+        initial_logger(&config);
 
         validate_and_persist_config(&mut config, true);
 
@@ -177,25 +193,10 @@ impl TiKVServer {
 
         config.write_into_metrics();
 
-        if config.panic_when_unexpected_key_or_data {
-            info!("panic-when-unexpected-key-or-data is on");
-            tikv_util::set_panic_when_unexpected_key_or_data(true);
-        }
-
         ConfigController::new(config, version)
     }
 
-    fn init_pd_connect(config: &mut TiKvConfig) -> (Arc<RpcClient>, Arc<SecurityManager>) {
-        let security_mgr =
-            Arc::new(SecurityManager::new(&config.security).unwrap_or_else(|e| {
-                fatal!("failed to create security manager: {}", e.description())
-            }));
-
-        let pd_client = Arc::new(
-            RpcClient::new(&config.pd, security_mgr.clone())
-                .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
-        );
-
+    fn init_pd_connect(config: &mut TiKvConfig, pd_client: Arc<RpcClient>) {
         let cluster_id = pd_client
             .get_cluster_id()
             .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
@@ -207,8 +208,6 @@ impl TiKVServer {
             "connect to PD cluster";
             "cluster_id" => cluster_id
         );
-
-        (pd_client, security_mgr)
     }
 
     fn init_fs(&self) {
@@ -587,7 +586,7 @@ impl TiKVServer {
     }
 }
 
-/// Various sanity-checks and logging before running a server.
+/// Various sanity-checks before running a server.
 ///
 /// Warnings are logged and fatal errors exit.
 ///
@@ -612,14 +611,15 @@ impl TiKVServer {
 /// If the max open file descriptor limit is not high enough to support
 /// the main database and the raft database.
 fn pre_start(config: &TiKvConfig) {
-    // Sets the global logger ASAP.
-    // It is okay to use the config w/o `validate()`,
-    // because `initial_logger()` handles various conditions.
-    initial_logger(&config);
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
     check_system_config(&config);
     check_environment_variables();
+
+    if config.panic_when_unexpected_key_or_data {
+        info!("panic-when-unexpected-key-or-data is on");
+        tikv_util::set_panic_when_unexpected_key_or_data(true);
+    }
 }
 
 fn check_system_config(config: &TiKvConfig) {

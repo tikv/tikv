@@ -91,7 +91,7 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
 #[allow(dead_code)]
 pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches<'_>) {
-    if matches.is_present("dy-config") {
+    if matches.is_present("dynamic-config") {
         config.dynamic_config = true;
     }
 

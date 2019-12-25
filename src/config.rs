@@ -1862,6 +1862,10 @@ impl ConfigController {
     pub fn get_current(&self) -> &TiKvConfig {
         &self.current
     }
+
+    pub fn get_current_mut(&mut self) -> &mut TiKvConfig {
+        &mut self.current
+    }
 }
 
 pub struct ConfigHandler {
@@ -1922,20 +1926,17 @@ impl ConfigHandler {
                 let mut incoming: TiKvConfig = toml::from_str(resp.get_config())?;
                 let mut version = resp.take_version();
                 if let Err(e) = incoming.validate() {
-                    warn!(
-                        "config from pd is invalid, fallback to local config";
-                        "version" => ?version,
-                        "error" => ?e,
+                    println!(
+                        "config from pd is invalid, fallback to local config version {:?}, error {:?}",
+                        version,
+                        e,
                     );
                     version = configpb::Version::default();
                     incoming = local_config;
                 }
                 Ok((version, incoming))
             }
-            code => {
-                debug!("failed to register config"; "status" => ?code);
-                Err(format!("{:?}", resp).into())
-            }
+            _ => Err(format!("failed to register config, response: {:?}", resp).into()),
         }
     }
 
