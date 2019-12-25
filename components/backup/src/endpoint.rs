@@ -32,6 +32,7 @@ use crate::writer::BackupRawKVWriter;
 use crate::*;
 
 const WORKER_TAKE_RANGE: usize = 6;
+const BACKUP_BATCH_LIMIT: usize = 1024;
 
 // if thread pool has been idle for such long time, we will shutdown it.
 const IDLE_THREADPOOL_DURATION: u64 = 30 * 60 * 1000; // 30 mins
@@ -161,7 +162,7 @@ impl BackupRange {
             .unwrap();
 
         let start = Instant::now();
-        let mut batch = EntryBatch::with_capacity(1024);
+        let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
         loop {
             if let Err(e) = scanner.scan_entries(&mut batch) {
                 error!("backup scan entries failed"; "error" => ?e);
@@ -198,32 +199,30 @@ impl BackupRange {
         let snapshot = match engine.snapshot(&ctx) {
             Ok(s) => s,
             Err(e) => {
-                error!("backup snapshot failed"; "error" => ?e);
+                error!("backup raw kv snapshot failed"; "error" => ?e);
                 return Err(e.into());
             }
         };
         let start = Instant::now();
-
+        let mut statistics = Statistics::default();
+        let cfstatistics = statistics.mut_cf_statistics(&self.cf);
         let mut option = IterOption::default();
         if let Some(end) = self.end_key.clone() {
             option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
         let mut cursor = snapshot.iter_cf(rawkv_cf(&self.cf)?, option, ScanMode::Forward)?;
-        let raw: Vec<u8> = (0..0).collect();
-        let empty_key = Key::from_raw(&raw);
-        let s_key = match self.start_key.clone() {
-            Some(s) => s,
-            None => empty_key,
-        };
-        let mut statistics = Statistics::default();
-        let cfstatistics = statistics.mut_cf_statistics(&self.cf);
-        if !cursor.seek(&s_key, cfstatistics)? {
-            return Ok(statistics);
+        if let Some(begin) = self.start_key.clone() {
+            if !cursor.seek(&begin, cfstatistics)? {
+                return Ok(statistics);
+            }
+        } else {
+            if !cursor.seek_to_first(cfstatistics) {
+                return Ok(statistics);
+            }
         }
-        let limit = 1024;
         let mut batch = vec![];
         loop {
-            while cursor.valid()? && batch.len() < limit {
+            while cursor.valid()? && batch.len() < BACKUP_BATCH_LIMIT {
                 batch.push(Ok((
                     cursor.key(cfstatistics).to_owned(),
                     cursor.value(cfstatistics).to_owned(),
@@ -233,15 +232,13 @@ impl BackupRange {
             if batch.is_empty() {
                 break;
             }
-            debug!("backup scan entries"; "len" => batch.len());
+            debug!("backup scan raw kv entries"; "len" => batch.len());
             // Build sst files.
-            if let Err(e) = writer.write(&batch, true) {
-                error!("backup build sst failed"; "error" => ?e);
+            if let Err(e) = writer.write(batch.drain(..), false) {
+                error!("backup raw kv build sst failed"; "error" => ?e);
                 return Err(e);
             }
-            batch.clear();
         }
-
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["raw_scan"])
             .observe(start.elapsed().as_secs_f64());
@@ -513,7 +510,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                                 return tx.send((brange, Err(e))).map_err(|_| ());
                             }
                         };
-                    let stat = match brange.backup(&mut writer, &engine, backup_ts) {
+                    let stat = match brange.backup(&mut writer, &engine, backup_ts, start_ts) {
                         Ok(s) => s,
                         Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
                     };
@@ -536,12 +533,12 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let start_key = if task.start_key.is_empty() {
             None
         } else {
-            Some(Key::from_raw(&task.start_key))
+            Some(Key::from_raw(&task.start_key.clone()))
         };
         let end_key = if task.end_key.is_empty() {
             None
         } else {
-            Some(Key::from_raw(&task.end_key))
+            Some(Key::from_raw(&task.end_key.clone()))
         };
 
         let (res_tx, res_rx) = mpsc::channel();

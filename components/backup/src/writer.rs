@@ -59,8 +59,8 @@ impl Writer {
     }
     fn update_raw_with(&mut self, key: &[u8], value: &[u8], need_checksum: bool) -> Result<()> {
         self.total_kvs += 1;
+        self.total_bytes += (key.to_vec().len() + value.to_vec().len()) as u64;
         if need_checksum {
-            self.total_bytes += (key.to_vec().len() + value.to_vec().len()) as u64;
             self.checksum = checksum_crc64_xor(self.checksum, self.digest.clone(), key, value);
         }
         Ok(())
@@ -203,7 +203,7 @@ impl BackupWriter {
 pub struct BackupRawKVWriter {
     name: String,
     cf: String,
-    write: Writer,
+    writer: Writer,
     limiter: Option<Arc<RocksIOLimiter>>,
 }
 
@@ -215,7 +215,7 @@ impl BackupRawKVWriter {
         cf: &str,
         limiter: Option<Arc<RocksIOLimiter>>,
     ) -> Result<BackupRawKVWriter> {
-        let write = RocksSstWriterBuilder::new()
+        let writer = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(super::endpoint::rawkv_cf(cf)?)
             .set_db(RocksEngine::from_ref(&db))
@@ -223,13 +223,16 @@ impl BackupRawKVWriter {
         Ok(BackupRawKVWriter {
             name: name.to_owned(),
             cf: cf.to_owned(),
-            write: Writer::new(write),
+            writer: Writer::new(writer),
             limiter,
         })
     }
 
     /// Write Kv_pair to buffered SST files.
-    pub fn write(&mut self, kv_pairs: &[Result<KvPair>], need_checksum: bool) -> Result<()> {
+    pub fn write<I>(&mut self, kv_pairs: I, need_checksum: bool) -> Result<()>
+    where
+        I: Iterator<Item = Result<KvPair>>,
+    {
         for kv_pair in kv_pairs {
             let (k, v) = match kv_pair {
                 Ok(s) => s,
@@ -238,9 +241,10 @@ impl BackupRawKVWriter {
                     return Err(Error::Other("occur an error when written raw kv".into()));
                 }
             };
+
             assert!(!k.is_empty());
-            self.write.write(&k, &v)?;
-            self.write.update_raw_with(&k, &v, need_checksum)?;
+            self.writer.write(&k, &v)?;
+            self.writer.update_raw_with(&k, &v, need_checksum)?;
         }
         Ok(())
     }
@@ -250,9 +254,8 @@ impl BackupRawKVWriter {
         let start = Instant::now();
         let mut files = Vec::with_capacity(1);
         let mut buf = Vec::new();
-        if !self.write.is_empty() {
-            // Save default cf contents.
-            let file = self.write.save_and_build_file(
+        if !self.writer.is_empty() {
+            let file = self.writer.save_and_build_file(
                 &self.name,
                 super::endpoint::rawkv_cf(&self.cf)?,
                 &mut buf,

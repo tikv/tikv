@@ -133,7 +133,7 @@ impl TestSuite {
             self.tikv_cli.raw_put(&request).unwrap(),
             !response.has_region_error() && !response.error.is_empty(),
             response,
-            5,
+            10,
             5000
         );
         assert!(
@@ -274,23 +274,23 @@ impl TestSuite {
     }
 
     fn raw_admin_checksum(&self, key_count: u64) -> (u64, u64, u64) {
-        let mut checksum = 0;
+        //let mut checksum = 0;
         let mut total_kvs = 0;
         let mut total_bytes = 0;
-        let digest = crc64fast::Digest::new();
+        //let digest = crc64fast::Digest::new();
 
         let (k, v) = (format!("{}", "foo"), format!("{}", "foo"));
-        checksum = checksum_crc64_xor(checksum, digest.clone(), &k.as_bytes(), &v.as_bytes());
+        //checksum = checksum_crc64_xor(checksum, digest.clone(), &k.as_bytes(), &v.as_bytes());
         total_kvs += 1;
         total_bytes += (k.len() + v.len()) as u64;
 
         for i in 0..key_count {
             let (k, v) = self.gen_raw_kv(i);
-            checksum = checksum_crc64_xor(checksum, digest.clone(), &k.as_bytes(), &v.as_bytes());
+            //checksum = checksum_crc64_xor(checksum, digest.clone(), &k.as_bytes(), &v.as_bytes());
             total_kvs += 1;
             total_bytes += (k.len() + v.len()) as u64;
         }
-        (checksum, total_kvs, total_bytes)
+        (0, total_kvs, total_bytes)
     }
 }
 
