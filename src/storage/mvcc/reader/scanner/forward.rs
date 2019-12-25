@@ -71,7 +71,7 @@ impl<S: Snapshot> Cursors<S> {
     ) -> Result<()> {
         for i in 0..SEEK_BOUND {
             if i > 0 {
-                self.write.next(&mut statistics.write);
+                self.write.next(&mut statistics.write)?;
             }
             if !self.write.valid()? {
                 // Key space ended. We are done here.
@@ -159,8 +159,10 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     &mut self.statistics.lock,
                 )?;
             } else {
-                self.cursors.write.seek_to_first(&mut self.statistics.write);
-                self.cursors.lock.seek_to_first(&mut self.statistics.lock);
+                self.cursors
+                    .write
+                    .seek_to_first(&mut self.statistics.write)?;
+                self.cursors.lock.seek_to_first(&mut self.statistics.lock)?;
             }
             self.is_started = true;
         }
@@ -281,7 +283,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 
         for i in 0..SEEK_BOUND {
             if i > 0 {
-                self.cursors.write.next(&mut self.statistics.write);
+                self.cursors.write.next(&mut self.statistics.write)?;
                 if !self.cursors.write.valid()? {
                     // Key space ended.
                     return Ok(false);
@@ -378,7 +380,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                 }
             }
 
-            cursors.write.next(&mut statistics.write);
+            cursors.write.next(&mut statistics.write)?;
 
             if !cursors.write.valid()? {
                 // Key space ended. Needn't move write cursor to next key.
@@ -480,7 +482,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
                 _ => {}
             }
 
-            cursors.write.next(&mut statistics.write);
+            cursors.write.next(&mut statistics.write)?;
 
             if !cursors.write.valid()? {
                 // Key space ended. Needn't move write cursor to next key.
@@ -517,7 +519,7 @@ fn scan_latest_handle_lock<S: Snapshot, T>(
         }
         IsolationLevel::RC => Ok(()),
     };
-    cursors.lock.next(&mut statistics.lock);
+    cursors.lock.next(&mut statistics.lock)?;
     // Even if there is a lock error, we still need to step the cursor for future
     // calls.
     if result.is_err() {
