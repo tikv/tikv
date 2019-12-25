@@ -207,6 +207,29 @@ pub fn coalesce<T: Evaluable>(args: &[&Option<T>]) -> Result<Option<T>> {
     Ok(None)
 }
 
+#[rpn_fn(varg)]
+#[inline]
+pub fn interval_real(args: &[&Option<Real>]) -> Result<Option<Int>> {
+    let target = match args[0] {
+        None => return Ok(Some(-1)),
+        Some(v) => *v,
+    };
+
+    let mut left = 1;
+    let mut right = args.len();
+    while left < right {
+        let mid = left + (right - left) / 2;
+        let m = args[mid].unwrap_or(target);
+
+        if target >= m {
+            left = mid + 1
+        } else {
+            right = mid
+        }
+    }
+    Ok(Some((left - 1) as Int))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,6 +659,51 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(args)
                 .evaluate(ScalarFuncSig::CoalesceInt)
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_interval_real() {
+        let cases = vec![
+            (vec![None, None], Some(-1)),
+            (vec![None, Some(3.0)], Some(-1)),
+            (vec![Some(3.0), None], Some(1)),
+            (vec![Some(1.0), Some(2.0), Some(3.0)], Some(0)),
+            (vec![Some(2.0), Some(1.0), Some(3.0)], Some(1)),
+            (vec![Some(3.0), Some(1.0), Some(2.0)], Some(2)),
+            (
+                vec![
+                    Some(23.0),
+                    Some(1.0),
+                    Some(23.0),
+                    Some(23.0),
+                    Some(23.0),
+                    Some(30.0),
+                    Some(44.0),
+                    Some(200.0),
+                ],
+                Some(4),
+            ),
+            (
+                vec![
+                    Some(200.0),
+                    Some(1.0),
+                    Some(23.0),
+                    Some(23.0),
+                    Some(23.0),
+                    Some(30.0),
+                    Some(44.0),
+                    Some(200.0),
+                ],
+                Some(7),
+            ),
+        ];
+        for (args, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args)
+                .evaluate(ScalarFuncSig::IntervalReal)
                 .unwrap();
             assert_eq!(output, expected);
         }

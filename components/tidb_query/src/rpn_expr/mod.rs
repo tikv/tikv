@@ -269,6 +269,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CoalesceTime => coalesce_fn_meta::<DateTime>(),
         ScalarFuncSig::CoalesceDuration => coalesce_fn_meta::<Duration>(),
         ScalarFuncSig::CoalesceJson => coalesce_fn_meta::<Json>(),
+        ScalarFuncSig::IntervalReal => interval_real_fn_meta(),
         // impl_compare_in
         ScalarFuncSig::InInt => compare_in_by_hash_fn_meta::<Int>(),
         ScalarFuncSig::InReal => compare_in_by_hash_fn_meta::<Real>(),
