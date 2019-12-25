@@ -18,6 +18,7 @@ use engine_rocks::{Compat, RocksSnapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
+use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
@@ -209,6 +210,7 @@ struct SnapContext {
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
+    coprocessor_host: Arc<CoprocessorHost>,
 }
 
 impl SnapContext {
@@ -326,6 +328,7 @@ impl SnapContext {
             region: region.clone(),
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
+            coprocessor_host: Arc::clone(&self.coprocessor_host),
         };
         s.apply(options)?;
 
@@ -526,6 +529,7 @@ impl Runner {
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
+        coprocessor_host: Arc<CoprocessorHost>,
     ) -> Runner {
         Runner {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap-generator"))
@@ -538,6 +542,7 @@ impl Runner {
                 use_delete_range,
                 clean_stale_peer_delay,
                 pending_delete_ranges: PendingDeleteRanges::default(),
+                coprocessor_host,
             },
             pending_applies: VecDeque::new(),
         }
@@ -659,6 +664,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use crate::raftstore::coprocessor::CoprocessorHost;
     use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
@@ -803,7 +809,14 @@ mod tests {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let runner = RegionRunner::new(engines.clone(), mgr, 0, true, Duration::from_secs(0));
+        let runner = RegionRunner::new(
+            engines.clone(),
+            mgr,
+            0,
+            true,
+            Duration::from_secs(0),
+            Arc::new(CoprocessorHost::default()),
+        );
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(100), Event::CheckApply);
         worker.start_with_timer(runner, timer).unwrap();

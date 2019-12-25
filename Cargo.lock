@@ -3830,6 +3830,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "coarsetime",
+ "codec",
  "configuration",
  "crc32fast",
  "crossbeam",
