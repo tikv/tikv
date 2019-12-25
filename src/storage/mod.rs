@@ -1558,7 +1558,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            cursor.next(statistics);
+            cursor.next(statistics)?;
         }
         Ok(pairs)
     }
@@ -1596,7 +1596,7 @@ impl<E: Engine, L: LockMgr> Storage<E, L> {
                     cursor.value(statistics).to_owned()
                 },
             )));
-            cursor.prev(statistics);
+            cursor.prev(statistics)?;
         }
         Ok(pairs)
     }

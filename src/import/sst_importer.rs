@@ -193,7 +193,7 @@ impl SSTImporter {
                 // must iterate if we perform key rewrite
                 return None;
             }
-            if !iter.seek(SeekKey::Start) {
+            if !iter.seek(SeekKey::Start).unwrap() {
                 // the SST is empty, so no need to iterate at all (should be impossible?)
                 return Some(meta.get_range().clone());
             }
@@ -205,7 +205,7 @@ impl SSTImporter {
             let start_key = start_key.to_vec();
 
             // seek to end and fetch the last (inclusive) key of the SST.
-            iter.seek(SeekKey::End);
+            iter.seek(SeekKey::End).unwrap();
             let last_key = keys::origin_key(iter.key());
             if is_after_end_bound(last_key, &range_end) {
                 // SST's end is after the range to consume
@@ -231,11 +231,11 @@ impl SSTImporter {
         let mut first_key = None;
 
         match range_start {
-            Bound::Unbounded => iter.seek(SeekKey::Start),
-            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s))),
+            Bound::Unbounded => iter.seek(SeekKey::Start)?,
+            Bound::Included(s) => iter.seek(SeekKey::Key(&keys::data_key(&s)))?,
             Bound::Excluded(_) => unreachable!(),
         };
-        while iter.valid() {
+        while iter.valid().unwrap() {
             let old_key = keys::origin_key(iter.key());
             if is_after_end_bound(old_key, &range_end) {
                 break;
@@ -251,7 +251,7 @@ impl SSTImporter {
             key.truncate(new_prefix_data_key_len);
             key.extend_from_slice(&old_key[old_prefix.len()..]);
             sst_writer.put(&key, iter.value())?;
-            iter.next();
+            iter.next()?;
             if first_key.is_none() {
                 first_key = Some(keys::origin_key(&key).to_vec());
             }
@@ -772,7 +772,7 @@ mod tests {
         let sst_reader = SstReader::open(sst_file_path.to_str().unwrap()).unwrap();
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
             iter.collect::<Vec<_>>(),
             vec![
@@ -818,7 +818,7 @@ mod tests {
         let sst_reader = SstReader::open(sst_file_path.to_str().unwrap()).unwrap();
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
             iter.collect::<Vec<_>>(),
             vec![
@@ -871,7 +871,7 @@ mod tests {
 
         // verifies the DB content is correct.
         let mut iter = db.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
             iter.collect::<Vec<_>>(),
             vec![
@@ -927,7 +927,7 @@ mod tests {
         let sst_reader = SstReader::open(sst_file_path.to_str().unwrap()).unwrap();
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
             iter.collect::<Vec<_>>(),
             vec![
@@ -970,7 +970,7 @@ mod tests {
         let sst_reader = SstReader::open(sst_file_path.to_str().unwrap()).unwrap();
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
             iter.collect::<Vec<_>>(),
             vec![
