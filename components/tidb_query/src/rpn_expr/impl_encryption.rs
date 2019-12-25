@@ -92,7 +92,7 @@ pub fn random_bytes(ctx: &mut EvalContext, arg: &Option<Int>) -> Result<Option<B
                     .append_warning(Error::incorrect_parameters(*arg, "random_bytes"));
                 return Ok(None);
             }
-            Ok(Some(gen_random_bytes(*arg)))
+            Ok(Some(gen_random_bytes(*arg as usize)))
         }
         _ => Ok(None),
     }

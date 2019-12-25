@@ -27,7 +27,7 @@ impl MySQLRng {
 }
 
 /// Generate random bytes.
-pub fn gen_random_bytes(len: i64) -> Vec<u8> {
+pub fn gen_random_bytes(len: usize) -> Vec<u8> {
     (0..len).map(|_| rand::random::<u8>()).collect()
 }
 
@@ -71,9 +71,9 @@ mod tests {
 
     #[test]
     fn test_gen_random_bytes() {
-        let tests = vec![1, 256, 1024, 2333];
+        let tests: Vec<usize> = vec![1, 256, 1024, 2333];
         for len in tests {
-            assert_eq!(gen_random_bytes(len).len() as i64, len)
+            assert_eq!(gen_random_bytes(len).len(), len)
         }
     }
 }

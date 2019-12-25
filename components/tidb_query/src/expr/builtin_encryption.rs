@@ -151,7 +151,7 @@ impl ScalarFunc {
                 .append_warning(Error::incorrect_parameters(length, "random_bytes"));
             return Ok(None);
         }
-        Ok(Some(Cow::Owned(gen_random_bytes(length))))
+        Ok(Some(Cow::Owned(gen_random_bytes(length as usize))))
     }
 }
 
