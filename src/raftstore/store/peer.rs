@@ -265,7 +265,7 @@ pub struct WaitApplyResultState {
 pub struct BatchRaftCmdRequest {
     request: Option<RaftCmdRequest>,
     batch_size: u32,
-    batch_callbacks: Vec<(Callback, usize)>,
+    batch_callbacks: Vec<(Callback<RocksEngine>, usize)>,
 }
 
 impl BatchRaftCmdRequest {
@@ -277,7 +277,7 @@ impl BatchRaftCmdRequest {
         }
     }
 
-    fn push(&mut self, mut req: RaftCmdRequest, req_size: u32, cb: Callback) {
+    fn push(&mut self, mut req: RaftCmdRequest, req_size: u32, cb: Callback<RocksEngine>) {
         let req_num = req.get_requests().len();
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = req.take_requests().into();
@@ -291,7 +291,7 @@ impl BatchRaftCmdRequest {
         self.batch_size += req_size;
     }
 
-    fn take(&mut self) -> Option<(RaftCmdRequest, Vec<(Callback, usize)>)> {
+    fn take(&mut self) -> Option<(RaftCmdRequest, Vec<(Callback<RocksEngine>, usize)>)> {
         self.batch_size = 0;
         if let Some(req) = self.request.take() {
             let cbs = mem::replace(&mut self.batch_callbacks, vec![]);
@@ -1735,7 +1735,7 @@ impl Peer {
         None
     }
 
-    fn batch_callback(&mut self, cbs: Vec<(Callback, usize)>, term: u64, e: Error) {
+    fn batch_callback(&mut self, cbs: Vec<(Callback<RocksEngine>, usize)>, term: u64, e: Error) {
         let mut resp = RaftCmdResponse::default();
         cmd_resp::bind_term(&mut resp, term);
         cmd_resp::bind_error(&mut resp, e);
