@@ -829,6 +829,8 @@ impl Peer {
         let committed = self.raft_group.raft.raft_log.committed;
         let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
         if msg_type == MessageType::MsgReadIndex && expected_term == self.raft_group.raft.term {
+            // If the leader hasn't committed any entries in its term, it can't response read only
+            // requests. Please also take a look at raft-rs.
             if let LeaseState::Valid = self.inspect_lease() {
                 let mut resp = eraftpb::Message::default();
                 resp.set_msg_type(MessageType::MsgReadIndexResp);
