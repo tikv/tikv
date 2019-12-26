@@ -14,7 +14,7 @@ use tikv_util::config::*;
 use tikv_util::HandyRwLock;
 
 #[test]
-fn test_follower_read_not_applied() {
+fn test_replica_read_not_applied() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
