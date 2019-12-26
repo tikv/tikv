@@ -314,6 +314,9 @@ pub enum Task {
     ChangeRole(Role),
     /// Change the ttl of DetectTable
     ChangeTTL(Duration),
+    /// Task only used for test
+    #[cfg(test)]
+    Validate(Box<dyn FnOnce(u64) + Send>),
 }
 
 impl Display for Task {
@@ -327,6 +330,8 @@ impl Display for Task {
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
             Task::ChangeTTL(ttl) => write!(f, "ChangeTTL {{ ttl: {:?} }}", ttl),
+            #[cfg(test)]
+            Task::Validate(_) => write!(f, "Validate dead lock config"),
         }
     }
 }
@@ -379,6 +384,11 @@ impl Scheduler {
 
     pub fn change_ttl(&self, t: u64) {
         self.notify_scheduler(Task::ChangeTTL(Duration::from_millis(t)));
+    }
+
+    #[cfg(test)]
+    pub fn validate(&self, f: Box<dyn FnOnce(u64) + Send>) {
+        self.notify_scheduler(Task::Validate(f));
     }
 }
 
@@ -793,6 +803,8 @@ where
             }
             Task::ChangeRole(role) => self.handle_change_role(role),
             Task::ChangeTTL(ttl) => self.handle_change_ttl(ttl),
+            #[cfg(test)]
+            Task::Validate(f) => f(self.inner.borrow().detect_table.ttl.as_millis() as u64),
         }
     }
 }

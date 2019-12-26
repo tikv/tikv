@@ -73,7 +73,15 @@ impl ConfigManager for LockManagerConfigManager {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
+
+    use super::super::LockManager;
     use super::*;
+    use crate::config::*;
+    use crate::server::resolve;
+    use pd_client::PdClient;
+    use tikv_util::security::SecurityManager;
 
     #[test]
     fn test_config_validate() {
@@ -83,5 +91,104 @@ mod tests {
         let mut invalid_cfg = Config::default();
         invalid_cfg.wait_for_lock_timeout = 0;
         assert!(invalid_cfg.validate().is_err());
+    }
+
+    struct MockPdClient;
+    impl PdClient for MockPdClient {}
+
+    fn setup(cfg: TiKvConfig) -> (ConfigController, WaiterMgrScheduler, DeadlockScheduler) {
+        let mut lock_mgr = LockManager::new();
+        let pd_client = Arc::new(MockPdClient);
+        let (_, resolver) = resolve::new_resolver(Arc::clone(&pd_client)).unwrap();
+        let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
+        lock_mgr
+            .start(1, pd_client, resolver, security_mgr, &cfg.pessimistic_txn)
+            .unwrap();
+
+        let mgr = lock_mgr.config_manager();
+        let (w, d) = (
+            mgr.waiter_mgr_scheduler.clone(),
+            mgr.detector_scheduler.clone(),
+        );
+        let mut cfg_controller = ConfigController::new(cfg);
+        cfg_controller.register("pessimistic_txn", Box::new(mgr));
+
+        (cfg_controller, w, d)
+    }
+
+    fn validate_waiter<F>(router: &WaiterMgrScheduler, f: F)
+    where
+        F: FnOnce(u64, u64) + Send + 'static,
+    {
+        let (tx, rx) = mpsc::channel();
+        router.validate(Box::new(move |v1, v2| {
+            f(v1, v2);
+            tx.send(()).unwrap();
+        }));
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+
+    fn validate_dead_lock<F>(router: &DeadlockScheduler, f: F)
+    where
+        F: FnOnce(u64) + Send + 'static,
+    {
+        let (tx, rx) = mpsc::channel();
+        router.validate(Box::new(move |v| {
+            f(v);
+            tx.send(()).unwrap();
+        }));
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+
+    #[test]
+    fn test_lock_manager_cfg_update() {
+        const DEFAULT_TIMEOUT: u64 = 3000;
+        const DEFAULT_DELAY: u64 = 100;
+        let mut cfg = TiKvConfig::default();
+        cfg.pessimistic_txn.wait_for_lock_timeout = DEFAULT_TIMEOUT;
+        cfg.pessimistic_txn.wake_up_delay_duration = DEFAULT_DELAY;
+        cfg.validate().unwrap();
+        let (mut cfg_controller, waiter, deadlock) = setup(cfg.clone());
+
+        // update of other module's config should not effect lock manager config
+        let mut incoming = cfg.clone();
+        incoming.raft_store.raft_log_gc_threshold = 2000;
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        assert_eq!(rollback.right(), Some(true));
+        validate_waiter(&waiter, move |timeout: u64, delay: u64| {
+            assert_eq!(timeout, DEFAULT_TIMEOUT);
+            assert_eq!(delay, DEFAULT_DELAY);
+        });
+        validate_dead_lock(&deadlock, move |ttl: u64| {
+            assert_eq!(ttl, DEFAULT_TIMEOUT);
+        });
+
+        // only update wake_up_delay_duration
+        let mut incoming = cfg.clone();
+        incoming.pessimistic_txn.wake_up_delay_duration = 500;
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        assert_eq!(rollback.right(), Some(true));
+        validate_waiter(&waiter, move |timeout: u64, delay: u64| {
+            assert_eq!(timeout, DEFAULT_TIMEOUT);
+            assert_eq!(delay, 500);
+        });
+        validate_dead_lock(&deadlock, move |ttl: u64| {
+            // dead lock ttl should not change
+            assert_eq!(ttl, DEFAULT_TIMEOUT);
+        });
+
+        // both config update
+        let mut incoming = cfg;
+        incoming.pessimistic_txn.wait_for_lock_timeout = 4321;
+        incoming.pessimistic_txn.wake_up_delay_duration = 123;
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        assert_eq!(rollback.right(), Some(true));
+        validate_waiter(&waiter, move |timeout: u64, delay: u64| {
+            assert_eq!(timeout, 4321);
+            assert_eq!(delay, 123);
+        });
+        validate_dead_lock(&deadlock, move |ttl: u64| {
+            assert_eq!(ttl, 4321);
+        });
     }
 }

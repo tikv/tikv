@@ -120,6 +120,8 @@ pub enum Task {
         timeout: Option<u64>,
         delay: Option<u64>,
     },
+    #[cfg(test)]
+    Validate(Box<dyn FnOnce(u64, u64) + Send>),
 }
 
 /// Debug for task.
@@ -144,6 +146,8 @@ impl Display for Task {
                 "change config to default_wait_for_lock_timeout: {:?}, wake_up_delay_duration: {:?}",
                 timeout, delay
             ),
+            #[cfg(test)]
+            Task::Validate(_) => write!(f, "validate waiter manager config"),
         }
     }
 }
@@ -420,6 +424,11 @@ impl Scheduler {
     pub fn change_config(&self, timeout: Option<u64>, delay: Option<u64>) {
         self.notify_scheduler(Task::ChangeConfig { timeout, delay });
     }
+
+    #[cfg(test)]
+    pub fn validate(&self, f: Box<dyn FnOnce(u64, u64) + Send>) {
+        self.notify_scheduler(Task::Validate(f));
+    }
 }
 
 /// WaiterManager handles waiting and wake-up of pessimistic lock
@@ -584,6 +593,11 @@ impl FutureRunnable<Task> for WaiterManager {
                 self.handle_deadlock(start_ts, lock, deadlock_key_hash);
             }
             Task::ChangeConfig { timeout, delay } => self.handle_config_change(timeout, delay),
+            #[cfg(test)]
+            Task::Validate(f) => f(
+                self.default_wait_for_lock_timeout,
+                self.wake_up_delay_duration,
+            ),
         }
     }
 }
