@@ -223,7 +223,6 @@ mod tests {
         let cases = vec![
             (None, None, None),
             (None, Some(Datum::Null), None),
-            (Some("null"), None, None),
             (Some(r#"{}"#), Some(Datum::Null), None),
             (Some("null"), None, Some(1)),
             (
