@@ -583,12 +583,11 @@ mod tests {
                     Some(Json::from_str("false").unwrap()).into(),
                     None::<Bytes>.into(),
                 ],
-                Some(1),
+                None,
             ),
             (
                 vec![
                     Some(Json::from_str("1").unwrap()).into(),
-                    None::<Bytes>.into(),
                 ],
                 Some(1),
             ),
