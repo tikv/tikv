@@ -383,7 +383,6 @@ impl ToInt for Bytes {
 impl ToInt for Decimal {
     #[inline]
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
-        // TODO: avoid this clone
         let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_i64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
@@ -393,7 +392,6 @@ impl ToInt for Decimal {
 
     #[inline]
     fn to_uint(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<u64> {
-        // TODO: avoid this clone
         let dec = round_decimal_with_ctx(ctx, *self)?;
         let val = dec.as_u64();
         let err = Error::truncated_wrong_val("DECIMAL", &dec);
