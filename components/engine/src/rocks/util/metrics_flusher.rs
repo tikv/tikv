@@ -80,6 +80,17 @@ fn flush_metrics(db: &DB, name: &str, shared_block_cache: bool) {
             flush_engine_histogram_metrics(*t, v, name);
         }
     }
+    if db.is_titan() {
+        for t in TITAN_ENGINE_TICKER_TYPES {
+            let v = db.get_and_reset_statistics_ticker_count(*t);
+            flush_engine_ticker_metrics(*t, v, name);
+        }
+        for t in TITAN_ENGINE_HIST_TYPES {
+            if let Some(v) = db.get_statistics_histogram(*t) {
+                flush_engine_histogram_metrics(*t, v, name);
+            }
+        }
+    }
     flush_engine_properties(db, name, shared_block_cache);
     flush_engine_iostall_properties(db, name);
 }
@@ -89,7 +100,7 @@ mod tests {
     use super::*;
     use crate::rocks;
     use crate::rocks::util::CFOptions;
-    use crate::rocks::{ColumnFamilyOptions, DBOptions};
+    use crate::rocks::{ColumnFamilyOptions, TitanDBOptions, DBOptions};
     use crate::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use std::path::Path;
     use std::sync::Arc;
@@ -104,7 +115,8 @@ mod tests {
             .tempdir()
             .unwrap();
         let raft_path = path.path().join(Path::new("raft"));
-        let db_opt = DBOptions::new();
+        let mut db_opt = DBOptions::new();
+        db_opt.set_titandb_options(&TitanDBOptions::new());
         let cf_opts = ColumnFamilyOptions::new();
         let cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, rocks::util::ColumnFamilyOptions::new()),
@@ -114,12 +126,15 @@ mod tests {
         let engine = Arc::new(
             rocks::util::new_engine_opt(path.path().to_str().unwrap(), db_opt, cfs_opts).unwrap(),
         );
+        assert!(engine.is_titan());
 
         let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
         let raft_engine = Arc::new(
             rocks::util::new_engine_opt(raft_path.to_str().unwrap(), DBOptions::new(), cfs_opts)
                 .unwrap(),
         );
+        assert!(!raft_engine.is_titan());
+
         let shared_block_cache = false;
         let engines = Engines::new(engine, raft_engine, shared_block_cache);
         let mut metrics_flusher = MetricsFlusher::new(engines, Duration::from_millis(100));

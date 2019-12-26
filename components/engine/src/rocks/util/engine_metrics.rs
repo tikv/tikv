@@ -119,6 +119,9 @@ pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::FlushWriteBytes,
     TickerType::ReadAmpEstimateUsefulBytes,
     TickerType::ReadAmpTotalReadBytes,
+];
+
+pub const TITAN_ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::TitanNumGet,
     TickerType::TitanNumSeek,
     TickerType::TitanNumNext,
@@ -172,6 +175,9 @@ pub const ENGINE_HIST_TYPES: &[HistType] = &[
     HistType::BytesDecompressed,
     HistType::CompressionTimesNanos,
     HistType::DecompressionTimesNanos,
+];
+
+pub const TITAN_ENGINE_HIST_TYPES: &[HistType] = &[
     HistType::TitanKeySize,
     HistType::TitanValueSize,
     HistType::TitanGetMicros,
