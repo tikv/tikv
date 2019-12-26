@@ -1227,7 +1227,7 @@ impl<E: Engine> GcWorker<E> {
     /// indicates GCWorker is busy; otherwise, return a new callback that invokes the original
     /// callback as well as decrease the scheduled task counter.
     fn check_is_busy<T: 'static>(&self, callback: Callback<T>) -> Option<Callback<T>> {
-        if self.scheduled_tasks.fetch_add(1, atomic::Ordering::SeqCst) > GC_MAX_EXECUTING_TASKS {
+        if self.scheduled_tasks.fetch_add(1, atomic::Ordering::SeqCst) >= GC_MAX_EXECUTING_TASKS {
             self.scheduled_tasks.fetch_sub(1, atomic::Ordering::SeqCst);
             callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)));
             return None;
