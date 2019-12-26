@@ -226,27 +226,28 @@ impl CoprocessorHost {
         }
     }
 
-    pub fn pre_apply_plain_keys_from_snapshot(
+    pub fn pre_apply_plain_kvs_from_snapshot(
         &self,
         region: &Region,
         cf: CfName,
-        key: &[(Vec<u8>, Vec<u8>)],
+        kv_pairs: &[(Vec<u8>, Vec<u8>)],
     ) {
         loop_ob!(
             region,
             &self.registry.apply_snapshot_observers,
-            pre_apply_plain_keys,
+            pre_apply_plain_kvs,
             cf,
-            key
+            kv_pairs
         );
     }
 
-    pub fn pre_apply_sst_from_snapshot(&self, region: &Region, cf: CfName) {
+    pub fn pre_apply_sst_from_snapshot(&self, region: &Region, cf: CfName, path: &str) {
         loop_ob!(
             region,
             &self.registry.apply_snapshot_observers,
             pre_apply_sst,
-            cf
+            cf,
+            path
         );
     }
 
@@ -386,7 +387,7 @@ mod tests {
     }
 
     impl ApplySnapshotObserver for TestCoprocessor {
-        fn pre_apply_plain_keys(
+        fn pre_apply_plain_kvs(
             &self,
             ctx: &mut ObserverContext<'_>,
             _: CfName,
@@ -396,7 +397,7 @@ mod tests {
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn pre_apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName) {
+        fn pre_apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
             self.called.fetch_add(10, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -459,9 +460,9 @@ mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!(&[&ob.called], &[36]);
 
-        host.pre_apply_plain_keys_from_snapshot(&region, "default", &[]);
+        host.pre_apply_plain_kvs_from_snapshot(&region, "default", &[]);
         assert_all!(&[&ob.called], &[45]);
-        host.pre_apply_sst_from_snapshot(&region, "default");
+        host.pre_apply_sst_from_snapshot(&region, "default", "");
         assert_all!(&[&ob.called], &[55]);
     }
 

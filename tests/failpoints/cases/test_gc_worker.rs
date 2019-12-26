@@ -17,8 +17,8 @@ fn test_gcworker_busy() {
 
     fail::cfg(snapshot_fp, "pause").unwrap();
     let (tx1, rx1) = channel();
-    // Schedule `GC_MAX_EXECUTING_TASKS` GC requests.
-    for _i in 0..GC_MAX_EXECUTING_TASKS {
+    // Schedule `GC_MAX_EXECUTING_TASKS - 1` GC requests.
+    for _i in 1..GC_MAX_EXECUTING_TASKS {
         let tx1 = tx1.clone();
         gc_worker
             .async_gc(

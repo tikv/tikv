@@ -90,7 +90,7 @@ pub trait ApplySnapshotObserver: Coprocessor {
     /// Hook to call before applying key from plain file.
     /// This may be invoked multiple times for each plain file, and each time a batch of key-value
     /// pairs will be passed to the function.
-    fn pre_apply_plain_keys(
+    fn pre_apply_plain_kvs(
         &self,
         _: &mut ObserverContext<'_>,
         _: CfName,
@@ -100,7 +100,7 @@ pub trait ApplySnapshotObserver: Coprocessor {
 
     /// Hook to call before applying sst file. Currently the content of the snapshot can't be
     /// passed to the observer.
-    fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName) {}
+    fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, _: CfName, _path: &str) {}
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use

@@ -41,7 +41,7 @@ use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTx
 use crate::storage::{Callback, Error, ErrorInner, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
-use tikv_util::time::duration_to_sec;
+use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{
     FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
 };
@@ -57,6 +57,7 @@ const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
 pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
+const GC_TASK_SLOW_SECONDS: u64 = 30;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
 
@@ -619,7 +620,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
         let label = task.get_label();
         GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
 
-        let timer = Instant::now();
+        let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
         let update_metrics = |is_err| {
             GC_TASK_DURATION_HISTOGRAM_VEC
                 .with_label_values(&[label])
@@ -640,6 +641,13 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 update_metrics(res.is_err());
                 callback(res);
                 self.update_statistics_metrics();
+                slow_log!(
+                    timer,
+                    "GC on region {}, epoch {:?}, safe_point {}",
+                    ctx.get_region_id(),
+                    ctx.get_region_epoch(),
+                    safe_point
+                );
             }
             GcTask::UnsafeDestroyRange {
                 ctx,
@@ -650,6 +658,12 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 let res = self.unsafe_destroy_range(&ctx, &start_key, &end_key);
                 update_metrics(res.is_err());
                 callback(res);
+                slow_log!(
+                    timer,
+                    "UnsafeDestroyRange start_key {:?}, end_key {:?}",
+                    start_key,
+                    end_key
+                );
             }
             GcTask::PhysicalScanLock {
                 ctx,
@@ -1422,7 +1436,7 @@ impl<E: Engine> GcWorker<E> {
     /// indicates GCWorker is busy; otherwise, return a new callback that invokes the original
     /// callback as well as decrease the scheduled task counter.
     fn check_is_busy<T: 'static>(&self, callback: Callback<T>) -> Option<Callback<T>> {
-        if self.scheduled_tasks.fetch_add(1, atomic::Ordering::SeqCst) > GC_MAX_EXECUTING_TASKS {
+        if self.scheduled_tasks.fetch_add(1, atomic::Ordering::SeqCst) >= GC_MAX_EXECUTING_TASKS {
             self.scheduled_tasks.fetch_sub(1, atomic::Ordering::SeqCst);
             callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)));
             return None;

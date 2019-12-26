@@ -165,7 +165,7 @@ impl QueryObserver for LockObserver {
 }
 
 impl ApplySnapshotObserver for LockObserver {
-    fn pre_apply_plain_keys(
+    fn pre_apply_plain_kvs(
         &self,
         _: &mut ObserverContext<'_>,
         cf: CfName,
@@ -199,7 +199,7 @@ impl ApplySnapshotObserver for LockObserver {
         }
     }
 
-    fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, cf: CfName) {
+    fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, cf: CfName, _path: &str) {
         if cf == CF_LOCK {
             let e = box_err!("snapshot of lock cf applied from sst file");
             error!("cannot collect all applied lock"; "err" => ?e);
