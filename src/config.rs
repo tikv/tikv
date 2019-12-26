@@ -1926,10 +1926,10 @@ impl ConfigHandler {
                 let mut incoming: TiKvConfig = toml::from_str(resp.get_config())?;
                 let mut version = resp.take_version();
                 if let Err(e) = incoming.validate() {
-                    println!(
-                        "config from pd is invalid, fallback to local config version {:?}, error {:?}",
-                        version,
-                        e,
+                    warn!(
+                        "config from pd is invalid, fallback to local config";
+                        "version" => ?version,
+                        "error" => ?e,
                     );
                     version = configpb::Version::default();
                     incoming = local_config;
