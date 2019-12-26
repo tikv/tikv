@@ -14,14 +14,6 @@ use crate::codec::mysql::{charset, Decimal, Duration, Json, Time, TimeType};
 use crate::codec::{mysql, Datum};
 use crate::expr::Flag;
 
-// TODO: remove it after CAST function use `in_union` function
-#[allow(dead_code)]
-/// Indicates whether the current expression is evaluated in union statement
-/// See: https://github.com/pingcap/tidb/blob/1e403873d905b2d0ad3be06bd8cd261203d84638/expression/builtin.go#L260
-fn in_union(implicit_args: &[Datum]) -> bool {
-    implicit_args.get(0) == Some(&Datum::I64(1))
-}
-
 impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
@@ -349,7 +341,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val: f64 = try_opt!(self.children[0].eval_real(ctx, row));
-        let val = if self.children[0].field_type().tp() == FieldTypeTp::Float {
+        let val = if self.children[0].field_type().as_accessor().tp() == FieldTypeTp::Float {
             let val = val as f32;
             val.to_string()
         } else {
@@ -418,8 +410,11 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let s = format!("{}", val);
-        Ok(Some(self.produce_time_with_str(ctx, &s)?))
+        let time_type: TimeType = self.field_type.as_accessor().tp().try_into()?;
+        let fsp = self.field_type.get_decimal() as i8;
+        Time::parse_from_i64(ctx, val, time_type, fsp)
+            .map(Cow::Owned)
+            .map(Some)
     }
 
     pub fn cast_real_as_time<'a, 'b: 'a>(
@@ -2068,20 +2063,4 @@ mod tests {
     //     let res = e.eval_duration(&mut ctx, &cols);
     //     assert!(res.is_err());
     // }
-
-    #[test]
-    fn test_in_union() {
-        use super::*;
-
-        // empty implicit arguments
-        assert!(!in_union(&[]));
-
-        // single implicit arguments
-        assert!(!in_union(&[Datum::I64(0)]));
-        assert!(in_union(&[Datum::I64(1)]));
-
-        // multiple implicit arguments
-        assert!(!in_union(&[Datum::I64(0), Datum::I64(1)]));
-        assert!(in_union(&[Datum::I64(1), Datum::I64(0)]));
-    }
 }

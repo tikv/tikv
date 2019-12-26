@@ -1,0 +1,22 @@
+[package]
+name = "txn_types"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+byteorder = "1.2"
+farmhash = "1.1.5"
+derive_more = "0.15.0"
+hex = "0.3"
+derive-new = "0.5"
+codec = { path = "../codec" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
+slog = "2.3"
+quick-error = "1.2.2"
+
+tikv_alloc = { path = "../tikv_alloc", default-features = false }
+tikv_util = { path = "../tikv_util", default-features = false }
+
+[dev-dependencies]
+panic_hook = { path = "../panic_hook" }

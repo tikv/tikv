@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use kvproto::kvrpcpb::Context;
 use test_storage::new_raft_engine;
-use tikv::server::gc_worker::{GCWorker, GC_MAX_EXECUTING_TASKS};
+use tikv::server::gc_worker::{GcWorker, GC_MAX_EXECUTING_TASKS};
 use tikv::storage;
 
 #[test]
@@ -12,13 +12,13 @@ fn test_gcworker_busy() {
     let _guard = crate::setup();
     let snapshot_fp = "raftkv_async_snapshot";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
-    let mut gc_worker = GCWorker::new(engine, None, None, Default::default());
+    let mut gc_worker = GcWorker::new(engine, None, None, None, Default::default());
     gc_worker.start().unwrap();
 
     fail::cfg(snapshot_fp, "pause").unwrap();
     let (tx1, rx1) = channel();
-    // Schedule `GC_MAX_EXECUTING_TASKS` GC requests.
-    for _i in 0..GC_MAX_EXECUTING_TASKS {
+    // Schedule `GC_MAX_EXECUTING_TASKS - 1` GC requests.
+    for _i in 1..GC_MAX_EXECUTING_TASKS {
         let tx1 = tx1.clone();
         gc_worker
             .async_gc(
@@ -46,7 +46,7 @@ fn test_gcworker_busy() {
         )
         .unwrap();
 
-    // Old GC commands are blocked, the new one will get GCWorkerTooBusy error.
+    // Old GC commands are blocked, the new one will get GcWorkerTooBusy error.
     let (tx2, rx2) = channel();
     gc_worker
         .async_gc(
@@ -54,7 +54,7 @@ fn test_gcworker_busy() {
             1.into(),
             Box::new(move |res: storage::Result<()>| {
                 match res {
-                    Err(storage::Error(box storage::ErrorInner::GCWorkerTooBusy)) => {}
+                    Err(storage::Error(box storage::ErrorInner::GcWorkerTooBusy)) => {}
                     res => panic!("expect too busy, got {:?}", res),
                 }
                 tx2.send(1).unwrap();

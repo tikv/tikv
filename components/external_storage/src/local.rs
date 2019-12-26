@@ -30,9 +30,6 @@ pub struct LocalStorage {
 }
 
 impl LocalStorage {
-    /// The url scheme of the `LocalStorage`.
-    pub const SCHEME: &'static str = "local";
-
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());

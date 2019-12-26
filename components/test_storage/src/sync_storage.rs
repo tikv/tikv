@@ -2,17 +2,16 @@
 
 use futures::Future;
 
-use keys::TimeStamp;
 use kvproto::kvrpcpb::{Context, LockInfo};
-use tikv::server::gc_worker::{AutoGCConfig, GCConfig, GCSafePointProvider, GCWorker};
+use tikv::server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker};
 use tikv::storage::config::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::lock_manager::DummyLockManager;
 use tikv::storage::{
-    Engine, Key, KvPair, Mutation, Options, RegionInfoProvider, Result, Storage, TxnStatus, Value,
+    Engine, RegionInfoProvider, Result, Storage, TestEngineBuilder, TestStorageBuilder, TxnStatus,
 };
-use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
 use tikv_util::collections::HashMap;
+use txn_types::{Key, KvPair, Mutation, TimeStamp, Value};
 
 /// A builder to build a `SyncTestStorage`.
 ///
@@ -20,7 +19,7 @@ use tikv_util::collections::HashMap;
 pub struct SyncTestStorageBuilder<E: Engine> {
     engine: E,
     config: Option<Config>,
-    gc_config: Option<GCConfig>,
+    gc_config: Option<GcConfig>,
 }
 
 impl SyncTestStorageBuilder<RocksEngine> {
@@ -47,7 +46,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         self
     }
 
-    pub fn gc_config(mut self, gc_config: GCConfig) -> Self {
+    pub fn gc_config(mut self, gc_config: GcConfig) -> Self {
         self.gc_config = Some(gc_config);
         self
     }
@@ -58,7 +57,7 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
             builder = builder.config(config);
         }
         let mut gc_worker =
-            GCWorker::new(self.engine, None, None, self.gc_config.unwrap_or_default());
+            GcWorker::new(self.engine, None, None, self.gc_config.unwrap_or_default());
         gc_worker.start()?;
 
         Ok(SyncTestStorage {
@@ -73,14 +72,14 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
 /// Only used for test purpose.
 #[derive(Clone)]
 pub struct SyncTestStorage<E: Engine> {
-    gc_worker: GCWorker<E>,
+    gc_worker: GcWorker<E>,
     store: Storage<E, DummyLockManager>,
 }
 
 impl<E: Engine> SyncTestStorage<E> {
-    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
         &mut self,
-        cfg: AutoGCConfig<S, R>,
+        cfg: AutoGcConfig<S, R>,
     ) {
         self.gc_worker.start_auto_gc(cfg).unwrap();
     }
@@ -99,9 +98,7 @@ impl<E: Engine> SyncTestStorage<E> {
         key: &Key,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Option<Value>> {
-        self.store
-            .async_get(ctx, key.to_owned(), start_ts.into())
-            .wait()
+        self.store.get(ctx, key.to_owned(), start_ts.into()).wait()
     }
 
     #[allow(dead_code)]
@@ -112,7 +109,7 @@ impl<E: Engine> SyncTestStorage<E> {
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_batch_get(ctx, keys.to_owned(), start_ts.into())
+            .batch_get(ctx, keys.to_owned(), start_ts.into())
             .wait()
     }
 
@@ -126,13 +123,14 @@ impl<E: Engine> SyncTestStorage<E> {
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_scan(
+            .scan(
                 ctx,
                 start_key,
                 end_key,
                 limit,
                 start_ts.into(),
-                Options::new(0, false, key_only),
+                key_only,
+                false,
             )
             .wait()
     }
@@ -147,13 +145,14 @@ impl<E: Engine> SyncTestStorage<E> {
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_scan(
+            .scan(
                 ctx,
                 start_key,
                 end_key,
                 limit,
                 start_ts.into(),
-                Options::new(0, false, key_only).reverse_scan(),
+                key_only,
+                true,
             )
             .wait()
     }
@@ -165,12 +164,15 @@ impl<E: Engine> SyncTestStorage<E> {
         primary: Vec<u8>,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<Vec<Result<()>>> {
-        wait_op!(|cb| self.store.async_prewrite(
+        wait_op!(|cb| self.store.prewrite(
             ctx,
             mutations,
             primary,
             start_ts.into(),
-            Options::default(),
+            0,
+            false,
+            0,
+            TimeStamp::default(),
             cb
         ))
         .unwrap()
@@ -185,7 +187,7 @@ impl<E: Engine> SyncTestStorage<E> {
     ) -> Result<TxnStatus> {
         wait_op!(|cb| self
             .store
-            .async_commit(ctx, keys, start_ts.into(), commit_ts.into(), cb))
+            .commit(ctx, keys, start_ts.into(), commit_ts.into(), cb))
         .unwrap()
     }
 
@@ -198,7 +200,7 @@ impl<E: Engine> SyncTestStorage<E> {
     ) -> Result<()> {
         wait_op!(|cb| self
             .store
-            .async_cleanup(ctx, key, start_ts.into(), current_ts.into(), cb))
+            .cleanup(ctx, key, start_ts.into(), current_ts.into(), cb))
         .unwrap()
     }
 
@@ -208,7 +210,7 @@ impl<E: Engine> SyncTestStorage<E> {
         keys: Vec<Key>,
         start_ts: impl Into<TimeStamp>,
     ) -> Result<()> {
-        wait_op!(|cb| self.store.async_rollback(ctx, keys, start_ts.into(), cb)).unwrap()
+        wait_op!(|cb| self.store.rollback(ctx, keys, start_ts.into(), cb)).unwrap()
     }
 
     pub fn scan_locks(
@@ -220,7 +222,7 @@ impl<E: Engine> SyncTestStorage<E> {
     ) -> Result<Vec<LockInfo>> {
         wait_op!(|cb| self
             .store
-            .async_scan_locks(ctx, max_ts.into(), start_key, limit, cb))
+            .scan_locks(ctx, max_ts.into(), start_key, limit, cb))
         .unwrap()
     }
 
@@ -235,7 +237,7 @@ impl<E: Engine> SyncTestStorage<E> {
             start_ts.into(),
             commit_ts.map(Into::into).unwrap_or_else(TimeStamp::zero),
         );
-        wait_op!(|cb| self.store.async_resolve_lock(ctx, txn_status, cb)).unwrap()
+        wait_op!(|cb| self.store.resolve_lock(ctx, txn_status, cb)).unwrap()
     }
 
     pub fn resolve_lock_batch(
@@ -244,23 +246,23 @@ impl<E: Engine> SyncTestStorage<E> {
         txns: Vec<(TimeStamp, TimeStamp)>,
     ) -> Result<()> {
         let txn_status: HashMap<TimeStamp, TimeStamp> = txns.into_iter().collect();
-        wait_op!(|cb| self.store.async_resolve_lock(ctx, txn_status, cb)).unwrap()
+        wait_op!(|cb| self.store.resolve_lock(ctx, txn_status, cb)).unwrap()
     }
 
     pub fn gc(&self, ctx: Context, safe_point: impl Into<TimeStamp>) -> Result<()> {
-        wait_op!(|cb| self.gc_worker.async_gc(ctx, safe_point.into(), cb)).unwrap()
+        wait_op!(|cb| self.gc_worker.gc(ctx, safe_point.into(), cb)).unwrap()
     }
 
     pub fn raw_get(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        self.store.async_raw_get(ctx, cf, key).wait()
+        self.store.raw_get(ctx, cf, key).wait()
     }
 
     pub fn raw_put(&self, ctx: Context, cf: String, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
-        wait_op!(|cb| self.store.async_raw_put(ctx, cf, key, value, cb)).unwrap()
+        wait_op!(|cb| self.store.raw_put(ctx, cf, key, value, cb)).unwrap()
     }
 
     pub fn raw_delete(&self, ctx: Context, cf: String, key: Vec<u8>) -> Result<()> {
-        wait_op!(|cb| self.store.async_raw_delete(ctx, cf, key, cb)).unwrap()
+        wait_op!(|cb| self.store.raw_delete(ctx, cf, key, cb)).unwrap()
     }
 
     pub fn raw_scan(
@@ -272,7 +274,7 @@ impl<E: Engine> SyncTestStorage<E> {
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_raw_scan(ctx, cf, start_key, end_key, limit, false, false)
+            .raw_scan(ctx, cf, start_key, end_key, limit, false, false)
             .wait()
     }
 
@@ -285,7 +287,7 @@ impl<E: Engine> SyncTestStorage<E> {
         limit: usize,
     ) -> Result<Vec<Result<KvPair>>> {
         self.store
-            .async_raw_scan(ctx, cf, start_key, end_key, limit, false, true)
+            .raw_scan(ctx, cf, start_key, end_key, limit, false, true)
             .wait()
     }
 }

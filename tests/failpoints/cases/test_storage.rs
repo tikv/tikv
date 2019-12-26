@@ -15,6 +15,7 @@ use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::*;
 use tikv_util::HandyRwLock;
+use txn_types::Key;
 
 #[test]
 fn test_scheduler_leader_change_twice() {

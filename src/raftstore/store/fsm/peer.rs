@@ -10,8 +10,9 @@ use std::{cmp, u64};
 
 use crate::raftstore::{Error, Result};
 use engine::Engines;
+use engine::Peekable;
 use engine::CF_RAFT;
-use engine::{Peekable, Snapshot as EngineSnapshot};
+use engine_rocks::{RocksEngine, RocksSnapshot};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SstMeta;
@@ -41,7 +42,6 @@ use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, CatchUpLogs, ChangePeer,
     ExecResult, Fsm, RegionProposal,
 };
-use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::Callback;
 use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
@@ -57,6 +57,7 @@ use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
+use keys::{self, enc_end_key, enc_start_key};
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
@@ -1336,9 +1337,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn handle_destroy_peer(&mut self, job: DestroyPeerJob) -> bool {
         if job.initialized {
-            self.ctx
-                .apply_router
-                .schedule_task(job.region_id, ApplyTask::destroy(job.region_id));
+            // When initialized is true and async_remove is false, applyfsm doesn't need to
+            // send destroy msg to peerfsm because peerfsm has already destroyed.
+            // In this case, if applyfsm sends destroy msg, peerfsm may be destroyed twice
+            // because there are some msgs in channel so peerfsm still need to handle them (e.g. callback)
+            self.ctx.apply_router.schedule_task(
+                job.region_id,
+                ApplyTask::destroy(job.region_id, job.async_remove),
+            );
         }
         if job.async_remove {
             info!(
@@ -1354,6 +1360,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn destroy_peer(&mut self, merged_by_target: bool) {
+        fail_point!("destroy_peer");
         info!(
             "starts destroy";
             "region_id" => self.fsm.region_id(),
@@ -1388,10 +1395,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if let Some(reader) = meta.readers.remove(&region_id) {
             reader.mark_invalid();
         }
-
-        self.ctx
-            .apply_router
-            .schedule_task(region_id, ApplyTask::destroy(region_id));
 
         // Trigger region change observer
         self.ctx.coprocessor_host.on_region_changed(
@@ -1505,7 +1508,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // We only care remove itself now.
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
             if my_peer_id == peer.get_id() {
-                self.destroy_peer(false)
+                self.destroy_peer(false);
             } else {
                 panic!(
                     "{} trying to remove unknown peer {:?}",
@@ -2128,8 +2131,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             "peer_id" => self.fsm.peer_id(),
             "merge_state" => ?self.fsm.peer.pending_merge_state,
         );
-        if let Some(job) = self.fsm.peer.maybe_destroy() {
-            self.handle_destroy_peer(job);
+        match self.fsm.peer.maybe_destroy() {
+            None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
+            Some(job) => {
+                self.handle_destroy_peer(job);
+            }
         }
     }
 
@@ -2354,7 +2360,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.peer.mut_store().check_applying_snap() {
             self.ctx.raft_metrics.invalid_proposal.is_applying_snapshot += 1;
             // TODO: replace to a more suitable error.
-            return Err(Error::Other(box_err!("peer is applying snapshot.")));
+            return Err(Error::Other(box_err!(
+                "{} peer is applying snapshot",
+                self.fsm.peer.tag
+            )));
         }
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg, self.fsm.peer.term()) {
@@ -2380,7 +2389,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback) {
+    fn propose_raft_command(&mut self, mut msg: RaftCmdRequest, cb: Callback<RocksEngine>) {
         match self.pre_propose_raft_command(&msg) {
             Ok(Some(resp)) => {
                 cb.invoke_with_response(resp);
@@ -2614,7 +2623,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         &mut self,
         region_epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
     ) {
         if let Err(e) = self.validate_split_region(&region_epoch, &split_keys) {
             cb.invoke_with_response(new_error(e));
@@ -2636,7 +2645,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
             match t {
                 PdTask::AskBatchSplit { callback, .. } => {
-                    callback.invoke_with_response(new_error(box_err!("failed to split: Stopped")));
+                    callback.invoke_with_response(new_error(box_err!(
+                        "{} failed to split: Stopped",
+                        self.fsm.peer.tag
+                    )));
                 }
                 _ => unreachable!(),
             }
@@ -2883,7 +2895,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: RocksSnapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
         info!(
@@ -3090,7 +3102,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut response = match cmd_type {
             StatusCmdType::RegionLeader => self.execute_region_leader(),
             StatusCmdType::RegionDetail => self.execute_region_detail(request),
-            StatusCmdType::InvalidStatus => Err(box_err!("invalid status command!")),
+            StatusCmdType::InvalidStatus => {
+                Err(box_err!("{} invalid status command!", self.fsm.peer.tag))
+            }
         }?;
         response.set_cmd_type(cmd_type);
 

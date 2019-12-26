@@ -6,12 +6,15 @@ use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
+use kvproto::configpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
+use protobuf::Message;
 use raft::{Ready, StateRole};
+use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -21,6 +24,7 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
+use crate::config::{ConfigController, ConfigHandler};
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -36,7 +40,6 @@ use crate::raftstore::store::fsm::{
     BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
 };
 use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
-use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use crate::raftstore::store::local_metrics::RaftMetrics;
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
@@ -56,8 +59,10 @@ use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
+use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
 use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::timer::SteadyTimer;
@@ -188,7 +193,7 @@ impl RaftRouter {
 }
 
 pub struct PollContext<T, C: 'static> {
-    pub cfg: Arc<Config>,
+    pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
@@ -426,6 +431,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     self.on_store_unreachable(store_id);
                 }
                 StoreMsg::Start { store } => self.start(store),
+                #[cfg(test)]
+                StoreMsg::Validate(f) => f(&self.ctx.cfg),
             }
         }
     }
@@ -457,6 +464,7 @@ pub struct RaftPoller<T: 'static, C: 'static> {
     poll_ctx: PollContext<T, C>,
     pending_proposals: Vec<RegionProposal>,
     messages_per_tick: usize,
+    cfg_tracker: Tracker<Config>,
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
@@ -571,6 +579,27 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             self.pending_proposals = Vec::with_capacity(batch_size);
         }
         self.timer = SlowTimer::new();
+        // update config
+        if let Some(incoming) = self.cfg_tracker.any_new() {
+            match Ord::cmp(
+                &incoming.messages_per_tick,
+                &self.poll_ctx.cfg.messages_per_tick,
+            ) {
+                CmpOrdering::Equal => {}
+                CmpOrdering::Greater => {
+                    self.store_msg_buf.reserve(incoming.messages_per_tick);
+                    self.peer_msg_buf.reserve(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
+                CmpOrdering::Less => {
+                    self.store_msg_buf.shrink_to(incoming.messages_per_tick);
+                    self.peer_msg_buf.shrink_to(incoming.messages_per_tick);
+                    self.messages_per_tick = incoming.messages_per_tick;
+                }
+            }
+            self.poll_ctx.cfg = incoming.clone();
+            info!("raftstore config updated!");
+        }
     }
 
     fn handle_control(&mut self, store: &mut StoreFsm) -> Option<usize> {
@@ -676,7 +705,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
 }
 
 pub struct RaftPollerBuilder<T, C> {
-    pub cfg: Arc<Config>,
+    pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
@@ -727,7 +756,9 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
             total_count += 1;
 
-            let local_state = protobuf::parse_from_bytes::<RegionLocalState>(value)?;
+            let mut local_state = RegionLocalState::default();
+            local_state.merge_from_bytes(value)?;
+
             let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
                 tombstone_count += 1;
@@ -750,7 +781,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
             let (tx, mut peer) = box_try!(PeerFsm::create(
                 store_id,
-                &self.cfg,
+                &self.cfg.value(),
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 region,
@@ -787,7 +818,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             info!("region is applying snapshot"; "region" => ?region, "store_id" => store_id);
             let (tx, mut peer) = PeerFsm::create(
                 store_id,
-                &self.cfg,
+                &self.cfg.value(),
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 &region,
@@ -871,7 +902,7 @@ where
 
     fn build(&mut self) -> RaftPoller<T, C> {
         let ctx = PollContext {
-            cfg: self.cfg.clone(),
+            cfg: self.cfg.value().clone(),
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
@@ -904,8 +935,9 @@ where
             queued_snapshot: HashSet::default(),
             current_time: None,
         };
+        let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
-            tag: format!("[store {}]", ctx.store.get_id()),
+            tag: tag.clone(),
             store_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             peer_msg_buf: Vec::with_capacity(ctx.cfg.messages_per_tick),
             previous_metrics: ctx.raft_metrics.clone(),
@@ -913,6 +945,7 @@ where
             messages_per_tick: ctx.cfg.messages_per_tick,
             poll_ctx: ctx,
             pending_proposals: Vec::new(),
+            cfg_tracker: self.cfg.clone().tracker(tag),
         }
     }
 }
@@ -954,6 +987,7 @@ impl RaftBatchSystem {
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
+        mut cfg_controller: ConfigController,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -977,8 +1011,10 @@ impl RaftBatchSystem {
                 .pool_size(cfg.future_poll_size)
                 .build(),
         };
+        let cfg = Arc::new(VersionTrack::new(cfg));
+        cfg_controller.register("raft_store", Box::new(cfg.clone()));
         let mut builder = RaftPollerBuilder {
-            cfg: Arc::new(cfg),
+            cfg,
             store: meta,
             engines,
             router: self.router.clone(),
@@ -1000,7 +1036,7 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        self.start_system(workers, region_peers, builder)?;
+        self.start_system(workers, region_peers, builder, cfg_controller)?;
         Ok(())
     }
 
@@ -1009,12 +1045,14 @@ impl RaftBatchSystem {
         mut workers: Workers,
         region_peers: Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>,
         builder: RaftPollerBuilder<T, C>,
+        cfg_controller: ConfigController,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
         let engines = builder.engines.clone();
         let snap_mgr = builder.snap_mgr.clone();
         let cfg = builder.cfg.clone();
+        let cfg = cfg.value();
         let store = builder.store.clone();
         let pd_client = builder.pd_client.clone();
         let importer = builder.importer.clone();
@@ -1080,6 +1118,7 @@ impl RaftBatchSystem {
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,
             cfg.clean_stale_peer_delay.0,
+            Arc::clone(&workers.coprocessor_host),
         );
         let timer = RegionRunner::new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
@@ -1097,9 +1136,16 @@ impl RaftBatchSystem {
         let cleanup_runner = CleanupRunner::new(compact_runner, cleanup_sst_runner);
         box_try!(workers.cleanup_worker.start(cleanup_runner));
 
+        let config_client = box_try!(ConfigHandler::start(
+            cfg_controller.get_current().server.addr.clone(),
+            cfg_controller,
+            configpb::Version::new(), // TODO: we can reuse the returned Version of ConfigHandler::create
+            workers.pd_worker.scheduler(),
+        ));
         let pd_runner = PdRunner::new(
             store.get_id(),
             Arc::clone(&pd_client),
+            config_client,
             self.router.clone(),
             Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),
@@ -2061,12 +2107,234 @@ fn is_range_covered<'a, F: Fn(u64) -> &'a metapb::Region>(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::{mpsc, Arc, Mutex};
 
+    use crate::config::*;
+    use crate::import::SSTImporter;
     use crate::raftstore::coprocessor::properties::{RangeOffsets, RangeProperties};
+    use crate::raftstore::coprocessor::CoprocessorHost;
+    use crate::raftstore::store::fsm::*;
+    use crate::raftstore::store::Transport;
     use crate::storage::kv::CompactedEvent;
+
+    use engine::ALL_CFS;
+    use tempfile::{Builder, TempDir};
     use tikv_util::collections::HashMap;
+    use tikv_util::config::VersionTrack;
+    use tikv_util::worker::{dummy_scheduler, FutureWorker};
+    use tokio_threadpool;
 
     use super::*;
+
+    #[derive(Clone)]
+    struct MockTransport;
+    impl Transport for MockTransport {
+        fn send(&mut self, _: RaftMessage) -> Result<()> {
+            unimplemented!()
+        }
+        fn flush(&mut self) {
+            unimplemented!()
+        }
+    }
+
+    struct MockPdClient;
+    impl PdClient for MockPdClient {}
+
+    fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
+        let path = Builder::new().prefix(path).tempdir().unwrap();
+        let db = Arc::new(
+            rocks::util::new_engine(
+                path.path().join("db").to_str().unwrap(),
+                None,
+                ALL_CFS,
+                None,
+            )
+            .unwrap(),
+        );
+        let raft_db = Arc::new(
+            rocks::util::new_engine(path.path().join("raft").to_str().unwrap(), None, &[], None)
+                .unwrap(),
+        );
+        let shared_block_cache = false;
+        (path, Engines::new(db, raft_db, shared_block_cache))
+    }
+
+    fn create_batch_system(
+        cfg: &Config,
+    ) -> (
+        RaftRouter,
+        ApplyRouter,
+        BatchSystem<PeerFsm, StoreFsm>,
+        ApplyBatchSystem,
+    ) {
+        let (store_tx, store_fsm) = StoreFsm::new(cfg);
+        let (apply_router, apply_system) = create_apply_batch_system(&cfg);
+        let (router, system) = create_system(
+            cfg.store_pool_size,
+            cfg.store_max_batch_size,
+            store_tx,
+            store_fsm,
+        );
+        (router, apply_router, system, apply_system)
+    }
+
+    fn start_raftstore(cfg: TiKvConfig) -> (ConfigController, RaftRouter, ApplyRouter) {
+        let (raft_router, apply_router, mut system, mut apply_system) =
+            create_batch_system(&cfg.raft_store);
+        let (_, engines) = create_tmp_engine("store-config");
+        let host = Arc::new(CoprocessorHost::default());
+        let importer = {
+            let dir = Builder::new().prefix("store-config").tempdir().unwrap();
+            Arc::new(SSTImporter::new(dir.path()).unwrap())
+        };
+        let snap_mgr = {
+            let tmp = Builder::new().prefix("store-config").tempdir().unwrap();
+            SnapManager::new(tmp.path().to_str().unwrap(), Some(raft_router.clone()))
+        };
+        let future_poller = tokio_threadpool::Builder::new()
+            .name_prefix("store-config")
+            .pool_size(1)
+            .build()
+            .sender()
+            .clone();
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
+        let mut cfg_controller = ConfigController::new(cfg);
+        cfg_controller.register("raft_store", Box::new(cfg_track.clone()));
+        let builder = RaftPollerBuilder {
+            cfg: cfg_track,
+            store: Default::default(),
+            engines,
+            router: raft_router.clone(),
+            split_check_scheduler: dummy_scheduler().0,
+            region_scheduler: dummy_scheduler().0,
+            pd_scheduler: FutureWorker::new("store-config").scheduler(),
+            consistency_check_scheduler: dummy_scheduler().0,
+            cleanup_scheduler: dummy_scheduler().0,
+            raftlog_gc_scheduler: dummy_scheduler().0,
+            apply_router: apply_router.clone(),
+            trans: MockTransport,
+            pd_client: Arc::new(MockPdClient),
+            coprocessor_host: host,
+            importer,
+            snap_mgr,
+            global_stat: Default::default(),
+            store_meta,
+            applying_snap_count: Arc::new(AtomicUsize::new(0)),
+            future_poller,
+        };
+        let apply_poller_builder = ApplyPollerBuilder::new(
+            &builder,
+            ApplyNotifier::Router(raft_router.clone()),
+            apply_router.clone(),
+        );
+        system.spawn("store-config".to_owned(), builder);
+        apply_system.spawn("apply-config".to_owned(), apply_poller_builder);
+        (cfg_controller, raft_router, apply_router)
+    }
+
+    fn validate_store<F>(router: &RaftRouter, f: F)
+    where
+        F: FnOnce(&Config) + Send + 'static,
+    {
+        let (tx, rx) = mpsc::channel();
+        router
+            .send_control(StoreMsg::Validate(Box::new(move |cfg: &Config| {
+                f(cfg);
+                tx.send(()).unwrap();
+            })))
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+
+    fn validate_apply<F>(router: &ApplyRouter, region_id: u64, validate: F)
+    where
+        F: FnOnce(bool) + Send + 'static,
+    {
+        let (tx, rx) = mpsc::channel();
+        router.schedule_task(
+            region_id,
+            ApplyTask::Validate(
+                region_id,
+                Box::new(move |(_, sync_log): (_, bool)| {
+                    validate(sync_log);
+                    tx.send(()).unwrap();
+                }),
+            ),
+        );
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+
+    #[test]
+    fn test_update_raftstore_config() {
+        let mut config = TiKvConfig::default();
+        config.validate().unwrap();
+        let (mut cfg_controller, router, _) = start_raftstore(config.clone());
+
+        let incoming = config.clone();
+        let raft_store = incoming.raft_store.clone();
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+
+        // config should not change
+        assert_eq!(rollback.right(), Some(false));
+        validate_store(&router, move |cfg: &Config| {
+            assert_eq!(cfg, &raft_store);
+        });
+
+        // dispatch updated config
+        let mut raft_store = config.raft_store.clone();
+        raft_store.messages_per_tick = 12345;
+        raft_store.raft_log_gc_threshold = 54321;
+        let mut incoming = config;
+        incoming.raft_store = raft_store.clone();
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+
+        // config should be updated
+        assert_eq!(rollback.right(), Some(true));
+        validate_store(&router, move |cfg: &Config| {
+            assert_eq!(cfg, &raft_store);
+        });
+    }
+
+    #[test]
+    fn test_update_apply_store_config() {
+        let mut config = TiKvConfig::default();
+        config.raft_store.sync_log = true;
+        config.validate().unwrap();
+        let (mut cfg_controller, raft_router, apply_router) = start_raftstore(config.clone());
+
+        // register region
+        let region_id = 1;
+        let mut reg = Registration::default();
+        reg.region.set_id(region_id);
+        apply_router.schedule_task(region_id, ApplyTask::Registration(reg));
+
+        let rollback = cfg_controller.update_or_rollback(config.clone()).unwrap();
+
+        // config should not change
+        assert_eq!(rollback.right(), Some(false));
+        validate_store(&raft_router, move |cfg: &Config| {
+            assert_eq!(cfg.sync_log, true);
+        });
+        validate_apply(&apply_router, region_id, |sync_log| {
+            assert_eq!(sync_log, true);
+        });
+
+        // dispatch updated config
+        let mut incoming = config;
+        incoming.raft_store.sync_log = false;
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+
+        // both configs should be updated
+        assert_eq!(rollback.right(), Some(true));
+        validate_store(&raft_router, move |cfg: &Config| {
+            assert_eq!(cfg.sync_log, false);
+        });
+        validate_apply(&apply_router, region_id, |sync_log| {
+            assert_eq!(sync_log, false);
+        });
+    }
 
     #[test]
     fn test_calc_region_declined_bytes() {

@@ -135,7 +135,7 @@ fn test_stream_batch_row_limit() {
         chunk.merge_from_bytes(resp.get_data()).unwrap();
         assert_eq!(
             resp.get_output_counts(),
-            expected_output_counts[i].as_slice()
+            expected_output_counts[i].as_slice(),
         );
 
         let chunks = vec![chunk];
@@ -1515,7 +1515,7 @@ fn test_output_counts() {
 
     let req = DAGSelect::from(&product).build();
     let resp = handle_select(&endpoint, req);
-    assert_eq!(resp.get_output_counts(), [data.len() as i64]);
+    assert_eq!(resp.get_output_counts(), &[data.len() as i64]);
 }
 
 #[test]
@@ -1605,4 +1605,68 @@ fn test_snapshot_failed() {
     let resp = handle_request(&endpoint, req);
 
     assert!(resp.get_region_error().has_store_not_match());
+}
+
+#[test]
+fn test_cache() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
+
+    let (_, endpoint) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
+
+    let req = DAGSelect::from(&product).build_with(ctx.clone(), &[0]);
+    let resp = handle_request(&endpoint, req.clone());
+
+    assert!(!resp.get_is_cache_hit());
+    let cache_version = resp.get_cache_last_version();
+
+    // Cache version must be >= 5 because Raft apply index must be >= 5.
+    assert!(cache_version >= 5);
+
+    // Send the request again using is_cache_enabled == false (default) and a matching version.
+    // The request should be processed as usual.
+
+    let mut req2 = req.clone();
+    req2.set_cache_if_match_version(cache_version);
+    let resp2 = handle_request(&endpoint, req2);
+
+    assert!(!resp2.get_is_cache_hit());
+    assert_eq!(
+        resp.get_cache_last_version(),
+        resp2.get_cache_last_version()
+    );
+    assert_eq!(resp.get_data(), resp2.get_data());
+
+    // Send the request again using is_cached_enabled == true and a matching version.
+    // The request should be skipped.
+
+    let mut req3 = req.clone();
+    req3.set_is_cache_enabled(true);
+    req3.set_cache_if_match_version(cache_version);
+    let resp3 = handle_request(&endpoint, req3);
+
+    assert!(resp3.get_is_cache_hit());
+    assert!(resp3.get_data().is_empty());
+
+    // Send the request using a non-matching version. The request should be processed.
+
+    let mut req4 = req.clone();
+    req4.set_is_cache_enabled(true);
+    req4.set_cache_if_match_version(cache_version + 1);
+    let resp4 = handle_request(&endpoint, req4);
+
+    assert!(!resp4.get_is_cache_hit());
+    assert_eq!(
+        resp.get_cache_last_version(),
+        resp4.get_cache_last_version()
+    );
+    assert_eq!(resp.get_data(), resp4.get_data());
 }

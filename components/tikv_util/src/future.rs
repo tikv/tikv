@@ -20,6 +20,23 @@ where
     (callback, future)
 }
 
+pub fn paired_std_future_callback<T>() -> (
+    Box<dyn FnOnce(T) + Send>,
+    futures03::channel::oneshot::Receiver<T>,
+)
+where
+    T: Send + 'static,
+{
+    let (tx, future) = futures03::channel::oneshot::channel::<T>();
+    let callback = Box::new(move |result| {
+        let r = tx.send(result);
+        if r.is_err() {
+            warn!("paired_future_callback: Failed to send result to the future rx, discarded.");
+        }
+    });
+    (callback, future)
+}
+
 /// A shortcut for `f1.and_then(|()| f2.flatten())`. Note that
 /// the expression is just a simplified version as f2's Error
 /// type may not be easy handled via combinators.

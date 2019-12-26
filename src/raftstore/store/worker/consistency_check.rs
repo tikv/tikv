@@ -5,9 +5,10 @@ use std::fmt::{self, Display, Formatter};
 use byteorder::{BigEndian, WriteBytesExt};
 use kvproto::metapb::Region;
 
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use crate::raftstore::store::{CasualMessage, CasualRouter};
 use engine::CF_RAFT;
-use engine::{Iterable, Peekable, Snapshot};
+use engine_rocks::RocksSnapshot;
+use engine_traits::{Iterable, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
@@ -18,12 +19,12 @@ pub enum Task {
     ComputeHash {
         index: u64,
         region: Region,
-        snap: Snapshot,
+        snap: RocksSnapshot,
     },
 }
 
 impl Task {
-    pub fn compute_hash(region: Region, index: u64, snap: Snapshot) -> Task {
+    pub fn compute_hash(region: Region, index: u64, snap: RocksSnapshot) -> Task {
         Task::ComputeHash {
             region,
             index,
@@ -52,7 +53,7 @@ impl<C: CasualRouter> Runner<C> {
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash(&mut self, region: Region, index: u64, snap: Snapshot) {
+    fn compute_hash(&mut self, region: Region, index: u64, snap: RocksSnapshot) {
         let region_id = region.get_id();
         info!(
             "computing hash";
@@ -142,12 +143,11 @@ impl<C: CasualRouter> Runnable<Task> for Runner<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raftstore::store::keys;
     use byteorder::{BigEndian, WriteBytesExt};
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
-    use engine::Snapshot;
     use engine::{CF_DEFAULT, CF_RAFT};
+    use engine_rocks::RocksSnapshot;
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
@@ -187,7 +187,7 @@ mod tests {
         runner.run(Task::ComputeHash {
             index: 10,
             region: region.clone(),
-            snap: Snapshot::new(Arc::clone(&db)),
+            snap: RocksSnapshot::new(Arc::clone(&db)),
         });
         let mut checksum_bytes = vec![];
         checksum_bytes.write_u32::<BigEndian>(sum).unwrap();

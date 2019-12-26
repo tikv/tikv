@@ -10,9 +10,12 @@ use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tidb_query::codec::{datum, table, Datum};
 use tidb_query::expr::EvalContext;
 use tikv::storage::{
-    Engine, FixtureStore, Key, Mutation, RocksEngine, SnapshotStore, TestEngineBuilder, TimeStamp,
+    kv::{Engine, RocksEngine, TestEngineBuilder},
+    txn::FixtureStore,
+    SnapshotStore,
 };
 use tikv_util::collections::HashMap;
+use txn_types::{Key, Mutation, TimeStamp};
 
 pub struct Insert<'a, E: Engine> {
     store: &'a mut Store<E>,
