@@ -90,7 +90,7 @@ impl ScalarFunc {
         let parser = JsonFuncArgsParser::new(row);
         let path_exprs: Vec<_> = match parser.get_path_exprs(ctx, &self.children[1..])? {
             Some(list) => list,
-            None => Vec::new(),
+            None => return Ok(None),
         };
         Ok(j.json_length(&path_exprs))
     }

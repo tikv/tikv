@@ -8,10 +8,9 @@ impl Json {
         match self {
             Json::Array(array) => Some(array.len() as i64),
             Json::Object(obj) => Some(obj.len() as i64),
-            Json::String(_) | Json::Boolean(_) | Json::U64(_) | Json::I64(_) | Json::Double(_) => {
+            Json::None | Json::String(_) | Json::Boolean(_) | Json::U64(_) | Json::I64(_) | Json::Double(_) => {
                 Some(1)
             }
-            Json::None => None,
         }
     }
 
@@ -42,7 +41,7 @@ mod tests {
     #[test]
     fn test_json_length() {
         let mut test_cases = vec![
-            ("null", None, None),
+            ("null", None, Some(1)),
             ("false", None, Some(1)),
             ("true", None, Some(1)),
             ("1", None, Some(1)),
