@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::DB;
+use engine::CfName;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
@@ -18,6 +19,7 @@ struct Entry<T> {
 // TODO: change it to Send + Clone.
 pub type BoxAdminObserver = Box<dyn AdminObserver + Send + Sync>;
 pub type BoxQueryObserver = Box<dyn QueryObserver + Send + Sync>;
+pub type BoxApplySnapshotObserver = Box<dyn ApplySnapshotObserver + Send + Sync>;
 pub type BoxSplitCheckObserver = Box<dyn SplitCheckObserver + Send + Sync>;
 pub type BoxRoleObserver = Box<dyn RoleObserver + Send + Sync>;
 pub type BoxRegionChangeObserver = Box<dyn RegionChangeObserver + Send + Sync>;
@@ -27,6 +29,7 @@ pub type BoxRegionChangeObserver = Box<dyn RegionChangeObserver + Send + Sync>;
 pub struct Registry {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
+    apply_snapshot_observers: Vec<Entry<BoxApplySnapshotObserver>>,
     split_check_observers: Vec<Entry<BoxSplitCheckObserver>>,
     role_observers: Vec<Entry<BoxRoleObserver>>,
     region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
@@ -53,6 +56,14 @@ impl Registry {
 
     pub fn register_query_observer(&mut self, priority: u32, qo: BoxQueryObserver) {
         push!(priority, qo, self.query_observers);
+    }
+
+    pub fn register_apply_snapshot_observer(
+        &mut self,
+        priority: u32,
+        aso: BoxApplySnapshotObserver,
+    ) {
+        push!(priority, aso, self.apply_snapshot_observers);
     }
 
     pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver) {
@@ -215,6 +226,31 @@ impl CoprocessorHost {
         }
     }
 
+    pub fn pre_apply_plain_kvs_from_snapshot(
+        &self,
+        region: &Region,
+        cf: CfName,
+        kv_pairs: &[(Vec<u8>, Vec<u8>)],
+    ) {
+        loop_ob!(
+            region,
+            &self.registry.apply_snapshot_observers,
+            pre_apply_plain_kvs,
+            cf,
+            kv_pairs
+        );
+    }
+
+    pub fn pre_apply_sst_from_snapshot(&self, region: &Region, cf: CfName, path: &str) {
+        loop_ob!(
+            region,
+            &self.registry.apply_snapshot_observers,
+            pre_apply_sst,
+            cf,
+            path
+        );
+    }
+
     pub fn new_split_checker_host(
         &self,
         region: &Region,
@@ -350,6 +386,23 @@ mod tests {
         }
     }
 
+    impl ApplySnapshotObserver for TestCoprocessor {
+        fn pre_apply_plain_kvs(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: CfName,
+            _: &[(Vec<u8>, Vec<u8>)],
+        ) {
+            self.called.fetch_add(9, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+
+        fn pre_apply_sst(&self, ctx: &mut ObserverContext<'_>, _: CfName, _: &str) {
+            self.called.fetch_add(10, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+    }
+
     macro_rules! assert_all {
         ($target:expr, $expect:expr) => {{
             for (c, e) in ($target).iter().zip($expect) {
@@ -374,6 +427,8 @@ mod tests {
             .register_admin_observer(1, Box::new(ob.clone()));
         host.registry
             .register_query_observer(1, Box::new(ob.clone()));
+        host.registry
+            .register_apply_snapshot_observer(1, Box::new(ob.clone()));
         host.registry
             .register_role_observer(1, Box::new(ob.clone()));
         host.registry
@@ -404,6 +459,11 @@ mod tests {
 
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!(&[&ob.called], &[36]);
+
+        host.pre_apply_plain_kvs_from_snapshot(&region, "default", &[]);
+        assert_all!(&[&ob.called], &[45]);
+        host.pre_apply_sst_from_snapshot(&region, "default", "");
+        assert_all!(&[&ob.called], &[55]);
     }
 
     #[test]
