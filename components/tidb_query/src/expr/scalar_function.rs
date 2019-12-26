@@ -294,6 +294,7 @@ impl ScalarFunc {
             | ScalarFuncSig::UncompressedLength
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::FromDays
+            | ScalarFuncSig::Ord
             | ScalarFuncSig::OctInt
             | ScalarFuncSig::JsonDepthSig => (1, 1),
 
@@ -381,6 +382,7 @@ impl ScalarFunc {
             | ScalarFuncSig::AddTimeStringNull
             | ScalarFuncSig::SubTimeDateTimeNull
             | ScalarFuncSig::SubTimeDurationNull
+            | ScalarFuncSig::Uuid
             | ScalarFuncSig::Pi => (0, 0),
 
             // unimplemented signature
@@ -458,7 +460,6 @@ impl ScalarFunc {
             | ScalarFuncSig::NowWithoutArg
             | ScalarFuncSig::NullTimeDiff
             | ScalarFuncSig::OctString
-            | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::RandomBytes
@@ -511,7 +512,6 @@ impl ScalarFunc {
             | ScalarFuncSig::UtcTimestampWithoutArg
             | ScalarFuncSig::UtcTimeWithArg
             | ScalarFuncSig::UtcTimeWithoutArg
-            | ScalarFuncSig::Uuid
             | ScalarFuncSig::ValuesDecimal
             | ScalarFuncSig::ValuesDuration
             | ScalarFuncSig::ValuesInt
@@ -868,6 +868,7 @@ dispatch_call! {
         UncompressedLength => uncompressed_length,
         Strcmp => strcmp,
         Instr => instr,
+        Ord => ord,
         InstrUtf8 => instr_utf8,
         JsonDepthSig => json_depth,
     }
@@ -1005,6 +1006,7 @@ dispatch_call! {
         Inet6Aton => inet6_aton,
         Inet6Ntoa => inet6_ntoa,
         Md5 => md5,
+        Uuid => uuid,
         Sha1 => sha1,
         Sha2 => sha2,
         Elt => elt,
@@ -1392,6 +1394,7 @@ mod tests {
                     ScalarFuncSig::UncompressedLength,
                     ScalarFuncSig::Quote,
                     ScalarFuncSig::OctInt,
+                    ScalarFuncSig::Ord,
                     ScalarFuncSig::JsonDepthSig,
                 ],
                 1,
@@ -1508,6 +1511,7 @@ mod tests {
                     ScalarFuncSig::SubTimeDateTimeNull,
                     ScalarFuncSig::SubTimeDurationNull,
                     ScalarFuncSig::Pi,
+                    ScalarFuncSig::Uuid,
                 ],
                 0,
                 0,
@@ -1606,7 +1610,6 @@ mod tests {
             ScalarFuncSig::NowWithoutArg,
             ScalarFuncSig::NullTimeDiff,
             ScalarFuncSig::OctString,
-            ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::RandomBytes,
@@ -1659,7 +1662,6 @@ mod tests {
             ScalarFuncSig::UtcTimestampWithoutArg,
             ScalarFuncSig::UtcTimeWithArg,
             ScalarFuncSig::UtcTimeWithoutArg,
-            ScalarFuncSig::Uuid,
             ScalarFuncSig::ValuesDecimal,
             ScalarFuncSig::ValuesDuration,
             ScalarFuncSig::ValuesInt,

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use super::RaftKv;
 use super::Result;
+use crate::config::ConfigController;
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
 use crate::raftstore::router::RaftStoreRouter;
@@ -115,6 +116,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
+        cfg_controller: ConfigController,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -149,6 +151,7 @@ where
             store_meta,
             coprocessor_host,
             importer,
+            cfg_controller,
         )?;
 
         // Put store only if the cluster is bootstrapped.
@@ -318,6 +321,7 @@ where
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
+        cfg_controller: ConfigController,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -342,6 +346,7 @@ where
             store_meta,
             coprocessor_host,
             importer,
+            cfg_controller,
         )?;
         Ok(())
     }

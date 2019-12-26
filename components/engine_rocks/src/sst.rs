@@ -72,22 +72,22 @@ impl Iterable for RocksSstReader {
 pub struct RocksSstIterator(DBIterator<Rc<SstFileReader>>);
 
 impl Iterator for RocksSstIterator {
-    fn seek(&mut self, key: SeekKey) -> bool {
+    fn seek(&mut self, key: SeekKey) -> Result<bool> {
         let k: RocksSeekKey = key.into();
-        self.0.seek(k.into_raw())
+        self.0.seek(k.into_raw()).map_err(Error::Engine)
     }
 
-    fn seek_for_prev(&mut self, key: SeekKey) -> bool {
+    fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> {
         let k: RocksSeekKey = key.into();
-        self.0.seek_for_prev(k.into_raw())
+        self.0.seek_for_prev(k.into_raw()).map_err(Error::Engine)
     }
 
-    fn prev(&mut self) -> bool {
-        self.0.prev()
+    fn prev(&mut self) -> Result<bool> {
+        self.0.prev().map_err(Error::Engine)
     }
 
-    fn next(&mut self) -> bool {
-        self.0.next()
+    fn next(&mut self) -> Result<bool> {
+        self.0.next().map_err(Error::Engine)
     }
 
     fn key(&self) -> &[u8] {
@@ -98,12 +98,8 @@ impl Iterator for RocksSstIterator {
         self.0.value()
     }
 
-    fn valid(&self) -> bool {
-        self.0.valid()
-    }
-
-    fn status(&self) -> Result<()> {
-        self.0.status().map_err(Error::Engine)
+    fn valid(&self) -> Result<bool> {
+        self.0.valid().map_err(Error::Engine)
     }
 }
 

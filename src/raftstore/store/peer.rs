@@ -507,7 +507,12 @@ impl Peer {
             );
             return None;
         }
+        // If initialized is false, it implicitly means applyfsm does not exist now.
         let initialized = self.get_store().is_initialized();
+        // If async_remove is true, it means peerfsm needs to be removed after its
+        // corresponding applyfsm was removed.
+        // If it is false, it means either applyfsm does not exist or there is no task
+        // in applyfsm so it's ok to remove peerfsm immediately.
         let async_remove = if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
                 info!(
@@ -821,7 +826,11 @@ impl Peer {
         // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
         // request directly, rather than send a heartbeat to check quorum.
         let msg_type = m.get_msg_type();
-        if msg_type == MessageType::MsgReadIndex {
+        let committed = self.raft_group.raft.raft_log.committed;
+        let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
+        if msg_type == MessageType::MsgReadIndex && expected_term == self.raft_group.raft.term {
+            // If the leader hasn't committed any entries in its term, it can't response read only
+            // requests. Please also take a look at raft-rs.
             if let LeaseState::Valid = self.inspect_lease() {
                 let mut resp = eraftpb::Message::default();
                 resp.set_msg_type(MessageType::MsgReadIndexResp);

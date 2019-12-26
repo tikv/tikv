@@ -115,7 +115,7 @@ impl InByCompare for Real {}
 impl InByCompare for Bytes {}
 impl InByCompare for Decimal {}
 impl InByCompare for Duration {}
-// DateTime requires TZInfo in context, and we cannot acquire it during metadata_ctor.
+// DateTime requires TZInfo in context, and we cannot acquire it during metadata_mapper.
 // TODO: implement InByHash for DateTime.
 impl InByCompare for DateTime {}
 // Implement Hash for Json is impossible, due to equality of Json depends on an epsilon.
@@ -127,7 +127,7 @@ pub struct CompareInMeta<T: Eq + Hash> {
     has_null: bool,
 }
 
-#[rpn_fn(varg, capture = [metadata], min_args = 1, metadata_ctor = init_compare_in_data::<T>)]
+#[rpn_fn(varg, capture = [metadata], min_args = 1, metadata_mapper = init_compare_in_data::<T>)]
 #[inline]
 pub fn compare_in_by_hash<T: InByHash + Extract>(
     metadata: &CompareInMeta<T>,
