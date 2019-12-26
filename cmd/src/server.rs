@@ -173,14 +173,18 @@ impl TiKVServer {
             // Server address and cluster id can not be changed
             let addr = config.server.addr.clone();
             let cluster_id = config.server.cluster_id;
+            // Using the same file for initialize global logger
+            // and diagnostics service
+            let log_file = config.log_file.clone();
 
             let (v, mut cfg) = ConfigHandler::create(addr.clone(), Arc::clone(&pd_client), config)
                 .unwrap_or_else(|e| fatal!("failed to register config from pd: {}", e));
 
             cfg.server.addr = addr;
             cfg.server.cluster_id = cluster_id;
-            version = v;
+            cfg.log_file = log_file;
             config = cfg;
+            version = v;
         }
 
         validate_and_persist_config(&mut config, true);
