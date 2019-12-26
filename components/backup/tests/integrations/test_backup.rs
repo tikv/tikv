@@ -173,13 +173,14 @@ impl TestSuite {
         &self,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
+        begin_ts: u64,
         backup_ts: u64,
         path: &Path,
     ) -> future_mpsc::UnboundedReceiver<BackupResponse> {
         let mut req = BackupRequest::new();
         req.set_start_key(start_key);
         req.set_end_key(end_key);
-        req.start_version = backup_ts;
+        req.start_version = begin_ts;
         req.end_version = backup_ts;
         req.set_storage_backend(make_local_backend(path));
         let (tx, rx) = future_mpsc::unbounded();
@@ -252,6 +253,7 @@ fn test_backup_and_import() {
     let rx = suite.backup(
         vec![], // start
         vec![], // end
+        0,      // begin_ts
         backup_ts,
         &storage_path,
     );
@@ -270,6 +272,7 @@ fn test_backup_and_import() {
     let rx = suite.backup(
         vec![], // start
         vec![], // end
+        0,      // begin_ts
         backup_ts,
         &tmp.path().join(format!("{}", backup_ts + 1)),
     );
@@ -327,6 +330,7 @@ fn test_backup_and_import() {
     let rx = suite.backup(
         vec![], // start
         vec![], // end
+        0,      // begin_ts
         backup_ts,
         &tmp.path().join(format!("{}", backup_ts + 2)),
     );
@@ -368,6 +372,7 @@ fn test_backup_meta() {
     let rx = suite.backup(
         vec![], // start
         vec![], // end
+        0,      // begin_ts
         backup_ts,
         &storage_path,
     );
