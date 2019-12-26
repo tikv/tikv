@@ -15,7 +15,6 @@ pub enum RpnExpressionNode {
         func_meta: RpnFnMeta,
         args_len: usize,
         field_type: FieldType,
-        implicit_args: Vec<ScalarValue>,
         metadata: Box<dyn Any + Send>,
     },
 

@@ -1,5 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod btree_engine;
+mod compact_listener;
+mod cursor;
+mod perf_context;
+mod rocksdb_engine;
+mod stats;
+
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::time::Duration;
@@ -8,19 +15,12 @@ use std::{error, ptr, result};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
-use keys::{Key, Value};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
+use txn_types::{Key, Value};
 
 use crate::into_other::IntoOther;
 use crate::raftstore::coprocessor::SeekRegionCallback;
-
-mod btree_engine;
-mod compact_listener;
-mod cursor;
-mod perf_context;
-mod rocksdb_engine;
-mod stats;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::compact_listener::{CompactedEvent, CompactionListener};
@@ -54,6 +54,23 @@ pub enum Modify {
     Put(CfName, Key, Value),
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
+}
+
+impl Modify {
+    pub fn size(&self) -> usize {
+        let cf = match self {
+            Modify::Delete(cf, _) => cf,
+            Modify::Put(cf, ..) => cf,
+            Modify::DeleteRange(..) => unreachable!(),
+        };
+        let cf_size = if cf == &CF_DEFAULT { 0 } else { cf.len() };
+
+        match self {
+            Modify::Delete(_, k) => cf_size + k.as_encoded().len(),
+            Modify::Put(_, k, v) => cf_size + k.as_encoded().len() + v.len(),
+            Modify::DeleteRange(..) => unreachable!(),
+        }
+    }
 }
 
 pub trait Engine: Send + Clone + 'static {
@@ -135,20 +152,21 @@ pub trait Snapshot: Send + Clone {
 }
 
 pub trait Iterator: Send {
-    fn next(&mut self) -> bool;
-    fn prev(&mut self) -> bool;
+    fn next(&mut self) -> Result<bool>;
+    fn prev(&mut self) -> Result<bool>;
     fn seek(&mut self, key: &Key) -> Result<bool>;
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool>;
-    fn seek_to_first(&mut self) -> bool;
-    fn seek_to_last(&mut self) -> bool;
-    fn valid(&self) -> bool;
-    fn status(&self) -> Result<()>;
+    fn seek_to_first(&mut self) -> Result<bool>;
+    fn seek_to_last(&mut self) -> Result<bool>;
+    fn valid(&self) -> Result<bool>;
 
     fn validate_key(&self, _: &Key) -> Result<()> {
         Ok(())
     }
 
+    /// Only be called when `self.valid() == Ok(true)`.
     fn key(&self) -> &[u8];
+    /// Only be called when `self.valid() == Ok(true)`.
     fn value(&self) -> &[u8];
 }
 

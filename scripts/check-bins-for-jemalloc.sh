@@ -10,7 +10,7 @@ errors=0
 # These don't need to link to jemalloc
 # NB: The fuzzer bins here are just placeholders due to the workspace
 # structure; they are not actual fuzzers.
-whitelist="match_template tidb_query_codegen panic_hook fuzz fuzzer_afl fuzzer_honggfuzz fuzzer_libfuzzer"
+whitelist="configuration configuration_derive match_template tidb_query_codegen panic_hook fuzz fuzzer_afl fuzzer_honggfuzz fuzzer_libfuzzer"
 
 if [[ "`uname`" != "Linux" ]]; then
     echo "skipping jemalloc check - not on Linux"

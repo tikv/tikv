@@ -8,10 +8,10 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, u64};
 
-use engine::rocks::{WriteBatch, WriteOptions, DB};
+use engine::rocks::{WriteBatch, WriteOptions};
 use engine::Engines;
-use engine_rocks::{RocksSnapshot, RocksSyncSnapshot};
-use engine_traits::{Peekable, Snapshot};
+use engine_rocks::{Compat, RocksEngine};
+use engine_traits::{KvEngine, Peekable, Snapshot};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -60,7 +60,7 @@ const MAX_BATCH_KEY_NUM: usize = 128;
 
 struct ReadIndexRequest {
     id: Uuid,
-    cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
+    cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksEngine>)>,
     renew_lease_time: Timespec,
     read_index: Option<u64>,
 }
@@ -71,7 +71,7 @@ impl ReadIndexRequest {
         self.id.as_bytes()
     }
 
-    fn push_command(&mut self, req: RaftCmdRequest, cb: Callback) {
+    fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<RocksEngine>) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         self.cmds.push((req, cb));
     }
@@ -79,7 +79,7 @@ impl ReadIndexRequest {
     fn with_command(
         id: Uuid,
         req: RaftCmdRequest,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
         renew_lease_time: Timespec,
     ) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
@@ -551,7 +551,12 @@ impl Peer {
             );
             return None;
         }
+        // If initialized is false, it implicitly means applyfsm does not exist now.
         let initialized = self.get_store().is_initialized();
+        // If async_remove is true, it means peerfsm needs to be removed after its
+        // corresponding applyfsm was removed.
+        // If it is false, it means either applyfsm does not exist or there is no task
+        // in applyfsm so it's ok to remove peerfsm immediately.
         let async_remove = if self.is_applying_snapshot() {
             if !self.mut_store().cancel_applying_snap() {
                 info!(
@@ -1818,7 +1823,7 @@ impl Peer {
     pub fn propose<T, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
     ) -> bool {
@@ -1897,7 +1902,7 @@ impl Peer {
         poll_ctx: &mut PollContext<T, C>,
         mut meta: ProposalMeta,
         is_conf_change: bool,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
     ) {
         // Try to renew leader lease on every consistent read/write request.
         if poll_ctx.current_time.is_none() {
@@ -2081,7 +2086,12 @@ impl Peer {
         last_index <= progress.get(peer_id).unwrap().matched + ctx.cfg.leader_transfer_max_log_lag
     }
 
-    fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C>, req: RaftCmdRequest, cb: Callback) {
+    fn read_local<T, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+        req: RaftCmdRequest,
+        cb: Callback<RocksEngine>,
+    ) {
         ctx.raft_metrics.propose.local_read += 1;
         cb.invoke_read(self.handle_read(ctx, req, false, Some(self.get_store().committed_index())))
     }
@@ -2119,7 +2129,7 @@ impl Peer {
         poll_ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
     ) -> bool {
         if let Err(e) = self.pre_read_index() {
             debug!(
@@ -2395,7 +2405,7 @@ impl Peer {
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
-        cb: Callback,
+        cb: Callback<RocksEngine>,
     ) -> bool {
         ctx.raft_metrics.propose.transfer_leader += 1;
 
@@ -2491,9 +2501,9 @@ impl Peer {
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
-    ) -> ReadResponse {
+    ) -> ReadResponse<RocksEngine> {
         let mut resp = ReadExecutor::new(
-            ctx.engines.kv.clone(),
+            ctx.engines.kv.c().clone(),
             check_epoch,
             false, /* we don't need snapshot time */
         )
@@ -2745,16 +2755,19 @@ impl RequestInspector for Peer {
 }
 
 #[derive(Debug)]
-pub struct ReadExecutor {
+pub struct ReadExecutor<E: KvEngine> {
     check_epoch: bool,
-    engine: Arc<DB>,
-    snapshot: Option<RocksSyncSnapshot>,
+    engine: E,
+    snapshot: Option<<E::Snapshot as Snapshot>::SyncSnapshot>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
 }
 
-impl ReadExecutor {
-    pub fn new(engine: Arc<DB>, check_epoch: bool, need_snapshot_time: bool) -> Self {
+impl<E> ReadExecutor<E>
+where
+    E: KvEngine,
+{
+    pub fn new(engine: E, check_epoch: bool, need_snapshot_time: bool) -> Self {
         ReadExecutor {
             check_epoch,
             engine,
@@ -2775,8 +2788,7 @@ impl ReadExecutor {
         if self.snapshot.is_some() {
             return;
         }
-        let engine = self.engine.clone();
-        self.snapshot = Some(RocksSnapshot::new(engine).into_sync());
+        self.snapshot = Some(self.engine.snapshot().into_sync());
         // Reading current timespec after snapshot, in case we do not
         // expire lease in time.
         atomic::fence(atomic::Ordering::Release);
@@ -2831,7 +2843,7 @@ impl ReadExecutor {
         msg: &RaftCmdRequest,
         region: &metapb::Region,
         read_index: Option<u64>,
-    ) -> ReadResponse {
+    ) -> ReadResponse<E> {
         if self.check_epoch {
             if let Err(e) = check_region_epoch(msg, region, true) {
                 debug!(
