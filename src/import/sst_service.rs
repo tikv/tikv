@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::{compact_files_in_range, io_limiter::IOLimiter};
-use engine::rocks::DB;
+use engine::rocks::{SstWriterBuilder, DB};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -151,6 +151,10 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
+        let sst_writer = SstWriterBuilder::new()
+            .set_db(self.engine.clone())
+            .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
+            .unwrap();
 
         ctx.spawn(self.threads.spawn_fn(move || {
             let res = importer.download(
@@ -159,6 +163,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
+                sst_writer,
             );
 
             future::result(res)
