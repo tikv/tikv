@@ -2,12 +2,15 @@
 
 use super::column::{Column, ColumnEncoder};
 use super::Result;
-use crate::codec::data_type::VectorValue;
+use crate::codec::batch::LazyBatchColumn;
+use crate::codec::data_type::*;
+use crate::codec::datum_codec::RawDatumDecoder;
 use crate::codec::Datum;
 use crate::expr::EvalContext;
 use codec::buffer::BufferWriter;
-use tidb_query_datatype::FieldTypeAccessor;
+use std::convert::TryFrom;
 use tidb_query_datatype::FieldTypeFlag;
+use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 use tipb::FieldType;
@@ -57,6 +60,151 @@ impl Chunk {
     #[inline]
     pub fn append_datum(&mut self, col_idx: usize, v: &Datum) -> Result<()> {
         self.columns[col_idx].append_datum(v)
+    }
+
+    /// Append lazy column to the column
+    #[inline]
+    pub fn append_lazy_column(
+        &mut self,
+        ctx: &mut EvalContext,
+        row_indexes: &[usize],
+        field_type: &FieldType,
+        lazy_col: &mut LazyBatchColumn,
+        column_index: usize,
+    ) -> Result<()> {
+        if lazy_col.is_decoded() {
+            return self.append_vec(row_indexes, field_type, lazy_col.decoded(), column_index);
+        }
+
+        let col = &mut self.columns[column_index];
+        let eval_type = box_try!(EvalType::try_from(field_type.as_accessor().tp()));
+        let raw_vec = lazy_col.raw();
+
+        match eval_type {
+            EvalType::Int => {
+                let unsigned = field_type
+                    .as_accessor()
+                    .flag()
+                    .contains(FieldTypeFlag::UNSIGNED);
+                if unsigned {
+                    for &row_index in row_indexes {
+                        let opt: Option<Int> = raw_vec[row_index].decode(field_type, ctx)?;
+                        match opt {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_u64(val as u64).unwrap();
+                            }
+                        }
+                    }
+                } else {
+                    for &row_index in row_indexes {
+                        let opt: Option<Int> = raw_vec[row_index].decode(field_type, ctx)?;
+                        match opt {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_i64(val).unwrap();
+                            }
+                        }
+                    }
+                }
+            }
+            EvalType::Real => {
+                if col.get_fixed_len() == 4 {
+                    for &row_index in row_indexes {
+                        let opt: Option<Real> = raw_vec[row_index].decode(field_type, ctx)?;
+                        match opt {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_f32(f64::from(val) as f32).unwrap();
+                            }
+                        }
+                    }
+                } else {
+                    for &row_index in row_indexes {
+                        let opt: Option<Real> = raw_vec[row_index].decode(field_type, ctx)?;
+                        match opt {
+                            None => {
+                                col.append_null().unwrap();
+                            }
+                            Some(val) => {
+                                col.append_f64(f64::from(val)).unwrap();
+                            }
+                        }
+                    }
+                }
+            }
+            EvalType::Decimal => {
+                for &row_index in row_indexes {
+                    let opt: Option<Decimal> = raw_vec[row_index].decode(field_type, ctx)?;
+                    match opt {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_decimal(&val).unwrap();
+                        }
+                    }
+                }
+            }
+            EvalType::Bytes => {
+                for &row_index in row_indexes {
+                    let opt: Option<Bytes> = raw_vec[row_index].decode(field_type, ctx)?;
+                    match opt {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(ref val) => {
+                            col.append_bytes(&val).unwrap();
+                        }
+                    }
+                }
+            }
+            EvalType::DateTime => {
+                for &row_index in row_indexes {
+                    let opt: Option<DateTime> = raw_vec[row_index].decode(field_type, ctx)?;
+                    match opt {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_time(val).unwrap();
+                        }
+                    }
+                }
+            }
+            EvalType::Duration => {
+                for &row_index in row_indexes {
+                    let opt: Option<Duration> = raw_vec[row_index].decode(field_type, ctx)?;
+                    match opt {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => {
+                            col.append_duration(val).unwrap();
+                        }
+                    }
+                }
+            }
+            EvalType::Json => {
+                for &row_index in row_indexes {
+                    let opt: Option<Json> = raw_vec[row_index].decode(field_type, ctx)?;
+                    match opt {
+                        None => {
+                            col.append_null().unwrap();
+                        }
+                        Some(val) => col.append_json(&val).unwrap(),
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Append a datum from vec to the column

@@ -158,36 +158,27 @@ impl LazyBatchColumnVec {
         output: &mut Vec<u8>,
         ctx: &mut EvalContext,
     ) -> Result<()> {
-        // Step 1 : Decode all data.
         let schema = schema.as_ref();
         let output_offsets = output_offsets.as_ref();
-        for offset in output_offsets {
-            let offset = *offset as usize;
-            let col = &mut self.columns[offset];
-            col.ensure_decoded(ctx, &schema[offset], logical_rows.as_ref())?;
-        }
 
-        // Step 2 : Make the chunk and append data.
-        let mut fields: Vec<FieldType> = Vec::new();
-        for offset in output_offsets {
-            let offset = *offset as usize;
-            let field_type = &schema[offset];
-            fields.push(field_type.clone());
-        }
+        let fields: Vec<FieldType> = output_offsets
+            .iter()
+            .map(|offset| schema[*offset as usize].clone())
+            .collect();
+
         let mut chunk = Chunk::new(&fields, logical_rows.as_ref().len());
-
         for column_idx in 0..output_offsets.len() {
             let offset = output_offsets[column_idx] as usize;
-            let col = &self.columns[offset];
-            chunk.append_vec(
+            let col = &mut self.columns[offset];
+            chunk.append_lazy_column(
+                ctx,
                 logical_rows.as_ref(),
-                &schema[offset],
-                col.decoded(),
+                &fields[column_idx],
+                col,
                 column_idx,
             )?;
         }
 
-        // Step 3 : Encode chunk to output.
         output.encode_chunk(&chunk).unwrap();
         Ok(())
     }
