@@ -267,7 +267,6 @@ mod tests {
     use self::metrics::*;
     use self::waiter_manager::tests::*;
     use super::*;
-    use crate::raftstore::coprocessor::Config as CopConfig;
     use crate::server::resolve::Callback;
     use tikv_util::security::SecurityConfig;
 
@@ -294,7 +293,7 @@ mod tests {
 
     fn start_lock_manager() -> LockManager {
         let (tx, _rx) = mpsc::sync_channel(100);
-        let mut coprocessor_host = CoprocessorHost::new(CopConfig::default(), tx);
+        let mut coprocessor_host = CoprocessorHost::new(tx);
 
         let mut lock_mgr = LockManager::new();
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);

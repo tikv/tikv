@@ -1045,7 +1045,7 @@ impl RaftBatchSystem {
         mut workers: Workers,
         region_peers: Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>,
         builder: RaftPollerBuilder<T, C>,
-        cfg_controller: ConfigController,
+        mut cfg_controller: ConfigController,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1105,10 +1105,15 @@ impl RaftBatchSystem {
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
 
+        cfg_controller.register(
+            "coprocessor",
+            Box::new(workers.split_check_worker.scheduler()),
+        );
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
             self.router.clone(),
             Arc::clone(&workers.coprocessor_host),
+            cfg_controller.get_current().coprocessor.clone(),
         );
         box_try!(workers.split_check_worker.start(split_check_runner));
 
@@ -1118,6 +1123,7 @@ impl RaftBatchSystem {
             cfg.snap_apply_batch_size.0 as usize,
             cfg.use_delete_range,
             cfg.clean_stale_peer_delay.0,
+            Arc::clone(&workers.coprocessor_host),
         );
         let timer = RegionRunner::new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));

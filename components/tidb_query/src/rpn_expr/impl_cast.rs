@@ -736,14 +736,11 @@ fn cast_decimal_as_signed_decimal(
 ) -> Result<Option<Decimal>> {
     match val {
         None => Ok(None),
-        Some(val) => {
-            let val = val.clone();
-            Ok(Some(produce_dec_with_specified_tp(
-                ctx,
-                val,
-                extra.ret_field_type,
-            )?))
-        }
+        Some(val) => Ok(Some(produce_dec_with_specified_tp(
+            ctx,
+            *val,
+            extra.ret_field_type,
+        )?)),
     }
 }
 
@@ -761,7 +758,7 @@ fn cast_decimal_as_unsigned_decimal(
             let res = if metadata.get_in_union() && val.is_negative() {
                 Decimal::zero()
             } else {
-                val.clone()
+                *val
             };
             Ok(Some(produce_dec_with_specified_tp(
                 ctx,
@@ -1721,7 +1718,7 @@ mod tests {
                 ..CtxConfig::default()
             }
             .into();
-            let r = cast_any_as_any::<Decimal, Int>(&mut ctx, &Some(input.clone()));
+            let r = cast_any_as_any::<Decimal, Int>(&mut ctx, &Some(input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
             check_warning(&ctx, err_code, log.as_str());
@@ -1763,7 +1760,7 @@ mod tests {
             let mut ctx = EvalContext::default();
             let metadata = make_metadata(true);
 
-            let r = cast_decimal_as_uint(&mut ctx, &metadata, &Some(input.clone()));
+            let r = cast_decimal_as_uint(&mut ctx, &metadata, &Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -1801,7 +1798,7 @@ mod tests {
             .into();
             let metadata = make_metadata(false);
 
-            let r = cast_decimal_as_uint(&mut ctx, &metadata, &Some(input.clone()));
+            let r = cast_decimal_as_uint(&mut ctx, &metadata, &Some(input));
             let r = r.map(|x| x.map(|x| x as u64));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2739,7 +2736,7 @@ mod tests {
         ];
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Decimal, Real>(&mut ctx, &Some(input.clone()));
+            let r = cast_any_as_any::<Decimal, Real>(&mut ctx, &Some(input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
@@ -2803,7 +2800,7 @@ mod tests {
             }
             .into();
             let metadata = make_metadata(in_union);
-            let r = cast_decimal_as_unsigned_real(&mut ctx, &metadata, &Some(input.clone()));
+            let r = cast_decimal_as_unsigned_real(&mut ctx, &metadata, &Some(input));
             let r = r.map(|x| x.map(|x| x.into_inner()));
             let log = format!(
                 "input: {}, expect: {}, in_union: {}, expect_overflow: {}, result: {:?}",
@@ -3786,12 +3783,12 @@ mod tests {
                         if base_res.is_negative() {
                             continue;
                         } else {
-                            base_res.clone()
+                            base_res
                         }
                     }
                     Sign::Negative => {
                         if base_res.is_negative() {
-                            base_res.clone()
+                            base_res
                         } else {
                             continue;
                         }
@@ -3828,7 +3825,7 @@ mod tests {
                 };
                 let expect = match res_type {
                     ResType::Zero => Decimal::zero(),
-                    ResType::Same => base_res.clone(),
+                    ResType::Same => base_res,
                     ResType::TruncateToMax => max_decimal(res_flen as u8, res_decimal as u8),
                     ResType::TruncateToMin => {
                         max_or_min_dec(true, res_flen as u8, res_decimal as u8)
@@ -3879,7 +3876,7 @@ mod tests {
                         ..CtxConfig::default()
                     }
                     .into();
-                    let pd_res = produce_dec_with_specified_tp(&mut ctx, base_res.clone(), &rft);
+                    let pd_res = produce_dec_with_specified_tp(&mut ctx, base_res, &rft);
 
                     // make log
                     let cast_func_res_log = cast_func_res
@@ -5412,7 +5409,7 @@ mod tests {
 
         for (input, expect) in cs {
             let mut ctx = EvalContext::default();
-            let r = cast_any_as_any::<Decimal, Json>(&mut ctx, &Some(input.clone()));
+            let r = cast_any_as_any::<Decimal, Json>(&mut ctx, &Some(input));
             let log = make_log(&input, &expect, &r);
             check_result(Some(&expect), &r, log.as_str());
         }
