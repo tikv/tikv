@@ -177,7 +177,23 @@ mod tests {
             assert_eq!(ttl, DEFAULT_TIMEOUT);
         });
 
-        // both config update
+        // only update wait_for_lock_timeout
+        let mut incoming = cfg.clone();
+        incoming.pessimistic_txn.wait_for_lock_timeout = 4000;
+        // keep wake_up_delay_duration the same as last update
+        incoming.pessimistic_txn.wake_up_delay_duration = 500;
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        assert_eq!(rollback.right(), Some(true));
+        validate_waiter(&waiter, move |timeout: u64, delay: u64| {
+            assert_eq!(timeout, 4000);
+            // wake_up_delay_duration should be the same as last update
+            assert_eq!(delay, 500);
+        });
+        validate_dead_lock(&deadlock, move |ttl: u64| {
+            assert_eq!(ttl, 4000);
+        });
+
+        // update both config
         let mut incoming = cfg;
         incoming.pessimistic_txn.wait_for_lock_timeout = 4321;
         incoming.pessimistic_txn.wake_up_delay_duration = 123;

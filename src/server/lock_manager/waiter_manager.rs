@@ -543,9 +543,9 @@ impl WaiterManager {
             self.wake_up_delay_duration = delay;
         }
         info!(
-            "Waiter manager config change";
-            "default_wait_for_lock_timeout" => timeout,
-            "wake_up_delay_duration" => delay
+            "Waiter manager config changed";
+            "default_wait_for_lock_timeout" => self.default_wait_for_lock_timeout,
+            "wake_up_delay_duration" => self.wake_up_delay_duration
         );
     }
 }

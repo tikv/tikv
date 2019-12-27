@@ -784,7 +784,7 @@ where
     fn handle_change_ttl(&mut self, ttl: Duration) {
         let mut inner = self.inner.borrow_mut();
         inner.detect_table.reset_ttl(ttl);
-        info!("Dead lock detector config updated"; "ttl" => ?ttl);
+        info!("Deadlock detector config changed"; "ttl" => ?ttl);
     }
 }
 
