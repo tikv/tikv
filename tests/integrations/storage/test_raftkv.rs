@@ -9,12 +9,12 @@ use raft::eraftpb::MessageType;
 
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT};
-use keys::Key;
 use test_raftstore::*;
 use tikv::storage::kv::*;
 use tikv::storage::CfStatistics;
 use tikv_util::codec::bytes;
 use tikv_util::HandyRwLock;
+use txn_types::Key;
 
 #[test]
 fn test_raftkv() {

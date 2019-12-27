@@ -1,17 +1,18 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub use self::imp::wait_for_signal;
+
 #[cfg(unix)]
 mod imp {
-    use libc::c_int;
-
     use engine::rocks::util::stats as rocksdb_stats;
     use engine::Engines;
+    use libc::c_int;
+    use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
+    use signal::trap::Trap;
     use tikv_util::metrics;
 
     #[allow(dead_code)]
-    pub fn handle_signal(engines: Option<Engines>) {
-        use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
-        use signal::trap::Trap;
+    pub fn wait_for_signal(engines: Option<Engines>) {
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
         for sig in trap {
             match sig {
@@ -38,7 +39,5 @@ mod imp {
 mod imp {
     use engine::Engines;
 
-    pub fn handle_signal(_: Option<Engines>) {}
+    pub fn wait_for_signal(_: Option<Engines>) {}
 }
-
-pub use self::imp::handle_signal;

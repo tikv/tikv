@@ -5,7 +5,7 @@ use tidb_query::storage::{IntervalRange, OwnedKvPair, PointRange, Result as QERe
 use crate::coprocessor::Error;
 use crate::storage::Statistics;
 use crate::storage::{Scanner, Store};
-use keys::Key;
+use txn_types::Key;
 
 /// A `Storage` implementation over TiKV's storage.
 pub struct TiKVStorage<S: Store> {

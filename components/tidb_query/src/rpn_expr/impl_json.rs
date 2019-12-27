@@ -168,9 +168,13 @@ fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
 
 // Args should be like `(&Option<Json> , &[&Option<Bytes>])`.
 fn json_with_paths_validator(expr: &tipb::Expr) -> Result<()> {
-    let children = expr.get_children();
-    assert!(children.len() >= 2);
+    assert!(expr.get_children().len() >= 2);
     // args should be like `&Option<Json> , &[&Option<Bytes>]`.
+    valid_paths(expr)
+}
+
+fn valid_paths(expr: &tipb::Expr) -> Result<()> {
+    let children = expr.get_children();
     super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
     for i in 1..children.len() {
         super::function::validate_expr_return_type(&children[i], EvalType::Bytes)?;
@@ -191,6 +195,29 @@ fn json_extract(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     let path_expr_list = try_opt!(parse_json_path_list(&args[1..]));
 
     Ok(j.extract(&path_expr_list))
+}
+
+// Args should be like `(&Option<Json> , &[&Option<Bytes>])`.
+fn json_with_path_validator(expr: &tipb::Expr) -> Result<()> {
+    assert!(expr.get_children().len() == 2 || expr.get_children().len() == 1);
+    valid_paths(expr)
+}
+
+#[rpn_fn(raw_varg,min_args= 1, max_args = 2, extra_validator = json_with_path_validator)]
+#[inline]
+fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
+    assert!(!args.is_empty() && args.len() <= 2);
+    let j: &Option<Json> = args[0].as_ref();
+    let j = match j.as_ref() {
+        None => return Ok(None),
+        Some(j) => j.to_owned(),
+    };
+    let path_expr_list = parse_json_path_list(&args[1..])?;
+    if path_expr_list.is_none() {
+        Ok(None)
+    } else {
+        Ok(j.json_length(&path_expr_list.unwrap()))
+    }
 }
 
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
@@ -584,6 +611,49 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(vargs.clone())
                 .evaluate(ScalarFuncSig::JsonRemoveSig)
+                .unwrap();
+            assert_eq!(output, expected, "{:?}", vargs);
+        }
+    }
+
+    #[test]
+    fn test_json_length() {
+        let cases: Vec<(Vec<ScalarValue>, Option<i64>)> = vec![
+            (
+                vec![
+                    Some(Json::from_str("null").unwrap()).into(),
+                    None::<Bytes>.into(),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(Json::from_str("false").unwrap()).into(),
+                    None::<Bytes>.into(),
+                ],
+                None,
+            ),
+            (vec![Some(Json::from_str("1").unwrap()).into()], Some(1)),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": [1, 2, {"aa": "xx"}]}"#).unwrap()).into(),
+                    Some(b"$.*".to_vec()).into(),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a":{"a":1},"b":2}"#).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                ],
+                Some(2),
+            ),
+        ];
+
+        for (vargs, expected) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(vargs.clone())
+                .evaluate(ScalarFuncSig::JsonLengthSig)
                 .unwrap();
             assert_eq!(output, expected, "{:?}", vargs);
         }

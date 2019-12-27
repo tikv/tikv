@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::any::Any;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -80,6 +81,11 @@ impl KvEngine for RocksEngine {
 
     fn cf_names(&self) -> Vec<&str> {
         self.0.cf_names()
+    }
+
+    fn bad_downcast<T: 'static>(&self) -> &T {
+        let e: &dyn Any = &self.0;
+        e.downcast_ref().expect("bad engine downcast")
     }
 }
 

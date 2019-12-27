@@ -4,8 +4,9 @@ use std::str;
 use tidb_query_codegen::rpn_fn;
 
 use crate::codec::data_type::*;
+use crate::rpn_expr::types::RpnFnCallExtra;
 use crate::Result;
-use tidb_query_datatype::EvalType;
+use tidb_query_datatype::*;
 
 const SPACE: u8 = 0o40u8;
 
@@ -77,7 +78,7 @@ pub fn ascii(arg: &Option<Bytes>) -> Result<Option<i64>> {
 
 #[rpn_fn]
 #[inline]
-pub fn reverse(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+pub fn reverse_utf8(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|bytes| {
         let s = String::from_utf8_lossy(bytes);
         s.chars().rev().collect::<String>().into_bytes()
@@ -145,7 +146,7 @@ pub fn replace(
 
 #[rpn_fn]
 #[inline]
-pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
+pub fn left_utf8(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => {
             if *rhs <= 0 {
@@ -169,7 +170,7 @@ pub fn left(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn right(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
+pub fn right_utf8(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
     match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => {
             if *rhs <= 0 {
@@ -197,6 +198,24 @@ pub fn right(lhs: &Option<Bytes>, rhs: &Option<Int>) -> Result<Option<Bytes>> {
     }
 }
 
+#[rpn_fn(capture = [extra])]
+#[inline]
+pub fn upper(extra: &RpnFnCallExtra, arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+    match arg.as_ref() {
+        Some(bytes) => {
+            if extra.ret_field_type.as_accessor().is_binary_string_like() {
+                return Ok(Some(bytes.to_vec()));
+            }
+
+            match str::from_utf8(bytes) {
+                Ok(s) => Ok(Some(s.to_uppercase().into_bytes())),
+                Err(err) => Err(box_err!("invalid input value: {:?}", err)),
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
 #[rpn_fn]
 #[inline]
 pub fn hex_str_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
@@ -205,7 +224,7 @@ pub fn hex_str_arg(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn locate_binary_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result<Option<i64>> {
+pub fn locate_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result<Option<i64>> {
     let (substr, s) = match (substr, s) {
         (Some(v1), Some(v2)) => (v1, v2),
         _ => return Ok(None),
@@ -218,7 +237,7 @@ pub fn locate_binary_2_args(substr: &Option<Bytes>, s: &Option<Bytes>) -> Result
 
 #[rpn_fn]
 #[inline]
-pub fn reverse_binary(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
+pub fn reverse(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
     Ok(arg.as_ref().map(|bytes| {
         let mut s = bytes.to_vec();
         s.reverse();
@@ -228,7 +247,7 @@ pub fn reverse_binary(arg: &Option<Bytes>) -> Result<Option<Bytes>> {
 
 #[rpn_fn]
 #[inline]
-pub fn locate_binary_3_args(
+pub fn locate_3_args(
     substr: &Option<Bytes>,
     s: &Option<Bytes>,
     pos: &Option<Int>,
@@ -317,12 +336,28 @@ pub fn strcmp(left: &Option<Bytes>, right: &Option<Bytes>) -> Result<Option<i64>
     })
 }
 
+#[rpn_fn]
+#[inline]
+pub fn instr_utf8(s: &Option<Bytes>, substr: &Option<Bytes>) -> Result<Option<Int>> {
+    if let (Some(s), Some(substr)) = (s, substr) {
+        let s = String::from_utf8_lossy(s);
+        let substr = String::from_utf8_lossy(substr);
+        let index = twoway::find_str(&s.to_lowercase(), &substr.to_lowercase())
+            .map(|i| s[..i].chars().count())
+            .map(|i| 1 + i as i64)
+            .or(Some(0));
+        Ok(index)
+    } else {
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use std::{f64, i64};
-    use tipb::ScalarFuncSig;
+    use tipb::{FieldType, ScalarFuncSig};
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
@@ -624,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reverse() {
+    fn test_reverse_utf8() {
         let cases = vec![
             (Some(b"hello".to_vec()), Some(b"olleh".to_vec())),
             (Some(b"".to_vec()), Some(b"".to_vec())),
@@ -654,7 +689,7 @@ mod tests {
         for (arg, expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(ScalarFuncSig::Reverse)
+                .evaluate(ScalarFuncSig::ReverseUtf8)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
@@ -826,7 +861,7 @@ mod tests {
     }
 
     #[test]
-    fn test_left() {
+    fn test_left_utf8() {
         let cases = vec![
             (Some(b"hello".to_vec()), Some(0i64), Some(b"".to_vec())),
             (Some(b"hello".to_vec()), Some(1i64), Some(b"h".to_vec())),
@@ -864,14 +899,14 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(lhs)
                 .push_param(rhs)
-                .evaluate(ScalarFuncSig::Left)
+                .evaluate(ScalarFuncSig::LeftUtf8)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
     }
 
     #[test]
-    fn test_right() {
+    fn test_right_utf8() {
         let cases = vec![
             (Some(b"hello".to_vec()), Some(0), Some(b"".to_vec())),
             (Some(b"hello".to_vec()), Some(1), Some(b"o".to_vec())),
@@ -909,9 +944,55 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(lhs)
                 .push_param(rhs)
-                .evaluate(ScalarFuncSig::Right)
+                .evaluate(ScalarFuncSig::RightUtf8)
                 .unwrap();
             assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_upper() {
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(b"HELLO".to_vec())),
+            (Some(b"123".to_vec()), Some(b"123".to_vec())),
+            (
+                Some("café".as_bytes().to_vec()),
+                Some("CAFÉ".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("ночь на окраине москвы".as_bytes().to_vec()),
+                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+            ),
+            (
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, exp) in cases {
+            // Test binary string case
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::Upper)
+                .unwrap();
+            assert_eq!(output, exp);
+
+            // Test non-binary string case
+            let mut ft = FieldType::default();
+            ft.as_mut_accessor()
+                .set_tp(FieldTypeTp::String)
+                .set_collation(Collation::Binary);
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .return_field_type(ft)
+                .evaluate(ScalarFuncSig::Upper)
+                .unwrap();
+            assert_eq!(output, arg);
         }
     }
 
@@ -936,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn test_locate_binary_2_args() {
+    fn test_locate_2_args() {
         let test_cases = vec![
             (None, None, None),
             (None, Some("abc"), None),
@@ -957,14 +1038,14 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(substr.map(|v| v.as_bytes().to_vec()))
                 .push_param(s.map(|v| v.as_bytes().to_vec()))
-                .evaluate(ScalarFuncSig::LocateBinary2Args)
+                .evaluate(ScalarFuncSig::Locate2Args)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
     }
 
     #[test]
-    fn test_reverse_binary() {
+    fn test_reverse() {
         let cases = vec![
             (Some(b"hello".to_vec()), Some(b"olleh".to_vec())),
             (Some(b"".to_vec()), Some(b"".to_vec())),
@@ -978,14 +1059,14 @@ mod tests {
         for (arg, expect_output) in cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg)
-                .evaluate(ScalarFuncSig::ReverseBinary)
+                .evaluate(ScalarFuncSig::Reverse)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
     }
 
     #[test]
-    fn test_locate_binary_3_args() {
+    fn test_locate_3_args() {
         let cases = vec![
             (None, None, None, None),
             (None, Some(""), Some(1), None),
@@ -1012,7 +1093,7 @@ mod tests {
                 .push_param(substr.map(|v| v.as_bytes().to_vec()))
                 .push_param(s.map(|v| v.as_bytes().to_vec()))
                 .push_param(pos)
-                .evaluate(ScalarFuncSig::LocateBinary3Args)
+                .evaluate(ScalarFuncSig::Locate3Args)
                 .unwrap();
             assert_eq!(output, exp)
         }
@@ -1269,6 +1350,56 @@ mod tests {
                 .evaluate(ScalarFuncSig::Strcmp)
                 .unwrap();
             assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_instr_utf8() {
+        let cases: Vec<(&str, &str, i64)> = vec![
+            ("a", "abcdefg", 1),
+            ("0", "abcdefg", 0),
+            ("c", "abcdefg", 3),
+            ("F", "abcdefg", 6),
+            ("cd", "abcdefg", 3),
+            (" ", "abcdefg", 0),
+            ("", "", 1),
+            (" ", " ", 1),
+            (" ", "", 0),
+            ("", " ", 1),
+            ("eFg", "abcdefg", 5),
+            ("def", "abcdefg", 4),
+            ("字节", "a多字节", 3),
+            ("a", "a多字节", 1),
+            ("bar", "foobarbar", 4),
+            ("xbar", "foobarbar", 0),
+            ("好世", "你好世界", 2),
+        ];
+
+        for (substr, s, exp) in cases {
+            let substr = Some(substr.as_bytes().to_vec());
+            let s = Some(s.as_bytes().to_vec());
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(substr)
+                .evaluate::<Int>(ScalarFuncSig::InstrUtf8)
+                .unwrap();
+            assert_eq!(got, Some(exp))
+        }
+
+        let null_cases = vec![
+            (None, Some(b"".to_vec()), None),
+            (None, Some(b"foobar".to_vec()), None),
+            (Some(b"".to_vec()), None, None),
+            (Some(b"bar".to_vec()), None, None),
+            (None, None, None),
+        ];
+        for (substr, s, exp) in null_cases {
+            let got = RpnFnScalarEvaluator::new()
+                .push_param(s)
+                .push_param(substr)
+                .evaluate::<Int>(ScalarFuncSig::InstrUtf8)
+                .unwrap();
+            assert_eq!(got, exp);
         }
     }
 }

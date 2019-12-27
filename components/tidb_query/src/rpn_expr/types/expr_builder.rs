@@ -10,7 +10,6 @@ use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
 use crate::codec::data_type::*;
 use crate::codec::mysql::{JsonDecoder, MAX_FSP};
-use crate::codec::{datum, Datum};
 use crate::expr::EvalContext;
 use crate::Result;
 
@@ -128,7 +127,6 @@ impl RpnExpressionBuilder {
             func_meta,
             args_len,
             field_type: return_field_type.into(),
-            implicit_args: vec![],
             metadata: Box::new(()),
         };
         self.0.push(node);
@@ -147,27 +145,7 @@ impl RpnExpressionBuilder {
             func_meta,
             args_len,
             field_type: return_field_type.into(),
-            implicit_args: vec![],
             metadata,
-        };
-        self.0.push(node);
-        self
-    }
-
-    #[cfg(test)]
-    pub fn push_fn_call_with_implicit_args(
-        mut self,
-        func_meta: RpnFnMeta,
-        args_len: usize,
-        return_field_type: impl Into<FieldType>,
-        implicit_args: Vec<ScalarValue>,
-    ) -> Self {
-        let node = RpnExpressionNode::FnCall {
-            func_meta,
-            args_len,
-            field_type: return_field_type.into(),
-            implicit_args,
-            metadata: Box::new(()),
         };
         self.0.push(node);
         self
@@ -327,26 +305,9 @@ where
         )
     })?;
 
-    let metadata = (func_meta.metadata_ctor_ptr)(&mut tree_node)?;
+    let metadata = (func_meta.metadata_expr_ptr)(&mut tree_node)?;
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
-
-    // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
-    let datums = datum::decode(&mut tree_node.get_val())?;
-    let mut implicit_args = Vec::with_capacity(datums.len());
-    for d in datums {
-        let arg = match d {
-            Datum::I64(n) => ScalarValue::Int(Some(n)),
-            Datum::U64(n) => ScalarValue::Int(Some(n as i64)),
-            Datum::F64(n) => ScalarValue::Real(Real::new(n).ok()),
-            Datum::Dur(dur) => ScalarValue::Duration(Some(dur)),
-            Datum::Bytes(bytes) => ScalarValue::Bytes(Some(bytes)),
-            Datum::Dec(dec) => ScalarValue::Decimal(Some(dec)),
-            Datum::Json(json) => ScalarValue::Json(Some(json)),
-            _ => return Err(other_err!("Unsupported push down datum {}", d)),
-        };
-        implicit_args.push(arg);
-    }
 
     // Visit children first, then push current node, so that it is a post-order traversal.
     for arg in args {
@@ -356,7 +317,6 @@ where
         func_meta,
         args_len,
         field_type: tree_node.take_field_type(),
-        implicit_args,
         metadata,
     });
     Ok(())
@@ -509,7 +469,6 @@ mod tests {
     use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
 
-    use crate::codec::datum::{self, Datum};
     use crate::Result;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
@@ -911,131 +870,6 @@ mod tests {
                 i
             )
             .is_ok());
-        }
-    }
-
-    #[test]
-    #[allow(clippy::iter_skip_next)]
-    fn test_expr_with_val() {
-        fn build_expr() -> Expr {
-            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsReal, FieldTypeTp::LongLong)
-                .push_child(ExprDefBuilder::constant_real(7.0))
-                .push_child(ExprDefBuilder::constant_real(3.0))
-                .build()
-        }
-
-        // Simple cases
-        // bytes generated from TiDB
-        // datum(0)
-        let mut expr = build_expr();
-        expr.mut_val().extend(&vec![8, 0]);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, &fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(0))]);
-            }
-            _ => unreachable!(),
-        }
-
-        // datum(1)
-        let mut expr = build_expr();
-        expr.mut_val().extend(&vec![8, 2]);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(1))]);
-            }
-            _ => unreachable!(),
-        }
-
-        // bytes generated from TiKV
-        // datum(0)
-        let mut ctx = EvalContext::default();
-        let bytes = datum::encode_value(&mut ctx, &[Datum::I64(0)]).unwrap();
-        let mut expr = build_expr();
-        expr.set_val(bytes);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(0))]);
-            }
-            _ => unreachable!(),
-        }
-
-        // datum(1)
-        let bytes = datum::encode_value(&mut ctx, &[Datum::I64(1)]).unwrap();
-        let mut expr = build_expr();
-        expr.set_val(bytes);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(1))]);
-            }
-            _ => unreachable!(),
-        }
-
-        // Combine various datums
-        // bytes generated from TiDB
-        // Int/Real/Duration/Decimal/Bytes/Json
-        let mut expr = build_expr();
-        expr.mut_val().extend(&vec![
-            8, 0, 5, 191, 241, 153, 153, 153, 153, 153, 154, 2, 18, 102, 114, 111, 109, 32, 84,
-            105, 68, 66, 6, 2, 1, 129, 5, 10, 4, 2, 7, 128, 0, 0, 0, 0, 0, 39, 16,
-        ]);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        let args = vec![
-            ScalarValue::Int(Some(0)),
-            ScalarValue::Real(Some(Real::new(1.1).unwrap())),
-            ScalarValue::Bytes(Some(b"from TiDB".to_vec())),
-            ScalarValue::Decimal(Some(Decimal::from_bytes(b"1.5").unwrap().unwrap())),
-            ScalarValue::Json(Some(Json::Boolean(false))),
-            ScalarValue::Duration(Some(Duration::from_micros(10, 6).unwrap())),
-        ];
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, args);
-            }
-            _ => unreachable!(),
-        }
-
-        // bytes generated from TiKV
-        let datums = vec![
-            Datum::I64(0),
-            Datum::F64(1.1),
-            Datum::Bytes(b"from TiKV".to_vec()),
-            Datum::Dec(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
-            Datum::Json(Json::Boolean(false)),
-            Datum::Dur(Duration::from_nanos(10000, 3).unwrap()),
-        ];
-        let bytes = datum::encode_value(&mut ctx, &datums).unwrap();
-        let mut expr = build_expr();
-        expr.set_val(bytes);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        let args = vec![
-            ScalarValue::Int(Some(0)),
-            ScalarValue::Real(Some(Real::new(1.1).unwrap())),
-            ScalarValue::Bytes(Some(b"from TiKV".to_vec())),
-            ScalarValue::Decimal(Some(Decimal::from_bytes(b"1.5").unwrap().unwrap())),
-            ScalarValue::Json(Some(Json::Boolean(false))),
-            ScalarValue::Duration(Some(Duration::from_nanos(10000, 3).unwrap())),
-        ];
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, args);
-            }
-            _ => unreachable!(),
         }
     }
 }
