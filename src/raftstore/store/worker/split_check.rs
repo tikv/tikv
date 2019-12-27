@@ -13,10 +13,12 @@ use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 
+use crate::raftstore::coprocessor::Config;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::coprocessor::SplitCheckerHost;
 use crate::raftstore::store::{Callback, CasualMessage, CasualRouter};
 use crate::raftstore::Result;
+use configuration::{ConfigChange, Configuration};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Runnable;
 
@@ -88,7 +90,8 @@ impl<'a> MergedIterator<'a> {
                 fill_cache,
             );
             let mut iter = db.new_iterator_cf(cf, iter_opt)?;
-            if iter.seek(start_key.into()) {
+            let found: Result<bool> = iter.seek(start_key.into()).map_err(|e| box_err!(e));
+            if found? {
                 heap.push(KeyEntry::new(
                     iter.key().to_vec(),
                     pos,
@@ -107,7 +110,7 @@ impl<'a> MergedIterator<'a> {
             Some(e) => e.pos,
         };
         let (cf, iter) = &mut self.iters[pos];
-        if iter.next() {
+        if iter.next().unwrap() {
             // TODO: avoid copy key.
             let mut e = KeyEntry::new(iter.key().to_vec(), pos, iter.value().len(), cf);
             let mut front = self.heap.peek_mut().unwrap();
@@ -119,16 +122,20 @@ impl<'a> MergedIterator<'a> {
     }
 }
 
-/// Split checking task.
-pub struct Task {
-    region: Region,
-    auto_split: bool,
-    policy: CheckPolicy,
+pub enum Task {
+    SplitCheckTask {
+        region: Region,
+        auto_split: bool,
+        policy: CheckPolicy,
+    },
+    ChangeConfig(ConfigChange),
+    #[cfg(test)]
+    Validate(Box<dyn FnOnce(&Config) + Send>),
 }
 
 impl Task {
-    pub fn new(region: Region, auto_split: bool, policy: CheckPolicy) -> Task {
-        Task {
+    pub fn split_check(region: Region, auto_split: bool, policy: CheckPolicy) -> Task {
+        Task::SplitCheckTask {
             region,
             auto_split,
             policy,
@@ -138,12 +145,19 @@ impl Task {
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Split Check Task for {}, auto_split: {:?}",
-            self.region.get_id(),
-            self.auto_split
-        )
+        match self {
+            Task::SplitCheckTask {
+                region, auto_split, ..
+            } => write!(
+                f,
+                "[split check worker] Split Check Task for {}, auto_split: {:?}",
+                region.get_id(),
+                auto_split
+            ),
+            Task::ChangeConfig(_) => write!(f, "[split check worker] Change Config Task"),
+            #[cfg(test)]
+            Task::Validate(_) => write!(f, "[split check worker] Validate config"),
+        }
     }
 }
 
@@ -151,20 +165,26 @@ pub struct Runner<S> {
     engine: Arc<DB>,
     router: S,
     coprocessor: Arc<CoprocessorHost>,
+    cfg: Config,
 }
 
 impl<S: CasualRouter> Runner<S> {
-    pub fn new(engine: Arc<DB>, router: S, coprocessor: Arc<CoprocessorHost>) -> Runner<S> {
+    pub fn new(
+        engine: Arc<DB>,
+        router: S,
+        coprocessor: Arc<CoprocessorHost>,
+        cfg: Config,
+    ) -> Runner<S> {
         Runner {
             engine,
             router,
             coprocessor,
+            cfg,
         }
     }
 
     /// Checks a Region with split checkers to produce split keys and generates split admin command.
-    fn check_split(&mut self, task: Task) {
-        let region = &task.region;
+    fn check_split(&mut self, region: &Region, auto_split: bool, policy: CheckPolicy) {
         let region_id = region.get_id();
         let start_key = keys::enc_start_key(region);
         let end_key = keys::enc_end_key(region);
@@ -177,10 +197,11 @@ impl<S: CasualRouter> Runner<S> {
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
         let mut host = self.coprocessor.new_split_checker_host(
+            &self.cfg,
             region,
             &self.engine,
-            task.auto_split,
-            task.policy,
+            auto_split,
+            policy,
         );
         if host.skip() {
             debug!("skip split check"; "region_id" => region.get_id());
@@ -243,8 +264,8 @@ impl<S: CasualRouter> Runner<S> {
 
     /// Gets the split keys by scanning the range.
     fn scan_split_keys(
-        &mut self,
-        host: &mut SplitCheckerHost,
+        &self,
+        host: &mut SplitCheckerHost<'_>,
         region: &Region,
         start_key: &[u8],
         end_key: &[u8],
@@ -283,11 +304,28 @@ impl<S: CasualRouter> Runner<S> {
 
         Ok(host.split_keys())
     }
+
+    fn change_cfg(&mut self, change: ConfigChange) {
+        info!(
+            "split check config updated!";
+            "change" => ?change
+        );
+        self.cfg.update(change);
+    }
 }
 
 impl<S: CasualRouter> Runnable<Task> for Runner<S> {
     fn run(&mut self, task: Task) {
-        self.check_split(task);
+        match task {
+            Task::SplitCheckTask {
+                region,
+                auto_split,
+                policy,
+            } => self.check_split(&region, auto_split, policy),
+            Task::ChangeConfig(c) => self.change_cfg(c),
+            #[cfg(test)]
+            Task::Validate(f) => f(&self.cfg),
+        }
     }
 }
 
@@ -296,5 +334,94 @@ fn new_split_region(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> Casu
         region_epoch,
         split_keys,
         callback: Callback::None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc::{self, sync_channel};
+    use std::time::Duration;
+
+    use super::*;
+    use crate::config::*;
+    use engine::rocks;
+    use tikv_util::worker::{Scheduler, Worker};
+
+    use tempfile::Builder;
+
+    fn setup(cfg: TiKvConfig) -> (ConfigController, Scheduler<Task>) {
+        let engine = {
+            let path = Builder::new().prefix("test-config").tempdir().unwrap();
+            Arc::new(
+                rocks::util::new_engine(
+                    path.path().join("db").to_str().unwrap(),
+                    None,
+                    &["split-check-config"],
+                    None,
+                )
+                .unwrap(),
+            )
+        };
+        let (router, _) = sync_channel(1);
+        let runner = Runner::new(
+            engine,
+            router.clone(),
+            Arc::new(CoprocessorHost::new(router)),
+            cfg.coprocessor.clone(),
+        );
+        let mut worker: Worker<Task> = Worker::new("split-check-config");
+        worker.start(runner).unwrap();
+
+        let mut cfg_controller = ConfigController::new(cfg);
+        cfg_controller.register("coprocessor", Box::new(worker.scheduler()));
+
+        (cfg_controller, worker.scheduler())
+    }
+
+    fn validate<F>(scheduler: &Scheduler<Task>, f: F)
+    where
+        F: FnOnce(&Config) + Send + 'static,
+    {
+        let (tx, rx) = mpsc::channel();
+        scheduler
+            .schedule(Task::Validate(Box::new(move |cfg: &Config| {
+                f(cfg);
+                tx.send(()).unwrap();
+            })))
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    }
+
+    #[test]
+    fn test_update_split_check_config() {
+        let mut cfg = TiKvConfig::default();
+        cfg.validate().unwrap();
+        let (mut cfg_controller, scheduler) = setup(cfg.clone());
+
+        let cop_config = cfg.coprocessor.clone();
+        let mut incoming = cfg.clone();
+        incoming.raft_store.raft_log_gc_threshold = 2000;
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        // update of other module's config should not effect split check config
+        assert_eq!(rollback.right(), Some(true));
+        validate(&scheduler, move |cfg: &Config| {
+            assert_eq!(cfg, &cop_config);
+        });
+
+        let cop_config = {
+            let mut cop_config = cfg.coprocessor.clone();
+            cop_config.split_region_on_table = true;
+            cop_config.batch_split_limit = 123;
+            cop_config.region_split_keys = 12345;
+            cop_config
+        };
+        let mut incoming = cfg;
+        incoming.coprocessor = cop_config.clone();
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        // config should be updated
+        assert_eq!(rollback.right(), Some(true));
+        validate(&scheduler, move |cfg: &Config| {
+            assert_eq!(cfg, &cop_config);
+        });
     }
 }
