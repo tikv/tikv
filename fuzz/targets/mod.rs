@@ -130,8 +130,8 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
         let _ = lhs - rhs;
         let _ = lhs * rhs;
         let _ = lhs / rhs;
-        let _ = lhs.clone() % rhs.clone();
-        let _ = -lhs.clone();
+        let _ = *lhs % *rhs;
+        let _ = -*lhs;
         Ok(())
     }
 
