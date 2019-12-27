@@ -1370,7 +1370,7 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
     #[config(skip)]
     pub import: ImportConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
     #[config(skip)]
     pub gc: GcConfig,
