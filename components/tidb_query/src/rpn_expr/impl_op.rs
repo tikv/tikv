@@ -98,7 +98,7 @@ pub fn unary_minus_real(arg: &Option<Real>) -> Result<Option<Real>> {
 #[rpn_fn]
 #[inline]
 pub fn unary_minus_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
-    Ok(arg.as_ref().map(|val| -val.clone()))
+    Ok(arg.as_ref().map(|val| -*val))
 }
 
 #[rpn_fn]
