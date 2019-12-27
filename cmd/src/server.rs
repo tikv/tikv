@@ -273,8 +273,7 @@ impl TiKVServer {
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
         // Create CoprocessorHost.
-        let mut coprocessor_host =
-            CoprocessorHost::new(self.config.coprocessor.clone(), self.router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(self.router.clone());
 
         let lock_mgr = if self.config.pessimistic_txn.enabled {
             let lock_mgr = LockManager::new();
