@@ -465,21 +465,6 @@ impl<S: Snapshot> MvccTxn<S> {
     pub fn commit(&mut self, key: Key, commit_ts: TimeStamp) -> Result<bool> {
         let (lock_type, short_value, is_pessimistic_txn) = match self.reader.load_lock(&key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
-                // It's an abnormal routine since pessimistic locks shouldn't be committed in our
-                // transaction model. But a pessimistic lock will be left if the pessimistic
-                // rollback request fails to send and the transaction need not to acquire
-                // this lock again(due to WriteConflict). If the transaction is committed, we
-                // should commit this pessimistic lock too.
-                if lock.lock_type == LockType::Pessimistic {
-                    warn!(
-                        "commit a pessimistic lock";
-                        "key" => %key,
-                        "start_ts" => self.start_ts,
-                        "commit_ts" => commit_ts,
-                    );
-                    // Commit with WriteType::Lock.
-                    lock.lock_type = LockType::Lock;
-                }
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
                 if commit_ts < lock.min_commit_ts {
                     info!(
@@ -496,6 +481,22 @@ impl<S: Snapshot> MvccTxn<S> {
                         min_commit_ts: lock.min_commit_ts,
                     }
                     .into());
+                }
+
+                // It's an abnormal routine since pessimistic locks shouldn't be committed in our
+                // transaction model. But a pessimistic lock will be left if the pessimistic
+                // rollback request fails to send and the transaction need not to acquire
+                // this lock again(due to WriteConflict). If the transaction is committed, we
+                // should commit this pessimistic lock too.
+                if lock.lock_type == LockType::Pessimistic {
+                    warn!(
+                        "commit a pessimistic lock with Lock type";
+                        "key" => %key,
+                        "start_ts" => self.start_ts,
+                        "commit_ts" => commit_ts,
+                    );
+                    // Commit with WriteType::Lock.
+                    lock.lock_type = LockType::Lock;
                 }
                 (
                     lock.lock_type,
@@ -1686,7 +1687,6 @@ mod tests {
         must_cleanup(&engine, k, 23, 0);
         must_acquire_pessimistic_lock(&engine, k, k, 24, 24);
         must_pessimistic_locked(&engine, k, 24, 24);
-        must_commit_err(&engine, k, 24, 25);
         must_rollback(&engine, k, 24);
 
         // Acquire lock on a prewritten key should fail.
