@@ -9,7 +9,6 @@ use engine::rocks;
 use engine::rocks::util::CFOptions;
 use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
 use engine::Engines;
-use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::{IterOption, Peekable};
 #[cfg(not(feature = "no-fail"))]
@@ -299,41 +298,32 @@ impl Snapshot for RocksSnapshot {
 }
 
 impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
-    fn next(&mut self) -> bool {
-        DBIterator::next(self)
+    fn next(&mut self) -> Result<bool> {
+        DBIterator::next(self).map_err(|e| box_err!(e))
     }
 
-    fn prev(&mut self) -> bool {
-        DBIterator::prev(self)
+    fn prev(&mut self) -> Result<bool> {
+        DBIterator::prev(self).map_err(|e| box_err!(e))
     }
 
     fn seek(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek(self, key.as_encoded().as_slice().into()))
+        DBIterator::seek(self, key.as_encoded().as_slice().into()).map_err(|e| box_err!(e))
     }
 
     fn seek_for_prev(&mut self, key: &Key) -> Result<bool> {
-        Ok(DBIterator::seek_for_prev(
-            self,
-            key.as_encoded().as_slice().into(),
-        ))
+        DBIterator::seek_for_prev(self, key.as_encoded().as_slice().into()).map_err(|e| box_err!(e))
     }
 
-    fn seek_to_first(&mut self) -> bool {
-        DBIterator::seek(self, SeekKey::Start)
+    fn seek_to_first(&mut self) -> Result<bool> {
+        DBIterator::seek(self, SeekKey::Start).map_err(|e| box_err!(e))
     }
 
-    fn seek_to_last(&mut self) -> bool {
-        DBIterator::seek(self, SeekKey::End)
+    fn seek_to_last(&mut self) -> Result<bool> {
+        DBIterator::seek(self, SeekKey::End).map_err(|e| box_err!(e))
     }
 
-    fn valid(&self) -> bool {
-        DBIterator::valid(self)
-    }
-
-    fn status(&self) -> Result<()> {
-        DBIterator::status(self)
-            .map_err(|e| EngineError::RocksDb(e))
-            .map_err(From::from)
+    fn valid(&self) -> Result<bool> {
+        DBIterator::valid(self).map_err(|e| box_err!(e))
     }
 
     fn key(&self) -> &[u8] {
@@ -440,13 +430,13 @@ mod tests {
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
         let perf_statistics = PerfStatisticsInstant::new();
-        iter.prev(&mut statistics);
+        iter.prev(&mut statistics).unwrap();
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 2);
 
-        iter.prev(&mut statistics);
+        iter.prev(&mut statistics).unwrap();
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
 
-        iter.prev(&mut statistics);
+        iter.prev(&mut statistics).unwrap();
         assert_eq!(perf_statistics.delta().internal_delete_skipped_count, 3);
     }
 

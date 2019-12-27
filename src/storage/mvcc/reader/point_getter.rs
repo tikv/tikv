@@ -221,7 +221,7 @@ impl<S: Snapshot> PointGetter<S> {
                 }
             }
 
-            self.write_cursor.next(&mut self.statistics.write);
+            self.write_cursor.next(&mut self.statistics.write)?;
         }
     }
 
