@@ -585,7 +585,7 @@ mod tests {
     use super::*;
     use test_sst_importer::*;
 
-    use engine_traits::{collect, Iterable, Iterator, SeekKey, CF_DEFAULT};
+    use engine_traits::{collect, name_to_cf, Iterable, Iterator, SeekKey, CF_DEFAULT};
     use engine_traits::{Error as TraitError, SstWriterBuilder, TablePropertiesExt};
     use engine_traits::{ExternalSstFileInfo, SstExt};
     use tempfile::Builder;
@@ -861,6 +861,7 @@ mod tests {
         let db = new_test_engine(db_path.to_str().unwrap(), &["default"]);
         let sst_writer = <TestEngine as SstExt>::SstWriterBuilder::new()
             .set_db(&db)
+            .set_cf(name_to_cf(meta.get_cf_name()).unwrap())
             .build(importer.get_path(meta).to_str().unwrap())
             .unwrap();
         Ok(sst_writer)
