@@ -8,9 +8,12 @@ impl Json {
         match self {
             Json::Array(array) => Some(array.len() as i64),
             Json::Object(obj) => Some(obj.len() as i64),
-            Json::None | Json::String(_) | Json::Boolean(_) | Json::U64(_) | Json::I64(_) | Json::Double(_) => {
-                Some(1)
-            }
+            Json::None
+            | Json::String(_)
+            | Json::Boolean(_)
+            | Json::U64(_)
+            | Json::I64(_)
+            | Json::Double(_) => Some(1),
         }
     }
 
@@ -28,9 +31,9 @@ impl Json {
             return None;
         }
         if let Some(json) = self.extract(path_expr_list) {
-           return json.len();
+            return json.len();
         }
-        None        
+        None
     }
 }
 
@@ -73,9 +76,9 @@ mod tests {
             (r#"{"a": [1, 2, {"aa": "xx"}]}"#, Some("$[*]"), None),
             (r#"{"a": [1, 2, {"aa": "xx"}]}"#, Some("$**.a"), None),
             // Tests path expression does not identify a section of the target document
-            //(r#"{"a": [1, 2, {"aa": "xx"}]}"#, Some("$.c"), None),
-            //(r#"{"a": [1, 2, {"aa": "xx"}]}"#, Some("$.a[3]"), None),
-            //(r#"{"a": [1, 2, {"aa": "xx"}]}"#, Some("$.a[2].b"), None),
+            (r#"{"a": [1, 2, {"aa": "xx"}]}"#, Some("$.c"), None),
+            (r#"{"a": [1, 2, {"aa": "xx"}]}"#, Some("$.a[3]"), None),
+            (r#"{"a": [1, 2, {"aa": "xx"}]}"#, Some("$.a[2].b"), None),
         ];
         for (i, (js, param, expected)) in test_cases.drain(..).enumerate() {
             let j = js.parse();

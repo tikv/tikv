@@ -212,7 +212,6 @@ fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
     } else {
         Ok(j.json_length(&path_expr_list.unwrap()))
     }
-    
 }
 
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
@@ -585,12 +584,7 @@ mod tests {
                 ],
                 None,
             ),
-            (
-                vec![
-                    Some(Json::from_str("1").unwrap()).into(),
-                ],
-                Some(1),
-            ),
+            (vec![Some(Json::from_str("1").unwrap()).into()], Some(1)),
             (
                 vec![
                     Some(Json::from_str(r#"{"a": [1, 2, {"aa": "xx"}]}"#).unwrap()).into(),
