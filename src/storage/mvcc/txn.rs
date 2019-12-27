@@ -465,20 +465,20 @@ impl<S: Snapshot> MvccTxn<S> {
     pub fn commit(&mut self, key: Key, commit_ts: TimeStamp) -> Result<bool> {
         let (lock_type, short_value, is_pessimistic_txn) = match self.reader.load_lock(&key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
-                // A pessimistic lock cannot be committed.
+                // It's an abnormal routine since pessimistic locks shouldn't be committed in our
+                // transaction model. But a pessimistic lock will be left if the pessimistic
+                // rollback request fails to send and the transaction need not to acquire
+                // this lock again(due to WriteConflict). If the transaction is committed, we
+                // should commit this pessimistic lock too.
                 if lock.lock_type == LockType::Pessimistic {
-                    error!(
-                        "trying to commit a pessimistic lock";
+                    warn!(
+                        "commit a pessimistic lock";
                         "key" => %key,
                         "start_ts" => self.start_ts,
                         "commit_ts" => commit_ts,
                     );
-                    return Err(ErrorInner::LockTypeNotMatch {
-                        start_ts: self.start_ts,
-                        key: key.into_raw()?,
-                        pessimistic: true,
-                    }
-                    .into());
+                    // Commit with WriteType::Lock.
+                    lock.lock_type = LockType::Lock;
                 }
                 // A lock with larger min_commit_ts than current commit_ts can't be committed
                 if commit_ts < lock.min_commit_ts {
@@ -2402,5 +2402,16 @@ mod tests {
             Error(box ErrorInner::KeyIsLocked(info)) => assert_eq!(info.get_lock_ttl(), 0),
             e => panic!("unexpected error: {}", e),
         };
+    }
+
+    #[test]
+    fn test_commit_pessimistic_lock() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k";
+        must_acquire_pessimistic_lock(&engine, k, k, 10, 10);
+        must_commit_err(&engine, k, 20, 30);
+        must_commit(&engine, k, 10, 20);
+        must_seek_write(&engine, k, 30, 10, 20, WriteType::Lock);
     }
 }
