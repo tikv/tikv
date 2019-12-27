@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::path::Path;
 use std::str::FromStr;
@@ -35,9 +34,9 @@ use crate::raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use crate::server::gc_worker::GcWorker;
+use crate::server::gc_worker::{GcConfig, GcWorkerConfigManager};
 use crate::storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType};
-use crate::storage::{Engine, Iterator as EngineIterator};
+use crate::storage::Iterator as EngineIterator;
 use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
@@ -134,14 +133,17 @@ impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
 }
 
 #[derive(Clone)]
-pub struct Debugger<E: Engine> {
+pub struct Debugger {
     engines: Engines,
-    gc_worker: Option<GcWorker<E>>,
+    gc_worker_cfg: Option<GcWorkerConfigManager>,
 }
 
-impl<E: Engine> Debugger<E> {
-    pub fn new(engines: Engines, gc_worker: Option<GcWorker<E>>) -> Debugger<E> {
-        Debugger { engines, gc_worker }
+impl Debugger {
+    pub fn new(engines: Engines, gc_worker_cfg: Option<GcWorkerConfigManager>) -> Debugger {
+        Debugger {
+            engines,
+            gc_worker_cfg,
+        }
     }
 
     pub fn get_engine(&self) -> &Engines {
@@ -813,15 +815,12 @@ impl<E: Engine> Debugger<E> {
             Module::Server => {
                 if config_name == GC_IO_LIMITER_CONFIG_NAME {
                     if let Ok(bytes_per_sec) = ReadableSize::from_str(config_value) {
-                        let bps = i64::try_from(bytes_per_sec.0).unwrap_or_else(|_| {
-                            (panic!("{} > i64::max_value", GC_IO_LIMITER_CONFIG_NAME))
-                        });
-                        return self
-                            .gc_worker
-                            .as_ref()
-                            .expect("must be some")
-                            .change_io_limit(bps)
-                            .map_err(|e| Error::Other(e.into()));
+                        self.gc_worker_cfg.as_ref().expect("must be some").update(
+                            move |cfg: &mut GcConfig| {
+                                cfg.max_write_bytes_per_sec = bytes_per_sec;
+                            },
+                        );
+                        return Ok(());
                     }
                 }
                 Err(Error::InvalidArgument(format!(
@@ -1542,9 +1541,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::server::gc_worker::GcConfig;
     use crate::storage::mvcc::{Lock, LockType};
-    use crate::storage::{RocksEngine as TestEngine, TestEngineBuilder};
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::Mutable;
@@ -1645,7 +1642,7 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> Debugger<TestEngine> {
+    fn new_debugger() -> Debugger {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
@@ -1664,13 +1661,10 @@ mod tests {
 
         let shared_block_cache = false;
         let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
-        let test_engine = TestEngineBuilder::new().build().unwrap();
-        let mut gc_worker = GcWorker::new(test_engine, None, None, GcConfig::default());
-        gc_worker.start().unwrap();
-        Debugger::new(engines, Some(gc_worker))
+        Debugger::new(engines, Some(Default::default()))
     }
 
-    impl Debugger<TestEngine> {
+    impl Debugger {
         fn get_store_ident(&self) -> Result<StoreIdent> {
             let db = &self.engines.kv;
             db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
