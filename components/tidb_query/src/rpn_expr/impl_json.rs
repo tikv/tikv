@@ -206,10 +206,12 @@ fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
         None => return Ok(None),
         Some(j) => j.to_owned(),
     };
-    let path_expr_list = parse_json_path_list(&args[1..])?
-        .or_else(|| Some(Vec::new()))
-        .unwrap();
-    Ok(j.json_length(&path_expr_list))
+    let path_expr_list = parse_json_path_list(&args[1..])?;
+    if path_expr_list.is_none() {
+        Ok(None)
+    } else {
+        Ok(j.json_length(&path_expr_list.unwrap()))
+    }
 }
 
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
@@ -580,15 +582,9 @@ mod tests {
                     Some(Json::from_str("false").unwrap()).into(),
                     None::<Bytes>.into(),
                 ],
-                Some(1),
+                None,
             ),
-            (
-                vec![
-                    Some(Json::from_str("1").unwrap()).into(),
-                    None::<Bytes>.into(),
-                ],
-                Some(1),
-            ),
+            (vec![Some(Json::from_str("1").unwrap()).into()], Some(1)),
             (
                 vec![
                     Some(Json::from_str(r#"{"a": [1, 2, {"aa": "xx"}]}"#).unwrap()).into(),
