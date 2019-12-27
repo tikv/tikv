@@ -60,6 +60,8 @@ build:
 run:
 	cargo run --features "${ENABLE_FEATURES}" --bin tikv-server
 
+dist_release: release
+
 release:
 	@cargo build --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
