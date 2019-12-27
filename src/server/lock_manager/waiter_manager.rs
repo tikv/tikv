@@ -603,7 +603,7 @@ pub mod tests {
                 core.run(delay.map(|not_cancelled| assert!(not_cancelled)))
                     .unwrap()
             },
-            50,
+            30,
             100,
         );
 
@@ -1079,7 +1079,7 @@ pub mod tests {
             // Waiters2's lifetime can't exceed it timeout.
             assert_elapsed(
                 || expect_write_conflict(f2.wait().unwrap(), 30, lock_info2, 15),
-                50,
+                30,
                 100,
             );
             tx.send(()).unwrap();
