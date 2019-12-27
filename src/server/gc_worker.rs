@@ -315,6 +315,8 @@ impl<E: Engine> GcRunner<E> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
+            // refresh gc worker config here, just in cases gc woker config
+            // (i.e `max_write_bytes_per_sec`) updated during `Gc` task
             self.refresh_cfg();
             if let Some(ref limiter) = self.limiter {
                 limiter.request(write_size as i64);
@@ -331,7 +333,6 @@ impl<E: Engine> GcRunner<E> {
             "safe_point" => safe_point
         );
 
-        self.refresh_cfg();
         let mut next_key = None;
         loop {
             // Scans at most `GCConfig.batch_keys` keys
@@ -504,6 +505,9 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                 safe_point,
                 callback,
             } => {
+                // Gc worker config only use during `Gc` task, so it is
+                // okay not refresh config for `UnsafeDestroyRange` task
+                self.refresh_cfg();
                 let res = self.gc(&mut ctx, safe_point);
                 update_metrics(res.is_err());
                 callback(res);
