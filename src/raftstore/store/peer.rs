@@ -91,6 +91,15 @@ impl ReadIndexRequest {
             read_index: None,
         }
     }
+
+    fn with_id(id: Uuid) -> Self {
+        Self {
+            id,
+            cmds: MustConsumeVec::new("callback of index read"),
+            renew_lease_time: monotonic_raw_now(),
+            read_index: None,
+        }
+    }
 }
 
 impl Drop for ReadIndexRequest {
@@ -283,6 +292,9 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
     pending_reads: ReadIndexQueue,
+    // Caculated by election_timeout / 3.
+    pub read_index_retry_timeout: usize,
+    pub read_index_retry_elapsed: usize,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -386,6 +398,8 @@ impl Peer {
             proposals: Default::default(),
             apply_proposals: vec![],
             pending_reads: Default::default(),
+            read_index_retry_timeout: cfg.raft_election_timeout_ticks / 3,
+            read_index_retry_elapsed: 0,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -1976,6 +1990,26 @@ impl Peer {
             return Err(box_err!("{} can not read index due to merge", self.tag));
         }
         Ok(())
+    }
+
+    /// `ReadIndex` requests could be lost in network, so on followers commands could queue in
+    /// `pending_reads` forever. Sending a new `ReadIndex` periodically can resolve this.
+    pub(super) fn retry_pending_reads(&mut self) {
+        if self.is_leader() || self.pending_read.reads.is_empty() || self.pre_read_index().is_err()
+        {
+            return;
+        }
+
+        let id = Uuid::new_v4();
+        self.raft_group.read_index(id.as_bytes().to_vec());
+        debug!("request to get a read index";
+            "request_id" => ?id,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
+
+        let read_proposal = ReadIndexRequest::with_id(id);
+        self.pending_reads.reads.push_back(read_proposal);
     }
 
     // Returns a boolean to indicate whether the `read` is proposed or not.

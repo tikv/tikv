@@ -18,7 +18,7 @@ fn test_replica_read_not_applied() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
-    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    configure_for_lease_read(&mut cluster, Some(50), Some(100));
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
@@ -77,7 +77,7 @@ fn test_replica_read_not_applied() {
 
     // Read index on follower should be blocked instead of get an old value.
     let resp1_ch = read_on!(read_request, 3, 3);
-    assert!(resp1_ch.recv_timeout(Duration::from_secs(3)).is_err());
+    assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
 
     // Unpark all append responses so that the new leader can commit its first entry.
     let router = cluster.sim.wl().get_router(2).unwrap();
@@ -85,20 +85,17 @@ fn test_replica_read_not_applied() {
         router.send_raft_message(raft_msg).unwrap();
     }
 
-    // However, the old read index request could be blocked in raftstore forever, need more fix.
-    // TODO: this needs to be fixed.
+    // The old read index request won't be blocked forever as it's retried internally.
     cluster.sim.wl().clear_send_filters(1);
     cluster.sim.wl().clear_recv_filters(2);
-    assert!(resp1_ch.recv_timeout(Duration::from_secs(3)).is_err());
+    let resp1 = resp1_ch.recv_timeout(Duration::from_secs(3)).unwrap();
+    let exp_value = resp1.get_responses()[0].get_get().get_value();
+    assert_eq!(exp_value, b"v2");
 
-    // New read index requests can be resolved quickly, and the previous one will be unblocked.
+    // New read index requests can be resolved quickly.
     let resp2_ch = read_on!(read_request, 3, 3);
     let resp2 = resp2_ch.recv_timeout(Duration::from_secs(3)).unwrap();
     let exp_value = resp2.get_responses()[0].get_get().get_value();
-    assert_eq!(exp_value, b"v2");
-
-    let resp1 = resp1_ch.recv_timeout(Duration::from_secs(3)).unwrap();
-    let exp_value = resp1.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
 }
 

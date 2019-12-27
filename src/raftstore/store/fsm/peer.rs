@@ -765,6 +765,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
+        self.fsm.peer.read_index_retry_elapsed += 1;
+        if self.fsm.peer.read_index_retry_elapsed >= self.fsm.peer.read_index_retry_timeout {
+            self.fsm.peer.read_index_retry_elapsed = 0;
+            self.fsm.peer.retry_pending_reads();
+        }
+
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
             if self.fsm.group_state == GroupState::Idle {
