@@ -2,6 +2,10 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.1.19]
+- Raftstore：Fix the panic occurred when restarting TiKV and `is_merging` is given an incorrect value in the process of merging Regions and applying the Compact log [#5884](https://github.com/tikv/tikv/pull/5884)
+- Importer：Remove the limit on the gRPC message length [#5809](https://github.com/tikv/tikv/pull/5809)
+
 ## [2.1.18]
 
 ## [2.1.17]
