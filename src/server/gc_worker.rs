@@ -202,7 +202,7 @@ impl<E: Engine> GcRunner<E> {
         let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
             let bps = i64::try_from(cfg.max_write_bytes_per_sec.0)
                 .expect("max_write_bytes_per_sec > i64::MAX");
-            Some(RocksIOLimiter::new(bps))
+            Some(IOLimiter::new(bps))
         } else {
             None
         };
@@ -474,7 +474,7 @@ impl<E: Engine> GcRunner<E> {
                         std::i64::MAX
                     });
                     self.limiter
-                        .get_or_insert_with(|| RocksIOLimiter::new(bps))
+                        .get_or_insert_with(|| IOLimiter::new(bps))
                         .set_bytes_per_second(bps);
                 }
             }
