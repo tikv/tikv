@@ -1,11 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![allow(dead_code)]
 use crate::codec::{Error, Result};
 use codec::prelude::*;
 use num_traits::PrimInt;
 
-enum RowSlice<'a> {
+pub enum RowSlice<'a> {
     Small {
         non_null_ids: &'a [u8],
         null_ids: &'a [u8],
@@ -24,7 +23,7 @@ impl RowSlice<'_> {
     /// # Panics
     ///
     /// Panics if the value of first byte is not 128(v2 version code)
-    fn from_bytes(mut data: &[u8]) -> Result<RowSlice> {
+    pub fn from_bytes(mut data: &[u8]) -> Result<RowSlice> {
         assert_eq!(data.read_u8()?, super::CODEC_VERSION);
         let is_big = super::Flags::from_bits_truncate(data.read_u8()?) == super::Flags::BIG;
 
@@ -57,7 +56,7 @@ impl RowSlice<'_> {
     ///
     /// If the id is found with no offset(It will only happen when the row data is broken),
     /// `Error::ColumnOffset` will be returned.
-    fn search_in_non_null_ids(&self, id: i64) -> Result<Option<(usize, usize)>> {
+    pub fn search_in_non_null_ids(&self, id: i64) -> Result<Option<(usize, usize)>> {
         if !self.id_valid(id) {
             return Ok(None);
         }
@@ -99,13 +98,14 @@ impl RowSlice<'_> {
     /// Search `id` in null ids
     ///
     /// Returns true if found
-    fn search_in_null_ids(&self, id: i64) -> bool {
+    pub fn search_in_null_ids(&self, id: i64) -> bool {
         match self {
             RowSlice::Big { null_ids, .. } => null_ids.binary_search(&(id as u32)).is_ok(),
             RowSlice::Small { null_ids, .. } => null_ids.binary_search(&(id as u8)).is_ok(),
         }
     }
 
+    #[inline]
     fn id_valid(&self, id: i64) -> bool {
         let upper: i64 = if self.is_big() {
             i64::from(u32::max_value())
@@ -115,10 +115,19 @@ impl RowSlice<'_> {
         id > 0 && id <= upper
     }
 
+    #[inline]
     fn is_big(&self) -> bool {
         match self {
             RowSlice::Big { .. } => true,
             RowSlice::Small { .. } => false,
+        }
+    }
+
+    #[inline]
+    pub fn values(&self) -> &[u8] {
+        match self {
+            RowSlice::Big { values, .. } => values,
+            RowSlice::Small { values, .. } => values,
         }
     }
 }
