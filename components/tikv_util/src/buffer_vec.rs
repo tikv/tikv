@@ -2,6 +2,8 @@
 
 use std::iter::*;
 
+use codec::prelude::BufferWriter;
+
 /// A vector like container storing multiple buffers. Each buffer is a `[u8]` slice in
 /// arbitrary length.
 #[derive(Default, Clone)]
@@ -86,6 +88,30 @@ impl BufferVec {
         self.data.extend_from_slice(buffer.as_ref());
     }
 
+    /// Appends multiple buffer parts together as one buffer to the back.
+    #[inline]
+    pub fn concat_extend<T, I>(&mut self, buffer_parts: I)
+    where
+        T: AsRef<[u8]>,
+        I: IntoIterator<Item = T>,
+    {
+        self.offsets.push(self.data.len());
+        for part in buffer_parts.into_iter() {
+            let slice = part.as_ref();
+            self.data.extend_from_slice(slice);
+        }
+    }
+
+    /// Returns a delegator that provides `extend` appends buffers together as one buffer
+    /// to the back.
+    ///
+    /// Note that this function always creates a new buffer even if you don't call `extend`
+    /// on the delegator later, which simply results in appending a new empty buffer.
+    #[inline]
+    pub fn begin_concat_extend(&mut self) -> WithConcatExtend<'_> {
+        WithConcatExtend::init(self)
+    }
+
     /// Removes the last buffer if there is any.
     #[inline]
     pub fn pop(&mut self) {
@@ -153,7 +179,7 @@ impl BufferVec {
     }
 
     /// Copies all buffers from `other` to `self`.
-    pub fn extend(&mut self, other: &BufferVec) {
+    pub fn copy_from(&mut self, other: &BufferVec) {
         let base_offset = self.data.len();
         self.data.extend_from_slice(&other.data);
         self.offsets.reserve(other.offsets.len());
@@ -165,9 +191,9 @@ impl BufferVec {
     /// Copies first `n` buffers from `other` to `self`.
     ///
     /// If `n > other.len()`, only `other.len()` buffers will be copied.
-    pub fn extend_n(&mut self, other: &BufferVec, n: usize) {
+    pub fn copy_n_from(&mut self, other: &BufferVec, n: usize) {
         if n >= other.len() {
-            self.extend(other);
+            self.copy_from(other);
         } else if n > 0 {
             let base_offset = self.data.len();
             self.data.extend_from_slice(&other.data[..other.offsets[n]]);
@@ -232,17 +258,6 @@ impl BufferVec {
     }
 }
 
-impl<A: AsRef<[u8]>> Extend<A> for BufferVec {
-    fn extend<I>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = A>,
-    {
-        for i in iter.into_iter() {
-            self.push(i);
-        }
-    }
-}
-
 impl std::ops::Index<usize> for BufferVec {
     type Output = [u8];
 
@@ -255,6 +270,73 @@ impl std::ops::Index<usize> for BufferVec {
             .copied()
             .unwrap_or_else(|| self.data.len());
         &self.data[start..end]
+    }
+}
+
+impl Extend<u8> for BufferVec {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = u8>,
+    {
+        self.offsets.push(self.data.len());
+        self.data.extend(iter);
+    }
+}
+
+impl<'a> Extend<&'a u8> for BufferVec {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = &'a u8>,
+    {
+        self.offsets.push(self.data.len());
+        self.data.extend(iter);
+    }
+}
+
+pub struct WithConcatExtend<'a>(&'a mut BufferVec);
+
+impl<'a> WithConcatExtend<'a> {
+    fn init(b: &'a mut BufferVec) -> Self {
+        b.offsets.push(b.data.len());
+        Self(b)
+    }
+
+    pub fn finish(self) {
+        // do nothing
+    }
+}
+
+impl<'a> Extend<u8> for WithConcatExtend<'a> {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = u8>,
+    {
+        self.0.data.extend(iter);
+    }
+}
+
+impl<'a, 'b> Extend<&'a u8> for WithConcatExtend<'b> {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = &'a u8>,
+    {
+        self.0.data.extend(iter);
+    }
+}
+
+impl<'a> BufferWriter for WithConcatExtend<'a> {
+    unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
+        self.0.data.bytes_mut(size)
+    }
+
+    #[inline]
+    unsafe fn advance_mut(&mut self, count: usize) {
+        self.0.data.advance_mut(count)
+    }
+
+    #[inline]
+    fn write_bytes(&mut self, values: &[u8]) -> codec::Result<()> {
+        self.0.data.write_bytes(values)
     }
 }
 
@@ -513,10 +595,23 @@ mod tests {
         assert_eq!(v.total_len(), 0);
         assert!(!v.is_empty());
         assert_eq!(format!("{:?}", v), "[null]");
+
+        v.concat_extend(&[vec![0xAC, 0xBB, 0x00], vec![], vec![0xCC]]);
+        assert_eq!(v.len(), 2);
+        assert_eq!(v.total_len(), 4);
+        assert!(!v.is_empty());
+        assert_eq!(format!("{:?}", v), "[null, ACBB00CC]");
+
+        let t: Vec<Vec<u8>> = Vec::new();
+        v.concat_extend(t);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.total_len(), 4);
+        assert!(!v.is_empty());
+        assert_eq!(format!("{:?}", v), "[null, ACBB00CC, null]");
     }
 
     #[test]
-    fn test_extend() {
+    fn test_copy_from() {
         let mut v1 = BufferVec::new();
         v1.push(&[]);
         v1.push(&[0xAA, 0xBB, 0x0C]);
@@ -528,7 +623,7 @@ mod tests {
         v2.push(&[]);
 
         let mut v3 = v1.clone();
-        v3.extend(&v2);
+        v3.copy_from(&v2);
         assert_eq!(v3.len(), 6);
         assert_eq!(v3.total_len(), 4);
         assert_eq!(format!("{:?}", v3), "[null, AABB0C, null, 00, null, null]");
@@ -545,7 +640,7 @@ mod tests {
         assert_eq!(format!("{:?}", v3), "[null, AABB0C, null, null, 00]");
 
         let mut v3 = v2.clone();
-        v3.extend(&v1);
+        v3.copy_from(&v1);
         assert_eq!(v3.len(), 6);
         assert_eq!(v3.total_len(), 4);
         assert_eq!(format!("{:?}", v3), "[null, null, null, AABB0C, null, 00]");
@@ -558,7 +653,7 @@ mod tests {
 
         let mut v3 = v2.clone();
         v3.shift(2);
-        v3.extend(&v1);
+        v3.copy_from(&v1);
         assert_eq!(v3.len(), 4);
         assert_eq!(v3.total_len(), 4);
         assert_eq!(format!("{:?}", v3), "[null, AABB0C, null, 00]");
@@ -577,7 +672,7 @@ mod tests {
         v2.push(&[]);
 
         let mut v3 = v2.clone();
-        v3.extend_n(&v1, 0);
+        v3.copy_n_from(&v1, 0);
         assert_eq!(v3.len(), 2);
         assert_eq!(v3.total_len(), 2);
         assert_eq!(format!("{:?}", v3), "[0C00, null]");
@@ -588,7 +683,7 @@ mod tests {
         assert_eq!(format!("{:?}", v3), "[0C00, null, AA]");
 
         let mut v3 = v2.clone();
-        v3.extend_n(&v1, 1);
+        v3.copy_n_from(&v1, 1);
         assert_eq!(v3.len(), 3);
         assert_eq!(v3.total_len(), 2);
         assert_eq!(format!("{:?}", v3), "[0C00, null, null]");
@@ -598,8 +693,18 @@ mod tests {
         assert_eq!(v3.total_len(), 3);
         assert_eq!(format!("{:?}", v3), "[0C00, null, null, AA]");
 
+        v3.extend(&[0xAA, 0xAB, 0xCC]);
+        assert_eq!(v3.len(), 5);
+        assert_eq!(v3.total_len(), 6);
+        assert_eq!(format!("{:?}", v3), "[0C00, null, null, AA, AAABCC]");
+
+        v3.extend(&[]);
+        assert_eq!(v3.len(), 6);
+        assert_eq!(v3.total_len(), 6);
+        assert_eq!(format!("{:?}", v3), "[0C00, null, null, AA, AAABCC, null]");
+
         let mut v3 = v1.clone();
-        v3.extend_n(&v2, 1);
+        v3.copy_n_from(&v2, 1);
         assert_eq!(v3.len(), 3);
         assert_eq!(v3.total_len(), 5);
         assert_eq!(format!("{:?}", v3), "[null, AABB0C, 0C00]");
@@ -610,7 +715,7 @@ mod tests {
         assert_eq!(format!("{:?}", v3), "[null, AABB0C]");
 
         let mut v3 = v1.clone();
-        v3.extend_n(&v2, 2);
+        v3.copy_n_from(&v2, 2);
         assert_eq!(v3.len(), 4);
         assert_eq!(v3.total_len(), 5);
         assert_eq!(format!("{:?}", v3), "[null, AABB0C, 0C00, null]");
@@ -620,7 +725,7 @@ mod tests {
         assert_eq!(v3.total_len(), 2);
         assert_eq!(format!("{:?}", v3), "[0C00, null]");
 
-        v3.extend_n(&v2, 5);
+        v3.copy_n_from(&v2, 5);
         assert_eq!(v3.len(), 4);
         assert_eq!(v3.total_len(), 4);
         assert_eq!(format!("{:?}", v3), "[0C00, null, 0C00, null]");
@@ -676,7 +781,7 @@ mod tests {
         v2.retain_by_array(&[true, true, false, true]);
         assert_eq!(format!("{:?}", v2), "[AA00, null, BB00A0]");
 
-        v2.extend_n(&v, 2);
+        v2.copy_n_from(&v, 2);
         assert_eq!(format!("{:?}", v2), "[AA00, null, BB00A0, AA00, null]");
 
         let mut v2 = v.clone();
@@ -705,7 +810,7 @@ mod tests {
         assert_eq!(format!("{:?}", v2), "[null, null]");
 
         v2.pop();
-        v2.extend(&v);
+        v2.copy_from(&v);
         assert_eq!(format!("{:?}", v2), "[null, AA00, null, null, BB00A0]");
 
         let mut v2 = v.clone();

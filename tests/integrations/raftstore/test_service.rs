@@ -16,9 +16,9 @@ use raft::eraftpb;
 use engine::rocks::Writable;
 use engine::*;
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
-use keys::Key;
 use tempfile::Builder;
 use test_raftstore::*;
+use tikv::config::ConfigController;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -27,6 +27,7 @@ use tikv::raftstore::store::SnapManager;
 use tikv::storage::mvcc::{Lock, LockType, TimeStamp};
 use tikv_util::worker::FutureWorker;
 use tikv_util::HandyRwLock;
+use txn_types::Key;
 
 fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let count = 1;
@@ -833,13 +834,14 @@ fn test_double_run_node() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), None);
-    let coprocessor_host = CoprocessorHost::new(Default::default(), router.clone());
+    let coprocessor_host = CoprocessorHost::new(router.clone());
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SSTImporter::new(dir).unwrap())
     };
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
+    let cfg_controller = ConfigController::new(Default::default());
     let e = node
         .start(
             engines,
@@ -849,6 +851,7 @@ fn test_double_run_node() {
             store_meta,
             coprocessor_host,
             importer,
+            cfg_controller,
         )
         .unwrap_err();
     assert!(format!("{:?}", e).contains("already started"), "{:?}", e);

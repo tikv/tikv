@@ -33,7 +33,7 @@ pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
     }
 }
 
-/// Check if `key`'s prefix next equals to `next`
+/// Check if `key`'s prefix next equals to `next`.
 pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
     let len = key.len();
     let next_len = next.len();

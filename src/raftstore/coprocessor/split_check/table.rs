@@ -5,11 +5,11 @@ use std::cmp::Ordering;
 use engine::rocks::{SeekKey, DB};
 use engine::CF_WRITE;
 use engine::{IterOption, Iterable};
-use keys::Key;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tidb_query::codec::table as table_codec;
 use tikv_util::keybuilder::KeyBuilder;
+use txn_types::Key;
 
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
@@ -79,6 +79,9 @@ impl SplitCheckObserver for TableCheckObserver {
         engine: &DB,
         policy: CheckPolicy,
     ) {
+        if !host.cfg.split_region_on_table {
+            return;
+        }
         let region = ctx.region();
         if is_same_table(region.get_start_key(), region.get_end_key()) {
             // Region is inside a table, skip for saving IO.
@@ -178,7 +181,8 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
     let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));
 
     // the last key
-    if iter.seek(SeekKey::End) {
+    let found: Result<bool> = iter.seek(SeekKey::End).map_err(|e| box_err!(e));
+    if found? {
         let key = iter.key().to_vec();
         last_key = Some(key);
     } // else { No data in this CF }
@@ -228,11 +232,11 @@ mod tests {
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
     use engine::ALL_CFS;
-    use keys::Key;
     use tidb_query::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
+    use txn_types::Key;
 
     use super::*;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};
@@ -331,16 +335,20 @@ mod tests {
         cfg.region_max_keys = 2000000000;
         cfg.region_split_keys = 1000000000;
         // Try to ignore the ApproximateRegionSize
-        let coprocessor = CoprocessorHost::new(cfg, stx);
+        let coprocessor = CoprocessorHost::new(stx);
         let mut runnable =
-            SplitCheckRunner::new(Arc::clone(&engine), tx.clone(), Arc::new(coprocessor));
+            SplitCheckRunner::new(Arc::clone(&engine), tx.clone(), Arc::new(coprocessor), cfg);
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {
             for (encoded_start_key, encoded_end_key, table_id) in cases {
                 region.set_start_key(encoded_start_key.unwrap_or_else(Vec::new));
                 region.set_end_key(encoded_end_key.unwrap_or_else(Vec::new));
-                runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+                runnable.run(SplitCheckTask::split_check(
+                    region.clone(),
+                    true,
+                    CheckPolicy::Scan,
+                ));
 
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));
