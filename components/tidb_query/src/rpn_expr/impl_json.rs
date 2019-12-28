@@ -205,6 +205,23 @@ fn json_with_path_validator(expr: &tipb::Expr) -> Result<()> {
 
 #[rpn_fn(raw_varg,min_args= 1, max_args = 2, extra_validator = json_with_path_validator)]
 #[inline]
+fn json_keys(args: &[ScalarValueRef]) -> Result<Option<Json>> {
+    assert!(!args.is_empty() && args.len() <= 2);
+    let j: &Option<Json> = args[0].as_ref();
+    let j = match j.as_ref() {
+        None => return Ok(None),
+        Some(j) => j.to_owned(),
+    };
+    let path_expr_list = parse_json_path_list(&args[1..])?;
+    if path_expr_list.is_none() {
+        Ok(None)
+    } else {
+        Ok(j.keys(&path_expr_list.unwrap())?)
+    }
+}
+
+#[rpn_fn(raw_varg,min_args= 1, max_args = 2, extra_validator = json_with_path_validator)]
+#[inline]
 fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
     assert!(!args.is_empty() && args.len() <= 2);
     let j: &Option<Json> = args[0].as_ref();
@@ -656,6 +673,182 @@ mod tests {
                 .evaluate(ScalarFuncSig::JsonLengthSig)
                 .unwrap();
             assert_eq!(output, expected, "{:?}", vargs);
+        }
+    }
+
+    #[test]
+    fn test_json_keys() {
+        let cases: Vec<(Vec<ScalarValue>, Option<Json>, bool)> = vec![
+            // Tests nil arguments
+            (vec![None::<Json>.into(), None::<Bytes>.into()], None, true),
+            (
+                vec![None::<Json>.into(), Some(b"$.c".to_vec()).into()],
+                None,
+                true,
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into(),
+                    None::<Bytes>.into(),
+                ],
+                None,
+                true,
+            ),
+            (vec![None::<Json>.into()], None, true),
+            // Tests with other type
+            (vec![Some(Json::from_str("1").unwrap()).into()], None, true),
+            (
+                vec![Some(Json::from_str(r#""str""#).unwrap()).into()],
+                None,
+                true,
+            ),
+            (
+                vec![Some(Json::from_str(r#"true"#).unwrap()).into()],
+                None,
+                true,
+            ),
+            (
+                vec![Some(Json::from_str(r#"true"#).unwrap()).into()],
+                None,
+                true,
+            ),
+            (
+                vec![Some(Json::from_str("null").unwrap()).into()],
+                None,
+                true,
+            ),
+            (
+                vec![Some(Json::from_str(r#"[1, 2]"#).unwrap()).into()],
+                None,
+                true,
+            ),
+            (
+                vec![Some(Json::from_str(r#"["1", "2"]"#).unwrap()).into()],
+                None,
+                true,
+            ),
+            // Tests without path expression
+            (
+                vec![Some(Json::from_str(r#"{}"#).unwrap()).into()],
+                Some(Json::from_str("[]").unwrap()).into(),
+                true,
+            ),
+            (
+                vec![Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into()],
+                Some(Json::from_str(r#"["a"]"#).unwrap()).into(),
+                true,
+            ),
+            (
+                vec![Some(Json::from_str(r#"{"a": 1, "b": 2}"#).unwrap()).into()],
+                Some(Json::from_str(r#"["a", "b"]"#).unwrap()).into(),
+                true,
+            ),
+            (
+                vec![Some(Json::from_str(r#"{"a": {"c": 3}, "b": 2}"#).unwrap()).into()],
+                Some(Json::from_str(r#"["a", "b"]"#).unwrap()).into(),
+                true,
+            ),
+            // Tests with path expression
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into(),
+                    Some(b"$.a".to_vec()).into(),
+                ],
+                None,
+                true,
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": {"c": 3}, "b": 2}"#).unwrap()).into(),
+                    Some(b"$.a".to_vec()).into(),
+                ],
+                Some(Json::from_str(r#"["c"]"#).unwrap()).into(),
+                true,
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": {"c": 3}, "b": 2}"#).unwrap()).into(),
+                    None::<Bytes>.into(),
+                ],
+                None,
+                true,
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": {"c": 3}, "b": 2}"#).unwrap()).into(),
+                    Some(b"$.a.c".to_vec()).into(),
+                ],
+                None,
+                true,
+            ),
+            // Tests path expression contains any asterisk
+            (
+                vec![
+                    Some(Json::from_str(r#"{}"#).unwrap()).into(),
+                    Some(b"$.*".to_vec()).into(),
+                ],
+                None,
+                false,
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into(),
+                    Some(b"$.*".to_vec()).into(),
+                ],
+                None,
+                false,
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": {"c": 3}, "b": 2}"#).unwrap()).into(),
+                    Some(b"$.*".to_vec()).into(),
+                ],
+                None,
+                false,
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": {"c": 3}, "b": 2}"#).unwrap()).into(),
+                    Some(b"$.a.*".to_vec()).into(),
+                ],
+                None,
+                false,
+            ),
+            // Tests path expression does not identify a section of the target document
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into(),
+                    Some(b"$.b".to_vec()).into(),
+                ],
+                None,
+                true,
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": {"c": 3}, "b": 2}"#).unwrap()).into(),
+                    Some(b"$.c".to_vec()).into(),
+                ],
+                None,
+                true,
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": {"c": 3}, "b": 2}"#).unwrap()).into(),
+                    Some(b"$.a.d".to_vec()).into(),
+                ],
+                None,
+                true,
+            ),
+        ];
+        for (vargs, expected, is_success) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(vargs.clone())
+                .evaluate(ScalarFuncSig::JsonKeysSig);
+            if is_success {
+                assert_eq!(output.unwrap(), expected, "{:?}", vargs);
+            } else {
+                assert_eq!(output.is_err(), true);
+            }
         }
     }
 }
