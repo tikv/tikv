@@ -177,6 +177,7 @@ impl Simulator for ServerCluster {
             pool,
             raft_router.clone(),
             gc_worker.clone(),
+            false,
         );
 
         // Create deadlock service.
