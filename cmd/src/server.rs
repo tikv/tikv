@@ -183,6 +183,7 @@ impl TiKVServer {
             cfg.server.addr = addr;
             cfg.server.cluster_id = cluster_id;
             cfg.log_file = log_file;
+            cfg.dynamic_config = true;
             config = cfg;
             version = v;
         }
@@ -479,6 +480,7 @@ impl TiKVServer {
             pool.clone(),
             engines.raft_router.clone(),
             gc_worker,
+            self.config.dynamic_config,
         );
         if servers
             .server
