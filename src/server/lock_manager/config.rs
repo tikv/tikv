@@ -96,7 +96,14 @@ mod tests {
     struct MockPdClient;
     impl PdClient for MockPdClient {}
 
-    fn setup(cfg: TiKvConfig) -> (ConfigController, WaiterMgrScheduler, DeadlockScheduler) {
+    fn setup(
+        cfg: TiKvConfig,
+    ) -> (
+        ConfigController,
+        WaiterMgrScheduler,
+        DeadlockScheduler,
+        LockManager,
+    ) {
         let mut lock_mgr = LockManager::new();
         let pd_client = Arc::new(MockPdClient);
         let (_, resolver) = resolve::new_resolver(Arc::clone(&pd_client)).unwrap();
@@ -113,7 +120,7 @@ mod tests {
         let mut cfg_controller = ConfigController::new(cfg);
         cfg_controller.register("pessimistic_txn", Box::new(mgr));
 
-        (cfg_controller, w, d)
+        (cfg_controller, w, d, lock_mgr)
     }
 
     fn validate_waiter<F>(router: &WaiterMgrScheduler, f: F)
@@ -148,7 +155,7 @@ mod tests {
         cfg.pessimistic_txn.wait_for_lock_timeout = DEFAULT_TIMEOUT;
         cfg.pessimistic_txn.wake_up_delay_duration = DEFAULT_DELAY;
         cfg.validate().unwrap();
-        let (mut cfg_controller, waiter, deadlock) = setup(cfg.clone());
+        let (mut cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg.clone());
 
         // update of other module's config should not effect lock manager config
         let mut incoming = cfg.clone();
@@ -206,5 +213,7 @@ mod tests {
         validate_dead_lock(&deadlock, move |ttl: u64| {
             assert_eq!(ttl, 4321);
         });
+
+        lock_mgr.stop();
     }
 }
