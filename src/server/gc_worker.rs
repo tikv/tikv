@@ -69,7 +69,6 @@ const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
-#[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct GcConfig {
     pub ratio_threshold: f64,
@@ -136,6 +135,8 @@ enum GcTask {
         end_key: Key,
         callback: Callback<()>,
     },
+    #[cfg(test)]
+    Validate(Box<dyn FnOnce(&GcConfig, &Option<RocksIOLimiter>) + Send>),
 }
 
 impl GcTask {
@@ -143,6 +144,8 @@ impl GcTask {
         match self {
             GcTask::Gc { .. } => "gc",
             GcTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
+            #[cfg(test)]
+            GcTask::Validate(_) => "validate_config",
         }
     }
 }
@@ -167,6 +170,8 @@ impl Display for GcTask {
                 .field("start_key", &format!("{}", start_key))
                 .field("end_key", &format!("{}", end_key))
                 .finish(),
+            #[cfg(test)]
+            GcTask::Validate(_) => write!(f, "Validate gc worker config"),
         }
     }
 }
@@ -197,7 +202,7 @@ impl<E: Engine> GcRunner<E> {
         let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
             let bps = i64::try_from(cfg.max_write_bytes_per_sec.0)
                 .expect("max_write_bytes_per_sec > i64::MAX");
-            Some(IOLimiter::new(bps))
+            Some(RocksIOLimiter::new(bps))
         } else {
             None
         };
@@ -535,6 +540,11 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
                     start_key,
                     end_key
                 );
+            }
+            #[cfg(test)]
+            GcTask::Validate(f) => {
+                self.refresh_cfg();
+                f(&self.cfg, &self.limiter);
             }
         };
     }
@@ -1320,13 +1330,6 @@ impl<E: Engine> GcWorker<E> {
         })
     }
 
-    // pub fn change_io_limit(&self, limit: ReadableSize) -> Result<()> {
-    //     self.config_manager.update(|cfg: &mut GcConfig| {
-    //         cfg.max_write_bytes_per_sec = limit;
-    //     });
-    //     Ok(())
-    // }
-
     pub fn get_config_manager(&self) -> GcWorkerConfigManager {
         Arc::clone(&self.config_manager)
     }
@@ -1335,9 +1338,10 @@ impl<E: Engine> GcWorker<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ConfigController, TiKvConfig};
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
-    use crate::storage::kv::{Result as EngineResult, TestEngineBuilder};
+    use crate::storage::kv::{Result as EngineResult, RocksEngine, TestEngineBuilder};
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{Storage, TestStorageBuilder};
     use futures::Future;
@@ -1354,6 +1358,7 @@ mod tests {
             GcTask::UnsafeDestroyRange {
                 ref mut callback, ..
             } => callback,
+            GcTask::Validate(_) => unreachable!(),
         };
         mem::replace(callback, Box::new(|_| {}))
     }
@@ -1873,41 +1878,133 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
     }
 
-    // #[test]
-    // fn test_change_io_limit() {
-    //     let engine = TestEngineBuilder::new().build().unwrap();
-    //     let mut gc_worker = GcWorker::new(engine, None, None, Default::default());
-    //     gc_worker.start().unwrap();
-    //     assert!(gc_worker.limiter.lock().unwrap().is_none());
+    fn setup_cfg_controller(cfg: TiKvConfig) -> (GcWorker<RocksEngine>, ConfigController) {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut gc_worker = GcWorker::new(engine, None, None, cfg.gc.clone());
+        gc_worker.start().unwrap();
 
-    //     // Enable io iolimit
-    //     gc_worker.change_io_limit(1024).unwrap();
-    //     assert_eq!(
-    //         gc_worker
-    //             .limiter
-    //             .lock()
-    //             .unwrap()
-    //             .as_ref()
-    //             .unwrap()
-    //             .get_bytes_per_second(),
-    //         1024
-    //     );
+        let mut cfg_controller = ConfigController::new(cfg);
+        cfg_controller.register("gc", Box::new(gc_worker.get_config_manager()));
 
-    //     // Change io limit
-    //     gc_worker.change_io_limit(2048).unwrap();
-    //     assert_eq!(
-    //         gc_worker
-    //             .limiter
-    //             .lock()
-    //             .unwrap()
-    //             .as_ref()
-    //             .unwrap()
-    //             .get_bytes_per_second(),
-    //         2048,
-    //     );
+        (gc_worker, cfg_controller)
+    }
 
-    //     // Disable io limit
-    //     gc_worker.change_io_limit(0).unwrap();
-    //     assert!(gc_worker.limiter.lock().unwrap().is_none());
-    // }
+    fn validate<F>(scheduler: &FutureScheduler<GcTask>, f: F)
+    where
+        F: FnOnce(&GcConfig, &Option<RocksIOLimiter>) + Send + 'static,
+    {
+        let (tx, rx) = channel();
+        scheduler
+            .schedule(GcTask::Validate(Box::new(
+                move |cfg: &GcConfig, limiter: &Option<RocksIOLimiter>| {
+                    f(cfg, limiter);
+                    tx.send(()).unwrap();
+                },
+            )))
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
+    }
+
+    #[allow(clippy::float_cmp)]
+    #[test]
+    fn test_gc_worker_config_update() {
+        let mut cfg = TiKvConfig::default();
+        cfg.validate().unwrap();
+        let (gc_worker, mut cfg_controller) = setup_cfg_controller(cfg.clone());
+        let scheduler = gc_worker.worker_scheduler.clone();
+
+        // update of other module's config should not effect gc worker config
+        let mut incoming = cfg.clone();
+        incoming.raft_store.raft_log_gc_threshold = 2000;
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        assert!(rollback.right().unwrap());
+        validate(&scheduler, move |cfg: &GcConfig, _| {
+            assert_eq!(cfg, &GcConfig::default());
+        });
+
+        // update cg worker config
+        let mut incoming = cfg;
+        incoming.gc.ratio_threshold = 1.23;
+        incoming.gc.batch_keys = 1234;
+        incoming.gc.max_write_bytes_per_sec = ReadableSize(1024);
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        assert!(rollback.right().unwrap());
+        validate(&scheduler, move |cfg: &GcConfig, _| {
+            assert_eq!(cfg.ratio_threshold, 1.23);
+            assert_eq!(cfg.batch_keys, 1234);
+            assert_eq!(cfg.max_write_bytes_per_sec, ReadableSize(1024));
+        });
+    }
+
+    #[test]
+    fn test_change_io_limit_by_config_manager() {
+        let mut cfg = TiKvConfig::default();
+        cfg.validate().unwrap();
+        let (gc_worker, mut cfg_controller) = setup_cfg_controller(cfg.clone());
+        let scheduler = gc_worker.worker_scheduler.clone();
+
+        validate(&scheduler, move |_, limiter: &Option<_>| {
+            assert!(limiter.is_none());
+        });
+
+        // Enable io iolimit
+        let mut incoming = cfg.clone();
+        incoming.gc.max_write_bytes_per_sec = ReadableSize(1024);
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        assert!(rollback.right().unwrap());
+        validate(&scheduler, move |_, limiter: &Option<RocksIOLimiter>| {
+            assert_eq!(limiter.as_ref().unwrap().get_bytes_per_second(), 1024);
+        });
+
+        // Change io iolimit
+        let mut incoming = cfg.clone();
+        incoming.gc.max_write_bytes_per_sec = ReadableSize(2048);
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        assert!(rollback.right().unwrap());
+        validate(&scheduler, move |_, limiter: &Option<RocksIOLimiter>| {
+            assert_eq!(limiter.as_ref().unwrap().get_bytes_per_second(), 2048);
+        });
+
+        // Disable io iolimit
+        let mut incoming = cfg;
+        incoming.gc.max_write_bytes_per_sec = ReadableSize(0);
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        assert!(rollback.right().unwrap());
+        validate(&scheduler, move |_, limiter: &Option<_>| {
+            assert!(limiter.is_none());
+        });
+    }
+    #[test]
+    fn test_change_io_limit_by_debugger() {
+        // Debugger use GcWorkerConfigManager to change io limit
+        let mut cfg = TiKvConfig::default();
+        cfg.validate().unwrap();
+        let (gc_worker, _) = setup_cfg_controller(cfg);
+        let scheduler = gc_worker.worker_scheduler.clone();
+        let config_manager = gc_worker.get_config_manager();
+
+        validate(&scheduler, move |_, limiter: &Option<_>| {
+            assert!(limiter.is_none());
+        });
+
+        // Enable io iolimit
+        config_manager
+            .update(|cfg: &mut GcConfig| cfg.max_write_bytes_per_sec = ReadableSize(1024));
+        validate(&scheduler, move |_, limiter: &Option<RocksIOLimiter>| {
+            assert_eq!(limiter.as_ref().unwrap().get_bytes_per_second(), 1024);
+        });
+
+        // Change io iolimit
+        config_manager
+            .update(|cfg: &mut GcConfig| cfg.max_write_bytes_per_sec = ReadableSize(2048));
+        validate(&scheduler, move |_, limiter: &Option<RocksIOLimiter>| {
+            assert_eq!(limiter.as_ref().unwrap().get_bytes_per_second(), 2048);
+        });
+
+        // Disable io iolimit
+        config_manager.update(|cfg: &mut GcConfig| cfg.max_write_bytes_per_sec = ReadableSize(0));
+        validate(&scheduler, move |_, limiter: &Option<_>| {
+            assert!(limiter.is_none());
+        });
+    }
 }
