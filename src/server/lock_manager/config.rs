@@ -79,7 +79,8 @@ mod tests {
     use super::super::LockManager;
     use super::*;
     use crate::config::*;
-    use crate::server::resolve;
+    use crate::server::resolve::{Callback, StoreAddrResolver};
+    use crate::server::{Error, Result};
     use pd_client::PdClient;
     use tikv_util::security::SecurityManager;
 
@@ -96,6 +97,14 @@ mod tests {
     struct MockPdClient;
     impl PdClient for MockPdClient {}
 
+    #[derive(Clone)]
+    struct MockResolver;
+    impl StoreAddrResolver for MockResolver {
+        fn resolve(&self, _store_id: u64, _cb: Callback) -> Result<()> {
+            Err(Error::Other(box_err!("unimplemented")))
+        }
+    }
+
     fn setup(
         cfg: TiKvConfig,
     ) -> (
@@ -106,10 +115,15 @@ mod tests {
     ) {
         let mut lock_mgr = LockManager::new();
         let pd_client = Arc::new(MockPdClient);
-        let (_, resolver) = resolve::new_resolver(Arc::clone(&pd_client)).unwrap();
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         lock_mgr
-            .start(1, pd_client, resolver, security_mgr, &cfg.pessimistic_txn)
+            .start(
+                1,
+                pd_client,
+                MockResolver,
+                security_mgr,
+                &cfg.pessimistic_txn,
+            )
             .unwrap();
 
         let mgr = lock_mgr.config_manager();
