@@ -133,7 +133,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Instr
             | ScalarFuncSig::Locate2ArgsUtf8
             | ScalarFuncSig::InstrUtf8
-            | ScalarFuncSig::Locate2Args => (2, 2),
+            | ScalarFuncSig::Locate2Args
+            | ScalarFuncSig::FindInSet => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
             | ScalarFuncSig::CastIntAsReal
@@ -441,7 +442,6 @@ impl ScalarFunc {
             | ScalarFuncSig::ExportSet5Arg
             | ScalarFuncSig::ExtractDatetime
             | ScalarFuncSig::ExtractDuration
-            | ScalarFuncSig::FindInSet
             | ScalarFuncSig::Format
             | ScalarFuncSig::FormatWithLocale
             | ScalarFuncSig::FoundRows
@@ -873,6 +873,7 @@ dispatch_call! {
         Ord => ord,
         InstrUtf8 => instr_utf8,
         JsonDepthSig => json_depth,
+        FindInSet => find_in_set,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1240,6 +1241,7 @@ mod tests {
                     ScalarFuncSig::PeriodDiff,
                     ScalarFuncSig::Locate2ArgsUtf8,
                     ScalarFuncSig::Locate2Args,
+                    ScalarFuncSig::FindInSet,
                 ],
                 2,
                 2,
@@ -1592,7 +1594,6 @@ mod tests {
             ScalarFuncSig::ExportSet5Arg,
             ScalarFuncSig::ExtractDatetime,
             ScalarFuncSig::ExtractDuration,
-            ScalarFuncSig::FindInSet,
             ScalarFuncSig::Format,
             ScalarFuncSig::FormatWithLocale,
             ScalarFuncSig::FoundRows,
