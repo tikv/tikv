@@ -298,7 +298,7 @@ impl ScalarFunc {
             | ScalarFuncSig::OctInt
             | ScalarFuncSig::JsonDepthSig => (1, 1),
 
-            ScalarFuncSig::JsonLengthSig => (1, 2),
+            ScalarFuncSig::JsonKeysSig | ScalarFuncSig::JsonLengthSig => (1, 2),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -531,7 +531,6 @@ impl ScalarFunc {
             | ScalarFuncSig::JsonQuoteSig
             | ScalarFuncSig::JsonSearchSig
             | ScalarFuncSig::JsonStorageSizeSig
-            | ScalarFuncSig::JsonKeysSig
             | ScalarFuncSig::JsonValidJsonSig
             | ScalarFuncSig::JsonContainsSig
             | ScalarFuncSig::JsonKeys2ArgsSig
@@ -1104,6 +1103,7 @@ dispatch_call! {
         IfJson => if_json,
         IfNullJson => if_null_json,
 
+        JsonKeysSig => json_keys,
         JsonExtractSig => json_extract,
         JsonSetSig => json_set,
         JsonInsertSig => json_insert,
