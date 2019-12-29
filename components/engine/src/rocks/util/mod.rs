@@ -317,6 +317,12 @@ pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -
     engine.get_property_int_cf(handle, &prop)
 }
 
+/// Gets the number of files at given level of given column family.
+pub fn get_cf_num_blob_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
+    let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
+    engine.get_property_int_cf(handle, &prop)
+}
+
 /// Gets the number of immutable mem-table of given column family.
 pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
     engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)

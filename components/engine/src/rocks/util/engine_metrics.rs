@@ -22,6 +22,7 @@ pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
 pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
 pub const ROCKSDB_NUM_IMMUTABLE_MEM_TABLE: &str = "rocksdb.num-immutable-mem-table";
 
+pub const ROCKSDB_TITANDB_NUM_BLOB_FILES_AT_LEVEL: &str = "rocksdb.titandb.num-blob-files-at-level";
 pub const ROCKSDB_TITANDB_LIVE_BLOB_SIZE: &str = "rocksdb.titandb.live-blob-size";
 pub const ROCKSDB_TITANDB_NUM_LIVE_BLOB_FILE: &str = "rocksdb.titandb.num-live-blob-file";
 pub const ROCKSDB_TITANDB_NUM_OBSOLETE_BLOB_FILE: &str = "rocksdb.titandb.\
@@ -945,7 +946,7 @@ pub fn flush_engine_iostall_properties(engine: &DB, name: &str) {
         }
     }
     for i in 0..stall_num {
-        STORE_ENGINE_WRITE_STALL_REASON_GAUSE_VEC
+        STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC
             .with_label_values(&[name, ROCKSDB_IOSTALL_TYPE[i]])
             .set(counter[i]);
     }
@@ -1016,6 +1017,13 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
             // Num files at levels
             if let Some(v) = rocks::util::get_cf_num_files_at_level(engine, handle, level) {
                 STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
+                    .with_label_values(&[name, cf, &level.to_string()])
+                    .set(v as i64);
+            }
+
+            // Titan Num blob files at levels
+            if let Some(v) = rocks::util::get_cf_num_blob_files_at_level(engine, handle, level) {
+                STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC
                     .with_label_values(&[name, cf, &level.to_string()])
                     .set(v as i64);
             }
@@ -1172,10 +1180,15 @@ lazy_static! {
         "Oldest unreleased snapshot duration in seconds",
         &["db"]
     ).unwrap();
-    pub static ref STORE_ENGINE_WRITE_STALL_REASON_GAUSE_VEC: IntGaugeVec = register_int_gauge_vec!(
+    pub static ref STORE_ENGINE_WRITE_STALL_REASON_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_write_stall_reason",
         "QPS of each reason which cause tikv write stall",
         &["db", "type"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_TITANDB_NUM_BLOB_FILES_AT_LEVEL_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_num_blob_files_at_level",
+        "Number of files at each level",
+        &["db", "cf", "level"]
     ).unwrap();
     pub static ref STORE_ENGINE_TITANDB_LIVE_BLOB_SIZE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_titandb_live_blob_size",
