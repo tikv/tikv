@@ -212,12 +212,7 @@ fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
         None => return Ok(None),
         Some(j) => j.to_owned(),
     };
-    let path_expr_list = parse_json_path_list(&args[1..])?;
-    if path_expr_list.is_none() {
-        Ok(None)
-    } else {
-        Ok(j.json_length(&path_expr_list.unwrap()))
-    }
+    Ok(parse_json_path_list(&args[1..])?.and_then(|path_expr_list| j.json_length(&path_expr_list)))
 }
 
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
