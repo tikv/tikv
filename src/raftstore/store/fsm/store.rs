@@ -2184,7 +2184,15 @@ mod tests {
         (router, apply_router, system, apply_system)
     }
 
-    fn start_raftstore(cfg: TiKvConfig) -> (ConfigController, RaftRouter, ApplyRouter) {
+    fn start_raftstore(
+        cfg: TiKvConfig,
+    ) -> (
+        ConfigController,
+        RaftRouter,
+        ApplyRouter,
+        BatchSystem<PeerFsm, StoreFsm>,
+        ApplyBatchSystem,
+    ) {
         let (raft_router, apply_router, mut system, mut apply_system) =
             create_batch_system(&cfg.raft_store);
         let (_, engines) = create_tmp_engine("store-config");
@@ -2236,7 +2244,13 @@ mod tests {
         );
         system.spawn("store-config".to_owned(), builder);
         apply_system.spawn("apply-config".to_owned(), apply_poller_builder);
-        (cfg_controller, raft_router, apply_router)
+        (
+            cfg_controller,
+            raft_router,
+            apply_router,
+            system,
+            apply_system,
+        )
     }
 
     fn validate_store<F>(router: &RaftRouter, f: F)
@@ -2275,7 +2289,8 @@ mod tests {
     fn test_update_raftstore_config() {
         let mut config = TiKvConfig::default();
         config.validate().unwrap();
-        let (mut cfg_controller, router, _) = start_raftstore(config.clone());
+        let (mut cfg_controller, router, _, mut system, mut apply_system) =
+            start_raftstore(config.clone());
 
         let incoming = config.clone();
         let raft_store = incoming.raft_store.clone();
@@ -2300,6 +2315,9 @@ mod tests {
         validate_store(&router, move |cfg: &Config| {
             assert_eq!(cfg, &raft_store);
         });
+
+        apply_system.shutdown();
+        system.shutdown();
     }
 
     #[test]
@@ -2307,7 +2325,8 @@ mod tests {
         let mut config = TiKvConfig::default();
         config.raft_store.sync_log = true;
         config.validate().unwrap();
-        let (mut cfg_controller, raft_router, apply_router) = start_raftstore(config.clone());
+        let (mut cfg_controller, raft_router, apply_router, mut system, mut apply_system) =
+            start_raftstore(config.clone());
 
         // register region
         let region_id = 1;
@@ -2339,6 +2358,9 @@ mod tests {
         validate_apply(&apply_router, region_id, |sync_log| {
             assert_eq!(sync_log, false);
         });
+
+        apply_system.shutdown();
+        system.shutdown();
     }
 
     #[test]
