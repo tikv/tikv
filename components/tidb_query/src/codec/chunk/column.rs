@@ -6,6 +6,8 @@ use tipb::FieldType;
 
 use super::{Error, Result};
 use crate::codec::datum;
+use crate::codec::datum_codec::decode_date_time_from_uint;
+use crate::codec::datum_codec::DatumPayloadDecoder;
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::mysql::{
     Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder, Json,
@@ -13,8 +15,6 @@ use crate::codec::mysql::{
 };
 use crate::codec::Datum;
 use crate::expr::EvalContext;
-
-use crate::codec::datum_codec::DatumPayloadDecoder;
 use codec::prelude::*;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
@@ -379,6 +379,39 @@ impl Column {
     pub fn append_time(&mut self, t: Time) -> Result<()> {
         self.data.write_time(t)?;
         self.finish_append_fixed()
+    }
+
+    pub fn append_time_datum(
+        &mut self,
+        mut raw_datum: &[u8],
+        field_type: &FieldType,
+    ) -> Result<()> {
+        if raw_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = raw_datum[0];
+        raw_datum = &raw_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            // In index, it's flag is `UINT`. See TiDB's `encode()`.
+            datum::UINT_FLAG => {
+                let v = raw_datum.read_datum_payload_u64()?;
+                let v = decode_date_time_from_uint(v, ctx, field_type)?;
+                self.append_time(v)
+            }
+            // In record, it's flag is `VAR_UINT`. See TiDB's `flatten()` and `encode()`.
+            datum::VAR_UINT_FLAG => {
+                let v = raw_datum.read_datum_payload_var_u64()?;
+                let v = decode_date_time_from_uint(v, ctx, field_type)?;
+                self.append_time(v)
+            }
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for DateTime vector",
+                flag
+            ))),
+        }
     }
 
     /// Get the time datum of the row in the column.

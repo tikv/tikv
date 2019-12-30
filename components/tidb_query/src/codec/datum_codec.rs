@@ -280,7 +280,7 @@ fn decode_duration_from_i64(v: i64, field_type: &FieldType) -> Result<Duration> 
 }
 
 #[inline]
-fn decode_date_time_from_uint(
+pub fn decode_date_time_from_uint(
     v: u64,
     ctx: &mut EvalContext,
     field_type: &FieldType,
