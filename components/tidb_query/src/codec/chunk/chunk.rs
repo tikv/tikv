@@ -92,28 +92,12 @@ impl Chunk {
             }
             EvalType::Decimal => {
                 for &row_index in row_indexes {
-                    let opt: Option<Decimal> = raw_vec[row_index].decode(field_type, ctx)?;
-                    match opt {
-                        None => {
-                            col.append_null().unwrap();
-                        }
-                        Some(val) => {
-                            col.append_decimal(&val).unwrap();
-                        }
-                    }
+                    col.append_decimal_datum(&raw_vec[row_index]);
                 }
             }
             EvalType::Bytes => {
                 for &row_index in row_indexes {
-                    let opt: Option<Bytes> = raw_vec[row_index].decode(field_type, ctx)?;
-                    match opt {
-                        None => {
-                            col.append_null().unwrap();
-                        }
-                        Some(ref val) => {
-                            col.append_bytes(&val).unwrap();
-                        }
-                    }
+                    col.append_bytes_datum(&raw_vec[row_index])
                 }
             }
             EvalType::DateTime => {

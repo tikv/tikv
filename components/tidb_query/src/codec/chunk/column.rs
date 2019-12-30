@@ -344,6 +344,29 @@ impl Column {
         self.finished_append_var()
     }
 
+    /// Append a bytes in raw datum format to the column.
+    pub fn append_bytes_datum(&mut self, byte: &[u8]) -> Result<()> {
+        if raw_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = raw_datum[0];
+        raw_datum = &raw_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            // In index, it's flag is `BYTES`. See TiDB's `encode()`.
+            datum::BYTES_FLAG => self.append_bytes(raw_datum.read_datum_payload_bytes()?),
+            // In record, it's flag is `COMPACT_BYTES`. See TiDB's `encode()`.
+            datum::COMPACT_BYTES_FLAG => self.append_bytes(raw_datum.read_datum_payload_compact_bytes()?),
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Bytes vector",
+                flag
+            ))),
+        }
+    }
+
+
     /// Get the bytes datum of the row in the column.
     pub fn get_bytes(&self, idx: usize) -> &[u8] {
         let start = self.var_offsets[idx];
@@ -383,6 +406,25 @@ impl Column {
     pub fn append_decimal(&mut self, d: &Decimal) -> Result<()> {
         self.data.write_decimal_to_chunk(d)?;
         self.finish_append_fixed()
+    }
+
+    pub fn append_decimal_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
+        if raw_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = raw_datum[0];
+        raw_datum = &raw_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            // In both index and record, it's flag is `DECIMAL`. See TiDB's `encode()`.
+            datum::DECIMAL_FLAG => self.append_decimal(&raw_datum.read_datum_payload_decimal()?),
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Decimal vector",
+                flag
+            ))),
+        }
     }
 
     /// Get the decimal datum of the row in the column.
