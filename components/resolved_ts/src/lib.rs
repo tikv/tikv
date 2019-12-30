@@ -1,3 +1,5 @@
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::cmp;
 use std::collections::BTreeMap;
 use tikv_util::collections::HashSet;

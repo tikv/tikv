@@ -2922,8 +2922,6 @@ name = "resolved_ts"
 version = "0.0.1"
 dependencies = [
  "hex 0.3.2",
- "kvproto",
- "tikv",
  "tikv_util",
  "txn_types",
 ]
