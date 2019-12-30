@@ -576,13 +576,13 @@ mod tests {
     use super::*;
     use crate::import::test_helpers::*;
 
+    use crate::storage::mvcc::WriteType;
+    use crate::storage::Value;
     use engine::rocks::util::new_engine;
     use engine::rocks::SstWriterBuilder;
     use engine::util::get_range_properties_cf;
-    use engine::CF_WRITE;
+    use engine::CF_DEFAULT;
     use tempdir::TempDir;
-    use tikv::storage::mvcc::WriteType;
-    use tikv::storage::Value;
     use tikv_util::file::calc_crc32_bytes;
 
     #[test]
@@ -748,21 +748,18 @@ mod tests {
         start_ts: u64,
         short_value: Option<Value>,
     ) -> Vec<u8> {
-        Write::new(write_type, start_ts, short_value)
-            .as_ref()
-            .to_bytes()
+        Write::new(write_type, start_ts, short_value).to_bytes()
     }
 
-    fn create_sample_external_sst_file_txn_default(
-    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
-        let ext_sst_dir = tempfile::tempdir()?;
-        let mut sst_writer = new_sst_writer(
+    fn create_sample_external_sst_file_txn_default() -> Result<(TempDir, StorageBackend, SSTMeta)> {
+        let ext_sst_dir = TempDir::new("external_storage")?;
+        let mut sst_writer = SstWriterBuilder::new().build(
             ext_sst_dir
                 .path()
                 .join("sample_default.sst")
                 .to_str()
                 .unwrap(),
-        );
+        )?;
         sst_writer.put(&get_encoded_key(b"t123_r01", 1), b"abc")?;
         sst_writer.put(&get_encoded_key(b"t123_r04", 3), b"xyz")?;
         sst_writer.put(&get_encoded_key(b"t123_r07", 7), b"pqrst")?;
@@ -770,7 +767,7 @@ mod tests {
         let sst_info = sst_writer.finish()?;
 
         // make up the SST meta for downloading.
-        let mut meta = SstMeta::default();
+        let mut meta = SSTMeta::default();
         let uuid = Uuid::new_v4();
         meta.set_uuid(uuid.as_bytes().to_vec());
         meta.set_cf_name(CF_DEFAULT.to_owned());
@@ -783,16 +780,15 @@ mod tests {
         Ok((ext_sst_dir, backend, meta))
     }
 
-    fn create_sample_external_sst_file_txn_write(
-    ) -> Result<(tempfile::TempDir, StorageBackend, SstMeta)> {
-        let ext_sst_dir = tempfile::tempdir()?;
-        let mut sst_writer = new_sst_writer(
+    fn create_sample_external_sst_file_txn_write() -> Result<(TempDir, StorageBackend, SSTMeta)> {
+        let ext_sst_dir = TempDir::new("external_storage")?;
+        let mut sst_writer = SstWriterBuilder::new().build(
             ext_sst_dir
                 .path()
                 .join("sample_write.sst")
                 .to_str()
                 .unwrap(),
-        );
+        )?;
         sst_writer.put(
             &get_encoded_key(b"t123_r01", 5),
             &get_write_value(WriteType::Put, 1, None),
@@ -816,7 +812,7 @@ mod tests {
         let sst_info = sst_writer.finish()?;
 
         // make up the SST meta for downloading.
-        let mut meta = SstMeta::default();
+        let mut meta = SSTMeta::default();
         let uuid = Uuid::new_v4();
         meta.set_uuid(uuid.as_bytes().to_vec());
         meta.set_cf_name(CF_WRITE.to_owned());
@@ -952,17 +948,19 @@ mod tests {
     fn test_download_sst_with_key_rewrite_ts_default() {
         // performs the download.
         let importer_dir = TempDir::new("importer_dir").unwrap();
-        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let importer = SSTImporter::new(importer_dir.path()).unwrap();
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_default().unwrap();
+        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
         let _ = importer
-            .download::<TestEngine>(
+            .download(
                 &meta,
                 &backend,
                 "sample_default.sst",
                 &new_rewrite_rule(b"", b"", 16),
                 None,
+                sst_writer,
             )
             .unwrap()
             .unwrap();
@@ -973,12 +971,12 @@ mod tests {
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
-        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        let sst_reader = SstReader::open(sst_file_path.to_str().unwrap()).unwrap();
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            iter.collect::<Vec<_>>(),
             vec![
                 (get_encoded_key(b"t123_r01", 16), b"abc".to_vec()),
                 (get_encoded_key(b"t123_r04", 16), b"xyz".to_vec()),
@@ -991,17 +989,19 @@ mod tests {
     fn test_download_sst_with_key_rewrite_ts_write() {
         // performs the download.
         let importer_dir = TempDir::new("importer_dir").unwrap();
-        let importer = SSTImporter::new(&importer_dir).unwrap();
+        let importer = SSTImporter::new(importer_dir.path()).unwrap();
 
         // creates a sample SST file.
         let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_write().unwrap();
+        let sst_writer = create_sst_writer_with_db(&importer, &meta).unwrap();
         let _ = importer
-            .download::<TestEngine>(
+            .download(
                 &meta,
                 &backend,
                 "sample_write.sst",
                 &new_rewrite_rule(b"", b"", 16),
                 None,
+                sst_writer,
             )
             .unwrap()
             .unwrap();
@@ -1012,12 +1012,12 @@ mod tests {
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
-        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap());
+        let sst_reader = SstReader::open(sst_file_path.to_str().unwrap()).unwrap();
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter();
-        iter.seek(SeekKey::Start);
+        iter.seek(SeekKey::Start).unwrap();
         assert_eq!(
-            iter.as_std().collect::<Vec<_>>(),
+            iter.collect::<Vec<_>>(),
             vec![
                 (
                     get_encoded_key(b"t123_r01", 16),
