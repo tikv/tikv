@@ -4,6 +4,7 @@ use tidb_query_datatype::prelude::*;
 use tidb_query_datatype::{FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, Result};
+use crate::codec::datum;
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::mysql::{
     Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder, Json,
@@ -12,6 +13,7 @@ use crate::codec::mysql::{
 use crate::codec::Datum;
 use crate::expr::EvalContext;
 
+use crate::codec::datum_codec::DatumPayloadDecoder;
 use codec::prelude::*;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
@@ -236,6 +238,28 @@ impl Column {
     pub fn append_u64(&mut self, v: u64) -> Result<()> {
         self.data.write_u64_le(v)?;
         self.finish_append_fixed()
+    }
+
+    /// Append datum bytes in int format
+    pub fn append_int_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
+        if raw_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = raw_datum[0];
+        raw_datum = &raw_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            datum::INT_FLAG => self.append_i64(raw_datum.read_datum_payload_i64()?),
+            datum::UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_u64()?),
+            datum::VAR_INT_FLAG => self.append_i64(raw_datum.read_datum_payload_var_i64()?),
+            datum::VAR_UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_u64()?),
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Int vector",
+                flag
+            ))),
+        }
     }
 
     /// Get the u64 datum of the row in the column.

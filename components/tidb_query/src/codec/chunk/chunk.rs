@@ -81,30 +81,8 @@ impl Chunk {
 
         match eval_type {
             EvalType::Int => {
-                if field_type.is_unsigned() {
-                    for &row_index in row_indexes {
-                        let opt: Option<Int> = raw_vec[row_index].decode(field_type, ctx)?;
-                        match opt {
-                            None => {
-                                col.append_null().unwrap();
-                            }
-                            Some(val) => {
-                                col.append_u64(val as u64).unwrap();
-                            }
-                        }
-                    }
-                } else {
-                    for &row_index in row_indexes {
-                        let opt: Option<Int> = raw_vec[row_index].decode(field_type, ctx)?;
-                        match opt {
-                            None => {
-                                col.append_null().unwrap();
-                            }
-                            Some(val) => {
-                                col.append_i64(val).unwrap();
-                            }
-                        }
-                    }
+                for &row_index in row_indexes {
+                    col.append_int_datum(&raw_vec[row_index])?
                 }
             }
             EvalType::Real => {
