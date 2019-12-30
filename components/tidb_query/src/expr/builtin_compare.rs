@@ -534,7 +534,7 @@ mod tests {
             ),
             (
                 ScalarFuncSig::CoalesceDecimal,
-                vec![Datum::Null, Datum::Dec(dec.clone())],
+                vec![Datum::Null, Datum::Dec(dec)],
                 Datum::Dec(dec),
             ),
             (
@@ -623,16 +623,12 @@ mod tests {
             ),
             (
                 ScalarFuncSig::InDecimal,
-                vec![Datum::Dec(dec1.clone()), Datum::Dec(dec2.clone())],
+                vec![Datum::Dec(dec1), Datum::Dec(dec2)],
                 Datum::I64(0),
             ),
             (
                 ScalarFuncSig::InDecimal,
-                vec![
-                    Datum::Dec(dec1.clone()),
-                    Datum::Dec(dec2.clone()),
-                    Datum::Dec(dec1.clone()),
-                ],
+                vec![Datum::Dec(dec1), Datum::Dec(dec2), Datum::Dec(dec1)],
                 Datum::I64(1),
             ),
             (

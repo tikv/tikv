@@ -6,7 +6,7 @@ pub mod deadlock;
 mod metrics;
 pub mod waiter_manager;
 
-pub use self::config::Config;
+pub use self::config::{Config, LockManagerConfigManager};
 pub use self::deadlock::Service as DeadlockService;
 
 use self::deadlock::{Detector, Scheduler as DetectorScheduler};
@@ -193,6 +193,13 @@ impl LockManager {
         )
     }
 
+    pub fn config_manager(&self) -> LockManagerConfigManager {
+        LockManagerConfigManager::new(
+            self.waiter_mgr_scheduler.clone(),
+            self.detector_scheduler.clone(),
+        )
+    }
+
     fn add_to_detected(&self, txn_ts: TimeStamp) {
         let mut detected = self.detected[detected_slot_idx(txn_ts)].lock();
         detected.insert(txn_ts);
@@ -267,7 +274,6 @@ mod tests {
     use self::metrics::*;
     use self::waiter_manager::tests::*;
     use super::*;
-    use crate::raftstore::coprocessor::Config as CopConfig;
     use crate::server::resolve::Callback;
     use tikv_util::security::SecurityConfig;
 
@@ -294,7 +300,7 @@ mod tests {
 
     fn start_lock_manager() -> LockManager {
         let (tx, _rx) = mpsc::sync_channel(100);
-        let mut coprocessor_host = CoprocessorHost::new(CopConfig::default(), tx);
+        let mut coprocessor_host = CoprocessorHost::new(tx);
 
         let mut lock_mgr = LockManager::new();
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);

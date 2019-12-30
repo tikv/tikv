@@ -3936,6 +3936,8 @@ mod tests {
         checker.check(b"k3", b"k31", 1, &[3, 5, 7], false);
         checker.check(b"k31", b"k32", 24, &[25, 26, 27], true);
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
+
+        system.shutdown();
     }
 
     #[test]
