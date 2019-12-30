@@ -927,7 +927,7 @@ pub mod tests {
         // Set an unique path to avoid AlreadyExists error.
         req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
         let (tx, rx) = unbounded();
-        let (task, _) = Task::new(req.clone(), tx).unwrap();
+        let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         check_response(rx, |resp| {
             let resp = resp.unwrap();
@@ -985,7 +985,7 @@ pub mod tests {
 
         // Cancel the task during backup.
         let (tx, rx) = unbounded();
-        let (task, cancel) = Task::new(req.clone(), tx).unwrap();
+        let (task, cancel) = Task::new(req, tx).unwrap();
         endpoint.region_info.canecl_on_seek(cancel);
         endpoint.handle_backup_task(task);
         check_response(rx, |resp| {
@@ -1011,7 +1011,7 @@ pub mod tests {
         req.set_storage_backend(make_noop_backend());
 
         let (tx, rx) = unbounded();
-        let (task, _) = Task::new(req.clone(), tx).unwrap();
+        let (task, _) = Task::new(req, tx).unwrap();
         // Pause the engine 6 seconds to trigger Timeout error.
         // The Timeout error is translated to server is busy.
         engine.pause(Duration::from_secs(6));

@@ -1600,7 +1600,7 @@ mod tests {
                 vec![Key::from_raw(b"x")],
                 100.into(),
                 101.into(),
-                expect_ok_callback(tx.clone(), 3),
+                expect_ok_callback(tx, 3),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1637,7 +1637,7 @@ mod tests {
                 false,
                 0,
                 TimeStamp::default(),
-                expect_fail_callback(tx.clone(), 0, |e| match e {
+                expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::Engine(EngineError(box EngineErrorInner::Request(
                             ..,
@@ -1838,7 +1838,7 @@ mod tests {
                 ],
                 1.into(),
                 2.into(),
-                expect_ok_callback(tx.clone(), 1),
+                expect_ok_callback(tx, 1),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -1997,7 +1997,7 @@ mod tests {
                 ],
                 1.into(),
                 2.into(),
-                expect_ok_callback(tx.clone(), 1),
+                expect_ok_callback(tx, 1),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -2071,7 +2071,7 @@ mod tests {
                 ],
                 1.into(),
                 2.into(),
-                expect_ok_callback(tx.clone(), 1),
+                expect_ok_callback(tx, 1),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -2172,7 +2172,7 @@ mod tests {
                 false,
                 0,
                 TimeStamp::default(),
-                expect_fail_callback(tx.clone(), 6, |e| match e {
+                expect_fail_callback(tx, 6, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::WriteConflict { .. },
                     ))))) => (),
@@ -2227,7 +2227,7 @@ mod tests {
                 false,
                 0,
                 TimeStamp::default(),
-                expect_ok_callback(tx.clone(), 3),
+                expect_ok_callback(tx, 3),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -2257,7 +2257,7 @@ mod tests {
                 Key::from_raw(b"x"),
                 100.into(),
                 TimeStamp::zero(),
-                expect_ok_callback(tx.clone(), 1),
+                expect_ok_callback(tx, 1),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -2311,7 +2311,7 @@ mod tests {
                 Key::from_raw(b"x"),
                 ts(110, 0),
                 ts(220, 0),
-                expect_ok_callback(tx.clone(), 0),
+                expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -2353,7 +2353,7 @@ mod tests {
                 vec![Key::from_raw(b"x")],
                 100.into(),
                 101.into(),
-                expect_ok_callback(tx.clone(), 2),
+                expect_ok_callback(tx, 2),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -2409,7 +2409,7 @@ mod tests {
                 Context::default(),
                 vec![Key::from_raw(b"y")],
                 1000,
-                expect_ok_callback(tx.clone(), 3),
+                expect_ok_callback(tx, 3),
             )
             .unwrap();
         let mut ctx = Context::default();
@@ -2512,7 +2512,7 @@ mod tests {
                 Key::from_raw(b""),
                 Key::from_raw(&[255]),
                 false,
-                expect_ok_callback(tx.clone(), 9),
+                expect_ok_callback(tx, 9),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -2656,7 +2656,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                expect_ok_callback(tx.clone(), 0),
+                expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -2839,7 +2839,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 vec![b"a".to_vec(), b"c".to_vec(), b"e".to_vec()],
-                expect_ok_callback(tx.clone(), 2),
+                expect_ok_callback(tx, 2),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -2888,7 +2888,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                expect_ok_callback(tx.clone(), 0),
+                expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -3012,7 +3012,7 @@ mod tests {
             .map(|(k, v)| Some((k, v)))
             .collect();
         expect_multi_values(
-            results.clone(),
+            results,
             storage
                 .raw_scan(
                     Context::default(),
@@ -3033,7 +3033,7 @@ mod tests {
             .map(|(k, v)| Some((k, v)))
             .collect();
         expect_multi_values(
-            results.clone(),
+            results,
             storage
                 .raw_scan(
                     Context::default(),
@@ -3057,7 +3057,7 @@ mod tests {
             .map(|(k, v)| Some((k, v)))
             .collect();
         expect_multi_values(
-            results.clone(),
+            results,
             storage
                 .raw_scan(
                     Context::default(),
@@ -3071,14 +3071,13 @@ mod tests {
                 .wait(),
         );
         let results: Vec<Option<KvPair>> = test_data
-            .clone()
             .into_iter()
             .skip(6)
             .take(1)
             .map(|(k, v)| Some((k, v)))
             .collect();
         expect_multi_values(
-            results.clone(),
+            results,
             storage
                 .raw_scan(
                     Context::default(),
@@ -3271,7 +3270,7 @@ mod tests {
                 Context::default(),
                 "".to_string(),
                 test_data.clone(),
-                expect_ok_callback(tx.clone(), 0),
+                expect_ok_callback(tx, 0),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -3652,12 +3651,7 @@ mod tests {
                 expect_value_callback(
                     tx.clone(),
                     0,
-                    vec![
-                        lock_a.clone(),
-                        lock_b.clone(),
-                        lock_c.clone(),
-                        lock_x.clone(),
-                    ],
+                    vec![lock_a, lock_b.clone(), lock_c.clone(), lock_x.clone()],
                 ),
             )
             .unwrap();
@@ -3687,17 +3681,7 @@ mod tests {
                 101.into(),
                 b"b".to_vec(),
                 0,
-                expect_value_callback(
-                    tx.clone(),
-                    0,
-                    vec![
-                        lock_b.clone(),
-                        lock_c.clone(),
-                        lock_x.clone(),
-                        lock_y.clone(),
-                        lock_z.clone(),
-                    ],
-                ),
+                expect_value_callback(tx, 0, vec![lock_b, lock_c, lock_x, lock_y, lock_z]),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -3950,7 +3934,7 @@ mod tests {
                 101.into(),
                 vec![],
                 0,
-                expect_value_callback(tx.clone(), 0, vec![lock_a]),
+                expect_value_callback(tx, 0, vec![lock_a]),
             )
             .unwrap();
         rx.recv().unwrap();
@@ -4027,10 +4011,10 @@ mod tests {
         storage
             .txn_heart_beat(
                 Context::default(),
-                k.clone(),
+                k,
                 11.into(),
                 150,
-                expect_fail_callback(tx.clone(), 0, |e| match e {
+                expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnLockNotFound { .. },
                     ))))) => (),
@@ -4197,10 +4181,10 @@ mod tests {
         storage
             .commit(
                 Context::default(),
-                vec![k.clone()],
+                vec![k],
                 ts(25, 0),
                 ts(28, 0),
-                expect_fail_callback(tx.clone(), 0, |e| match e {
+                expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnLockNotFound { .. },
                     ))))) => (),

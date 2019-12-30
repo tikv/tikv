@@ -325,7 +325,7 @@ impl<T: Transport, C> PollContext<T, C> {
         gc_msg.set_region_id(region_id);
         gc_msg.set_from_peer(to_peer.clone());
         gc_msg.set_to_peer(from_peer.clone());
-        gc_msg.set_region_epoch(cur_epoch.clone());
+        gc_msg.set_region_epoch(cur_epoch);
         if let Some(r) = target_region {
             gc_msg.set_merge_target(r);
         } else {
@@ -1045,7 +1045,7 @@ impl RaftBatchSystem {
         mut workers: Workers,
         region_peers: Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>,
         builder: RaftPollerBuilder<T, C>,
-        cfg_controller: ConfigController,
+        mut cfg_controller: ConfigController,
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
@@ -1105,10 +1105,15 @@ impl RaftBatchSystem {
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
 
+        cfg_controller.register(
+            "coprocessor",
+            Box::new(workers.split_check_worker.scheduler()),
+        );
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
             self.router.clone(),
             Arc::clone(&workers.coprocessor_host),
+            cfg_controller.get_current().coprocessor.clone(),
         );
         box_try!(workers.split_check_worker.start(split_check_runner));
 
@@ -2179,7 +2184,15 @@ mod tests {
         (router, apply_router, system, apply_system)
     }
 
-    fn start_raftstore(cfg: TiKvConfig) -> (ConfigController, RaftRouter, ApplyRouter) {
+    fn start_raftstore(
+        cfg: TiKvConfig,
+    ) -> (
+        ConfigController,
+        RaftRouter,
+        ApplyRouter,
+        BatchSystem<PeerFsm, StoreFsm>,
+        ApplyBatchSystem,
+    ) {
         let (raft_router, apply_router, mut system, mut apply_system) =
             create_batch_system(&cfg.raft_store);
         let (_, engines) = create_tmp_engine("store-config");
@@ -2231,7 +2244,13 @@ mod tests {
         );
         system.spawn("store-config".to_owned(), builder);
         apply_system.spawn("apply-config".to_owned(), apply_poller_builder);
-        (cfg_controller, raft_router, apply_router)
+        (
+            cfg_controller,
+            raft_router,
+            apply_router,
+            system,
+            apply_system,
+        )
     }
 
     fn validate_store<F>(router: &RaftRouter, f: F)
@@ -2270,7 +2289,8 @@ mod tests {
     fn test_update_raftstore_config() {
         let mut config = TiKvConfig::default();
         config.validate().unwrap();
-        let (mut cfg_controller, router, _) = start_raftstore(config.clone());
+        let (mut cfg_controller, router, _, mut system, mut apply_system) =
+            start_raftstore(config.clone());
 
         let incoming = config.clone();
         let raft_store = incoming.raft_store.clone();
@@ -2295,6 +2315,9 @@ mod tests {
         validate_store(&router, move |cfg: &Config| {
             assert_eq!(cfg, &raft_store);
         });
+
+        apply_system.shutdown();
+        system.shutdown();
     }
 
     #[test]
@@ -2302,7 +2325,8 @@ mod tests {
         let mut config = TiKvConfig::default();
         config.raft_store.sync_log = true;
         config.validate().unwrap();
-        let (mut cfg_controller, raft_router, apply_router) = start_raftstore(config.clone());
+        let (mut cfg_controller, raft_router, apply_router, mut system, mut apply_system) =
+            start_raftstore(config.clone());
 
         // register region
         let region_id = 1;
@@ -2334,6 +2358,9 @@ mod tests {
         validate_apply(&apply_router, region_id, |sync_log| {
             assert_eq!(sync_log, false);
         });
+
+        apply_system.shutdown();
+        system.shutdown();
     }
 
     #[test]
