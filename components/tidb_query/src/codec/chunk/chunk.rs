@@ -92,12 +92,12 @@ impl Chunk {
             }
             EvalType::Decimal => {
                 for &row_index in row_indexes {
-                    col.append_decimal_datum(&raw_vec[row_index]);
+                    col.append_decimal_datum(&raw_vec[row_index])?
                 }
             }
             EvalType::Bytes => {
                 for &row_index in row_indexes {
-                    col.append_bytes_datum(&raw_vec[row_index])
+                    col.append_bytes_datum(&raw_vec[row_index])?
                 }
             }
             EvalType::DateTime => {

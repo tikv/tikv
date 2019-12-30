@@ -345,7 +345,7 @@ impl Column {
     }
 
     /// Append a bytes in raw datum format to the column.
-    pub fn append_bytes_datum(&mut self, byte: &[u8]) -> Result<()> {
+    pub fn append_bytes_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
                 "Failed to decode datum flag".to_owned(),
@@ -356,16 +356,17 @@ impl Column {
         match flag {
             datum::NIL_FLAG => self.append_null(),
             // In index, it's flag is `BYTES`. See TiDB's `encode()`.
-            datum::BYTES_FLAG => self.append_bytes(raw_datum.read_datum_payload_bytes()?),
+            datum::BYTES_FLAG => self.append_bytes(&raw_datum.read_datum_payload_bytes()?),
             // In record, it's flag is `COMPACT_BYTES`. See TiDB's `encode()`.
-            datum::COMPACT_BYTES_FLAG => self.append_bytes(raw_datum.read_datum_payload_compact_bytes()?),
+            datum::COMPACT_BYTES_FLAG => {
+                self.append_bytes(&raw_datum.read_datum_payload_compact_bytes()?)
+            }
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for Bytes vector",
                 flag
             ))),
         }
     }
-
 
     /// Get the bytes datum of the row in the column.
     pub fn get_bytes(&self, idx: usize) -> &[u8] {
