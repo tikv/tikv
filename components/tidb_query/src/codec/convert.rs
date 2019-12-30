@@ -1239,7 +1239,7 @@ mod tests {
             // OVERFLOW_AS_WARNING
             let mut ctx =
                 EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
-            let val = raw.clone().to_int(&mut ctx, tp);
+            let val = raw.to_int(&mut ctx, tp);
             assert_eq!(val.unwrap(), dst);
             assert_eq!(ctx.warnings.warning_cnt, 1);
         }
@@ -2479,15 +2479,22 @@ mod tests {
                 // make log
                 let rs = r.as_ref().map(|x| x.to_string());
                 let expect_str = expect.as_ref().map(|x| x.to_string());
-                let log =
-                    format!(
-                            "input: {}, origin_flen: {}, origin_decimal: {}, \
+                let log = format!(
+                    "input: {}, origin_flen: {}, origin_decimal: {}, \
                      res_flen: {}, res_decimal: {}, is_unsigned: {}, \
                      in_dml: {}, in_dml_flag(if in_dml is false, it will take no effect): {:?}, \
                      expect: {:?}, expect: {:?}",
-                            input, origin_flen, origin_decimal, res_flen, res_decimal,
-                            is_unsigned, in_dml, in_dml_flag, expect_str, rs
-                        );
+                    input,
+                    origin_flen,
+                    origin_decimal,
+                    res_flen,
+                    res_decimal,
+                    is_unsigned,
+                    in_dml,
+                    in_dml_flag,
+                    expect_str,
+                    rs
+                );
 
                 // check result
                 match &expect {

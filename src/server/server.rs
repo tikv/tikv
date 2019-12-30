@@ -411,7 +411,7 @@ mod tests {
         msg.mut_to_peer().set_store_id(2);
         msg.set_region_id(2);
         quick_fail.store(true, Ordering::SeqCst);
-        trans.send(msg.clone()).unwrap();
+        trans.send(msg).unwrap();
         trans.flush();
         resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 2, 0), "{:?}", resp);

@@ -142,7 +142,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader.clone());
+    ctx.set_peer(leader);
     b.iter(|| {
         let on_finished: EngineCallback<RegionSnapshot<RocksEngine>> = Box::new(move |results| {
             let _ = test::black_box(results);
@@ -167,7 +167,7 @@ fn bench_async_write(b: &mut test::Bencher) {
     let mut ctx = Context::default();
     ctx.set_region_id(region.get_id());
     ctx.set_region_epoch(region.get_region_epoch().clone());
-    ctx.set_peer(leader.clone());
+    ctx.set_peer(leader);
     b.iter(|| {
         let on_finished: EngineCallback<()> = Box::new(|_| {
             test::black_box(());

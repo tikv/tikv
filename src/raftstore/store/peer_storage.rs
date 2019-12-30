@@ -2052,7 +2052,7 @@ mod tests {
         s.apply_state = ctx.apply_state;
 
         let (tx, rx) = channel();
-        tx.send(snap.clone()).unwrap();
+        tx.send(snap).unwrap();
         s.set_snap_state(SnapState::Generating(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
@@ -2295,7 +2295,7 @@ mod tests {
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let runner = RegionRunner::new(
             s1.engines.clone(),
-            mgr.clone(),
+            mgr,
             0,
             true,
             Duration::from_secs(0),
