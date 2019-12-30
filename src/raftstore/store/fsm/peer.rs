@@ -2605,7 +2605,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             return;
         }
-        let task = SplitCheckTask::new(self.fsm.peer.region().clone(), true, CheckPolicy::Scan);
+        let task =
+            SplitCheckTask::split_check(self.fsm.peer.region().clone(), true, CheckPolicy::Scan);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";
@@ -2764,7 +2765,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
-        let task = SplitCheckTask::new(region.clone(), false, policy);
+        let task = SplitCheckTask::split_check(region.clone(), false, policy);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
                 "failed to schedule split check";

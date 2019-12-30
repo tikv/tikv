@@ -3556,6 +3556,7 @@ version = "0.0.1"
 dependencies = [
  "arrow",
  "byteorder",
+ "configuration",
  "crc32fast",
  "crc64fast",
  "criterion",
@@ -3747,6 +3748,7 @@ dependencies = [
  "grpcio",
  "hex 0.3.2",
  "hyper",
+ "itertools",
  "keys",
  "kvproto",
  "lazy_static",
@@ -3829,6 +3831,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "coarsetime",
+ "codec",
  "configuration",
  "crc32fast",
  "crossbeam",

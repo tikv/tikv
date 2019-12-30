@@ -6,9 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use kvproto::configpb::*;
 
+use configuration::{ConfigChange, Configuration};
 use pd_client::errors::Result;
 use pd_client::PdClient;
 use tikv::config::*;
+use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv_util::config::ReadableDuration;
 use tikv_util::worker::FutureWorker;
 
@@ -202,14 +204,14 @@ fn test_update_to_invalid() {
     let id = "localhost:1080";
 
     let mut cfg = validated_cfg();
-    cfg.raft_store.store_max_batch_size = 2000;
+    cfg.raft_store.raft_log_gc_threshold = 2000;
 
     // register config
     let mut cfg_handler = pd_client.clone().register(id, cfg);
 
     // update invalid config on pd side
     pd_client.update_cfg(id, |cfg| {
-        cfg.raft_store.store_max_batch_size = 0;
+        cfg.raft_store.raft_log_gc_threshold = 0;
     });
 
     // refresh local config
@@ -217,14 +219,14 @@ fn test_update_to_invalid() {
 
     // local config should not change
     assert_eq!(
-        cfg_handler.get_config().raft_store.store_max_batch_size,
+        cfg_handler.get_config().raft_store.raft_log_gc_threshold,
         2000
     );
 
     // config on pd side should be rollbacked to valid config
     let cfg = pd_client.get(id);
     assert_eq!(cfg.update.len(), 1);
-    assert_eq!(cfg.update[0].name, "raftstore.store-max-batch-size");
+    assert_eq!(cfg.update[0].name, "raftstore.raft-log-gc-threshold");
     assert_eq!(cfg.update[0].value, toml::to_string(&2000).unwrap());
 }
 
@@ -242,7 +244,7 @@ fn test_compatible_config() {
             [new.config]
             xyz = 1
             [raftstore]
-            store-max-batch-size = 2048
+            raft-log-gc-threshold = 2048
         "
         .to_owned();
     });
@@ -251,6 +253,58 @@ fn test_compatible_config() {
     cfg_handler.refresh_config(pd_client.clone()).unwrap();
 
     let mut new_cfg = validated_cfg();
-    new_cfg.raft_store.store_max_batch_size = 2048;
+    new_cfg.raft_store.raft_log_gc_threshold = 2048;
     assert_eq!(cfg_handler.get_config(), &new_cfg);
+}
+
+#[test]
+fn test_dispatch_change() {
+    use std::error::Error;
+    use std::result::Result;
+    use tikv::config::ConfigManager;
+
+    #[derive(Clone)]
+    struct CfgManager(Arc<Mutex<RaftstoreConfig>>);
+
+    impl ConfigManager for CfgManager {
+        fn dispatch(&mut self, c: ConfigChange) -> Result<(), Box<dyn Error>> {
+            self.0.lock().unwrap().update(c);
+            Ok(())
+        }
+    }
+
+    let pd_client = Arc::new(MockPdClient::new());
+    let id = "localhost:1080";
+    let cfg = validated_cfg();
+    let mgr = CfgManager(Arc::new(Mutex::new(Default::default())));
+
+    // register config and raftstore config manager
+    let mut cfg_handler = {
+        let (version, cfg) = ConfigHandler::create(id.to_owned(), pd_client.clone(), cfg).unwrap();
+        *mgr.0.lock().unwrap() = cfg.raft_store.clone();
+        let mut controller = ConfigController::new(cfg);
+        controller.register("raft_store", Box::new(mgr.clone()));
+        ConfigHandler::start(
+            id.to_owned(),
+            controller,
+            version,
+            FutureWorker::new("test-pd-worker").scheduler(),
+        )
+        .unwrap()
+    };
+
+    pd_client.update_cfg(id, |cfg| {
+        cfg.raft_store.raft_log_gc_threshold = 2000;
+    });
+
+    // refresh local config
+    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+
+    // config update
+    assert_eq!(
+        cfg_handler.get_config().raft_store.raft_log_gc_threshold,
+        2000
+    );
+    // config change should also dispatch to raftstore config manager
+    assert_eq!(mgr.0.lock().unwrap().raft_log_gc_threshold, 2000);
 }
