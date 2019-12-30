@@ -9,7 +9,6 @@ use crate::codec::Datum;
 use crate::expr::EvalContext;
 use codec::buffer::BufferWriter;
 use std::convert::TryFrom;
-use tidb_query_datatype::FieldTypeFlag;
 use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
@@ -64,7 +63,7 @@ impl Chunk {
 
     /// Append lazy column to the column
     #[inline]
-    pub fn append_lazy_column(
+    pub fn append_logical_columns(
         &mut self,
         ctx: &mut EvalContext,
         row_indexes: &[usize],
@@ -82,11 +81,7 @@ impl Chunk {
 
         match eval_type {
             EvalType::Int => {
-                let unsigned = field_type
-                    .as_accessor()
-                    .flag()
-                    .contains(FieldTypeFlag::UNSIGNED);
-                if unsigned {
+                if field_type.is_unsigned() {
                     for &row_index in row_indexes {
                         let opt: Option<Int> = raw_vec[row_index].decode(field_type, ctx)?;
                         match opt {
@@ -219,11 +214,7 @@ impl Chunk {
         let col = &mut self.columns[column_index];
         match vec {
             VectorValue::Int(ref vec) => {
-                if field_type
-                    .as_accessor()
-                    .flag()
-                    .contains(FieldTypeFlag::UNSIGNED)
-                {
+                if field_type.is_unsigned() {
                     for &row_index in row_indexes {
                         match &vec[row_index] {
                             None => {
