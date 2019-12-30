@@ -373,7 +373,7 @@ mod tests {
         let mut worker: Worker<Task> = Worker::new("split-check-config");
         worker.start(runner).unwrap();
 
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("coprocessor", Box::new(worker.scheduler()));
 
         (cfg_controller, worker)

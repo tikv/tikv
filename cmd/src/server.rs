@@ -335,7 +335,7 @@ impl TiKVServer {
         &mut self,
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
-        let mut cfg_controller = ConfigController::new(self.config.clone());
+        let mut cfg_controller = self.cfg_controller.take().unwrap();
         // Create CoprocessorHost.
         let mut coprocessor_host = CoprocessorHost::new(self.router.clone());
 
@@ -423,7 +423,7 @@ impl TiKVServer {
             engines.store_meta.clone(),
             coprocessor_host,
             importer.clone(),
-            self.cfg_controller.take().unwrap(),
+            cfg_controller,
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
