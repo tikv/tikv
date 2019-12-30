@@ -239,7 +239,7 @@ impl Simulator for ServerCluster {
         );
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone());
 
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();

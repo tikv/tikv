@@ -2,6 +2,8 @@
 
 use std::iter::*;
 
+use codec::prelude::BufferWriter;
+
 /// A vector like container storing multiple buffers. Each buffer is a `[u8]` slice in
 /// arbitrary length.
 #[derive(Default, Clone)]
@@ -98,6 +100,16 @@ impl BufferVec {
             let slice = part.as_ref();
             self.data.extend_from_slice(slice);
         }
+    }
+
+    /// Returns a delegator that provides `extend` appends buffers together as one buffer
+    /// to the back.
+    ///
+    /// Note that this function always creates a new buffer even if you don't call `extend`
+    /// on the delegator later, which simply results in appending a new empty buffer.
+    #[inline]
+    pub fn begin_concat_extend(&mut self) -> WithConcatExtend<'_> {
+        WithConcatExtend::init(self)
     }
 
     /// Removes the last buffer if there is any.
@@ -278,6 +290,53 @@ impl<'a> Extend<&'a u8> for BufferVec {
     {
         self.offsets.push(self.data.len());
         self.data.extend(iter);
+    }
+}
+
+pub struct WithConcatExtend<'a>(&'a mut BufferVec);
+
+impl<'a> WithConcatExtend<'a> {
+    fn init(b: &'a mut BufferVec) -> Self {
+        b.offsets.push(b.data.len());
+        Self(b)
+    }
+
+    pub fn finish(self) {
+        // do nothing
+    }
+}
+
+impl<'a> Extend<u8> for WithConcatExtend<'a> {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = u8>,
+    {
+        self.0.data.extend(iter);
+    }
+}
+
+impl<'a, 'b> Extend<&'a u8> for WithConcatExtend<'b> {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = &'a u8>,
+    {
+        self.0.data.extend(iter);
+    }
+}
+
+impl<'a> BufferWriter for WithConcatExtend<'a> {
+    unsafe fn bytes_mut(&mut self, size: usize) -> &mut [u8] {
+        self.0.data.bytes_mut(size)
+    }
+
+    #[inline]
+    unsafe fn advance_mut(&mut self, count: usize) {
+        self.0.data.advance_mut(count)
+    }
+
+    #[inline]
+    fn write_bytes(&mut self, values: &[u8]) -> codec::Result<()> {
+        self.0.data.write_bytes(values)
     }
 }
 

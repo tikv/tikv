@@ -1362,7 +1362,7 @@ pub struct TiKvConfig {
     #[config(submodule)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub coprocessor: CopConfig,
     #[config(skip)]
     pub rocksdb: DbConfig,
@@ -1372,7 +1372,7 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
     #[config(skip)]
     pub import: ImportConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
     #[config(skip)]
     pub gc: GcConfig,
@@ -1961,6 +1961,11 @@ impl ConfigHandler {
                     Either::Right(updated) => {
                         if updated {
                             info!("local config updated"; "version" => ?version);
+                        } else {
+                            info!(
+                                "remote config upated, which will take effect after restarting the node";
+                                "version" => ?version
+                            );
                         }
                         self.version = version;
                     }

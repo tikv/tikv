@@ -335,12 +335,13 @@ impl TiKVServer {
         &mut self,
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
+        let mut cfg_controller = ConfigController::new(self.config.clone());
         // Create CoprocessorHost.
-        let mut coprocessor_host =
-            CoprocessorHost::new(self.config.coprocessor.clone(), self.router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(self.router.clone());
 
         let lock_mgr = if self.config.pessimistic_txn.enabled {
             let lock_mgr = LockManager::new();
+            cfg_controller.register("pessimistic_txn", Box::new(lock_mgr.config_manager()));
             lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
             Some(lock_mgr)
         } else {
