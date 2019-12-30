@@ -11,7 +11,7 @@ pub const MIN_FSP: i8 = 0;
 /// `MySQL` use 0 as the default Fsp.
 pub const DEFAULT_FSP: i8 = 0;
 
-fn check_fsp(fsp: i8) -> Result<u8> {
+pub fn check_fsp(fsp: i8) -> Result<u8> {
     if fsp == UNSPECIFIED_FSP {
         return Ok(DEFAULT_FSP as u8);
     }

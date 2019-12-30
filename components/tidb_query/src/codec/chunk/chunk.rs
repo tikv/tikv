@@ -102,7 +102,7 @@ impl Chunk {
             }
             EvalType::DateTime => {
                 for &row_index in row_indexes {
-                    col.append_time_datum(&raw_vec[row_index], field_type, ctx)?
+                    col.append_time_datum(&raw_vec[row_index], field_type)?
                 }
             }
             EvalType::Duration => {
