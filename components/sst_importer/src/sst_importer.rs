@@ -1101,7 +1101,7 @@ mod tests {
             importer.ingest(&meta, &db).unwrap();
 
             // verifies the DB content is correct.
-            let mut iter = db.iterator().unwrap();
+            let mut iter = db.iterator_cf(cf).unwrap();
             iter.seek(SeekKey::Start).unwrap();
             assert_eq!(
                 collect(iter),
