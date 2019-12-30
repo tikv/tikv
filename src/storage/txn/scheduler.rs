@@ -604,7 +604,7 @@ mod tests {
                 Context::default(),
             ),
             ResolveLock::new(
-                temp_map.clone(),
+                temp_map,
                 None,
                 vec![(
                     Key::from_raw(b"k"),

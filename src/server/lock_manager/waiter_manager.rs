@@ -116,6 +116,12 @@ pub enum Task {
         lock: Lock,
         deadlock_key_hash: u64,
     },
+    ChangeConfig {
+        timeout: Option<u64>,
+        delay: Option<u64>,
+    },
+    #[cfg(test)]
+    Validate(Box<dyn FnOnce(u64, u64) + Send>),
 }
 
 /// Debug for task.
@@ -135,6 +141,13 @@ impl Display for Task {
             Task::WakeUp { lock_ts, .. } => write!(f, "waking up txns waiting for {}", lock_ts),
             Task::Dump { .. } => write!(f, "dump"),
             Task::Deadlock { start_ts, .. } => write!(f, "txn:{} deadlock", start_ts),
+            Task::ChangeConfig { timeout, delay } => write!(
+                f,
+                "change config to default_wait_for_lock_timeout: {:?}, wake_up_delay_duration: {:?}",
+                timeout, delay
+            ),
+            #[cfg(test)]
+            Task::Validate(_) => write!(f, "validate waiter manager config"),
         }
     }
 }
@@ -407,6 +420,15 @@ impl Scheduler {
             deadlock_key_hash,
         });
     }
+
+    pub fn change_config(&self, timeout: Option<u64>, delay: Option<u64>) {
+        self.notify_scheduler(Task::ChangeConfig { timeout, delay });
+    }
+
+    #[cfg(test)]
+    pub fn validate(&self, f: Box<dyn FnOnce(u64, u64) + Send>) {
+        self.notify_scheduler(Task::Validate(f));
+    }
 }
 
 /// WaiterManager handles waiting and wake-up of pessimistic lock
@@ -512,6 +534,20 @@ impl WaiterManager {
                 Some(())
             });
     }
+
+    fn handle_config_change(&mut self, timeout: Option<u64>, delay: Option<u64>) {
+        if let Some(timeout) = timeout {
+            self.default_wait_for_lock_timeout = timeout;
+        }
+        if let Some(delay) = delay {
+            self.wake_up_delay_duration = delay;
+        }
+        info!(
+            "Waiter manager config changed";
+            "default_wait_for_lock_timeout" => self.default_wait_for_lock_timeout,
+            "wake_up_delay_duration" => self.wake_up_delay_duration
+        );
+    }
 }
 
 impl FutureRunnable<Task> for WaiterManager {
@@ -556,6 +592,12 @@ impl FutureRunnable<Task> for WaiterManager {
             } => {
                 self.handle_deadlock(start_ts, lock, deadlock_key_hash);
             }
+            Task::ChangeConfig { timeout, delay } => self.handle_config_change(timeout, delay),
+            #[cfg(test)]
+            Task::Validate(f) => f(
+                self.default_wait_for_lock_timeout,
+                self.wake_up_delay_duration,
+            ),
         }
     }
 }
@@ -663,9 +705,9 @@ pub mod tests {
         let raw_key = b"foo".to_vec();
         let primary = b"bar".to_vec();
         let mut info = LockInfo::default();
-        info.set_key(raw_key.clone());
+        info.set_key(raw_key);
         info.set_lock_version(lock_ts.into_inner());
-        info.set_primary_lock(primary.clone());
+        info.set_primary_lock(primary);
         info.set_lock_ttl(3000);
         info.set_txn_size(16);
         let pr = ProcessResult::MultiRes {

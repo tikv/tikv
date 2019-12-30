@@ -11,6 +11,12 @@ use crate::Result;
 
 #[rpn_fn]
 #[inline]
+fn json_depth(arg: &Option<Json>) -> Result<Option<i64>> {
+    Ok(arg.as_ref().map(|json_arg| json_arg.depth()))
+}
+
+#[rpn_fn]
+#[inline]
 fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
     Ok(arg
         .as_ref()
@@ -206,12 +212,7 @@ fn json_length(args: &[ScalarValueRef]) -> Result<Option<Int>> {
         None => return Ok(None),
         Some(j) => j.to_owned(),
     };
-    let path_expr_list = parse_json_path_list(&args[1..])?;
-    if path_expr_list.is_none() {
-        Ok(None)
-    } else {
-        Ok(j.json_length(&path_expr_list.unwrap()))
-    }
+    Ok(parse_json_path_list(&args[1..])?.and_then(|path_expr_list| j.json_length(&path_expr_list)))
 }
 
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
@@ -259,6 +260,57 @@ mod tests {
     use tipb::ScalarFuncSig;
 
     use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+
+    #[test]
+    fn test_json_depth() {
+        let cases = vec![
+            (None, None),
+            (Some("null"), Some(1)),
+            (Some("[true, 2017]"), Some(2)),
+            (
+                Some(r#"{"a": {"a1": [3]}, "b": {"b1": {"c": {"d": [5]}}}}"#),
+                Some(6),
+            ),
+            (Some("{}"), Some(1)),
+            (Some("[]"), Some(1)),
+            (Some("true"), Some(1)),
+            (Some("1"), Some(1)),
+            (Some("-1"), Some(1)),
+            (Some(r#""a""#), Some(1)),
+            (Some(r#"[10, 20]"#), Some(2)),
+            (Some(r#"[[], {}]"#), Some(2)),
+            (Some(r#"[10, {"a": 20}]"#), Some(3)),
+            (Some(r#"[[2], 3, [[[4]]]]"#), Some(5)),
+            (Some(r#"{"Name": "Homer"}"#), Some(2)),
+            (Some(r#"[10, {"a": 20}]"#), Some(3)),
+            (
+                Some(
+                    r#"{"Person": {"Name": "Homer", "Age": 39, "Hobbies": ["Eating", "Sleeping"]} }"#,
+                ),
+                Some(4),
+            ),
+            (Some(r#"{"a":1}"#), Some(2)),
+            (Some(r#"{"a":[1]}"#), Some(3)),
+            (Some(r#"{"b":2, "c":3}"#), Some(2)),
+            (Some(r#"[1]"#), Some(2)),
+            (Some(r#"[1,2]"#), Some(2)),
+            (Some(r#"[1,2,[1,3]]"#), Some(3)),
+            (Some(r#"[1,2,[1,[5,[3]]]]"#), Some(5)),
+            (Some(r#"[1,2,[1,[5,{"a":[2,3]}]]]"#), Some(6)),
+            (Some(r#"[{"a":1}]"#), Some(3)),
+            (Some(r#"[{"a":1,"b":2}]"#), Some(3)),
+            (Some(r#"[{"a":{"a":1},"b":2}]"#), Some(4)),
+        ];
+        for (arg, expect_output) in cases {
+            let arg = arg.map(|input| Json::from_str(input).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(ScalarFuncSig::JsonDepthSig)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", arg);
+        }
+    }
 
     #[test]
     fn test_json_type() {
