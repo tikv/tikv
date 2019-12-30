@@ -2193,7 +2193,7 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
     req.mut_context().set_region_id(region_id);
     req.mut_context()
         .set_region_epoch(region.get_region_epoch().clone());
-    req.set_split_key(key.clone());
+    req.set_split_key(key);
 
     let resp = tikv_client
         .split_region(&req)
@@ -2232,7 +2232,7 @@ fn compact_whole_cluster(
         let mgr = Arc::clone(&mgr);
         let addr = s.address.clone();
         let (from, to) = (from.clone(), to.clone());
-        let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string().clone()).collect();
+        let cfs: Vec<String> = cfs.iter().map(|cf| (*cf).to_string()).collect();
         let h = thread::spawn(move || {
             let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
             for cf in cfs {

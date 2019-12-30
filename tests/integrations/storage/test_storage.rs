@@ -638,7 +638,7 @@ fn test_txn_store_gc() {
 fn test_txn_store_gc_multiple_keys(key_prefix_len: usize, n: usize) {
     let prefix = String::from_utf8(vec![b'k'; key_prefix_len]).unwrap();
     test_txn_store_gc_multiple_keys_cluster_storage(n, prefix.clone());
-    test_txn_store_gc_multiple_keys_single_storage(n, prefix.clone());
+    test_txn_store_gc_multiple_keys_single_storage(n, prefix);
 }
 
 pub fn test_txn_store_gc_multiple_keys_single_storage(n: usize, prefix: String) {

@@ -325,7 +325,7 @@ impl<T: Transport, C> PollContext<T, C> {
         gc_msg.set_region_id(region_id);
         gc_msg.set_from_peer(to_peer.clone());
         gc_msg.set_to_peer(from_peer.clone());
-        gc_msg.set_region_epoch(cur_epoch.clone());
+        gc_msg.set_region_epoch(cur_epoch);
         if let Some(r) = target_region {
             gc_msg.set_merge_target(r);
         } else {
