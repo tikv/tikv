@@ -391,7 +391,7 @@ mod tests {
         // Triggers rotate by time.
         logger.flush().unwrap();
 
-        assert!(file_exists(new_path.clone()));
+        assert!(file_exists(new_path));
 
         // Should update `RotateBySize`'s state.
         assert_eq!(logger.rotators[1].should_rotate(), false);
@@ -440,7 +440,7 @@ mod tests {
 
         logger.write_all(&[0xff; 2048]).unwrap();
         assert_eq!(logger.rotators[1].should_rotate(), false);
-        assert!(file_exists(new_path.clone()));
+        assert!(file_exists(new_path));
     }
 
     #[test]

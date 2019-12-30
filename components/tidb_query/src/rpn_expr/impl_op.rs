@@ -59,15 +59,15 @@ pub fn unary_not_decimal(arg: &Option<Decimal>) -> Result<Option<i64>> {
 #[rpn_fn]
 #[inline]
 pub fn unary_minus_uint(arg: &Option<Int>) -> Result<Option<Int>> {
+    use std::cmp::Ordering::*;
+
     match *arg {
         Some(val) => {
             let uval = val as u64;
-            if uval > std::i64::MAX as u64 + 1 {
-                Err(Error::overflow("BIGINT", &format!("-{}", uval)).into())
-            } else if uval == std::i64::MAX as u64 + 1 {
-                Ok(Some(std::i64::MIN))
-            } else {
-                Ok(Some(-val))
+            match uval.cmp(&(std::i64::MAX as u64 + 1)) {
+                Greater => Err(Error::overflow("BIGINT", &format!("-{}", uval)).into()),
+                Equal => Ok(Some(std::i64::MIN)),
+                Less => Ok(Some(-val)),
             }
         }
         None => Ok(None),

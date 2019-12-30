@@ -486,12 +486,12 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             force_consistency_checks: false,
-            titan: titan_cf_config.clone(),
+            titan: titan_cf_config,
             prop_size_index_distance: 4000000,
             prop_keys_index_distance: 40000,
             enable_doubly_skiplist: true,
         },
-        titan: titan_db_config.clone(),
+        titan: titan_db_config,
     };
     value.storage = StorageConfig {
         data_dir: "/var".to_owned(),

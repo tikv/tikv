@@ -650,7 +650,7 @@ mod tests {
             (vec![e.clone(); 10], 2 * size, 2),
             (vec![e.clone(); 10], 10 * size - 1, 9),
             (vec![e.clone(); 10], 10 * size, 10),
-            (vec![e.clone(); 10], 10 * size + 1, 10),
+            (vec![e; 10], 10 * size + 1, 10),
         ];
 
         for (mut entries, max, len) in tbls {

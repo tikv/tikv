@@ -705,9 +705,9 @@ pub mod tests {
         let raw_key = b"foo".to_vec();
         let primary = b"bar".to_vec();
         let mut info = LockInfo::default();
-        info.set_key(raw_key.clone());
+        info.set_key(raw_key);
         info.set_lock_version(lock_ts.into_inner());
-        info.set_primary_lock(primary.clone());
+        info.set_primary_lock(primary);
         info.set_lock_ttl(3000);
         info.set_txn_size(16);
         let pr = ProcessResult::MultiRes {
