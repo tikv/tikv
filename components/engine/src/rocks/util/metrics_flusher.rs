@@ -100,7 +100,7 @@ mod tests {
     use super::*;
     use crate::rocks;
     use crate::rocks::util::CFOptions;
-    use crate::rocks::{ColumnFamilyOptions, TitanDBOptions, DBOptions};
+    use crate::rocks::{ColumnFamilyOptions, DBOptions, TitanDBOptions};
     use crate::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use std::path::Path;
     use std::sync::Arc;

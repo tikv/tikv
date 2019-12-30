@@ -16,8 +16,8 @@ use std::sync::Arc;
 use self::engine_metrics::{
     ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
     ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE,
-    ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE, ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE,
-    ROCKSDB_TOTAL_SST_FILES_SIZE,
+    ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE, ROCKSDB_TITANDB_NUM_BLOB_FILES_AT_LEVEL,
+    ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE, ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
 use crate::rocks::load_latest_options;
 use crate::rocks::supported_compression;
@@ -317,9 +317,9 @@ pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -
     engine.get_property_int_cf(handle, &prop)
 }
 
-/// Gets the number of files at given level of given column family.
+/// Gets the number of blob files at given level of given column family.
 pub fn get_cf_num_blob_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
-    let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
+    let prop = format!("{}{}", ROCKSDB_TITANDB_NUM_BLOB_FILES_AT_LEVEL, level);
     engine.get_property_int_cf(handle, &prop)
 }
 

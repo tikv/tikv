@@ -32,15 +32,15 @@ pub const ROCKSDB_TITANDB_LIVE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
 pub const ROCKSDB_TITANDB_OBSOLETE_BLOB_FILE_SIZE: &str = "rocksdb.titandb.\
                                                            obsolete-blob-file-size";
 pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE0_FILE: &str =
-"rocksdb.titandb.num-discardable-ratio-le0-file";
+    "rocksdb.titandb.num-discardable-ratio-le0-file";
 pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE20_FILE: &str =
-"rocksdb.titandb.num-discardable-ratio-le20-file";
+    "rocksdb.titandb.num-discardable-ratio-le20-file";
 pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE50_FILE: &str =
-"rocksdb.titandb.num-discardable-ratio-le50-file";
+    "rocksdb.titandb.num-discardable-ratio-le50-file";
 pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE80_FILE: &str =
-"rocksdb.titandb.num-discardable-ratio-le80-file";
+    "rocksdb.titandb.num-discardable-ratio-le80-file";
 pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE100_FILE: &str =
-"rocksdb.titandb.num-discardable-ratio-le100-file";
+    "rocksdb.titandb.num-discardable-ratio-le100-file";
 
 pub const ROCKSDB_CFSTATS: &str = "rocksdb.cfstats";
 pub const ROCKSDB_IOSTALL_KEY: &[&str] = &[
@@ -609,37 +609,37 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_BLOB_GC_ACTION_VEC
                 .with_label_values(&[name, "remain"])
                 .inc_by(v);
-        },
+        }
         TickerType::TitanGcDiscardable => {
             STORE_ENGINE_BLOB_GC_ACTION_VEC
                 .with_label_values(&[name, "discardable"])
                 .inc_by(v);
-        },
+        }
         TickerType::TitanGcSample => {
             STORE_ENGINE_BLOB_GC_ACTION_VEC
                 .with_label_values(&[name, "sample"])
                 .inc_by(v);
-        },
+        }
         TickerType::TitanGcSmallFile => {
             STORE_ENGINE_BLOB_GC_ACTION_VEC
                 .with_label_values(&[name, "small_file"])
                 .inc_by(v);
-        },
+        }
         TickerType::TitanGcFailure => {
             STORE_ENGINE_BLOB_GC_ACTION_VEC
                 .with_label_values(&[name, "failure"])
                 .inc_by(v);
-        },
+        }
         TickerType::TitanGcSuccess => {
             STORE_ENGINE_BLOB_GC_ACTION_VEC
                 .with_label_values(&[name, "success"])
                 .inc_by(v);
-        },
+        }
         TickerType::TitanGcTriggerNext => {
             STORE_ENGINE_BLOB_GC_ACTION_VEC
                 .with_label_values(&[name, "trigger_next"])
                 .inc_by(v);
-        },
+        }
         _ => {}
     }
 }
@@ -910,7 +910,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 name,
                 value
             );
-        },
+        }
         HistType::TitanGcOutputFileSize => {
             engine_histogram_metrics!(
                 STORE_ENGINE_GC_OUTPUT_BLOB_FILE_SIZE_VEC,
@@ -918,7 +918,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 name,
                 value
             );
-        },
+        }
         HistType::TitanIterTouchBlobFileCount => {
             engine_histogram_metrics!(
                 STORE_ENGINE_ITER_TOUCH_BLOB_FILE_COUNT_VEC,
@@ -926,7 +926,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 name,
                 value
             );
-        },
+        }
         _ => {}
     }
 }
@@ -1074,31 +1074,36 @@ pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool
         }
 
         // Titan blob file discardable ratio
-        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE0_FILE)
+        if let Some(v) =
+            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE0_FILE)
         {
             STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
                 .with_label_values(&[name, cf, "le0"])
                 .set(v as i64);
         }
-        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE20_FILE)
+        if let Some(v) =
+            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE20_FILE)
         {
             STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
                 .with_label_values(&[name, cf, "le20"])
                 .set(v as i64);
         }
-        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE50_FILE)
+        if let Some(v) =
+            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE50_FILE)
         {
             STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
                 .with_label_values(&[name, cf, "le50"])
                 .set(v as i64);
         }
-        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE80_FILE)
+        if let Some(v) =
+            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE80_FILE)
         {
             STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
                 .with_label_values(&[name, cf, "le80"])
                 .set(v as i64);
         }
-        if let Some(v) = engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE100_FILE)
+        if let Some(v) =
+            engine.get_property_int_cf(handle, ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE100_FILE)
         {
             STORE_ENGINE_TITANDB_BLOB_FILE_DISCARDABLE_RATIO_VEC
                 .with_label_values(&[name, cf, "le100"])
