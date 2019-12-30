@@ -1499,9 +1499,9 @@ impl Peer {
         let mut last_read = None;
         for _ in 0..self.pending_reads.ready_cnt {
             last_read = self.pending_reads.reads.pop_front();
-            let read = last_read.as_mut().unwrap();
-            if !self.read_index_on_replica(ctx, read) {
-                last_read = None;
+            if !self.read_index_on_replica(ctx, last_read.as_mut().unwrap()) {
+                let read = last_read.take().unwrap();
+                self.pending_reads.reads.push_front(read);
                 break;
             }
             handled += 1;
@@ -2022,13 +2022,15 @@ impl Peer {
         }
 
         let read = self.pending_reads.reads.back_mut().unwrap();
-        read.replica_retries += 1;
-        self.raft_group.read_index(read.id.as_bytes().to_vec());
-        debug!("request to get a read index";
-            "request_id" => ?read.id,
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
+        if read.read_index.is_none() {
+            read.replica_retries += 1;
+            self.raft_group.read_index(read.id.as_bytes().to_vec());
+            debug!("request to get a read index";
+                "request_id" => ?read.id,
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+        }
     }
 
     // Returns a boolean to indicate whether the `read` is proposed or not.
