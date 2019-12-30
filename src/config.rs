@@ -152,7 +152,7 @@ fn get_background_job_limit(
 
 macro_rules! cf_config {
     ($name:ident) => {
-        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+        #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
         #[serde(default)]
         #[serde(rename_all = "kebab-case")]
         pub struct $name {
@@ -168,6 +168,7 @@ macro_rules! cf_config {
             pub block_based_bloom_filter: bool,
             pub read_amp_bytes_per_bit: u32,
             #[serde(with = "rocks_config::compression_type_level_serde")]
+            #[config(skip)]
             pub compression_per_level: [DBCompressionType; 7],
             pub write_buffer_size: ReadableSize,
             pub max_write_buffer_number: i32,
@@ -179,11 +180,13 @@ macro_rules! cf_config {
             pub level0_stop_writes_trigger: i32,
             pub max_compaction_bytes: ReadableSize,
             #[serde(with = "rocks_config::compaction_pri_serde")]
+            #[config(skip)]
             pub compaction_pri: CompactionPriority,
             pub dynamic_level_bytes: bool,
             pub num_levels: i32,
             pub max_bytes_for_level_multiplier: i32,
             #[serde(with = "rocks_config::compaction_style_serde")]
+            #[config(skip)]
             pub compaction_style: DBCompactionStyle,
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
@@ -192,6 +195,7 @@ macro_rules! cf_config {
             pub prop_size_index_distance: u64,
             pub prop_keys_index_distance: u64,
             pub enable_doubly_skiplist: bool,
+            #[config(skip)]
             pub titan: TitanCfConfig,
         }
 
@@ -680,11 +684,12 @@ impl TitanDBConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
+    #[config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
@@ -703,6 +708,7 @@ pub struct DbConfig {
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
     #[serde(with = "rocks_config::rate_limiter_mode_serde")]
+    #[config(skip)]
     pub rate_limiter_mode: DBRateLimiterMode,
     pub auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
@@ -712,10 +718,15 @@ pub struct DbConfig {
     pub use_direct_io_for_flush_and_compaction: bool,
     pub enable_pipelined_write: bool,
     pub enable_unordered_write: bool,
+    #[config(submodule)]
     pub defaultcf: DefaultCfConfig,
+    #[config(submodule)]
     pub writecf: WriteCfConfig,
+    #[config(submodule)]
     pub lockcf: LockCfConfig,
+    #[config(submodule)]
     pub raftcf: RaftCfConfig,
+    #[config(skip)]
     pub titan: TitanDBConfig,
 }
 
@@ -924,11 +935,12 @@ impl RaftDefaultCfConfig {
 // When construct Options, options.env is set to same singleton Env::Default() object.
 // So total max_background_jobs = max(rocksdb.max_background_jobs, raftdb.max_background_jobs)
 // But each instance will limit their background jobs according to their own max_background_jobs
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
     #[serde(with = "rocks_config::recovery_mode_serde")]
+    #[config(skip)]
     pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
@@ -953,7 +965,9 @@ pub struct RaftDbConfig {
     pub allow_concurrent_memtable_write: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
+    #[config(submodule)]
     pub defaultcf: RaftDefaultCfConfig,
+    #[config(skip)]
     pub titan: TitanDBConfig,
 }
 
@@ -1057,6 +1071,126 @@ impl RaftDbConfig {
         }
         Ok(())
     }
+}
+
+use engine::rocks::util::get_cf_handle;
+use engine::DB;
+
+#[derive(Clone, Copy, Debug)]
+pub enum DBType {
+    Kv,
+    Raft,
+}
+
+pub struct DBConfigManger {
+    db: Arc<DB>,
+    db_type: DBType,
+}
+
+impl DBConfigManger {
+    pub fn new(db: Arc<DB>, db_type: DBType) -> Self {
+        DBConfigManger { db, db_type }
+    }
+}
+
+impl DBConfigManger {
+    fn set_db_config(&self, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
+        self.db.set_db_options(opts)?;
+        Ok(())
+    }
+
+    fn set_cf_config(&self, cf: &str, opts: &[(&str, &str)]) -> Result<(), Box<dyn Error>> {
+        self.validate_cf(cf)?;
+        let handle = get_cf_handle(&self.db, cf)?;
+        self.db.set_options_cf(handle, opts)?;
+        // Write config to metric
+        for (cfg_name, cfg_value) in opts {
+            let cfg_value = match cfg_value {
+                v if *v == "ture" => Ok(1f64),
+                v if *v == "false" => Ok(0f64),
+                v => v.parse::<f64>(),
+            };
+            if let Ok(v) = cfg_value {
+                CONFIG_ROCKSDB_GAUGE
+                    .with_label_values(&[cf, cfg_name])
+                    .set(v);
+            }
+        }
+        Ok(())
+    }
+
+    fn set_block_cache_size(&self, cf: &str, size: ReadableSize) -> Result<(), Box<dyn Error>> {
+        self.validate_cf(cf)?;
+        let handle = get_cf_handle(&self.db, cf)?;
+        let opt = self.db.get_options_cf(handle);
+        opt.set_block_cache_capacity(size.0)?;
+        // Write config to metric
+        CONFIG_ROCKSDB_GAUGE
+            .with_label_values(&[cf, "block_cache_size"])
+            .set(size.0 as f64);
+        Ok(())
+    }
+
+    fn validate_cf(&self, cf: &str) -> Result<(), Box<dyn Error>> {
+        match (self.db_type, cf) {
+            (DBType::Kv, CF_DEFAULT)
+            | (DBType::Kv, CF_WRITE)
+            | (DBType::Kv, CF_LOCK)
+            | (DBType::Kv, CF_RAFT)
+            | (DBType::Raft, CF_DEFAULT) => Ok(()),
+            _ => Err(format!("invalid cf {:?} for db {:?}", cf, self.db_type).into()),
+        }
+    }
+}
+
+impl ConfigManager for DBConfigManger {
+    fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
+        let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
+        let cf_config = change.drain_filter(|(name, _)| name.ends_with("cf"));
+        for (cf_name, cf_change) in cf_config {
+            if let ConfigValue::Module(mut cf_change) = cf_change {
+                if let Some(v) = cf_change.remove("block_cache_size") {
+                    self.set_block_cache_size(&cf_name, v.into())?;
+                }
+                let cf_change = config_value_to_string(cf_change.into_iter().collect());
+                let cf_change_vec = config_to_slice(&cf_change);
+                self.set_cf_config(&cf_name, &cf_change_vec)?;
+            }
+        }
+        let change = config_value_to_string(change);
+        let change_vec = config_to_slice(&change);
+        self.set_db_config(&change_vec)?;
+
+        Ok(())
+    }
+}
+
+fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
+    config_change
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect()
+}
+
+fn config_value_to_string(config_change: Vec<(String, ConfigValue)>) -> Vec<(String, String)> {
+    config_change
+        .into_iter()
+        .map(|(name, value)| {
+            let v = match value {
+                d @ ConfigValue::Duration(_) => {
+                    let d: ReadableDuration = d.into();
+                    d.as_secs().to_string()
+                }
+                s @ ConfigValue::Size(_) => {
+                    let s: ReadableSize = s.into();
+                    s.0.to_string()
+                }
+                ConfigValue::Module(_) => unreachable!(),
+                v => format!("{}", v),
+            };
+            (name, v)
+        })
+        .collect()
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -1362,9 +1496,9 @@ pub struct TiKvConfig {
     pub raft_store: RaftstoreConfig,
     #[config(submodule)]
     pub coprocessor: CopConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub rocksdb: DbConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub raftdb: RaftDbConfig,
     #[config(skip)]
     pub security: SecurityConfig,
@@ -1687,6 +1821,7 @@ fn to_config_entry(change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>
     // in config struct with the name in toml file.
     fn helper(prefix: String, change: ConfigChange) -> CfgResult<Vec<configpb::ConfigEntry>> {
         let mut entries = Vec::with_capacity(change.len());
+
         for (mut name, value) in change {
             if name == "raft_store" {
                 name = "raftstore".to_owned();

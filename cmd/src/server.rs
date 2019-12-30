@@ -31,7 +31,7 @@ use std::{
 };
 use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::{
-    config::{ConfigController, TiKvConfig},
+    config::{ConfigController, DBConfigManger, DBType, TiKvConfig},
     coprocessor,
     import::{ImportSSTService, SSTImporter},
     raftstore::{
@@ -286,6 +286,17 @@ impl TiKVServer {
         };
 
         let engines = self.engines.as_ref().unwrap();
+        cfg_controller.register(
+            "rocksdb",
+            Box::new(DBConfigManger::new(engines.engines.kv.clone(), DBType::Kv)),
+        );
+        cfg_controller.register(
+            "raftdb",
+            Box::new(DBConfigManger::new(
+                engines.engines.raft.clone(),
+                DBType::Raft,
+            )),
+        );
 
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();

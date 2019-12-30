@@ -13,6 +13,8 @@ pub enum ConfigValue {
     Size(u64),
     U64(u64),
     F64(f64),
+    I32(i32),
+    U32(u32),
     Usize(usize),
     Bool(bool),
     String(String),
@@ -26,6 +28,8 @@ impl Display for ConfigValue {
             ConfigValue::Size(v) => write!(f, "{}b", v),
             ConfigValue::U64(v) => write!(f, "{}", v),
             ConfigValue::F64(v) => write!(f, "{}", v),
+            ConfigValue::I32(v) => write!(f, "{}", v),
+            ConfigValue::U32(v) => write!(f, "{}", v),
             ConfigValue::Usize(v) => write!(f, "{}", v),
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
@@ -45,6 +49,8 @@ macro_rules! impl_from {
 }
 impl_from!(u64, U64);
 impl_from!(f64, F64);
+impl_from!(i32, I32);
+impl_from!(u32, U32);
 impl_from!(usize, Usize);
 impl_from!(bool, Bool);
 impl_from!(String, String);
@@ -69,6 +75,8 @@ macro_rules! impl_into {
 }
 impl_into!(u64, U64);
 impl_into!(f64, F64);
+impl_into!(i32, I32);
+impl_into!(u32, U32);
 impl_into!(usize, Usize);
 impl_into!(bool, Bool);
 impl_into!(String, String);

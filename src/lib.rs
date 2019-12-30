@@ -26,6 +26,7 @@
 #![feature(mem_take)]
 #![feature(box_patterns)]
 #![feature(shrink_to)]
+#![feature(drain_filter)]
 
 #[macro_use]
 extern crate bitflags;
