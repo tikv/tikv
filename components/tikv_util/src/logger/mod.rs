@@ -85,9 +85,9 @@ where
     Ok(())
 }
 
-/// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger<N>>>`.
+/// A simple alias to `PlainDecorator<BufWriter<RotatingFileLogger>>`.
 // Avoid clippy type_complexity lint.
-pub type RotatingFileDecorator<N> = PlainDecorator<BufWriter<RotatingFileLogger<N>>>;
+pub type RotatingFileDecorator = PlainDecorator<BufWriter<RotatingFileLogger>>;
 
 /// Constructs a new file drainer which outputs log to a file at the specified
 /// path. The file drainer rotates for the specified timespan.
@@ -96,7 +96,7 @@ pub fn file_drainer<N>(
     rotation_timespan: ReadableDuration,
     rotation_size: ReadableSize,
     rename: N,
-) -> io::Result<TikvFormat<RotatingFileDecorator<N>>>
+) -> io::Result<TikvFormat<RotatingFileDecorator>>
 where
     N: 'static + Send + Fn(&Path) -> io::Result<PathBuf>,
 {
