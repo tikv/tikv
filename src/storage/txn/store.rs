@@ -252,6 +252,8 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
                 .omit_value(false)
                 .fill_cache(self.fill_cache)
                 .isolation_level(self.isolation_level)
+                .hint_min_ts(Some(after_ts + 1))
+                .hint_max_ts(Some(self.start_ts))
                 .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
