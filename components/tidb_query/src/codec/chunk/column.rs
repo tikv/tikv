@@ -6,16 +6,16 @@ use tipb::FieldType;
 
 use super::{Error, Result};
 use crate::codec::datum;
+use crate::codec::datum_codec::decode_date_time_from_uint;
 use crate::codec::datum_codec::DatumPayloadDecoder;
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::mysql::{
-    check_fsp, Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder,
-    Json, JsonDecoder, JsonEncoder, Time, TimeDecoder, TimeEncoder, TimeType,
+    Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder, Json,
+    JsonDecoder, JsonEncoder, Time, TimeDecoder, TimeEncoder,
 };
 use crate::codec::Datum;
 use crate::expr::EvalContext;
 use codec::prelude::*;
-use std::mem;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 
@@ -385,6 +385,7 @@ impl Column {
         &mut self,
         mut raw_datum: &[u8],
         field_type: &FieldType,
+        ctx: &mut EvalContext,
     ) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
@@ -398,62 +399,20 @@ impl Column {
             // In index, it's flag is `UINT`. See TiDB's `encode()`.
             datum::UINT_FLAG => {
                 let v = raw_datum.read_datum_payload_u64()?;
-                self.append_time_packed_u64(v, field_type)
+                let v = decode_date_time_from_uint(v, ctx, field_type)?;
+                self.append_time(v)
             }
             // In record, it's flag is `VAR_UINT`. See TiDB's `flatten()` and `encode()`.
             datum::VAR_UINT_FLAG => {
                 let v = raw_datum.read_datum_payload_var_u64()?;
-                self.append_time_packed_u64(v, field_type)
+                let v = decode_date_time_from_uint(v, ctx, field_type)?;
+                self.append_time(v)
             }
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for DateTime vector",
                 flag
             ))),
         }
-    }
-
-    fn append_time_packed_u64(&mut self, value: u64, field_type: &FieldType) -> Result<()> {
-        use std::convert::TryInto;
-
-        let fsp = field_type.decimal() as i8;
-        let time_type: TimeType = field_type.as_accessor().tp().try_into()?;
-
-        let fsp = check_fsp(fsp)?;
-        let ymdhms = value >> 24;
-        let ymd = ymdhms >> 17;
-        let ym = ymd >> 5;
-        let hms = ymdhms & ((1 << 17) - 1);
-
-        let day = (ymd & ((1 << 5) - 1)) as u8;
-        let month = (ym % 13) as u8;
-        let year = (ym / 13) as u16;
-        let second = (hms & ((1 << 6) - 1)) as u8;
-        let minute = ((hms >> 6) & ((1 << 6) - 1)) as u8;
-        let hour = (hms >> 12) as u32;
-        let micro = (value & ((1 << 24) - 1)) as u32;
-
-        if value != 0 {
-            self.data.write_u32_le(hour)?;
-            self.data.write_u32_le(micro)?;
-            self.data.write_u16_le(year)?;
-            self.data.write_u8(month)?;
-            self.data.write_u8(day)?;
-            self.data.write_u8(minute)?;
-            self.data.write_u8(second)?;
-        } else {
-            let len = mem::size_of::<u16>() + 2 * mem::size_of::<u32>() + 4;
-            let buf = vec![0; len];
-            self.data.write_bytes(&buf)?;
-        }
-
-        // Encode an useless u16 to make byte alignment 16 bytes.
-        self.data.write_u16_le(0 as u16)?;
-
-        let tp = FieldTypeTp::from(time_type);
-        self.data.write_u8(tp.to_u8().unwrap())?;
-        self.data.write_u8(fsp)?;
-        // Encode an useless u16 to make byte alignment 20 bytes.
-        self.data.write_u16_le(0 as u16).map_err(From::from)
     }
 
     /// Get the time datum of the row in the column.
