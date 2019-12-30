@@ -36,7 +36,7 @@ impl SSTImporter {
 
     pub fn get_path(&self, meta: &SstMeta) -> PathBuf {
         let path = self.dir.join(meta).unwrap();
-        path.save.clone()
+        path.save
     }
 
     pub fn create(&self, meta: &SstMeta) -> Result<ImportFile> {
@@ -408,7 +408,9 @@ impl ImportDir {
             let path = e.path();
             match path_to_sst_meta(&path) {
                 Ok(sst) => ssts.push(sst),
-                Err(e) => error!("path_to_sst_meta failed"; "path" => %path.to_str().unwrap(), "err" => %e),
+                Err(e) => {
+                    error!("path_to_sst_meta failed"; "path" => %path.to_str().unwrap(), "err" => %e)
+                }
             }
         }
         Ok(ssts)
@@ -698,7 +700,7 @@ mod tests {
         meta.set_length(data.len() as u64);
 
         {
-            let mut f = ImportFile::create(meta.clone(), path.clone()).unwrap();
+            let mut f = ImportFile::create(meta, path.clone()).unwrap();
             f.append(data).unwrap();
             f.finish().unwrap();
             assert!(!path.temp.exists());

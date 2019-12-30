@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[2, 0, 1]);
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
 
-        let mut c = columns.clone();
+        let mut c = columns;
         let exp = RpnExpressionBuilder::new().push_column_ref(0).build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 5);
@@ -397,7 +397,7 @@ mod tests {
         });
         assert!(hooked_eval.is_err());
 
-        let mut c = columns.clone();
+        let mut c = columns;
         let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
         let hooked_eval = panic_hook::recover_safe(|| {

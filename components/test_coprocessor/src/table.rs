@@ -135,12 +135,18 @@ impl TableBuilder {
     }
 
     pub fn add_col(mut self, name: impl std::borrow::Borrow<str>, col: Column) -> TableBuilder {
+        use std::cmp::Ordering::*;
+
         if col.index == 0 {
-            if self.handle_id > 0 {
-                self.handle_id = 0;
-            } else if self.handle_id < 0 {
-                // maybe need to check type.
-                self.handle_id = col.id;
+            match self.handle_id.cmp(&0) {
+                Greater => {
+                    self.handle_id = 0;
+                }
+                Less => {
+                    // maybe need to check type.
+                    self.handle_id = col.id;
+                }
+                Equal => {}
             }
         }
         self.columns.push((normalize_column_name(name), col));

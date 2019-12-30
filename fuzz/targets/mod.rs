@@ -114,7 +114,7 @@ pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
 
         let mode = cursor.read_as_decimal_round_mode()?;
         let frac = cursor.read_as_i8()?;
-        let _ = lhs.clone().round(frac, mode.clone());
+        let _ = lhs.clone().round(frac, mode);
 
         let shift = cursor.read_as_u64()? as isize;
         let _ = lhs.clone().shift(shift);
