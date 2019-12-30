@@ -385,6 +385,7 @@ impl Column {
         &mut self,
         mut raw_datum: &[u8],
         field_type: &FieldType,
+        ctx: &mut EvalContext,
     ) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(

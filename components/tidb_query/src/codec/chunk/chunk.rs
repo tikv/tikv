@@ -102,15 +102,7 @@ impl Chunk {
             }
             EvalType::DateTime => {
                 for &row_index in row_indexes {
-                    let opt: Option<DateTime> = raw_vec[row_index].decode(field_type, ctx)?;
-                    match opt {
-                        None => {
-                            col.append_null().unwrap();
-                        }
-                        Some(val) => {
-                            col.append_time(val).unwrap();
-                        }
-                    }
+                    col.append_time_datum(&raw_vec[row_index], field_type, ctx)?
                 }
             }
             EvalType::Duration => {
