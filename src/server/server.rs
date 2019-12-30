@@ -122,6 +122,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .set_resource_quota(mem_quota)
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
+            .keepalive_time(cfg.grpc_keepalive_time.into())
+            .keepalive_timeout(cfg.grpc_keepalive_timeout.into())
             .build_args();
         let builder = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
