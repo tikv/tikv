@@ -9,7 +9,7 @@ use std::sync::{atomic, Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
-use configuration::{ConfigChange, Configuration};
+use configuration::Configuration;
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
@@ -23,7 +23,6 @@ use log_wrappers::DisplayValue;
 use raft::StateRole;
 use tokio_core::reactor::Handle;
 
-use crate::config::ConfigManager;
 use crate::raftstore::router::ServerRaftStoreRouter;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
@@ -96,16 +95,6 @@ impl GcConfig {
 }
 
 pub type GcWorkerConfigManager = Arc<VersionTrack<GcConfig>>;
-
-impl ConfigManager for GcWorkerConfigManager {
-    fn dispatch(
-        &mut self,
-        change: ConfigChange,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        self.update(move |cfg: &mut GcConfig| cfg.update(change));
-        Ok(())
-    }
-}
 
 /// Provides safe point.
 /// TODO: Give it a better name?
