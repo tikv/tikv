@@ -3748,6 +3748,7 @@ dependencies = [
  "grpcio",
  "hex 0.3.2",
  "hyper",
+ "itertools",
  "keys",
  "kvproto",
  "lazy_static",
