@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::{compact_files_in_range, io_limiter::IOLimiter};
 use engine::rocks::{SstWriterBuilder, DB};
+use engine::name_to_cf;
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -153,6 +154,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let limiter = self.limiter.clone();
         let sst_writer = SstWriterBuilder::new()
             .set_db(self.engine.clone())
+            .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
             .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
             .unwrap();
 
