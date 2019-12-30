@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::HashMap;
+use std::fmt::{self, Display, Formatter};
 
 pub use configuration_derive::*;
 
@@ -16,6 +17,21 @@ pub enum ConfigValue {
     Bool(bool),
     String(String),
     Module(ConfigChange),
+}
+
+impl Display for ConfigValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigValue::Duration(v) => write!(f, "{}ms", v),
+            ConfigValue::Size(v) => write!(f, "{}b", v),
+            ConfigValue::U64(v) => write!(f, "{}", v),
+            ConfigValue::F64(v) => write!(f, "{}", v),
+            ConfigValue::Usize(v) => write!(f, "{}", v),
+            ConfigValue::Bool(v) => write!(f, "{}", v),
+            ConfigValue::String(v) => write!(f, "{}", v),
+            ConfigValue::Module(v) => write!(f, "{:?}", v),
+        }
+    }
 }
 
 macro_rules! impl_from {
