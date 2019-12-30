@@ -59,7 +59,7 @@ impl Writer {
     }
     fn update_raw_with(&mut self, key: &[u8], value: &[u8], need_checksum: bool) -> Result<()> {
         self.total_kvs += 1;
-        self.total_bytes += (key.to_vec().len() + value.to_vec().len()) as u64;
+        self.total_bytes += (key.len() + value.len()) as u64;
         if need_checksum {
             self.checksum = checksum_crc64_xor(self.checksum, self.digest.clone(), key, value);
         }
@@ -263,7 +263,6 @@ impl BackupRawKVWriter {
                 storage,
             )?;
             files.push(file);
-            buf.clear();
         }
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["save_raw"])

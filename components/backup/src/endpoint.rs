@@ -48,7 +48,7 @@ pub struct Task {
     concurrency: u32,
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
-    cf: String,
+    cf: CfName,
 }
 
 impl fmt::Display for Task {
@@ -93,11 +93,6 @@ impl Task {
             limiter,
         };
 
-        let mut cf = req.get_cf().to_string();
-        if cf.len() == 0 {
-            cf = CF_DEFAULT.to_string();
-        }
-
         Ok((
             Task {
                 start_key: req.get_start_key().to_owned(),
@@ -109,7 +104,7 @@ impl Task {
                 concurrency: req.get_concurrency(),
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
-                cf,
+                cf: rawkv_cf(req.get_cf())?,
             },
             cancel,
         ))
@@ -128,7 +123,7 @@ pub struct BackupRange {
     region: Region,
     leader: Peer,
     is_raw_kv: bool,
-    cf: String,
+    cf: CfName,
 }
 
 impl BackupRange {
@@ -210,7 +205,7 @@ impl BackupRange {
         };
         let start = Instant::now();
         let mut statistics = Statistics::default();
-        let cfstatistics = statistics.mut_cf_statistics(&self.cf);
+        let cfstatistics = statistics.mut_cf_statistics(self.cf);
         let mut option = IterOption::default();
         if let Some(end) = self.end_key.clone() {
             option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
@@ -274,7 +269,7 @@ pub struct Progress<R: RegionInfoProvider> {
     region_info: R,
     finished: bool,
     is_raw_kv: bool,
-    cf: String,
+    cf: CfName,
 }
 
 impl<R: RegionInfoProvider> Progress<R> {
@@ -284,7 +279,7 @@ impl<R: RegionInfoProvider> Progress<R> {
         end_key: Option<Key>,
         region_info: R,
         is_raw_kv: bool,
-        cf: String,
+        cf: CfName,
     ) -> Self {
         Progress {
             store_id,
@@ -314,7 +309,7 @@ impl<R: RegionInfoProvider> Progress<R> {
         let start_key = self.next_start.clone();
         let end_key = self.end_key.clone();
         let raw_kv = self.is_raw_kv;
-        let cf_name = self.cf.clone();
+        let cf_name = self.cf;
         let res = self.region_info.seek_region(
             &start_key_,
             Box::new(move |iter| {
@@ -341,7 +336,7 @@ impl<R: RegionInfoProvider> Progress<R> {
                             region: region.clone(),
                             leader,
                             is_raw_kv: raw_kv,
-                            cf: cf_name.clone(),
+                            cf: cf_name,
                         };
                         tx.send(backup_range).unwrap();
                         sended += 1;
@@ -460,9 +455,10 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
         let store_id = self.store_id;
         // TODO: make it async.
         self.pool.borrow_mut().spawn(lazy(move || loop {
-            let branges = prs.lock().unwrap().forward(WORKER_TAKE_RANGE);
-            let is_raw_kv = prs.lock().unwrap().is_raw_kv;
-            let cf = prs.lock().unwrap().cf.clone();
+            let mut progress = prs.lock().unwrap();
+            let branges = progress.forward(WORKER_TAKE_RANGE);
+            let is_raw_kv = progress.is_raw_kv;
+            let cf = progress.cf.clone();
             if branges.is_empty() {
                 return Ok(());
             }
@@ -841,14 +837,13 @@ pub mod tests {
                 } else {
                     Some(Key::from_raw(end_key))
                 };
-                let cf = CF_DEFAULT;
                 let mut prs = Progress::new(
                     endpoint.store_id,
                     start_key,
                     end_key,
                     endpoint.region_info.clone(),
                     false,
-                    cf.to_string(),
+                    CF_DEFAULT,
                 );
 
                 let mut ranges = Vec::with_capacity(expect.len());
@@ -894,7 +889,6 @@ pub mod tests {
                     limiter: None,
                 };
                 let (tx, rx) = unbounded();
-                let cf = CF_DEFAULT;
                 let task = Task {
                     start_key: start_key.to_vec(),
                     end_key: end_key.to_vec(),
@@ -905,7 +899,7 @@ pub mod tests {
                     concurrency: 4,
                     cancel: Arc::default(),
                     is_raw_kv: false,
-                    cf: cf.to_string(),
+                    cf: CF_DEFAULT,
                 };
                 endpoint.handle_backup_task(task);
                 let resps: Vec<_> = rx.collect().wait().unwrap();
