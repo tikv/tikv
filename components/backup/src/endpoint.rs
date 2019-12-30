@@ -7,9 +7,8 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
+use async_speed_limit::Limiter;
 use engine::DB;
-use engine_rocks::RocksIOLimiter;
-use engine_traits::IOLimiter;
 use external_storage::*;
 use futures::lazy;
 use futures::prelude::Future;
@@ -65,7 +64,7 @@ impl fmt::Debug for Task {
 
 #[derive(Clone)]
 struct LimitedStorage {
-    limiter: Option<Arc<RocksIOLimiter>>,
+    limiter: Option<Limiter>,
     storage: Arc<dyn ExternalStorage>,
 }
 
@@ -78,7 +77,7 @@ impl Task {
         let cancel = Arc::new(AtomicBool::new(false));
 
         let limiter = if req.get_rate_limit() != 0 {
-            Some(Arc::new(RocksIOLimiter::new(req.get_rate_limit() as _)))
+            Some(Limiter::new(req.get_rate_limit() as _))
         } else {
             None
         };
@@ -835,7 +834,7 @@ pub mod tests {
         }
 
         // TODO: check key number for each snapshot.
-        let limiter = Arc::new(RocksIOLimiter::new(10 * 1024 * 1024 /* 10 MB/s */));
+        let limiter = Limiter::new(10.0 * 1024.0 * 1024.0 /* 10 MB/s */);
         for (ts, len) in backup_tss {
             let mut req = BackupRequest::default();
             req.set_start_key(vec![]);

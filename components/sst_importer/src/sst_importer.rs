@@ -6,17 +6,18 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use kvproto::backup::StorageBackend;
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use engine_traits::{IOLimiter, LimitReader};
+use async_speed_limit::{Limiter, Resource};
 use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterator, CF_WRITE};
 use engine_traits::{SeekKey, SstReader, SstWriter};
 use external_storage::{create_storage, url_of_backend};
+use futures_executor::block_on;
+use futures_util::io::{copy, AllowStdIo};
 use keys;
 use txn_types::{Key, TimeStamp, WriteRef};
 
@@ -100,7 +101,7 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limiter: Option<Arc<E::IOLimiter>>,
+        speed_limiter: Option<Limiter>,
         sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
         debug!("download start";
@@ -108,7 +109,7 @@ impl SSTImporter {
             "url" => ?backend,
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
-            "speed_limit" => speed_limiter.as_ref().map_or(0, |l| l.get_bytes_per_second()),
+            "speed_limit" => speed_limiter.as_ref().map_or(0.0, |l| l.speed_limit()),
         );
         match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
             Ok(r) => {
@@ -128,7 +129,7 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limiter: Option<Arc<E::IOLimiter>>,
+        speed_limiter: Option<Limiter>,
         mut sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
         let path = self.dir.join(meta)?;
@@ -136,20 +137,20 @@ impl SSTImporter {
 
         // prepare to download the file from the external_storage
         let ext_storage = create_storage(backend)?;
-        let mut ext_reader = ext_storage
+        let ext_reader = ext_storage
             .read(name)
             .map_err(|e| Error::CannotReadExternalStorage(url.to_string(), name.to_owned(), e))?;
-        let mut ext_reader = LimitReader::new(speed_limiter, &mut ext_reader);
+        let ext_reader = Resource::new(speed_limiter, ext_reader);
 
         // do the I/O copy from external_storage to the local file.
         {
-            let mut file_writer = File::create(&path.temp)?;
-            let file_length = std::io::copy(&mut ext_reader, &mut file_writer)?;
+            let mut file_writer = AllowStdIo::new(File::create(&path.temp)?);
+            let file_length = block_on(copy(ext_reader, &mut file_writer))?;
             if meta.length != 0 && meta.length != file_length {
                 let reason = format!("length {}, expect {}", file_length, meta.length);
                 return Err(Error::FileCorrupted(path.temp, reason));
             }
-            file_writer.sync_data()?;
+            file_writer.into_inner().sync_data()?;
         }
 
         // now validate the SST file.

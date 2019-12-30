@@ -1,17 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::engine::RocksEngine;
-use engine_traits::{IOLimiter, IOLimiterExt};
+use engine_traits::IOLimiter;
 use rocksdb::RateLimiter;
 
 const PRIORITY_HIGH: u8 = 1;
 const REFILL_PERIOD: i64 = 100 * 1000;
 const FARENESS: i32 = 10;
 const SNAP_MAX_BYTES_PER_TIME: i64 = 4 * 1024 * 1024;
-
-impl IOLimiterExt for RocksEngine {
-    type IOLimiter = RocksIOLimiter;
-}
 
 pub struct RocksIOLimiter {
     inner: RateLimiter,

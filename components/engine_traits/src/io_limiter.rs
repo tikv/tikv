@@ -3,13 +3,6 @@
 use std::io::{Read, Result, Write};
 use std::sync::Arc;
 
-/// An I/O rate limiter
-///
-/// Throttles the maximum bytes per second written or read.
-pub trait IOLimiterExt {
-    type IOLimiter: IOLimiter;
-}
-
 pub trait IOLimiter {
     /// # Arguments
     ///

@@ -9,6 +9,8 @@ name = "integrations"
 path = "tests/integrations/mod.rs"
 
 [dependencies]
+async-speed-limit = { version = "0.1", git = "https://github.com/kennytm/async-speed-limit.git" }
+futures-util = { version = "0.3", default-features = false, features = ["io", "io-compat"] }
 crc64fast = "0.1"
 engine = { path = "../engine" }
 engine_rocks = { path = "../engine_rocks" }
@@ -48,6 +50,7 @@ rand = "0.7"
 test_util = { path = "../test_util" }
 test_raftstore = { path = "../test_raftstore" }
 uuid = { version = "0.7", features = [ "serde", "v4" ] }
+futures-executor = "0.3"
 
 [features]
 protobuf-codec = ["kvproto/protobuf-codec", "external_storage/protobuf-codec"]

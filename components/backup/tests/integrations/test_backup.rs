@@ -8,6 +8,8 @@ use std::time::Instant;
 
 use futures::sync::mpsc as future_mpsc;
 use futures::{Future, Stream};
+use futures_executor::block_on;
+use futures_util::io::AsyncReadExt;
 use grpcio::{ChannelBuilder, Environment};
 
 use backup::Task;
@@ -302,7 +304,7 @@ fn test_backup_and_import() {
     for f in files1.clone().into_iter() {
         let mut reader = storage.read(&f.name).unwrap();
         let mut content = vec![];
-        reader.read_to_end(&mut content).unwrap();
+        block_on(reader.read_to_end(&mut content)).unwrap();
         let mut m = sst_meta.clone();
         m.crc32 = calc_crc32_bytes(&content);
         m.length = content.len() as _;
