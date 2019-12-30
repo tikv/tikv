@@ -181,7 +181,7 @@ bitfield! {
     // 1. `type` bit 0 represent `DateTime`
     // 2. `type` bit 1 represent `Timestamp`
     //
-    // Since `Date` does not require `fsp`, we could use `fsp` == 0b111 to represent it.
+    // Since `Date` does not require `fsp`, we could use `fsp_tt` == 0b1110 to represent it.
     #[inline]
     u8, get_fsp_tt, set_fsp_tt: 3, 0;
 }
@@ -1033,8 +1033,7 @@ impl Time {
     fn set_tt(&mut self, time_type: TimeType) {
         let ft = self.get_fsp_tt();
         let mask = match time_type {
-            // Set `fsp_tt` to 0b111x
-            TimeType::Date => ft | 0b1110,
+            TimeType::Date => 0b1110,
             TimeType::DateTime => ft & 0b1110,
             TimeType::Timestamp => ft | 1,
         };
