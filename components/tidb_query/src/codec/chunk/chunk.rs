@@ -86,30 +86,8 @@ impl Chunk {
                 }
             }
             EvalType::Real => {
-                if col.get_fixed_len() == 4 {
-                    for &row_index in row_indexes {
-                        let opt: Option<Real> = raw_vec[row_index].decode(field_type, ctx)?;
-                        match opt {
-                            None => {
-                                col.append_null().unwrap();
-                            }
-                            Some(val) => {
-                                col.append_f32(f64::from(val) as f32).unwrap();
-                            }
-                        }
-                    }
-                } else {
-                    for &row_index in row_indexes {
-                        let opt: Option<Real> = raw_vec[row_index].decode(field_type, ctx)?;
-                        match opt {
-                            None => {
-                                col.append_null().unwrap();
-                            }
-                            Some(val) => {
-                                col.append_f64(f64::from(val)).unwrap();
-                            }
-                        }
-                    }
+                for &row_index in row_indexes {
+                    col.append_real_datum(&raw_vec[row_index], field_type)?
                 }
             }
             EvalType::Decimal => {
