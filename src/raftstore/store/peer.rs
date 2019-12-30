@@ -59,6 +59,7 @@ const SHRINK_CACHE_CAPACITY: usize = 64;
 
 struct ReadIndexRequest {
     id: Uuid,
+    replica_retries: usize,
     cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksEngine>)>,
     renew_lease_time: Timespec,
     read_index: Option<u64>,
@@ -86,17 +87,9 @@ impl ReadIndexRequest {
         cmds.push((req, cb));
         ReadIndexRequest {
             id,
+            replica_retries: 1,
             cmds,
             renew_lease_time,
-            read_index: None,
-        }
-    }
-
-    fn with_id(id: Uuid) -> Self {
-        Self {
-            id,
-            cmds: MustConsumeVec::new("callback of index read"),
-            renew_lease_time: monotonic_raw_now(),
             read_index: None,
         }
     }
@@ -112,12 +105,16 @@ impl Drop for ReadIndexRequest {
 }
 
 #[derive(Default)]
-struct ReadIndexQueue {
+pub struct ReadIndexQueue {
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
 }
 
 impl ReadIndexQueue {
+    pub fn is_empty(&self) -> bool {
+        self.reads.is_empty()
+    }
+
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
@@ -291,7 +288,7 @@ pub struct Peer {
 
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
-    pending_reads: ReadIndexQueue,
+    pub pending_reads: ReadIndexQueue,
     // Caculated by election_timeout / 3.
     pub read_index_retry_timeout: usize,
     pub read_index_retry_elapsed: usize,
@@ -1452,47 +1449,69 @@ impl Peer {
         self.proposals.gc();
     }
 
+    // Return the request is handled correctly or not.
+    fn read_index_on_replica<T, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+        read: &mut ReadIndexRequest,
+    ) -> bool {
+        RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+        assert!(read.read_index.is_some());
+
+        let is_read_index_request = read.cmds.len() == 1
+            && read.cmds[0].0.get_requests().len() == 1
+            && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
+
+        if is_read_index_request {
+            debug!("handle reads with a read index";
+                "request_id" => ?read.binary_id(),
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            for (req, cb) in read.cmds.drain(..) {
+                cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+            }
+            read.replica_retries -= 1;
+            return true;
+        } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
+            debug!("handle reads with a read index";
+                "request_id" => ?read.binary_id(),
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            for (req, cb) in read.cmds.drain(..) {
+                // We should check epoch since the range could be changed
+                if req.get_header().get_replica_read() {
+                    cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                } else {
+                    apply::notify_stale_req(self.term(), cb);
+                }
+            }
+            read.replica_retries -= 1;
+            return true;
+        }
+        false
+    }
+
     /// Responses to the ready read index request on the replica, the replica is not a leader.
     fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
-        if self.pending_reads.ready_cnt > 0 {
-            for _ in 0..self.pending_reads.ready_cnt {
-                let mut read = self.pending_reads.reads.pop_front().unwrap();
-                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-                assert!(read.read_index.is_some());
-
-                let is_read_index_request = read.cmds.len() == 1
-                    && read.cmds[0].0.get_requests().len() == 1
-                    && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
-
-                let term = self.term();
-                if is_read_index_request {
-                    debug!("handle reads with a read index";
-                        "request_id" => ?read.binary_id(),
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                    );
-                    for (req, cb) in read.cmds.drain(..) {
-                        cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                    }
-                    self.pending_reads.ready_cnt -= 1;
-                } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
-                    debug!("handle reads with a read index";
-                        "request_id" => ?read.binary_id(),
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                    );
-                    for (req, cb) in read.cmds.drain(..) {
-                        // We should check epoch since the range could be changed
-                        if req.get_header().get_replica_read() {
-                            cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                        } else {
-                            apply::notify_stale_req(term, cb);
-                        }
-                    }
-                    self.pending_reads.ready_cnt -= 1;
-                } else {
-                    self.pending_reads.reads.push_front(read);
-                }
+        let mut handled = 0;
+        let mut last_read = None;
+        for _ in 0..self.pending_reads.ready_cnt {
+            last_read = self.pending_reads.reads.pop_front();
+            let read = last_read.as_mut().unwrap();
+            if !self.read_index_on_replica(ctx, read) {
+                last_read = None;
+                break;
+            }
+            handled += 1;
+        }
+        self.pending_reads.ready_cnt -= handled;
+        if let Some(read) = last_read {
+            if read.replica_retries > 0 {
+                // It's retried by raftstore internally, put it back into the queue to avoid
+                // potencial full scan when handling read_states next time.
+                self.pending_reads.reads.push_front(read);
             }
         }
     }
@@ -2002,16 +2021,14 @@ impl Peer {
             return;
         }
 
-        let id = Uuid::new_v4();
-        self.raft_group.read_index(id.as_bytes().to_vec());
+        let read = self.pending_reads.reads.back_mut().unwrap();
+        read.replica_retries += 1;
+        self.raft_group.read_index(read.id.as_bytes().to_vec());
         debug!("request to get a read index";
-            "request_id" => ?id,
+            "request_id" => ?read.id,
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
         );
-
-        let read_proposal = ReadIndexRequest::with_id(id);
-        self.pending_reads.reads.push_back(read_proposal);
     }
 
     // Returns a boolean to indicate whether the `read` is proposed or not.
