@@ -1141,7 +1141,7 @@ impl RaftBatchSystem {
         box_try!(workers.cleanup_worker.start(cleanup_runner));
 
         let config_client = box_try!(ConfigHandler::start(
-            cfg_controller.get_current().server.addr.clone(),
+            cfg_controller.get_current().server.advertise_addr.clone(),
             cfg_controller,
             workers.pd_worker.scheduler(),
         ));

@@ -170,17 +170,21 @@ impl TiKVServer {
     fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> ConfigController {
         let mut version = Default::default();
         if config.dynamic_config {
-            // Server address and cluster id can not be changed
-            let addr = config.server.addr.clone();
+            // Advertise address and cluster id can not be changed
+            if config.server.advertise_addr.is_empty() {
+                config.server.advertise_addr = config.server.addr.clone();
+            }
+            let advertise_addr = config.server.advertise_addr.clone();
             let cluster_id = config.server.cluster_id;
             // Using the same file for initialize global logger
             // and diagnostics service
             let log_file = config.log_file.clone();
 
-            let (v, mut cfg) = ConfigHandler::create(addr.clone(), Arc::clone(&pd_client), config)
-                .unwrap_or_else(|e| fatal!("failed to register config from pd: {}", e));
+            let (v, mut cfg) =
+                ConfigHandler::create(advertise_addr.clone(), Arc::clone(&pd_client), config)
+                    .unwrap_or_else(|e| fatal!("failed to register config from pd: {}", e));
 
-            cfg.server.addr = addr;
+            cfg.server.advertise_addr = advertise_addr;
             cfg.server.cluster_id = cluster_id;
             cfg.log_file = log_file;
             cfg.dynamic_config = true;
