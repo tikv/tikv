@@ -83,7 +83,7 @@ pub fn init_data_with_details<E: Engine>(
         &CoprReadPoolConfig::default_for_test(),
         store.get_engine(),
     );
-    let cop = Endpoint::new(cfg, pool);
+    let cop = Endpoint::new(cfg, pool.into());
     (store, cop)
 }
 

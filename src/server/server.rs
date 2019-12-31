@@ -389,6 +389,7 @@ mod tests {
             },
             SnapManager::new("", None),
             gc_worker,
+            None,
         )
         .unwrap();
 

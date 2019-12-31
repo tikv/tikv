@@ -545,6 +545,8 @@ mod tests {
     use std::thread;
     use std::vec;
 
+    use futures03::executor::block_on_stream;
+
     use tipb::Executor;
     use tipb::Expr;
 
@@ -779,7 +781,7 @@ mod tests {
     fn test_full() {
         use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
         use std::sync::Mutex;
-        use tikv_util::future_pool::Builder;
+        use tikv_util::future_pool::{Builder, FuturePool};
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -869,12 +871,12 @@ mod tests {
         // Fail immediately
         let handler_builder =
             Box::new(|_, _: &_| Ok(StreamFixture::new(vec![Err(box_err!("foo"))]).into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data().len(), 0);
         assert!(!resp_vec[0].get_other_error().is_empty());
@@ -889,12 +891,12 @@ mod tests {
         responses.push(Err(box_err!("foo")));
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(responses).into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 6);
         for i in 0..5 {
             assert_eq!(resp_vec[i].get_data(), [1, 2, i as u8]);
@@ -907,15 +909,15 @@ mod tests {
     fn test_empty_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 0);
     }
 
@@ -925,7 +927,7 @@ mod tests {
     fn test_special_streaming_handlers() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
 
         // handler returns `finished == true` should not be called again.
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -943,12 +945,12 @@ mod tests {
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 7]);
         assert_eq!(counter.load(atomic::Ordering::SeqCst), 0);
@@ -969,12 +971,12 @@ mod tests {
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 13]);
         assert_eq!(counter.load(atomic::Ordering::SeqCst), 0);
@@ -995,12 +997,12 @@ mod tests {
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 2);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 23]);
         assert!(!resp_vec[1].get_other_error().is_empty());
@@ -1029,13 +1031,13 @@ mod tests {
             Ok((Some(resp), false))
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .take(7)
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .take(7)
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 7);
         assert!(counter.load(atomic::Ordering::SeqCst) < 14);
     }
@@ -1196,7 +1198,14 @@ mod tests {
             let resp_future_3 = cop
                 .handle_stream_request(req_with_exec_detail, handler_builder)
                 .unwrap();
-            thread::spawn(move || tx.send(resp_future_3.collect().wait().unwrap()).unwrap());
+            thread::spawn(move || {
+                tx.send(
+                    block_on_stream(resp_future_3)
+                        .collect::<Result<Vec<_>>>()
+                        .unwrap(),
+                )
+                .unwrap()
+            });
 
             // Response 1
             let resp = &rx.recv().unwrap()[0];
