@@ -6,7 +6,7 @@ use tipb::FieldType;
 
 use super::{Error, Result};
 use crate::codec::datum;
-use crate::codec::datum_codec::{DatumPayloadDecoder, decode_date_time_from_uint};
+use crate::codec::datum_codec::{decode_date_time_from_uint, DatumPayloadDecoder};
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::mysql::{
     check_fsp, Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder,
@@ -384,6 +384,7 @@ impl Column {
     pub fn append_time_datum(
         &mut self,
         mut raw_datum: &[u8],
+        ctx: &mut EvalContext,
         field_type: &FieldType,
     ) -> Result<()> {
         if raw_datum.is_empty() {
@@ -416,6 +417,7 @@ impl Column {
         }
     }
 
+    #[allow(dead_code)]
     fn append_time_packed_u64(&mut self, value: u64, field_type: &FieldType) -> Result<()> {
         use std::convert::TryInto;
 
