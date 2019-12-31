@@ -2,6 +2,20 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.8]
+- Coprocessor
+  - Modify the level of the output log from `error` to `warn` when an error occurs in Coprocessor [#6051](https://github.com/tikv/tikv/pull/6051)
+  - Modify the update behavior of statistics sampling data from directly updating the row to deleting before inserting, to keep consistency with the update behavior of tidb-server [#6069](https://github.com/tikv/tikv/pull/6096)
+- Raftstore
+    - Fix the panic caused by repeatedly sending the `destroy` message to `peerfsm` and `peerfsm` being destroyed multiple times [#6297](https://github.com/tikv/tikv/pull/6297)
+    - Update the default value of `split-region-on-table` from `true` to `false` and disable splitting Regions by table by default [#6253](https://github.com/tikv/tikv/pull/6253)
+- Engine
+    - Fix the issue that empty data might be returned because RocksDB iterator errors are not correctly processed in extreme conditions  [#6326](https://github.com/tikv/tikv/pull/6326)
+- Transaction
+    - Fix the issue that TiKV fails to write data into keys and GC is blocked because the pessimistic locks are incorrectly cleaned up [#6354](https://github.com/tikv/tikv/pull/6354)
+    - Optimize the pessimistic lock waiting mechanism and improve the performance in scenarios where the lock conflict is severe [#6296](https://github.com/tikv/tikv/pull/6296)
+    - Update the default value of `tikv_alloc` from `tikv_alloc/default` to `jemalloc` [#6206](https://github.com/tikv/tikv/pull/6206)
+
 ## [3.0.7]
 + Update grpc to fix a potential memory leak issue [#6128](https://github.com/tikv/tikv/pull/6128)
 + Deadlock: only observe valid region in order to make sure the manager is in the valid region [#6110](https://github.com/tikv/tikv/pull/6110)
