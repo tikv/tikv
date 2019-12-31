@@ -273,7 +273,7 @@ mod tests {
         );
 
         // Test write and default.
-        let mut writer = BackupWriter::new(db.clone(), "foo2", None).unwrap();
+        let mut writer = BackupWriter::new(db, "foo2", None).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {

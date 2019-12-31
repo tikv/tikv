@@ -124,7 +124,7 @@ mod tests {
         let s = "你好".as_bytes().to_owned();
         let row = vec![Datum::Bytes(s.clone())];
         let res = e.eval_string(&mut ctx, &row).unwrap().unwrap();
-        assert_eq!(res.to_owned(), s.clone());
+        assert_eq!(res.to_owned(), s);
         // test with pad_char_to_full_length
         let res = e.eval_string(&mut pad_char_ctx, &row).unwrap().unwrap();
         let s = str::from_utf8(res.as_ref()).unwrap();
@@ -153,7 +153,7 @@ mod tests {
             EvalResults(Some(-1), None, None, None, None, None, None),
             EvalResults(None, Some(124.32), None, None, None, None, None),
             EvalResults(None, None, Some(dec), None, None, None, None),
-            EvalResults(None, None, None, Some(s.clone()), None, None, None),
+            EvalResults(None, None, None, Some(s), None, None, None),
             EvalResults(None, None, None, None, None, Some(dur), None),
         ];
 

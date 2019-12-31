@@ -806,7 +806,7 @@ mod latest_kv_tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
             .build()
             .unwrap();
@@ -1154,7 +1154,7 @@ mod latest_entry_tests {
         assert_eq!(scanner.next_entry().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
             .build_entry_scanner(0.into(), false)
             .unwrap();

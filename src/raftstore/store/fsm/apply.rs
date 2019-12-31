@@ -1529,7 +1529,9 @@ impl ApplyDelegate {
                     "region" => ?&self.region,
                 );
             }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => unimplemented!(),
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
+                unimplemented!()
+            }
         }
 
         let state = if self.pending_remove {
@@ -3928,7 +3930,7 @@ mod tests {
             .mut_requests()
             .push(new_split_req(b"k32", 28, vec![29, 30, 31]));
         splits.set_right_derive(false);
-        let resp = exec_split(&router, splits.clone());
+        let resp = exec_split(&router, splits);
         // Right derive should be respected.
         assert!(!resp.get_header().has_error(), "{:?}", resp);
         new_version = epoch.borrow().get_version() + 2;

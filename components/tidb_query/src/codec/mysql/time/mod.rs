@@ -427,7 +427,7 @@ mod parser {
             (&input[..fsp + round as usize], fsp + round as usize)
         };
 
-        let frac = bytes_to_u32(input)? * TEN_POW[MICRO_WIDTH.checked_sub(len).unwrap_or(0)];
+        let frac = bytes_to_u32(input)? * TEN_POW[MICRO_WIDTH.saturating_sub(len)];
 
         Some(if round {
             round_frac(frac, fsp as u8)
