@@ -769,10 +769,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
-        self.fsm.peer.read_index_retry_countdown -= 1;
         if self.fsm.peer.read_index_retry_countdown == 0 {
             self.fsm.peer.read_index_retry_countdown = self.ctx.cfg.raft_election_timeout_ticks / 3;
             self.fsm.peer.retry_pending_reads();
+        } else {
+            self.fsm.peer.read_index_retry_countdown -= 1;
         }
 
         let mut res = None;
