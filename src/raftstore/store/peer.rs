@@ -112,7 +112,7 @@ pub struct ReadIndexQueue {
 
 impl ReadIndexQueue {
     pub fn is_empty(&self) -> bool {
-        self.reads.is_empty()
+        self.reads.back().map_or(true, |req| req.cmds.is_empty())
     }
 
     fn clear_uncommitted(&mut self, term: u64) {

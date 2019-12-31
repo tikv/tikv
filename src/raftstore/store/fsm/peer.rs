@@ -801,24 +801,23 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         self.fsm.peer.mut_store().flush_cache_metrics();
-        let res = match res {
+
+        // Keep ticking if there are still pending read requests.
+        if !self.fsm.peer.pending_reads.is_empty() ||
             // hibernate_region is false.
-            None => {
-                self.register_raft_base_tick();
-                return;
-            }
-            Some(res) => res,
-        };
-        if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
+            res.is_none() ||
+                !self.fsm.peer.check_after_tick(self.fsm.group_state, res.unwrap())
+        {
             self.register_raft_base_tick();
-        } else {
-            debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
-            self.fsm.group_state = GroupState::Idle;
-            // Followers will stop ticking at L760. Keep ticking for followers
-            // to allow it to campaign quickly when abnormal situation is detected.
-            if !self.fsm.peer.is_leader() {
-                self.register_raft_base_tick();
-            }
+            return;
+        }
+
+        debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
+        self.fsm.group_state = GroupState::Idle;
+        // Followers will stop ticking at L760. Keep ticking for followers
+        // to allow it to campaign quickly when abnormal situation is detected.
+        if !self.fsm.peer.is_leader() {
+            self.register_raft_base_tick();
         }
     }
 
