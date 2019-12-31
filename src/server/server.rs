@@ -374,7 +374,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             storage.get_engine(),
         );
-        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool);
+        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool.into());
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(

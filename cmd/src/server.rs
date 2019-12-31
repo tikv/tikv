@@ -338,7 +338,7 @@ impl TiKVServer {
             Some(builder.build_with_queue_and_runner(
                 move |worker_num| multilevel_builder.build(worker_num),
                 runner_builder,
-            ));
+            ))
         } else {
             None
         };

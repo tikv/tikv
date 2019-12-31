@@ -677,7 +677,7 @@ mod tests {
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
 
         // a normal request
         let handler_builder =
@@ -713,7 +713,7 @@ mod tests {
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
         cop.recursion_limit = 100;
 
         let req = {
@@ -746,7 +746,7 @@ mod tests {
     fn test_invalid_req_type() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
 
         let mut req = coppb::Request::default();
         req.set_tp(9999);
@@ -762,7 +762,7 @@ mod tests {
     fn test_invalid_req_body() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
 
         let mut req = coppb::Request::default();
         req.set_tp(REQ_TYPE_DAG);
@@ -783,7 +783,7 @@ mod tests {
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
-        let read_pool = CoprReadPoolConfig {
+        let read_pool: Vec<FuturePool> = CoprReadPoolConfig {
             normal_concurrency: 1,
             max_tasks_per_worker_normal: 2,
             ..CoprReadPoolConfig::default_for_test()
@@ -801,7 +801,7 @@ mod tests {
         })
         .collect();
 
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
 
         let (tx, rx) = mpsc::channel();
 
@@ -847,7 +847,7 @@ mod tests {
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
@@ -864,7 +864,7 @@ mod tests {
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
-        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
 
         // Fail immediately
         let handler_builder =
@@ -1016,7 +1016,7 @@ mod tests {
                 end_point_stream_channel_size: 3,
                 ..Config::default()
             },
-            read_pool,
+            read_pool.into(),
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1075,7 +1075,7 @@ mod tests {
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cop = Endpoint::<RocksEngine>::new(&config, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&config, read_pool.into());
 
         let (tx, rx) = std::sync::mpsc::channel();
 
