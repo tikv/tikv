@@ -85,6 +85,12 @@ fn test_serde_custom_tikv_config() {
         request_batch_wait_duration: ReadableDuration::millis(10),
     };
     value.readpool = ReadPoolConfig {
+        use_yatp: true,
+        yatp: YatpConfig {
+            min_thread_count: 5,
+            max_thread_count: 10,
+            max_inplace_spin: 3,
+        },
         storage: StorageReadPoolConfig {
             high_concurrency: 1,
             normal_concurrency: 3,

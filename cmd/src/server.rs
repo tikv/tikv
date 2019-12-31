@@ -42,6 +42,7 @@ use tikv::{
             new_compaction_listener, LocalReader, SnapManagerBuilder,
         },
     },
+    read_pool::{ReadPool, ReadPoolRunner},
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
@@ -60,6 +61,7 @@ use tikv_util::{
     time::Monitor,
     worker::{FutureWorker, Worker},
 };
+use yatp::{pool::CloneRunnerBuilder, queue::multilevel};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -322,12 +324,36 @@ impl TiKVServer {
         let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
         region_info_accessor.start();
 
+        let yatp_read_pool = if self.config.readpool.use_yatp {
+            let yatp_cfg = &self.config.readpool.yatp;
+            let mut builder = yatp::Builder::new("yatp-read-pool");
+            builder
+                .min_thread_count(yatp_cfg.min_thread_count)
+                .max_thread_count(yatp_cfg.max_thread_count)
+                .max_inplace_spin(yatp_cfg.max_inplace_spin);
+            let multilevel_builder = multilevel::Builder::new(Default::default());
+            let read_pool_runner = ReadPoolRunner::new(engines.engine.clone(), Default::default());
+            let runner_builder =
+                multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
+            Some(builder.build_with_queue_and_runner(
+                move |worker_num| multilevel_builder.build(worker_num),
+                runner_builder,
+            ))
+        } else {
+            None
+        };
+
         // Create coprocessor endpoint.
-        let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
-            &self.config.readpool.coprocessor,
-            pd_sender,
-            engines.engine.clone(),
-        );
+        let cop_read_pool = if self.config.readpool.use_yatp {
+            ReadPool::from(yatp_read_pool.unwrap().remote())
+        } else {
+            let cop_read_pools = coprocessor::readpool_impl::build_read_pool(
+                &self.config.readpool.coprocessor,
+                pd_sender,
+                engines.engine.clone(),
+            );
+            ReadPool::from(cop_read_pools)
+        };
 
         let server_config = Arc::new(self.config.server.clone());
 

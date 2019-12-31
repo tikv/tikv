@@ -19,6 +19,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ahash"
+version = "0.2.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f33b5018f120946c1dcf279194f238a9f146725593ead1c08fa47ff22b0b5d3"
+dependencies = [
+ "const-random",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -452,6 +461,7 @@ dependencies = [
  "txn_types",
  "url 2.1.0",
  "vlog",
+ "yatp",
 ]
 
 [[package]]
@@ -493,6 +503,26 @@ dependencies = [
  "proc-macro2 1.0.4",
  "quote 1.0.2",
  "syn 1.0.5",
+]
+
+[[package]]
+name = "const-random"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b641a8c9867e341f3295564203b1c250eb8ce6cb6126e007941f78c4d2ed7fe"
+dependencies = [
+ "const-random-macro",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "const-random-macro"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c750ec12b83377637110d5a57f5ae08e895b06c4b16e2bdbf1a94ef717428c59"
+dependencies = [
+ "proc-macro-hack",
+ "rand 0.7.2",
 ]
 
 [[package]]
@@ -731,6 +761,22 @@ dependencies = [
  "darling_core",
  "quote 1.0.2",
  "syn 1.0.5",
+]
+
+[[package]]
+name = "dashmap"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "362b44f82af5d682357335094c5eecba8875215c30b011161c5143e33e998fde"
+dependencies = [
+ "ahash",
+ "futures 0.3.1",
+ "hashbrown 0.6.3",
+ "num_cpus",
+ "owning_ref 0.4.0",
+ "parking_lot 0.9.0",
+ "slab",
+ "stable_deref_trait",
 ]
 
 [[package]]
@@ -1281,6 +1327,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1de41fb8dba9714efd92241565cdff73f78508c95697dd56787d3cba27e2353"
 
 [[package]]
+name = "hashbrown"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e6073d0ca812575946eb5f35ff68dbe519907b25c42530389ff946dc84c6ead"
+dependencies = [
+ "ahash",
+ "autocfg",
+]
+
+[[package]]
 name = "heck"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1696,6 +1752,16 @@ checksum = "62ebf1391f6acad60e5c8b43706dde4582df75c06698ab44511d15016bc2442c"
 dependencies = [
  "owning_ref 0.4.0",
  "scopeguard 0.3.3",
+]
+
+[[package]]
+name = "lock_api"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e57b3997725d2b60dbec1297f6c2e2957cc383db1cebd6be812163f969c7d586"
+dependencies = [
+ "owning_ref 0.4.0",
+ "scopeguard 1.0.0",
 ]
 
 [[package]]
@@ -2137,8 +2203,19 @@ version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab41b4aed082705d1056416ae4468b6ea99d52599ecf3169b00088d43113e337"
 dependencies = [
- "lock_api",
+ "lock_api 0.1.5",
  "parking_lot_core 0.4.0",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f842b1982eb6c2fe34036a4fbfb06dd185a3f5c8edfaacdf7d1ea10b07de6252"
+dependencies = [
+ "lock_api 0.3.2",
+ "parking_lot_core 0.6.2",
+ "rustc_version",
 ]
 
 [[package]]
@@ -2149,7 +2226,7 @@ checksum = "4db1a8ccf734a7bce794cc19b3df06ed87ab2f3907036b693c68f56b4d4537fa"
 dependencies = [
  "libc",
  "rand 0.4.6",
- "smallvec",
+ "smallvec 0.6.10",
  "winapi 0.3.8",
 ]
 
@@ -2162,7 +2239,36 @@ dependencies = [
  "libc",
  "rand 0.6.5",
  "rustc_version",
- "smallvec",
+ "smallvec 0.6.10",
+ "winapi 0.3.8",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b876b1b9e7ac6e1a74a6da34d25c42e17e8862aa409cbbbdcfc8d86c6f3bc62b"
+dependencies = [
+ "cfg-if",
+ "cloudabi",
+ "libc",
+ "redox_syscall",
+ "rustc_version",
+ "smallvec 0.6.10",
+ "winapi 0.3.8",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7582838484df45743c8434fbff785e8edf260c28748353d44bc0da32e0ceabf1"
+dependencies = [
+ "cfg-if",
+ "cloudabi",
+ "libc",
+ "redox_syscall",
+ "smallvec 1.1.0",
  "winapi 0.3.8",
 ]
 
@@ -2579,7 +2685,7 @@ version = "0.6.0-alpha"
 source = "git+https://github.com/pingcap/raft-rs#243278168c5488d94f2fd45cda9efd121c7ecb2a"
 dependencies = [
  "getset",
- "hashbrown",
+ "hashbrown 0.5.0",
  "log",
  "protobuf 2.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error",
@@ -3223,6 +3329,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab606a9c5e214920bb66c458cd7be8ef094f813f20fe77a54cc7dbfff220d4b7"
 
 [[package]]
+name = "smallvec"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44e59e0c9fa00817912ae6e4e6e3c4fe04455e75699d06eedc7d85917ed8e8f4"
+
+[[package]]
 name = "snappy-sys"
 version = "0.1.0"
 source = "git+https://github.com/busyjay/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
@@ -3682,7 +3794,7 @@ dependencies = [
  "servo_arc",
  "slog",
  "slog-global",
- "smallvec",
+ "smallvec 0.6.10",
  "static_assertions 1.1.0",
  "tidb_query_codegen",
  "tidb_query_datatype",
@@ -3806,6 +3918,7 @@ dependencies = [
  "utime",
  "uuid 0.7.4",
  "vlog",
+ "yatp",
  "zipf",
 ]
 
@@ -4214,7 +4327,7 @@ version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "141339a08b982d942be2ca06ff8b076563cbe223d1befd5450716790d44e2426"
 dependencies = [
- "smallvec",
+ "smallvec 0.6.10",
 ]
 
 [[package]]
@@ -4453,6 +4566,18 @@ name = "xdg"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d089681aa106a86fade1b0128fb5daf07d5867a509ab036d99988dec80429a57"
+
+[[package]]
+name = "yatp"
+version = "0.0.1"
+source = "git+https://github.com/tikv/yatp.git?rev=f8e0f9fc05cb902ec2d124466e6c17e8606b4d66#f8e0f9fc05cb902ec2d124466e6c17e8606b4d66"
+dependencies = [
+ "crossbeam-deque",
+ "dashmap",
+ "num_cpus",
+ "parking_lot_core 0.7.0",
+ "rand 0.7.2",
+]
 
 [[package]]
 name = "zeroize"

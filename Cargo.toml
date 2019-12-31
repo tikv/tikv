@@ -134,6 +134,10 @@ features = ["nightly", "push", "process"]
 git = "https://github.com/pingcap/rust-prometheus.git"
 rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 
+[dependencies.yatp]
+git = "https://github.com/tikv/yatp.git"
+rev = "f8e0f9fc05cb902ec2d124466e6c17e8606b4d66"
+
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
 test_sst_importer = { path = "components/test_sst_importer" }

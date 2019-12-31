@@ -1104,6 +1104,83 @@ pub mod log_level_serde {
     }
 }
 
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct YatpConfig {
+    pub min_thread_count: usize,
+    pub max_thread_count: usize,
+    pub max_inplace_spin: usize,
+    // FIXME: Add more configs when they are effective in yatp
+}
+
+impl YatpConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        // FIXME: Replace "readpool" prefix in error messages when it is used
+        // elsewhere.
+
+        if self.min_thread_count == 0 {
+            return Err("readpool.yatp.min-thread-count should be > 0"
+                .to_string()
+                .into());
+        }
+        if self.max_thread_count < self.min_thread_count {
+            return Err(
+                "readpool.yatp.max-thread-count should be >= readpool.yatp.min-thread-count"
+                    .to_string()
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+const YATP_READPOOL_MIN_CONCURRENCY: usize = 4;
+const DEFAULT_YATP_READPOOL_INPLACE_SPIN: usize = 1;
+
+// FIXME: Support other default configs if yatp is used elsewhere besides
+// readpool.
+impl Default for YatpConfig {
+    fn default() -> YatpConfig {
+        let cpu_num = sysinfo::get_logical_cores();
+        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        concurrency = cmp::max(YATP_READPOOL_MIN_CONCURRENCY, concurrency);
+        Self {
+            min_thread_count: 1,
+            max_thread_count: concurrency,
+            max_inplace_spin: DEFAULT_YATP_READPOOL_INPLACE_SPIN,
+        }
+    }
+}
+
+#[cfg(test)]
+mod yatp_tests {
+    use super::*;
+
+    #[test]
+    fn test_validate() {
+        let cfg = YatpConfig {
+            min_thread_count: 1,
+            max_thread_count: 2,
+            max_inplace_spin: 0,
+        };
+        assert!(cfg.validate().is_ok());
+
+        let invalid_cfg = YatpConfig {
+            min_thread_count: 0,
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+
+        let invalid_cfg = YatpConfig {
+            min_thread_count: 2,
+            max_thread_count: 1,
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+    }
+}
+
 macro_rules! readpool_config {
     ($struct_name:ident, $test_mod_name:ident, $display_name:expr) => {
         #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
@@ -1315,19 +1392,123 @@ impl Default for CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Default)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
+    pub use_yatp: bool,
+    pub yatp: YatpConfig,
     pub storage: StorageReadPoolConfig,
     pub coprocessor: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        self.storage.validate()?;
-        self.coprocessor.validate()?;
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.use_yatp {
+            self.yatp.validate()?;
+        } else {
+            self.storage.validate()?;
+            self.coprocessor.validate()?;
+        }
         Ok(())
+    }
+}
+
+impl Default for ReadPoolConfig {
+    fn default() -> ReadPoolConfig {
+        ReadPoolConfig {
+            use_yatp: false,
+            yatp: Default::default(),
+            storage: Default::default(),
+            coprocessor: Default::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod readpool_tests {
+    use super::*;
+
+    #[test]
+    fn test_yatp_disabled() {
+        // Allow invalid yatp config when yatp is not used.
+        let yatp = YatpConfig {
+            min_thread_count: 0,
+            max_thread_count: 0,
+            max_inplace_spin: 0,
+        };
+        assert!(yatp.validate().is_err());
+        let storage = StorageReadPoolConfig::default();
+        assert!(storage.validate().is_ok());
+        let coprocessor = CoprReadPoolConfig::default();
+        assert!(coprocessor.validate().is_ok());
+        let cfg = ReadPoolConfig {
+            use_yatp: false,
+            yatp,
+            storage,
+            coprocessor,
+        };
+        assert!(cfg.validate().is_ok());
+
+        // Storage and coprocessor config must be valid when yatp is not used.
+        let yatp = YatpConfig::default();
+        assert!(yatp.validate().is_ok());
+        let storage = StorageReadPoolConfig {
+            high_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(storage.validate().is_err());
+        let coprocessor = CoprReadPoolConfig::default();
+        let invalid_cfg = ReadPoolConfig {
+            use_yatp: false,
+            yatp,
+            storage,
+            coprocessor,
+        };
+        assert!(invalid_cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_yatp_enabled() {
+        // Allow invalid storage and coprocessor config when yatp is used.
+        let yatp = YatpConfig::default();
+        assert!(yatp.validate().is_ok());
+        let storage = StorageReadPoolConfig {
+            high_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(storage.validate().is_err());
+        let coprocessor = CoprReadPoolConfig {
+            high_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(coprocessor.validate().is_err());
+        let cfg = ReadPoolConfig {
+            use_yatp: true,
+            yatp,
+            storage,
+            coprocessor,
+        };
+        assert!(cfg.validate().is_ok());
+
+        // Yatp config must be valid when yatp is used.
+        let yatp = YatpConfig {
+            min_thread_count: 0,
+            max_thread_count: 0,
+            max_inplace_spin: 0,
+        };
+        assert!(yatp.validate().is_err());
+        let storage = StorageReadPoolConfig::default();
+        assert!(storage.validate().is_ok());
+        let coprocessor = CoprReadPoolConfig::default();
+        assert!(coprocessor.validate().is_ok());
+        let cfg = ReadPoolConfig {
+            use_yatp: true,
+            yatp,
+            storage,
+            coprocessor,
+        };
+        assert!(cfg.validate().is_err());
     }
 }
 

@@ -61,6 +61,7 @@ pub mod coprocessor;
 pub mod import;
 pub mod into_other;
 pub mod raftstore;
+pub mod read_pool;
 pub mod server;
 pub mod storage;
 

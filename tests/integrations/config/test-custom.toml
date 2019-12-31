@@ -3,6 +3,14 @@ log-file = "foo"
 log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 
+[readpool]
+use-yatp = true
+
+[readpool.yatp]
+min-thread-count = 5
+max-thread-count = 10
+max-inplace-spin = 3
+
 [readpool.storage]
 high-concurrency = 1
 normal-concurrency = 3
