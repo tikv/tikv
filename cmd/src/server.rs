@@ -152,7 +152,7 @@ impl TiKVServer {
         security_mgr: Arc<SecurityManager>,
     ) -> Arc<RpcClient> {
         let pd_client = Arc::new(
-            RpcClient::new(&config.pd, security_mgr.clone())
+            RpcClient::new(&config.pd, security_mgr)
                 .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
         );
 
@@ -325,7 +325,7 @@ impl TiKVServer {
         // Create coprocessor endpoint.
         let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
             &self.config.readpool.coprocessor,
-            pd_sender.clone(),
+            pd_sender,
             engines.engine.clone(),
         );
 
@@ -335,7 +335,7 @@ impl TiKVServer {
         let server = Server::new(
             &server_config,
             &self.security_mgr,
-            storage.clone(),
+            storage,
             coprocessor::Endpoint::new(&server_config, cop_read_pool),
             engines.raft_router.clone(),
             self.resolver.clone(),
