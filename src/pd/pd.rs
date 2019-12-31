@@ -578,7 +578,7 @@ impl<T: PdClient> Runner<T> {
 
                     let mut split_region = resp.take_split_region();
                     info!("try to split"; "region_id" => region_id, "region_epoch" => ?epoch);
-                    let msg = if split_region.get_policy() == pdpb::CheckPolicy::Usekey {
+                    let msg = if split_region.get_policy() == pdpb::CheckPolicy::USEKEY {
                         CasualMessage::SplitRegion{
                             region_epoch: epoch,
                             split_keys: split_region.take_keys().into_vec(),
