@@ -3804,6 +3804,7 @@ dependencies = [
  "tipb_helper",
  "twoway",
  "uuid 0.8.1",
+ "yatp",
 ]
 
 [[package]]
