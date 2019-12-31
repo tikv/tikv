@@ -1417,7 +1417,8 @@ impl ReadPoolConfig {
 impl Default for ReadPoolConfig {
     fn default() -> ReadPoolConfig {
         ReadPoolConfig {
-            use_yatp: false,
+            // Switch to true temporarily for benchmark
+            use_yatp: true,
             yatp: Default::default(),
             storage: Default::default(),
             coprocessor: Default::default(),
