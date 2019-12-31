@@ -883,7 +883,7 @@ impl<E: Engine> Debugger<E> {
             ("mvcc.max_row_versions", mvcc_properties.max_row_versions),
         ]
         .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
         .collect();
         res.push((
             "middle_key_by_approximate_size".to_string(),
@@ -967,7 +967,7 @@ impl MvccChecker {
             let from = start_key.clone();
             let to = end_key.clone();
             let readopts = IterOption::new(
-                Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+                Some(KeyBuilder::from_vec(from, 0, 0)),
                 Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
             )
@@ -1920,7 +1920,7 @@ mod tests {
         // region 3 with peers at stores 21, 22, 23.
         let region_3 = init_region_state(engine, 3, &[21, 22, 23]);
         // Got the target region from pd but the peers are not changed.
-        let mut target_region_3 = region_3.clone();
+        let mut target_region_3 = region_3;
         target_region_3.mut_region_epoch().set_conf_ver(100);
 
         // Test with bad target region. No region state in rocksdb should be changed.

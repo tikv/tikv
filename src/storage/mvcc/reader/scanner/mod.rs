@@ -358,7 +358,7 @@ mod tests {
             move |engine: &RocksEngine, expected_result: Vec<(Vec<u8>, Option<Vec<u8>>)>| {
                 let snapshot = engine.snapshot(&Context::default()).unwrap();
 
-                let scanner = ScannerBuilder::new(snapshot.clone(), SCAN_TS, desc)
+                let scanner = ScannerBuilder::new(snapshot, SCAN_TS, desc)
                     .build()
                     .unwrap();
                 check_scan_result(scanner, &expected_result);
@@ -518,7 +518,7 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::default()).unwrap();
-        let scanner = ScannerBuilder::new(snapshot.clone(), 65.into(), desc)
+        let scanner = ScannerBuilder::new(snapshot, 65.into(), desc)
             .bypass_locks(bypass_locks)
             .build()
             .unwrap();
