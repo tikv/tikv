@@ -20,13 +20,6 @@ impl ImportExt for PanicEngine {
         files: &[&str],
     ) -> Result<()> { panic!() }
 
-    fn ingest_external_file_optimized(
-        &self,
-        cf: &Self::CFHandle,
-        opt: &Self::IngestExternalFileOptions,
-        files: &[&str],
-    ) -> Result<bool> { panic!() }
-
     fn validate_sst_for_ingestion<P: AsRef<Path>>(
         &self,
         cf: &Self::CFHandle,

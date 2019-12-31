@@ -38,17 +38,16 @@ impl Iterable for PanicSnapshot {
 pub struct PanicSnapshotIterator;
 
 impl Iterator for PanicSnapshotIterator {
-    fn seek(&mut self, key: SeekKey) -> bool { panic!() }
-    fn seek_for_prev(&mut self, key: SeekKey) -> bool { panic!() }
+    fn seek(&mut self, key: SeekKey) -> Result<bool> { panic!() }
+    fn seek_for_prev(&mut self, key: SeekKey) -> Result<bool> { panic!() }
 
-    fn prev(&mut self) -> bool { panic!() }
-    fn next(&mut self) -> bool { panic!() }
+    fn prev(&mut self) -> Result<bool> { panic!() }
+    fn next(&mut self) -> Result<bool> { panic!() }
 
     fn key(&self) -> &[u8] { panic!() }
     fn value(&self) -> &[u8] { panic!() }
 
-    fn valid(&self) -> bool { panic!() }
-    fn status(&self) -> Result<()> { panic!() }
+    fn valid(&self) -> Result<bool> { panic!() }
 }
 
 #[derive(Clone, Debug)]
