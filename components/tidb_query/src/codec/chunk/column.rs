@@ -305,11 +305,7 @@ impl Column {
         self.finish_append_fixed()
     }
 
-    pub fn append_real_datum(
-        &mut self,
-        mut raw_datum: &[u8],
-        field_type: &FieldType,
-    ) -> Result<()> {
+    pub fn append_f32_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
                 "Failed to decode datum flag".to_owned(),
@@ -322,11 +318,29 @@ impl Column {
             // In both index and record, it's flag is `FLOAT`. See TiDB's `encode()`.
             datum::FLOAT_FLAG => {
                 let v = raw_datum.read_datum_payload_f64()?;
-                if field_type.as_accessor().tp() == FieldTypeTp::Float {
-                    self.append_f32(v as f32)
-                } else {
-                    self.append_f64(v)
-                }
+                self.append_f32(v as f32)
+            }
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Real vector",
+                flag
+            ))),
+        }
+    }
+
+    pub fn append_f64_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
+        if raw_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = raw_datum[0];
+        raw_datum = &raw_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            // In both index and record, it's flag is `FLOAT`. See TiDB's `encode()`.
+            datum::FLOAT_FLAG => {
+                let v = raw_datum.read_datum_payload_f64()?;
+                self.append_f64(v)
             }
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for Real vector",

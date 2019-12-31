@@ -8,7 +8,7 @@ use crate::codec::Datum;
 use crate::expr::EvalContext;
 use codec::buffer::BufferWriter;
 use std::convert::TryFrom;
-use tidb_query_datatype::{EvalType, FieldTypeAccessor};
+use tidb_query_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 use tipb::FieldType;
@@ -91,8 +91,14 @@ impl Chunk {
                 }
             }
             EvalType::Real => {
-                for &row_index in row_indexes {
-                    col.append_real_datum(&raw_vec[row_index], field_type)?
+                if field_type.as_accessor().tp() == FieldTypeTp::Float {
+                    for &row_index in row_indexes {
+                        col.append_f32_datum(&raw_vec[row_index])?
+                    }
+                } else {
+                    for &row_index in row_indexes {
+                        col.append_f64_datum(&raw_vec[row_index])?
+                    }
                 }
             }
             EvalType::Decimal => {
