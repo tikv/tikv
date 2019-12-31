@@ -34,8 +34,7 @@ mod tests {
 
     #[test]
     fn test_json_depth() {
-        let mut test_cases =
-            vec![
+        let mut test_cases = vec![
             ("null", 1),
             ("[true, 2017]", 2),
             (r#"{"a": {"a1": [3]}, "b": {"b1": {"c": {"d": [5]}}}}"#, 6),
@@ -51,7 +50,10 @@ mod tests {
             (r#"[[2], 3, [[[4]]]]"#, 5),
             (r#"{"Name": "Homer"}"#, 2),
             (r#"[10, {"a": 20}]"#, 3),
-            (r#"{"Person": {"Name": "Homer", "Age": 39, "Hobbies": ["Eating", "Sleeping"]} }"#, 4),
+            (
+                r#"{"Person": {"Name": "Homer", "Age": 39, "Hobbies": ["Eating", "Sleeping"]} }"#,
+                4,
+            ),
             (r#"{"a":1}"#, 2),
             (r#"{"a":[1]}"#, 3),
             (r#"{"b":2, "c":3}"#, 2),

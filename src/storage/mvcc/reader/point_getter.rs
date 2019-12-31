@@ -640,7 +640,7 @@ mod tests {
         must_get_key(&mut getter, b"foo1");
         must_get_none(&mut getter, b"foo1");
 
-        let mut getter = new_omit_value_single_point_getter(snapshot.clone(), 4.into());
+        let mut getter = new_omit_value_single_point_getter(snapshot, 4.into());
         must_get_none(&mut getter, b"foo3");
         must_get_none(&mut getter, b"foo3");
     }

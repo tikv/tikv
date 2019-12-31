@@ -535,7 +535,7 @@ mod tests {
     fn test_seek_and_seek_prev() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
-        let (store, _) = load_default_dataset(engines.clone());
+        let (store, _) = load_default_dataset(engines);
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
 
         let check_seek_result = |snap: &RegionSnapshot<RocksEngine>,
@@ -619,7 +619,7 @@ mod tests {
 
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
-        let (store, _) = load_multiple_levels_dataset(engines.clone());
+        let (store, _) = load_multiple_levels_dataset(engines);
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
 
         seek_table = vec![
@@ -823,7 +823,7 @@ mod tests {
                 break;
             }
         }
-        let mut expect = test_data.clone();
+        let mut expect = test_data;
         expect.reverse();
         assert_eq!(res, expect);
     }
