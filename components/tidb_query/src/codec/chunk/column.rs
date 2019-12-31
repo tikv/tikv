@@ -478,6 +478,34 @@ impl Column {
         self.finish_append_fixed()
     }
 
+    /// Append a duration datum in raw bytes to the column.
+    pub fn append_duration_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
+        if raw_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = raw_datum[0];
+        raw_datum = &raw_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            // In index, it's flag is `DURATION`. See TiDB's `encode()`.
+            datum::DURATION_FLAG => {
+                let v = raw_datum.read_datum_payload_i64()?;
+                self.append_i64(v)
+            }
+            // In record, it's flag is `VAR_INT`. See TiDB's `flatten()` and `encode()`.
+            datum::VAR_INT_FLAG => {
+                let v = raw_datum.read_datum_payload_var_i64()?;
+                self.append_i64(v)
+            }
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Duration vector",
+                flag
+            ))),
+        }
+    }
+
     /// Get the duration datum of the row in the column.
     pub fn get_duration(&self, idx: usize, fsp: isize) -> Result<Duration> {
         let start = idx * self.fixed_len;

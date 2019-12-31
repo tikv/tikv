@@ -107,15 +107,7 @@ impl Chunk {
             }
             EvalType::Duration => {
                 for &row_index in row_indexes {
-                    let opt: Option<Duration> = raw_vec[row_index].decode(field_type, ctx)?;
-                    match opt {
-                        None => {
-                            col.append_null().unwrap();
-                        }
-                        Some(val) => {
-                            col.append_duration(val).unwrap();
-                        }
-                    }
+                    col.append_duration_datum(&raw_vec[row_index])?
                 }
             }
             EvalType::Json => {
