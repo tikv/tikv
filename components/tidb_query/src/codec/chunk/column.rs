@@ -6,7 +6,7 @@ use tipb::FieldType;
 
 use super::{Error, Result};
 use crate::codec::datum;
-use crate::codec::datum_codec::DatumPayloadDecoder;
+use crate::codec::datum_codec::{DatumPayloadDecoder, decode_date_time_from_uint};
 use crate::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::codec::mysql::{
     check_fsp, Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder,
@@ -398,12 +398,16 @@ impl Column {
             // In index, it's flag is `UINT`. See TiDB's `encode()`.
             datum::UINT_FLAG => {
                 let v = raw_datum.read_datum_payload_u64()?;
-                self.append_time_packed_u64(v, field_type)
+                //todo: append_time_packed_u64 have bugs,use it later
+                let v = decode_date_time_from_uint(v, ctx, field_type)?;
+                self.append_time(v)
             }
             // In record, it's flag is `VAR_UINT`. See TiDB's `flatten()` and `encode()`.
             datum::VAR_UINT_FLAG => {
                 let v = raw_datum.read_datum_payload_var_u64()?;
-                self.append_time_packed_u64(v, field_type)
+                //todo: append_time_packed_u64 have bugs,use it later
+                let v = decode_date_time_from_uint(v, ctx, field_type)?;
+                self.append_time(v)
             }
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for DateTime vector",
