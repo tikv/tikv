@@ -218,6 +218,7 @@ impl<S: CasualRouter> Runner<S> {
                     }
                 }
             },
+            CheckPolicy::USEKEY => unimplemented!(),
         };
 
         if !split_keys.is_empty() {

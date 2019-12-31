@@ -13,6 +13,7 @@ use uuid::{ParseError, Uuid};
 
 use crate::pd::{Error as PdError, RegionInfo};
 use crate::raftstore::errors::Error as RaftStoreError;
+use crate::storage::mvcc::Error as MvccError;
 use tikv_util::codec::Error as CodecError;
 
 quick_error! {
@@ -52,6 +53,11 @@ quick_error! {
             display("Engine {:?}", err)
         }
         RaftStore(err: RaftStoreError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        MvccError(err: MvccError) {
             from()
             cause(err)
             description(err.description())
