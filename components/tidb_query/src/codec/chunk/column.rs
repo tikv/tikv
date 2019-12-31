@@ -241,8 +241,8 @@ impl Column {
         self.finish_append_fixed()
     }
 
-    /// Append datum bytes in int format
-    pub fn append_int_datum(&mut self, mut raw_datum: &[u8], unsigned: bool) -> Result<()> {
+    /// Append datum bytes in signed int 64 format
+    pub fn append_i64_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
         if raw_datum.is_empty() {
             return Err(Error::InvalidDataType(
                 "Failed to decode datum flag".to_owned(),
@@ -252,38 +252,32 @@ impl Column {
         raw_datum = &raw_datum[1..];
         match flag {
             datum::NIL_FLAG => self.append_null(),
-            datum::INT_FLAG => {
-                let num = raw_datum.read_datum_payload_i64()?;
-                if unsigned {
-                    self.append_u64(num as u64)
-                } else {
-                    self.append_i64(num as i64)
-                }
-            }
-            datum::UINT_FLAG => {
-                let num = raw_datum.read_datum_payload_u64()?;
-                if unsigned {
-                    self.append_u64(num as u64)
-                } else {
-                    self.append_i64(num as i64)
-                }
-            }
-            datum::VAR_INT_FLAG => {
-                let num = raw_datum.read_datum_payload_var_i64()?;
-                if unsigned {
-                    self.append_u64(num as u64)
-                } else {
-                    self.append_i64(num as i64)
-                }
-            }
-            datum::VAR_UINT_FLAG => {
-                let num = raw_datum.read_datum_payload_var_u64()?;
-                if unsigned {
-                    self.append_u64(num as u64)
-                } else {
-                    self.append_i64(num as i64)
-                }
-            }
+            datum::INT_FLAG => self.append_i64(raw_datum.read_datum_payload_i64()? as i64),
+            datum::UINT_FLAG => self.append_i64(raw_datum.read_datum_payload_u64()? as i64),
+            datum::VAR_INT_FLAG => self.append_i64(raw_datum.read_datum_payload_var_i64()? as i64),
+            datum::VAR_UINT_FLAG => self.append_i64(raw_datum.read_datum_payload_var_u64()? as i64),
+            _ => Err(Error::InvalidDataType(format!(
+                "Unsupported datum flag {} for Int vector",
+                flag
+            ))),
+        }
+    }
+
+    /// Append datum bytes in unsigned int 64 format
+    pub fn append_u64_datum(&mut self, mut raw_datum: &[u8]) -> Result<()> {
+        if raw_datum.is_empty() {
+            return Err(Error::InvalidDataType(
+                "Failed to decode datum flag".to_owned(),
+            ));
+        }
+        let flag = raw_datum[0];
+        raw_datum = &raw_datum[1..];
+        match flag {
+            datum::NIL_FLAG => self.append_null(),
+            datum::INT_FLAG => self.append_u64(raw_datum.read_datum_payload_i64()? as u64),
+            datum::UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_u64()? as u64),
+            datum::VAR_INT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_i64()? as u64),
+            datum::VAR_UINT_FLAG => self.append_u64(raw_datum.read_datum_payload_var_u64()? as u64),
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for Int vector",
                 flag

@@ -80,9 +80,14 @@ impl Chunk {
 
         match eval_type {
             EvalType::Int => {
-                let unsigned = field_type.is_unsigned();
-                for &row_index in row_indexes {
-                    col.append_int_datum(&raw_vec[row_index], unsigned)?
+                if field_type.is_unsigned() {
+                    for &row_index in row_indexes {
+                        col.append_u64_datum(&raw_vec[row_index])?
+                    }
+                } else {
+                    for &row_index in row_indexes {
+                        col.append_i64_datum(&raw_vec[row_index])?
+                    }
                 }
             }
             EvalType::Real => {
