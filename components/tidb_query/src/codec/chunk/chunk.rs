@@ -4,7 +4,6 @@ use super::column::{Column, ColumnEncoder};
 use super::Result;
 use crate::codec::batch::LazyBatchColumn;
 use crate::codec::data_type::*;
-use crate::codec::datum_codec::RawDatumDecoder;
 use crate::codec::Datum;
 use crate::expr::EvalContext;
 use codec::buffer::BufferWriter;
@@ -112,13 +111,7 @@ impl Chunk {
             }
             EvalType::Json => {
                 for &row_index in row_indexes {
-                    let opt: Option<Json> = raw_vec[row_index].decode(field_type, ctx)?;
-                    match opt {
-                        None => {
-                            col.append_null().unwrap();
-                        }
-                        Some(val) => col.append_json(&val).unwrap(),
-                    }
+                    col.append_json_datum(&raw_vec[row_index])?
                 }
             }
         }
