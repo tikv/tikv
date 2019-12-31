@@ -13,6 +13,7 @@ use grpcio::{
 use kvproto::tikvpb::*;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
+use yatp::task::future::TaskCell;
 
 use crate::coprocessor::Endpoint;
 use crate::raftstore::router::RaftStoreRouter;
@@ -60,6 +61,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // Currently load statistics is done in the thread.
     stats_pool: Option<ThreadPool>,
     grpc_thread_load: Arc<ThreadLoad>,
+    yatp_read_pool: Option<yatp::ThreadPool<TaskCell>>,
     readpool_normal_concurrency: usize,
     readpool_normal_thread_load: Arc<ThreadLoad>,
     timer: Handle,
@@ -76,6 +78,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         resolver: S,
         snap_mgr: SnapManager,
         gc_worker: GcWorker<E>,
+        yatp_read_pool: Option<yatp::ThreadPool<TaskCell>>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = ThreadPoolBuilder::new()
@@ -159,6 +162,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             snap_worker,
             stats_pool: Some(stats_pool),
             grpc_thread_load,
+            yatp_read_pool,
             readpool_normal_concurrency,
             readpool_normal_thread_load,
             timer: GLOBAL_TIMER_HANDLE.clone(),
@@ -251,6 +255,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         if let Some(pool) = self.stats_pool.take() {
             let _ = pool.shutdown_now().wait();
         }
+        let _ = self.yatp_read_pool.take();
         Ok(())
     }
 

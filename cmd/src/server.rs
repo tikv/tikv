@@ -338,14 +338,14 @@ impl TiKVServer {
             Some(builder.build_with_queue_and_runner(
                 move |worker_num| multilevel_builder.build(worker_num),
                 runner_builder,
-            ))
+            ));
         } else {
             None
         };
 
         // Create coprocessor endpoint.
         let cop_read_pool = if self.config.readpool.use_yatp {
-            ReadPool::from(yatp_read_pool.unwrap().remote())
+            ReadPool::from(yatp_read_pool.as_ref().unwrap().remote())
         } else {
             let cop_read_pools = coprocessor::readpool_impl::build_read_pool(
                 &self.config.readpool.coprocessor,
@@ -367,6 +367,7 @@ impl TiKVServer {
             self.resolver.clone(),
             snap_mgr.clone(),
             gc_worker.clone(),
+            yatp_read_pool,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
