@@ -1646,7 +1646,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=green-blob-gc#24d489d17ccb42580be590d1abbbdfec04aecd41"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=green-blob-gc#f8840571d7a46ad841029e6f2770a11ce51a628b"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1664,7 +1664,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=green-blob-gc#24d489d17ccb42580be590d1abbbdfec04aecd41"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=green-blob-gc#f8840571d7a46ad841029e6f2770a11ce51a628b"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2938,7 +2938,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=green-blob-gc#24d489d17ccb42580be590d1abbbdfec04aecd41"
+source = "git+https://github.com/tabokie/rust-rocksdb.git?branch=green-blob-gc#f8840571d7a46ad841029e6f2770a11ce51a628b"
 dependencies = [
  "libc",
  "librocksdb_sys",
