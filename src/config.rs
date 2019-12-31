@@ -44,10 +44,10 @@ use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::{Config as StorageConfig, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, BlobRunMode, CompressionType};
 use engine::rocks::util::{
-    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
-    NoopSliceTransform,
+    db_exist, get_cf_handle, CFOptions, EventListener, FixedPrefixSliceTransform,
+    FixedSuffixSliceTransform, NoopSliceTransform,
 };
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DB};
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, PdClient};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
@@ -1073,9 +1073,6 @@ impl RaftDbConfig {
     }
 }
 
-use engine::rocks::util::get_cf_handle;
-use engine::DB;
-
 #[derive(Clone, Copy, Debug)]
 pub enum DBType {
     Kv,
@@ -1156,13 +1153,13 @@ impl ConfigManager for DBConfigManger {
                     self.set_block_cache_size(&cf_name, v.into())?;
                 }
                 let cf_change = config_value_to_string(cf_change.into_iter().collect());
-                let cf_change_vec = config_to_slice(&cf_change);
-                self.set_cf_config(&cf_name, &cf_change_vec)?;
+                let cf_change_slice = config_to_slice(&cf_change);
+                self.set_cf_config(&cf_name, &cf_change_slice)?;
             }
         }
         let change = config_value_to_string(change);
-        let change_vec = config_to_slice(&change);
-        self.set_db_config(&change_vec)?;
+        let change_slice = config_to_slice(&change);
+        self.set_db_config(&change_slice)?;
 
         Ok(())
     }
@@ -2131,6 +2128,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+    use engine::rocks::util::new_engine_opt;
     use kvproto::configpb::Version;
     use slog::Level;
     use std::cmp::Ordering;
@@ -2320,14 +2318,11 @@ mod tests {
         assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
     }
 
-    // TODO: move to tests/config
-    use engine::rocks;
-
     fn new_engines(cfg: TiKvConfig) -> (Arc<DB>, ConfigController) {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
-            rocks::util::new_engine_opt(
+            new_engine_opt(
                 path,
                 DBOptions::new(),
                 vec![
@@ -2353,6 +2348,8 @@ mod tests {
         let mut cfg = TiKvConfig::default();
         cfg.rocksdb.max_background_jobs = 2;
         cfg.rocksdb.defaultcf.disable_auto_compactions = false;
+        cfg.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(64);
+        cfg.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(8);
         cfg.validate().unwrap();
         let (db, mut cfg_controller) = new_engines(cfg.clone());
 
@@ -2368,17 +2365,23 @@ mod tests {
         let db_opts = db.get_db_options();
         assert_eq!(db_opts.get_max_background_jobs(), 8);
 
-        // update disable_auto_compactions on default cf
-        let cf = db.cf_handle(CF_DEFAULT).unwrap();
-        let cf_opts = db.get_options_cf(cf);
+        // update some configs on default cf
+        let defaultcf = db.cf_handle(CF_DEFAULT).unwrap();
+        let cf_opts = db.get_options_cf(defaultcf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), false);
+        assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(64).0);
+        assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(8).0);
 
-        let mut incoming = cfg;
+        let mut incoming = cfg.clone();
         incoming.rocksdb.defaultcf.disable_auto_compactions = true;
+        incoming.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(32);
+        incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(256);
         let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
         assert!(rollback.right().unwrap());
 
-        let cf_opts = db.get_options_cf(cf);
+        let cf_opts = db.get_options_cf(defaultcf);
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
+        assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(32).0);
+        assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(256).0);
     }
 }
