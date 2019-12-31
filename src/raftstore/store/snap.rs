@@ -1196,9 +1196,10 @@ impl SnapManager {
             Box::new(self.clone()),
         )?;
         if !s.exists() {
-            return Err(RaftStoreError::Other(From::from(
-                format!("snapshot of {:?} not exists.", key).to_string(),
-            )));
+            return Err(RaftStoreError::Other(From::from(format!(
+                "snapshot of {:?} not exists.",
+                key
+            ))));
         }
         Ok(Box::new(s))
     }
@@ -1513,7 +1514,7 @@ pub mod tests {
         region.set_end_key(b"z".to_vec());
         region.mut_region_epoch().set_version(INIT_EPOCH_VER);
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
-        region.mut_peers().push(peer.clone());
+        region.mut_peers().push(peer);
         region
     }
 
@@ -1720,7 +1721,7 @@ pub mod tests {
             Arc::new(rocks::util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap());
         let options = ApplyOptions {
             db: dst_db.c().clone(),
-            region: region.clone(),
+            region,
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: Arc::new(CoprocessorHost::default()),
@@ -2035,7 +2036,7 @@ pub mod tests {
         let dst_db = open_test_empty_db(&dst_db_dir.path(), None, None).unwrap();
         let options = ApplyOptions {
             db: dst_db.c().clone(),
-            region: region.clone(),
+            region,
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: Arc::new(CoprocessorHost::default()),
@@ -2052,13 +2053,9 @@ pub mod tests {
             None,
         )
         .is_err());
-        assert!(Snap::new_for_applying(
-            dst_dir.path(),
-            &key,
-            Arc::clone(&size_track),
-            deleter.clone()
-        )
-        .is_err());
+        assert!(
+            Snap::new_for_applying(dst_dir.path(), &key, Arc::clone(&size_track), deleter).is_err()
+        );
     }
 
     #[test]
@@ -2155,7 +2152,7 @@ pub mod tests {
             &key,
             snap_data.take_meta(),
             Arc::clone(&size_track),
-            deleter.clone(),
+            deleter,
             None,
         )
         .is_err());
@@ -2198,7 +2195,7 @@ pub mod tests {
         let snapshot = RocksSnapshot::new(open_test_db(&db_dir.path(), None, None).unwrap());
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
-        let deleter = Box::new(mgr.clone());
+        let deleter = Box::new(mgr);
         let mut s1 =
             Snap::new_for_building(&path, &key1, Arc::clone(&size_track), deleter.clone(), None)
                 .unwrap();
@@ -2241,7 +2238,7 @@ pub mod tests {
             &key2,
             snap_data.take_meta(),
             Arc::clone(&size_track),
-            deleter.clone(),
+            deleter,
             None,
         )
         .unwrap();
@@ -2285,7 +2282,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let src_mgr = SnapManager::new(src_path.clone(), None);
+        let src_mgr = SnapManager::new(src_path, None);
         src_mgr.init().unwrap();
 
         let src_db_dir = Builder::new()
@@ -2326,7 +2323,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
-        let dst_mgr = SnapManager::new(dst_path.clone(), None);
+        let dst_mgr = SnapManager::new(dst_path, None);
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.

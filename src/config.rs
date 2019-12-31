@@ -2065,8 +2065,8 @@ mod tests {
         tikv_cfg.raftdb.wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
         let cfg_from_file = TiKvConfig::from_file(file);
-        assert_eq!(cfg_from_file.rocksdb.wal_dir, s2.clone());
-        assert_eq!(cfg_from_file.raftdb.wal_dir, s1.clone());
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
     }
 
     #[test]

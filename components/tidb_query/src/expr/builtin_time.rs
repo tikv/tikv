@@ -1596,7 +1596,7 @@ mod tests {
             (
                 Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
                 Datum::Dur(Duration::parse(b"-01:00:00", 6).unwrap()),
-                zero_duration.clone(),
+                zero_duration,
             ),
         ];
         for (arg1, arg2, exp) in cases {
@@ -1667,13 +1667,13 @@ mod tests {
             ),
             (
                 Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
-                zero_duration_string.clone(),
+                zero_duration_string,
                 Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
             ),
             (
                 Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
                 Datum::Bytes(b"-01:00:00".to_vec()),
-                zero_duration.clone(),
+                zero_duration,
             ),
         ];
         for (arg1, arg2, exp) in cases {

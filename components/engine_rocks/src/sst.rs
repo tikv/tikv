@@ -143,7 +143,7 @@ impl SstWriterBuilder for RocksSstWriterBuilder {
             let handle = db
                 .cf_handle(self.cf.unwrap_or(CF_DEFAULT))
                 .ok_or_else(|| format!("CF {:?} is not found", self.cf))?;
-            db.get_options_cf(handle).clone()
+            db.get_options_cf(handle)
         } else {
             ColumnFamilyOptions::new()
         };

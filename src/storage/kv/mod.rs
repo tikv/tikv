@@ -283,7 +283,9 @@ thread_local! {
 
 /// Execute the closure on the thread local engine.
 ///
-/// Safety: precondition: `TLS_ENGINE_ANY` is non-null.
+/// # Safety
+///
+/// Precondition: `TLS_ENGINE_ANY` is non-null.
 pub unsafe fn with_tls_engine<E: Engine, F, R>(f: F) -> R
 where
     F: FnOnce(&E) -> R,
@@ -310,9 +312,12 @@ pub fn set_tls_engine<E: Engine>(engine: E) {
 
 /// Destroy the thread local engine.
 ///
-/// Safety: the current tls engine must have the same type as `E` (or at least
-/// there destructors must be compatible).
 /// Postcondition: `TLS_ENGINE_ANY` is null.
+///
+/// # Safety
+///
+/// The current tls engine must have the same type as `E` (or at least
+/// there destructors must be compatible).
 pub unsafe fn destroy_tls_engine<E: Engine>() {
     // Safety: we check that `TLS_ENGINE_ANY` is non-null, we must ensure that references
     // to `TLS_ENGINE_ANY` can never be stored outside of `TLS_ENGINE_ANY`.

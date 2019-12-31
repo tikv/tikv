@@ -689,7 +689,7 @@ fn test_node_merge_update_region() {
     must_get_equal(&cluster.get_engine(new_leader.get_store_id()), b"k0", b"v0");
 
     // Transfer leadership to the new_leader.
-    cluster.must_transfer_leader(left.get_id(), new_leader.clone());
+    cluster.must_transfer_leader(left.get_id(), new_leader);
 
     // Make sure the leader is in lease.
     cluster.must_put(b"k0", b"v1");

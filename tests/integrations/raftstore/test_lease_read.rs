@@ -98,7 +98,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(state.get_last_index(), last_index + 1);
 
     // Issue a read request and check the value on response.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v2");
+    must_read_on_peer(cluster, peer, region, key, b"v2");
 
     // Check if the leader does a local read.
     assert_eq!(detector.ctx.rl().len(), expect_lease_read);
@@ -151,13 +151,7 @@ fn test_lease_expired<T: Simulator>(cluster: &mut Cluster<T>) {
     thread::sleep(election_timeout * 2);
 
     // Issue a read request and check the value on response.
-    must_error_read_on_peer(
-        cluster,
-        peer.clone(),
-        region.clone(),
-        key,
-        Duration::from_secs(1),
-    );
+    must_error_read_on_peer(cluster, peer, region, key, Duration::from_secs(1));
 }
 
 #[test]
@@ -255,7 +249,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     thread::sleep(election_timeout / 2);
 
     // Check if the leader does a local read.
-    must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
+    must_read_on_peer(cluster, peer, region, key, b"v1");
     let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
     assert_eq!(detector.ctx.rl().len(), 3);
