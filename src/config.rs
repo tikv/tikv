@@ -1149,7 +1149,10 @@ impl ConfigManager for DBConfigManger {
         let cf_config = change.drain_filter(|(name, _)| name.ends_with("cf"));
         for (cf_name, cf_change) in cf_config {
             if let ConfigValue::Module(mut cf_change) = cf_change {
+                // defaultcf -> default
+                let cf_name = &cf_name[..(cf_name.len() - 2)];
                 if let Some(v) = cf_change.remove("block_cache_size") {
+                    // currently we can't modify block_cache_size via set_options_cf
                     self.set_block_cache_size(&cf_name, v.into())?;
                 }
                 let cf_change = config_value_to_string(cf_change.into_iter().collect());
@@ -1172,6 +1175,7 @@ fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
         .collect()
 }
 
+// Convert `ConfigValue` to formated String that can pass to `DB::set_db_options`
 fn config_value_to_string(config_change: Vec<(String, ConfigValue)>) -> Vec<(String, String)> {
     config_change
         .into_iter()
@@ -2314,5 +2318,67 @@ mod tests {
         assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
         let (v1, v2) = new_version((10, small), (20, big));
         assert_eq!(cmp_version(&v1, &v2), Ordering::Less);
+    }
+
+    // TODO: move to tests/config
+    use engine::rocks;
+
+    fn new_engines(cfg: TiKvConfig) -> (Arc<DB>, ConfigController) {
+        let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+        let engine = Arc::new(
+            rocks::util::new_engine_opt(
+                path,
+                DBOptions::new(),
+                vec![
+                    CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+                    CFOptions::new(CF_WRITE, ColumnFamilyOptions::new()),
+                    CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
+                    CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+                ],
+            )
+            .unwrap(),
+        );
+
+        let mut cfg_controller = ConfigController::new(cfg);
+        cfg_controller.register(
+            "rocksdb",
+            Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
+        );
+        (engine, cfg_controller)
+    }
+
+    #[test]
+    fn test_change_rocksdb_config() {
+        let mut cfg = TiKvConfig::default();
+        cfg.rocksdb.max_background_jobs = 2;
+        cfg.rocksdb.defaultcf.disable_auto_compactions = false;
+        cfg.validate().unwrap();
+        let (db, mut cfg_controller) = new_engines(cfg.clone());
+
+        // update max_background_jobs
+        let db_opts = db.get_db_options();
+        assert_eq!(db_opts.get_max_background_jobs(), 2);
+
+        let mut incoming = cfg.clone();
+        incoming.rocksdb.max_background_jobs = 8;
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        assert!(rollback.right().unwrap());
+
+        let db_opts = db.get_db_options();
+        assert_eq!(db_opts.get_max_background_jobs(), 8);
+
+        // update disable_auto_compactions on default cf
+        let cf = db.cf_handle(CF_DEFAULT).unwrap();
+        let cf_opts = db.get_options_cf(cf);
+        assert_eq!(cf_opts.get_disable_auto_compactions(), false);
+
+        let mut incoming = cfg;
+        incoming.rocksdb.defaultcf.disable_auto_compactions = true;
+        let rollback = cfg_controller.update_or_rollback(incoming).unwrap();
+        assert!(rollback.right().unwrap());
+
+        let cf_opts = db.get_options_cf(cf);
+        assert_eq!(cf_opts.get_disable_auto_compactions(), true);
     }
 }
