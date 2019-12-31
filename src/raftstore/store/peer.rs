@@ -134,9 +134,7 @@ impl ReadIndexQueue {
                     *index = read_index;
                 }
             }
-            if self.ready_cnt < i + 1 {
-                self.ready_cnt = i + 1;
-            }
+            self.ready_cnt = cmp::max(self.ready_cnt, i + 1);
         } else {
             error!(
                 "cannot find corresponding read from pending reads";
@@ -289,9 +287,8 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
     pub pending_reads: ReadIndexQueue,
-    // Caculated by election_timeout / 3.
-    pub read_index_retry_timeout: usize,
-    pub read_index_retry_elapsed: usize,
+    // Initialized as election_timeout / 3.
+    pub read_index_retry_countdown: usize,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -395,8 +392,7 @@ impl Peer {
             proposals: Default::default(),
             apply_proposals: vec![],
             pending_reads: Default::default(),
-            read_index_retry_timeout: cfg.raft_election_timeout_ticks / 3,
-            read_index_retry_elapsed: 0,
+            read_index_retry_countdown: cfg.raft_election_timeout_ticks / 3,
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
@@ -1511,6 +1507,7 @@ impl Peer {
             if read.replica_retries > 0 {
                 // It's retried by raftstore internally, put it back into the queue to avoid
                 // potencial full scan when handling read_states next time.
+                // NOTE: `ready_cnt` shouldn't be updated for this.
                 self.pending_reads.reads.push_front(read);
             }
         }
