@@ -2,14 +2,13 @@
 
 use std::collections::HashMap;
 use std::mem;
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
-use tikv::raftstore::store::Callback;
 use tikv::raftstore::Result;
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
@@ -64,7 +63,7 @@ fn test_replica_read_not_applied() {
     read_request.mut_header().set_replica_read(true);
 
     // Read index on follower should be blocked instead of get an old value.
-    let resp1_ch = read_on(read_request.clone(), 3, 3, &mut cluster);
+    let resp1_ch = cluster.sim.wl().read_on_node(read_request.clone(), 3, 3);
     assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
 
     // Unpark all append responses so that the new leader can commit its first entry.
@@ -81,7 +80,7 @@ fn test_replica_read_not_applied() {
     assert_eq!(exp_value, b"v2");
 
     // New read index requests can be resolved quickly.
-    let resp2_ch = read_on(read_request.clone(), 3, 3, &mut cluster);
+    let resp2_ch = cluster.sim.wl().read_on_node(read_request.clone(), 3, 3);
     let resp2 = resp2_ch.recv_timeout(Duration::from_secs(3)).unwrap();
     let exp_value = resp2.get_responses()[0].get_get().get_value();
     assert_eq!(exp_value, b"v2");
@@ -89,9 +88,11 @@ fn test_replica_read_not_applied() {
 
 #[test]
 fn test_replica_read_on_hibernate() {
+    test_util::setup_for_ci();
+
     let mut cluster = new_node_cluster(0, 3);
 
-    configure_for_lease_read(&mut cluster, Some(20), Some(10));
+    configure_for_lease_read(&mut cluster, Some(50), Some(20));
     // let max_lease = Duration::from_secs(2);
     // cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
@@ -104,29 +105,51 @@ fn test_replica_read_on_hibernate() {
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
     let filter = Box::new(
-        RegionPacketFilter::new(1, 2)
+        RegionPacketFilter::new(1, 3)
             .direction(Direction::Recv)
-            .msg_type(MessageType::MsgReadIndex)
+            .msg_type(MessageType::MsgReadIndex),
     );
     cluster.sim.wl().add_recv_filter(3, filter);
     cluster.must_transfer_leader(1, new_peer(3, 3));
-}
 
-fn read_on<T>(
-    mut req: RaftCmdRequest,
-    id: u64,
-    store_id: u64,
-    cluster: &mut Cluster<T>,
-) -> mpsc::Receiver<RaftCmdResponse>
-where
-    T: Simulator,
-{
-    req.mut_header().set_peer(new_peer(store_id, id));
-    let (tx, rx) = mpsc::sync_channel(1);
-    let sim = cluster.sim.wl();
-    let cb = Callback::Read(Box::new(move |resp| drop(tx.send(resp.response))));
-    sim.async_command_on_node(id, req, cb).unwrap();
-    rx
+    let r1 = cluster.get_region(b"k1");
+    let mut read_request = new_request(
+        r1.get_id(),
+        r1.get_region_epoch().clone(),
+        vec![new_get_cmd(b"k1")],
+        true, // read quorum
+    );
+    read_request.mut_header().set_replica_read(true);
+
+    // Read index on follower should be blocked.
+    let resp1_ch = cluster.sim.wl().read_on_node(read_request.clone(), 1, 1);
+    assert!(resp1_ch.recv_timeout(Duration::from_secs(1)).is_err());
+
+    let (tx, rx) = mpsc::sync_channel(1024);
+    for i in 1..=3 {
+        let filter = Box::new(InspectFilter::new(tx.clone()));
+        cluster.sim.wl().add_send_filter(i, filter);
+    }
+
+    // In the loop, peer 1 will keep sending read index messages to 3,
+    // but peer 3 and peer 2 will hibernate later. So, peer 1 will start
+    // a new election finally because it always ticks.
+    let start = Instant::now();
+    loop {
+        if start.elapsed() >= Duration::from_secs(6) {
+            break;
+        }
+        match rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(m) => {
+                let m = m.get_message();
+                if m.get_msg_type() == MessageType::MsgRequestPreVote && m.from == 1 {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => panic!("shouldn't hibernate"),
+            Err(_) => unreachable!(),
+        }
+    }
 }
 
 #[derive(Default)]

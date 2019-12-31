@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 use std::sync::atomic::*;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, SyncSender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{mem, thread, time, usize};
@@ -764,6 +764,27 @@ impl DropMessageFilter {
 impl Filter for DropMessageFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|m| m.get_message().get_msg_type() != self.ty);
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct InspectFilter {
+    ch: Arc<SyncSender<RaftMessage>>,
+}
+
+impl InspectFilter {
+    pub fn new(ch: SyncSender<RaftMessage>) -> Self {
+        let ch = Arc::new(ch);
+        InspectFilter { ch }
+    }
+}
+
+impl Filter for InspectFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for m in msgs {
+            let _ = self.ch.send(m.clone());
+        }
         Ok(())
     }
 }
