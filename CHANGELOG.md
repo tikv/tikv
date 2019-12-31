@@ -8,7 +8,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
   - Modify the update behavior of statistics sampling data from directly updating the row to deleting before inserting, to keep consistency with the update behavior of tidb-server [#6069](https://github.com/tikv/tikv/pull/6096)
 - Raftstore
     - Fix the panic caused by repeatedly sending the `destroy` message to `peerfsm` and `peerfsm` being destroyed multiple times [#6297](https://github.com/tikv/tikv/pull/6297)
-    - Update the default value of `split-region-on-table` from `true` to `false`  to disable splitting Regions by table by default [#6253](https://github.com/tikv/tikv/pull/6253)
+    - Update the default value of `split-region-on-table` from `true` to `false` to disable splitting Regions by table by default [#6253](https://github.com/tikv/tikv/pull/6253)
 - Engine
     - Fix the issue that empty data might be returned because RocksDB iterator errors are not correctly processed in extreme conditions  [#6326](https://github.com/tikv/tikv/pull/6326)
 - Transaction
