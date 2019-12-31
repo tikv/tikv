@@ -287,7 +287,7 @@ mod tests {
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
-            Arc::new(CoprocessorHost::new(tx.clone())),
+            Arc::new(CoprocessorHost::new(tx)),
             cfg,
         );
 

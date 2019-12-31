@@ -812,7 +812,7 @@ fn test_node_split_update_region_right_derive() {
     must_get_equal(&cluster.get_engine(new_leader.get_store_id()), b"k4", b"v4");
 
     // Transfer leadership to another peer.
-    cluster.must_transfer_leader(right.get_id(), new_leader.clone());
+    cluster.must_transfer_leader(right.get_id(), new_leader);
 
     // Make sure the new_leader is in lease.
     cluster.must_put(b"k4", b"v5");

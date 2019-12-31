@@ -817,9 +817,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
 
         let key = Key::from_raw(req.get_key());
         let (cb, f) = paired_future_callback();
-        let res = self
-            .storage
-            .mvcc_by_key(req.take_context(), key.clone(), cb);
+        let res = self.storage.mvcc_by_key(req.take_context(), key, cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {

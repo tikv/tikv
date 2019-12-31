@@ -398,7 +398,7 @@ mod tests {
         let mut cfg = TiKvConfig::default();
         cfg.validate().unwrap();
         let engine = tmp_engine();
-        let (mut cfg_controller, mut worker) = setup(cfg.clone(), engine.clone());
+        let (mut cfg_controller, mut worker) = setup(cfg.clone(), engine);
         let scheduler = worker.scheduler();
 
         let cop_config = cfg.coprocessor.clone();

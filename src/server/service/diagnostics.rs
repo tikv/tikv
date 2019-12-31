@@ -190,7 +190,7 @@ mod sys {
                     let mut pairs = vec![];
                     for (val, name) in parts.zip(&names) {
                         let mut pair = ServerInfoPair::default();
-                        pair.set_key(name.to_string());
+                        pair.set_key((*name).to_string());
                         pair.set_value(val.to_string());
                         pairs.push(pair);
                     }

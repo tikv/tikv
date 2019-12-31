@@ -472,7 +472,7 @@ fn handle_fail_points_request(
             if let Err(e) = fail::cfg(name.to_owned(), &actions) {
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
-                    .body(e.to_string().into())
+                    .body(e.into())
                     .unwrap();
             }
             let body = format!("Added fail point with name: {}, actions: {}", name, actions);
@@ -606,7 +606,7 @@ mod tests {
                 .unwrap();
             let mut req = Request::new(Body::from("panic"));
             *req.method_mut() = Method::PUT;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             let future_1_add_fail_point = client
                 .request(req)
@@ -634,7 +634,7 @@ mod tests {
                 .unwrap();
             let mut req = Request::new(Body::from("panic"));
             *req.method_mut() = Method::PUT;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             let future_2_add_fail_point = client
                 .request(req)
@@ -663,7 +663,7 @@ mod tests {
                 .unwrap();
             let mut req = Request::default();
             *req.method_mut() = Method::GET;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             let future_3_list_fail_points = client
                 .request(req)
@@ -690,7 +690,7 @@ mod tests {
                 .unwrap();
             let mut req = Request::default();
             *req.method_mut() = Method::DELETE;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             let future_4_delete_fail_points = client
                 .request(req)
@@ -739,7 +739,7 @@ mod tests {
                 .unwrap();
             let mut req = Request::new(Body::from("return"));
             *req.method_mut() = Method::PUT;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             client
                 .request(req)
@@ -781,7 +781,7 @@ mod tests {
                 .unwrap();
             let mut req = Request::new(Body::from("panic"));
             *req.method_mut() = Method::PUT;
-            *req.uri_mut() = uri.clone();
+            *req.uri_mut() = uri;
 
             client
                 .request(req)
