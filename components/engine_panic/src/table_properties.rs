@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{TablePropertiesExt, TablePropertiesCollection, Result, Range};
 use crate::engine::PanicEngine;
+use engine_traits::{Range, Result, TablePropertiesCollection, TablePropertiesExt};
 
 impl TablePropertiesExt for PanicEngine {
     type TablePropertiesCollection = PanicTablePropertiesCollection;
@@ -10,9 +10,11 @@ impl TablePropertiesExt for PanicEngine {
         &self,
         cf: &Self::CFHandle,
         ranges: &[Range],
-    ) -> Result<Self::TablePropertiesCollection> { panic!() }
+    ) -> Result<Self::TablePropertiesCollection> {
+        panic!()
+    }
 }
 
 pub struct PanicTablePropertiesCollection;
 
-impl TablePropertiesCollection for PanicTablePropertiesCollection { }
+impl TablePropertiesCollection for PanicTablePropertiesCollection {}
