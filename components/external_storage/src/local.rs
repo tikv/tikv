@@ -126,7 +126,6 @@ mod tests {
         ls.write("", &mut magic_contents.clone().as_slice())
             .unwrap_err();
         // root is not allowed.
-        ls.write("/", &mut magic_contents.clone().as_slice())
-            .unwrap_err();
+        ls.write("/", &mut magic_contents.as_slice()).unwrap_err();
     }
 }

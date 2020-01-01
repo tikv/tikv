@@ -5,6 +5,7 @@ use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_rocks::RocksEngine;
 use futures::Future;
 use kvproto::configpb;
 use kvproto::import_sstpb::SstMeta;
@@ -196,7 +197,7 @@ pub struct PollContext<T, C: 'static> {
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
-    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
+    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
@@ -208,7 +209,7 @@ pub struct PollContext<T, C: 'static> {
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
-    pub snap_mgr: SnapManager,
+    pub snap_mgr: SnapManager<RocksEngine>,
     pub applying_snap_count: Arc<AtomicUsize>,
     pub coprocessor_host: Arc<CoprocessorHost>,
     pub timer: SteadyTimer,
@@ -325,7 +326,7 @@ impl<T: Transport, C> PollContext<T, C> {
         gc_msg.set_region_id(region_id);
         gc_msg.set_from_peer(to_peer.clone());
         gc_msg.set_to_peer(from_peer.clone());
-        gc_msg.set_region_epoch(cur_epoch.clone());
+        gc_msg.set_region_epoch(cur_epoch);
         if let Some(r) = target_region {
             gc_msg.set_merge_target(r);
         } else {
@@ -708,7 +709,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask>,
-    consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
+    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
@@ -718,7 +719,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
-    snap_mgr: SnapManager,
+    snap_mgr: SnapManager<RocksEngine>,
     pub coprocessor_host: Arc<CoprocessorHost>,
     trans: T,
     pd_client: Arc<C>,
@@ -952,7 +953,7 @@ where
 
 struct Workers {
     pd_worker: FutureWorker<PdTask>,
-    consistency_check_worker: Worker<ConsistencyCheckTask>,
+    consistency_check_worker: Worker<ConsistencyCheckTask<RocksEngine>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
@@ -982,7 +983,7 @@ impl RaftBatchSystem {
         engines: Engines,
         trans: T,
         pd_client: Arc<C>,
-        mgr: SnapManager,
+        mgr: SnapManager<RocksEngine>,
         pd_worker: FutureWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost,
@@ -2184,7 +2185,15 @@ mod tests {
         (router, apply_router, system, apply_system)
     }
 
-    fn start_raftstore(cfg: TiKvConfig) -> (ConfigController, RaftRouter, ApplyRouter) {
+    fn start_raftstore(
+        cfg: TiKvConfig,
+    ) -> (
+        ConfigController,
+        RaftRouter,
+        ApplyRouter,
+        BatchSystem<PeerFsm, StoreFsm>,
+        ApplyBatchSystem,
+    ) {
         let (raft_router, apply_router, mut system, mut apply_system) =
             create_batch_system(&cfg.raft_store);
         let (_, engines) = create_tmp_engine("store-config");
@@ -2236,7 +2245,13 @@ mod tests {
         );
         system.spawn("store-config".to_owned(), builder);
         apply_system.spawn("apply-config".to_owned(), apply_poller_builder);
-        (cfg_controller, raft_router, apply_router)
+        (
+            cfg_controller,
+            raft_router,
+            apply_router,
+            system,
+            apply_system,
+        )
     }
 
     fn validate_store<F>(router: &RaftRouter, f: F)
@@ -2275,7 +2290,8 @@ mod tests {
     fn test_update_raftstore_config() {
         let mut config = TiKvConfig::default();
         config.validate().unwrap();
-        let (mut cfg_controller, router, _) = start_raftstore(config.clone());
+        let (mut cfg_controller, router, _, mut system, mut apply_system) =
+            start_raftstore(config.clone());
 
         let incoming = config.clone();
         let raft_store = incoming.raft_store.clone();
@@ -2300,6 +2316,9 @@ mod tests {
         validate_store(&router, move |cfg: &Config| {
             assert_eq!(cfg, &raft_store);
         });
+
+        apply_system.shutdown();
+        system.shutdown();
     }
 
     #[test]
@@ -2307,7 +2326,8 @@ mod tests {
         let mut config = TiKvConfig::default();
         config.raft_store.sync_log = true;
         config.validate().unwrap();
-        let (mut cfg_controller, raft_router, apply_router) = start_raftstore(config.clone());
+        let (mut cfg_controller, raft_router, apply_router, mut system, mut apply_system) =
+            start_raftstore(config.clone());
 
         // register region
         let region_id = 1;
@@ -2339,6 +2359,9 @@ mod tests {
         validate_apply(&apply_router, region_id, |sync_log| {
             assert_eq!(sync_log, false);
         });
+
+        apply_system.shutdown();
+        system.shutdown();
     }
 
     #[test]

@@ -174,7 +174,7 @@ fn test_select_after_lease() {
 
     // Sleep until the leader lease is expired.
     thread::sleep(cluster.cfg.raft_store.raft_store_max_leader_lease.0);
-    let req = DAGSelect::from(&product).build_with(ctx.clone(), &[0]);
+    let req = DAGSelect::from(&product).build_with(ctx, &[0]);
     let mut resp = handle_select(&endpoint, req);
     let spliter = DAGChunkSpliter::new(resp.take_chunks().into(), 3);
     for (row, (id, name, cnt)) in spliter.zip(data) {
@@ -1597,8 +1597,7 @@ fn test_snapshot_failed() {
     let product = ProductTable::new();
     let (_cluster, raft_engine, ctx) = new_raft_engine(1, "");
 
-    let (_, endpoint) =
-        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
+    let (_, endpoint) = init_data_with_engine_and_commit(ctx, raft_engine, &product, &[], true);
 
     // Use an invalid context to make errors.
     let req = DAGSelect::from(&product).build_with(Context::default(), &[0]);
@@ -1622,7 +1621,7 @@ fn test_cache() {
     let (_, endpoint) =
         init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &data, true);
 
-    let req = DAGSelect::from(&product).build_with(ctx.clone(), &[0]);
+    let req = DAGSelect::from(&product).build_with(ctx, &[0]);
     let resp = handle_request(&endpoint, req.clone());
 
     assert!(!resp.get_is_cache_hit());
@@ -1658,7 +1657,7 @@ fn test_cache() {
 
     // Send the request using a non-matching version. The request should be processed.
 
-    let mut req4 = req.clone();
+    let mut req4 = req;
     req4.set_is_cache_enabled(true);
     req4.set_cache_if_match_version(cache_version + 1);
     let resp4 = handle_request(&endpoint, req4);
