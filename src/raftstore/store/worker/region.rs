@@ -325,7 +325,7 @@ impl SnapContext {
         let timer = Instant::now();
         let options = ApplyOptions {
             db: self.engines.kv.c().clone(),
-            region: region.clone(),
+            region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
             coprocessor_host: Arc::clone(&self.coprocessor_host),
@@ -774,7 +774,7 @@ mod tests {
             rocks::util::CFOptions::new("lock", cf_opts.clone()),
             rocks::util::CFOptions::new("raft", cf_opts.clone()),
         ];
-        let raft_cfs_opt = rocks::util::CFOptions::new(CF_DEFAULT, cf_opts.clone());
+        let raft_cfs_opt = rocks::util::CFOptions::new(CF_DEFAULT, cf_opts);
         let engine = get_test_db_for_regions(
             &temp_dir,
             None,

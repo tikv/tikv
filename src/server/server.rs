@@ -123,6 +123,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             .set_resource_quota(mem_quota)
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
+            .keepalive_time(cfg.grpc_keepalive_time.into())
+            .keepalive_timeout(cfg.grpc_keepalive_timeout.into())
             .build_args();
         let builder = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
@@ -410,7 +412,7 @@ mod tests {
         msg.mut_to_peer().set_store_id(2);
         msg.set_region_id(2);
         quick_fail.store(true, Ordering::SeqCst);
-        trans.send(msg.clone()).unwrap();
+        trans.send(msg).unwrap();
         trans.flush();
         resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 2, 0), "{:?}", resp);
