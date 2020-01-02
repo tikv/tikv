@@ -50,7 +50,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         let default_handler = Arc::clone(&handler);
         let mocker = PdMock {
             default_handler,
-            case: case.clone(),
+            case,
         };
         let mut server = Server {
             server: None,

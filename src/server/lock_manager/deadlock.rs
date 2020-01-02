@@ -567,8 +567,12 @@ where
     fn change_role(&mut self, role: Role) {
         if self.inner.borrow().role != role {
             match role {
-                Role::Leader => info!("became the leader of deadlock detector!"; "self_id" => self.store_id),
-                Role::Follower => info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id),
+                Role::Leader => {
+                    info!("became the leader of deadlock detector!"; "self_id" => self.store_id)
+                }
+                Role::Follower => {
+                    info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id)
+                }
             }
         }
         // If the node is a follower, it will receive a `ChangeRole(Follower)` msg when the leader
