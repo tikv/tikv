@@ -1,10 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
-
-// FIXME(shirly): remove following later
-#![allow(dead_code)]
-
 mod binary;
+#[allow(dead_code)]
 mod comparison;
+mod constants;
+mod modifier;
 mod path_expr;
 mod serde;
 // json functions
@@ -23,6 +22,7 @@ pub use self::json_modify::ModifyType;
 pub use self::path_expr::{parse_json_path_expr, PathExpression};
 
 use std::collections::BTreeMap;
+use std::str;
 use tikv_util::is_even;
 
 use super::super::datum::Datum;
@@ -32,8 +32,95 @@ use crate::codec::data_type::{Decimal, Real};
 use crate::codec::mysql;
 use crate::codec::mysql::{Duration, Time, TimeType};
 use crate::expr::EvalContext;
+use codec::number::{NumberCodec, F64_SIZE, I64_SIZE};
+use constants::{JSON_LITERAL_FALSE, JSON_LITERAL_NIL, JSON_LITERAL_TRUE};
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
+
+#[repr(u8)]
+#[derive(Eq, PartialEq, FromPrimitive, Clone, Debug, Copy)]
+pub enum JsonType {
+    Object = 0x01,
+    Array = 0x03,
+    Literal = 0x04,
+    I64 = 0x09,
+    U64 = 0x0a,
+    Double = 0x0b,
+    String = 0x0c,
+}
+
+impl From<u8> for JsonType {
+    fn from(src: u8) -> JsonType {
+        num::FromPrimitive::from_u8(src).unwrap()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct JsonRef<'a> {
+    type_code: JsonType,
+    // Referred value
+    value: &'a [u8],
+}
+
+impl<'a> JsonRef<'a> {
+    pub fn new<T: Into<JsonType>>(type_code: T, value: &[u8]) -> JsonRef<'_> {
+        JsonRef {
+            type_code: type_code.into(),
+            value,
+        }
+    }
+
+    pub fn to_owned(&self) -> Json {
+        Json {
+            type_code: self.type_code,
+            value: self.value.to_owned(),
+        }
+    }
+
+    pub fn get_type(&self) -> JsonType {
+        self.type_code
+    }
+
+    pub fn value(&self) -> &'a [u8] {
+        &self.value
+    }
+
+    pub fn get_u64(&self) -> u64 {
+        NumberCodec::decode_u64_le(self.value())
+    }
+
+    pub fn get_i64(&self) -> i64 {
+        NumberCodec::decode_i64_le(self.value())
+    }
+
+    pub fn get_double(&self) -> f64 {
+        NumberCodec::decode_f64_le(self.value())
+    }
+
+    // Gets the count of Object or Array
+    pub fn get_elem_count(&self) -> u32 {
+        NumberCodec::decode_u32_le(self.value())
+    }
+
+    pub fn get_literal(&self) -> Option<bool> {
+        match self.value()[0] {
+            JSON_LITERAL_FALSE => Some(false),
+            JSON_LITERAL_TRUE => Some(true),
+            _ => None,
+        }
+    }
+
+    // Get string value in bytes
+    pub fn get_str_bytes(&self) -> &[u8] {
+        let val = self.value();
+        let (str_len, len_len) = NumberCodec::try_decode_var_u64(val).unwrap();
+        &val[len_len..len_len + str_len as usize]
+    }
+
+    pub fn get_str(&self) -> &str {
+        str::from_utf8(self.get_str_bytes()).unwrap()
+    }
+}
 
 /// Json implements type json used in tikv, it specifies the following
 /// implementations:
@@ -43,15 +130,115 @@ const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 /// values back from string representation.
 /// 3. sql functions like `JSON_TYPE`, etc
 #[derive(Clone, Debug)]
-pub enum Json {
-    Object(BTreeMap<String, Json>),
-    Array(Vec<Json>),
-    I64(i64),
-    U64(u64),
-    Double(f64),
-    String(String),
-    Boolean(bool),
-    None,
+pub struct Json {
+    type_code: JsonType,
+    pub value: Vec<u8>,
+}
+
+impl Json {
+    pub fn new<T: Into<JsonType>>(tp: T, value: Vec<u8>) -> Self {
+        Self {
+            type_code: tp.into(),
+            value,
+        }
+    }
+
+    pub fn new_empty<T: Into<JsonType>>(tp: T) -> Self {
+        Self {
+            type_code: tp.into(),
+            value: vec![],
+        }
+    }
+
+    pub fn from_slice(src: &[u8]) -> Self {
+        assert!(src.len() > 1);
+        let tp = src[0];
+        let value = Vec::from(&src[1..]);
+        Self {
+            type_code: tp.into(),
+            value,
+        }
+    }
+
+    pub fn from_string(s: String) -> Self {
+        let mut j = Self::new_empty(JsonType::String);
+        j.value.write_json_str(s.as_str()).unwrap();
+        j
+    }
+
+    pub fn from_str_val(s: &str) -> Self {
+        let mut j = Self::new_empty(JsonType::String);
+        j.value.write_json_str(s).unwrap();
+        j
+    }
+
+    pub fn from_bool(b: bool) -> Self {
+        let mut j = Self::new_empty(JsonType::Literal);
+        if b {
+            j.value.write_json_literal(JSON_LITERAL_TRUE).unwrap();
+        } else {
+            j.value.write_json_literal(JSON_LITERAL_FALSE).unwrap();
+        }
+        j
+    }
+
+    pub fn from_u64(v: u64) -> Self {
+        let mut j = Self::new_empty(JsonType::U64);
+        j.value.write_json_u64(v).unwrap();
+        j
+    }
+
+    pub fn from_f64(v: f64) -> Self {
+        let mut j = Self::new_empty(JsonType::Double);
+        j.value.write_json_f64(v).unwrap();
+        j
+    }
+
+    pub fn from_i64(v: i64) -> Self {
+        let mut j = Self::new_empty(JsonType::I64);
+        j.value.write_json_i64(v).unwrap();
+        j
+    }
+
+    pub fn from_ref_array(array: Vec<JsonRef<'_>>) -> Self {
+        let mut j = Self::new_empty(JsonType::Array);
+        j.value.write_json_ref_array(&array).unwrap();
+        j
+    }
+
+    pub fn from_array(array: Vec<Json>) -> Self {
+        let mut j = Self::new_empty(JsonType::Array);
+        j.value.write_json_array(&array).unwrap();
+        j
+    }
+
+    pub fn from_kv_pairs<'a>(keys: Vec<&[u8]>, values: Vec<JsonRef<'a>>) -> Self {
+        let mut j = Self::new_empty(JsonType::Object);
+        j.value
+            .write_json_obj_from_keys_values(keys, values)
+            .unwrap();
+        j
+    }
+
+    pub fn from_object(map: BTreeMap<String, Json>) -> Self {
+        let mut j = Self::new_empty(JsonType::Object);
+        // TODO(fullstop000): use write_json_obj_from_keys_values instead
+        j.value.write_json_obj(&map).unwrap();
+        j
+    }
+
+    pub fn none() -> Self {
+        let mut j = Self::new_empty(JsonType::Literal);
+        j.value.write_json_literal(JSON_LITERAL_NIL).unwrap();
+        j
+    }
+
+    pub fn as_ref(&self) -> JsonRef<'_> {
+        JsonRef {
+            type_code: self.type_code,
+            value: self.value.as_slice(),
+        }
+    }
 }
 
 // https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array
@@ -60,7 +247,7 @@ pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
     for elem in elems {
         a.push(elem.into_json()?);
     }
-    Ok(Json::Array(a))
+    Ok(Json::from_array(a))
 }
 
 // https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-object
@@ -89,20 +276,29 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
             map.insert(key.take().unwrap(), val);
         }
     }
-    Ok(Json::Object(map))
+    Ok(Json::from_object(map))
 }
 
 impl ConvertTo<f64> for Json {
     ///  Keep compatible with TiDB's `ConvertJSONToFloat` function.
     #[inline]
     fn convert(&self, ctx: &mut EvalContext) -> Result<f64> {
-        let d = match *self {
-            Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => 0f64,
-            Json::Boolean(true) => 1f64,
-            Json::I64(d) => d as f64,
-            Json::U64(d) => d as f64,
-            Json::Double(d) => d,
-            Json::String(ref s) => s.as_bytes().convert(ctx)?,
+        let d = match self.as_ref().get_type() {
+            JsonType::Array | JsonType::Object => 0f64,
+            JsonType::U64 => self.as_ref().get_u64() as f64,
+            JsonType::I64 => self.as_ref().get_i64() as f64,
+            JsonType::Double => self.as_ref().get_double(),
+            JsonType::Literal => match self.as_ref().get_literal() {
+                Some(b) => {
+                    if b {
+                        1f64
+                    } else {
+                        0f64
+                    }
+                }
+                None => 0f64,
+            },
+            JsonType::String => self.as_ref().get_str_bytes().convert(ctx)?,
         };
         Ok(d)
     }
@@ -111,7 +307,12 @@ impl ConvertTo<f64> for Json {
 impl ConvertTo<Json> for i64 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
-        Ok(Json::I64(*self))
+        let mut value = vec![0; I64_SIZE];
+        NumberCodec::encode_i64_le(&mut value, *self);
+        Ok(Json {
+            type_code: JsonType::I64,
+            value,
+        })
     }
 }
 
@@ -119,7 +320,12 @@ impl ConvertTo<Json> for f64 {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
         // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
-        Ok(Json::Double(*self))
+        let mut value = vec![0; F64_SIZE];
+        NumberCodec::encode_f64_le(&mut value, *self);
+        Ok(Json {
+            type_code: JsonType::Double,
+            value,
+        })
     }
 }
 
@@ -127,7 +333,12 @@ impl ConvertTo<Json> for Real {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
         // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
-        Ok(Json::Double(self.into_inner()))
+        let mut value = vec![0; F64_SIZE];
+        NumberCodec::encode_f64_le(&mut value, self.into_inner());
+        Ok(Json {
+            type_code: JsonType::Double,
+            value,
+        })
     }
 }
 
@@ -136,7 +347,7 @@ impl ConvertTo<Json> for Decimal {
     fn convert(&self, ctx: &mut EvalContext) -> Result<Json> {
         // FIXME: `select json_type(cast(1111.11 as json))` should return `DECIMAL`, we return `DOUBLE` now.
         let val: f64 = self.convert(ctx)?;
-        Ok(Json::Double(val))
+        val.convert(ctx)
     }
 }
 
@@ -149,7 +360,7 @@ impl ConvertTo<Json> for Time {
         } else {
             *self
         };
-        Ok(Json::String(s.to_string()))
+        Ok(Json::from_string(s.to_string()))
     }
 }
 
@@ -157,7 +368,7 @@ impl ConvertTo<Json> for Duration {
     #[inline]
     fn convert(&self, _: &mut EvalContext) -> Result<Json> {
         let d = self.maximize_fsp();
-        Ok(Json::String(d.to_string()))
+        Ok(Json::from_string(d.to_string()))
     }
 }
 

@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::f64;
 
 use super::super::Result;
-use super::{Json, JsonEncoder, ERR_CONVERT_FAILED};
+use super::{Json, JsonRef, JsonType, ERR_CONVERT_FAILED};
 
 const PRECEDENCE_BLOB: i32 = -1;
 const PRECEDENCE_BIT: i32 = -2;
@@ -19,25 +19,26 @@ const PRECEDENCE_STRING: i32 = -10;
 const PRECEDENCE_NUMBER: i32 = -11;
 const PRECEDENCE_NULL: i32 = -12;
 
-impl Json {
+impl<'a> JsonRef<'a> {
     fn get_precedence(&self) -> i32 {
-        match *self {
-            Json::Object(_) => PRECEDENCE_OBJECT,
-            Json::Array(_) => PRECEDENCE_ARRAY,
-            Json::Boolean(_) => PRECEDENCE_BOOLEAN,
-            Json::None => PRECEDENCE_NULL,
-            Json::I64(_) | Json::U64(_) | Json::Double(_) => PRECEDENCE_NUMBER,
-            Json::String(_) => PRECEDENCE_STRING,
+        match self.get_type() {
+            JsonType::Object => PRECEDENCE_OBJECT,
+            JsonType::Array => PRECEDENCE_ARRAY,
+            JsonType::Literal => self
+                .get_literal()
+                .map_or(PRECEDENCE_NULL, |_| PRECEDENCE_BOOLEAN),
+            JsonType::I64 | JsonType::U64 | JsonType::Double => PRECEDENCE_NUMBER,
+            JsonType::String => PRECEDENCE_STRING,
         }
     }
 
     fn as_f64(&self) -> Result<f64> {
-        match *self {
-            Json::Double(d) => Ok(d),
-            Json::I64(d) => Ok(d as f64),
-            Json::U64(d) => Ok(d as f64),
-            Json::Boolean(_) => {
-                let v = self.as_literal()?;
+        match self.get_type() {
+            JsonType::I64 => Ok(self.get_i64() as f64),
+            JsonType::U64 => Ok(self.get_u64() as f64),
+            JsonType::Double => Ok(self.get_double()),
+            JsonType::Literal => {
+                let v = self.as_literal().unwrap();
                 Ok(v.into())
             }
             _ => Err(invalid_type!(
@@ -49,51 +50,63 @@ impl Json {
     }
 }
 
-impl Eq for Json {}
-impl Ord for Json {
-    fn cmp(&self, right: &Json) -> Ordering {
+impl<'a> Eq for JsonRef<'a> {}
+
+impl<'a> Ord for JsonRef<'a> {
+    fn cmp<'b>(&self, right: &JsonRef<'b>) -> Ordering {
         self.partial_cmp(right).unwrap()
     }
 }
 
-impl PartialEq for Json {
-    fn eq(&self, right: &Json) -> bool {
+impl<'a> PartialEq for JsonRef<'a> {
+    fn eq<'b>(&self, right: &JsonRef<'b>) -> bool {
         self.partial_cmp(right).unwrap() == Ordering::Equal
     }
 }
-
-impl PartialOrd for Json {
-    fn partial_cmp(&self, right: &Json) -> Option<Ordering> {
+impl<'a> PartialOrd for JsonRef<'a> {
+    fn partial_cmp<'b>(&self, right: &JsonRef<'b>) -> Option<Ordering> {
         let precedence_diff = self.get_precedence() - right.get_precedence();
         if precedence_diff == 0 {
-            if self.get_precedence() == PRECEDENCE_NUMBER {
-                let left_data = self.as_f64().unwrap();
-                let right_data = right.as_f64().unwrap();
-                if (left_data - right_data).abs() < f64::EPSILON {
-                    return Some(Ordering::Equal);
-                } else {
-                    return left_data.partial_cmp(&right_data);
-                }
+            if self.get_precedence() == PRECEDENCE_NULL {
+                // for JSON null.
+                return Some(Ordering::Equal);
             }
 
-            return match (self, right) {
-                (&Json::Boolean(left_data), &Json::Boolean(right_data)) => {
-                    left_data.partial_cmp(&right_data)
+            return match self.get_type() {
+                JsonType::I64 | JsonType::U64 | JsonType::Double => {
+                    let left_data = self.as_f64().unwrap();
+                    let right_data = right.as_f64().unwrap();
+                    if (left_data - right_data).abs() < f64::EPSILON {
+                        Some(Ordering::Equal)
+                    } else {
+                        left_data.partial_cmp(&right_data)
+                    }
                 }
-                (&Json::String(ref left_data), &Json::String(ref right_data)) => {
-                    left_data.partial_cmp(right_data)
+                JsonType::Literal => {
+                    // false is less than true.
+                    self.get_literal().partial_cmp(&right.get_literal())
                 }
-                (&Json::Array(ref left_data), &Json::Array(ref right_data)) => {
-                    left_data.partial_cmp(right_data)
+                JsonType::Object => {
+                    // only equal is defined on two json objects.
+                    // larger and smaller are not defined.
+                    self.value().partial_cmp(right.value())
                 }
-                (&Json::Object(_), &Json::Object(_)) => {
-                    let mut left_data = vec![];
-                    let mut right_data = vec![];
-                    left_data.write_json(self).unwrap();
-                    right_data.write_json(right).unwrap();
-                    left_data.partial_cmp(&right_data)
+                JsonType::String => self.get_str_bytes().partial_cmp(right.get_str_bytes()),
+                JsonType::Array => {
+                    let left_count = self.get_elem_count();
+                    let right_count = right.get_elem_count();
+                    let mut i = 0;
+                    while i < left_count && i < right_count {
+                        let left_ele = self.array_get_elem(i as usize);
+                        let right_ele = right.array_get_elem(i as usize);
+                        let res = left_ele.partial_cmp(&right_ele).unwrap();
+                        if res != Ordering::Equal {
+                            return Some(res);
+                        }
+                        i += 1;
+                    }
+                    Some(left_count.cmp(&right_count))
                 }
-                _ => Some(Ordering::Equal),
             };
         }
 
@@ -110,6 +123,25 @@ impl PartialOrd for Json {
         } else {
             Some(Ordering::Less)
         }
+    }
+}
+
+impl Eq for Json {}
+impl Ord for Json {
+    fn cmp(&self, right: &Json) -> Ordering {
+        self.as_ref().partial_cmp(&right.as_ref()).unwrap()
+    }
+}
+
+impl PartialEq for Json {
+    fn eq(&self, right: &Json) -> bool {
+        self.as_ref().partial_cmp(&right.as_ref()).unwrap() == Ordering::Equal
+    }
+}
+
+impl PartialOrd for Json {
+    fn partial_cmp(&self, right: &Json) -> Option<Ordering> {
+        self.as_ref().partial_cmp(&right.as_ref())
     }
 }
 
@@ -134,7 +166,7 @@ mod tests {
             assert!(left < right);
             assert_eq!(left, left);
         }
-        assert_eq!(Json::None, Json::None);
+        assert_eq!(Json::none(), Json::none());
     }
 
     #[test]
@@ -157,6 +189,6 @@ mod tests {
             assert!(left < right);
         }
 
-        assert_eq!(Json::I64(2), Json::Boolean(false));
+        assert_eq!(Json::from_i64(2), Json::from_bool(false));
     }
 }

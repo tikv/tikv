@@ -3,7 +3,7 @@
 use std::{char, str, u32};
 
 use super::super::Result;
-use super::Json;
+use super::{JsonRef, JsonType};
 
 const ESCAPED_UNICODE_BYTES_SIZE: usize = 4;
 
@@ -13,10 +13,14 @@ const CHAR_LINEFEED: char = '\x0A';
 const CHAR_FORMFEED: char = '\x0C';
 const CHAR_CARRIAGE_RETURN: char = '\x0D';
 
-impl Json {
+impl<'a> JsonRef<'a> {
     pub fn unquote(&self) -> Result<String> {
-        match *self {
-            Json::String(ref s) => unquote_string(s),
+        match self.get_type() {
+            JsonType::String => {
+                let bytes = self.get_str_bytes();
+                let s = str::from_utf8(bytes)?;
+                unquote_string(s)
+            }
             _ => Ok(self.to_string()),
         }
     }
@@ -76,6 +80,7 @@ fn decode_escaped_unicode(s: &str) -> Result<char> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Json;
     use super::*;
     use std::collections::BTreeMap;
 
@@ -119,8 +124,8 @@ mod tests {
             ("\\u59", false, None),
         ];
         for (i, (input, no_error, expected)) in test_cases.drain(..).enumerate() {
-            let j = Json::String(String::from(input));
-            let r = j.unquote();
+            let j = Json::from_string(String::from(input));
+            let r = j.as_ref().unquote();
             if no_error {
                 assert!(r.is_ok(), "#{} expect unquote ok but got err {:?}", i, r);
                 let got = r.unwrap();
@@ -137,16 +142,16 @@ mod tests {
 
         // test unquote other json types
         let mut test_cases = vec![
-            Json::Object(BTreeMap::new()),
-            Json::Array(vec![]),
-            Json::I64(2017),
-            Json::Double(19.28),
-            Json::Boolean(true),
-            Json::None,
+            Json::from_object(BTreeMap::new()),
+            Json::from_array(vec![]),
+            Json::from_i64(2017),
+            Json::from_f64(19.28),
+            Json::from_bool(true),
+            Json::none(),
         ];
         for (i, j) in test_cases.drain(..).enumerate() {
             let expected = j.to_string();
-            let r = j.unquote();
+            let r = j.as_ref().unquote();
             assert!(r.is_ok(), "#{} expect unquote ok but got err {:?}", i, r);
             let got = r.unwrap();
             assert_eq!(

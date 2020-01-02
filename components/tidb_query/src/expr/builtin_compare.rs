@@ -530,8 +530,13 @@ mod tests {
         let mut ctx = EvalContext::default();
         let dec = "1.1".parse::<Decimal>().unwrap();
         let s = "你好".as_bytes().to_owned();
+<<<<<<< HEAD
         let dur = Duration::parse(&mut ctx, b"01:00:00", 0).unwrap();
         let json = Json::I64(12);
+=======
+        let dur = Duration::parse(b"01:00:00", 0).unwrap();
+        let json = Json::from_i64(12);
+>>>>>>> initial commit
         let t = Time::parse_datetime(&mut ctx, "2012-12-12 12:00:39", 0, true).unwrap();
         let cases = vec![
             (ScalarFuncSig::CoalesceInt, vec![Datum::Null], Datum::Null),
@@ -607,8 +612,8 @@ mod tests {
         let dec2 = "1.11".parse::<Decimal>().unwrap();
         let dur1 = Duration::parse(&mut ctx, b"01:00:00", 0).unwrap();
         let dur2 = Duration::parse(&mut ctx, b"02:00:00", 0).unwrap();
-        let json1 = Json::I64(11);
-        let json2 = Json::I64(12);
+        let json1 = Json::from_i64(11);
+        let json2 = Json::from_i64(12);
         let s1 = "你好".as_bytes().to_owned();
         let s2 = "你好啊".as_bytes().to_owned();
         let t1 = Time::parse_datetime(&mut ctx, "2012-12-12 12:00:39", 0, false).unwrap();

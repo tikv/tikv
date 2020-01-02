@@ -1,8 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::str;
+
 use super::super::Result;
 use super::path_expr::PathExpression;
-use super::Json;
+use super::{Json, JsonRef, JsonType};
 
 impl Json {
     pub fn keys(&self, path_expr_list: &[PathExpression]) -> Result<Option<Json>> {
@@ -22,19 +24,26 @@ impl Json {
                     path_expr_list
                 ));
             }
-            return Ok(self.extract(path_expr_list).and_then(|j| json_keys(&j)));
+            return Ok(self
+                .extract(path_expr_list)
+                .and_then(|j| json_keys(j.as_ref())));
         }
-        Ok(json_keys(self))
+        Ok(json_keys(self.as_ref()))
     }
 }
 
-fn json_keys(j: &Json) -> Option<Json> {
-    match *j {
-        Json::Object(ref map) => Some(Json::Array(
-            map.keys()
-                .map(|key| Json::String(key.to_string()))
-                .collect(),
-        )),
+fn json_keys(j: JsonRef<'_>) -> Option<Json> {
+    match j.get_type() {
+        JsonType::Object => {
+            let elem_count = j.get_elem_count() as usize;
+            let mut ret = Vec::with_capacity(elem_count);
+            for i in 0..elem_count {
+                ret.push(Json::from_str_val(
+                    str::from_utf8(j.object_get_key(i)).unwrap(),
+                ));
+            }
+            Some(Json::from_array(ret))
+        }
         _ => None,
     }
 }

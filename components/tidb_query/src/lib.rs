@@ -23,6 +23,8 @@
 #[macro_use]
 extern crate failure;
 #[macro_use]
+extern crate num_derive;
+#[macro_use]
 extern crate static_assertions;
 #[macro_use(error, debug, warn)]
 extern crate slog_global;

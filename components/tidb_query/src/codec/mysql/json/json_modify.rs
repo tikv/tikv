@@ -1,9 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::mem;
-
 use super::super::Result;
-use super::path_expr::{PathExpression, PathLeg};
+use super::modifier::BinaryModifier;
+use super::path_expr::PathExpression;
 use super::Json;
 
 /// `ModifyType` is for modify a JSON.
@@ -43,60 +42,14 @@ impl Json {
             }
         }
         for (expr, value) in path_expr_list.iter().zip(values.drain(..)) {
-            self.set_json(&expr.legs, value, mt);
+            let modifier = BinaryModifier::new(self.as_ref());
+            *self = match mt {
+                ModifyType::Insert => modifier.insert(&expr, value)?,
+                ModifyType::Replace => modifier.replace(&expr, value)?,
+                ModifyType::Set => modifier.set(&expr, value)?,
+            };
         }
         Ok(())
-    }
-
-    // `set_json` is used in Json::modify().
-    fn set_json(&mut self, path_legs: &[PathLeg], value: Json, mt: ModifyType) {
-        if path_legs.is_empty() {
-            match mt {
-                ModifyType::Replace | ModifyType::Set => {
-                    *self = value;
-                }
-                _ => {}
-            }
-            return;
-        }
-
-        let (current_leg, sub_path_legs) = (&path_legs[0], &path_legs[1..]);
-
-        if let PathLeg::Index(i) = *current_leg {
-            let base_data = mem::replace(self, Json::None);
-            let index = i as usize;
-            // If `base_data` is not an array, we should autowrap it to be an array.
-            // Then if the length of result array equals to 1, it's unwraped.
-            let (mut array, wrapped) = match base_data {
-                Json::Array(array) => (array, false),
-                _ => (vec![base_data], true),
-            };
-            if array.len() > index {
-                array[index].set_json(sub_path_legs, value, mt);
-            } else if sub_path_legs.is_empty() && mt != ModifyType::Replace {
-                // e.g. json_insert('[1, 2, 3]', '$[3]', "x") => '[1, 2, 3, "x"]'
-                array.push(value);
-            }
-            if (array.len() == 1) && wrapped {
-                *self = array.pop().unwrap();
-            } else {
-                *self = Json::Array(array);
-            }
-            return;
-        }
-
-        if let PathLeg::Key(ref key) = *current_leg {
-            if let Json::Object(ref mut map) = *self {
-                if map.contains_key(key) {
-                    // e.g. json_replace('{"a": 1}', '$.a', 2) => '{"a": 2}'
-                    let v = map.get_mut(key).unwrap();
-                    v.set_json(sub_path_legs, value, mt);
-                } else if sub_path_legs.is_empty() && mt != ModifyType::Replace {
-                    // e.g. json_insert('{"a": 1}', '$.b', 2) => '{"a": 1, "b": 2}'
-                    map.insert(key.clone(), value);
-                }
-            }
-        }
     }
 }
 
@@ -216,6 +169,7 @@ mod tests {
             ),
         ];
         for (i, (json, path, value, mt, expected, success)) in test_cases.drain(..).enumerate() {
+            dbg!(i);
             let j: Result<Json> = json.parse();
             assert!(j.is_ok(), "#{} expect json parse ok but got {:?}", i, j);
             let p = parse_json_path_expr(path);
@@ -236,7 +190,7 @@ mod tests {
             } else {
                 assert!(r.is_err(), "#{} expect modify error but got {:?}", i, r);
             }
-            assert_eq!(e, j, "#{} expect modified json {:?} == {:?}", i, j, e);
+            assert_eq!(e, j, "#{} expect modified json {:?} == {:?}", i, j.to_string(), e.to_string());
         }
     }
 }

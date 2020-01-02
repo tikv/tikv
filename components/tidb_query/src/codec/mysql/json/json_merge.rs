@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Json;
+use super::{Json, JsonType};
+use std::collections::BTreeMap;
 
 impl Json {
     // `merge` is the implementation for JSON_MERGE in mysql
@@ -11,41 +12,63 @@ impl Json {
     // 2. adjacent object are merged to a single object;
     // 3. a scalar value is autowrapped as an array before merge;
     // 4. an adjacent array and object are merged by autowrapping the object as an array.
-    pub fn merge(self, to_merge: Json) -> Json {
-        match (self, to_merge) {
-            // rule 1
-            (Json::Array(mut array), Json::Array(mut sub_array)) => {
-                array.append(&mut sub_array);
-                Json::Array(array)
-            }
-            // rule 3, 4
-            (Json::Array(mut array), suffix) => {
-                array.push(suffix);
-                Json::Array(array)
-            }
-            // rule 2
-            (Json::Object(mut obj), Json::Object(sub_obj)) => {
-                for (sub_key, sub_value) in sub_obj {
-                    let v = if let Some(value) = obj.remove(&sub_key) {
-                        value.merge(sub_value)
-                    } else {
-                        sub_value
-                    };
-                    obj.insert(sub_key, v);
+    pub fn merge(mut bjs: Vec<Json>) -> Json {
+        let mut result = vec![];
+        let mut objects = vec![];
+        for j in bjs.drain(..) {
+            if j.as_ref().get_type() != JsonType::Object {
+                if objects.len() == 1 {
+                    result.append(&mut objects);
+                } else if objects.len() > 1 {
+                    result.push(merge_binary_object(&mut objects));
                 }
-                Json::Object(obj)
+                result.push(j);
+            } else {
+                objects.push(j);
             }
-            // rule 4
-            (obj, Json::Array(mut sub_array)) => {
-                let mut array = Vec::with_capacity(sub_array.len() + 1);
-                array.push(obj);
-                array.append(&mut sub_array);
-                Json::Array(array)
+        }
+        if !objects.is_empty() {
+            result.push(merge_binary_object(&mut objects));
+        }
+        if result.len() == 1 {
+            return result.pop().unwrap();
+        }
+        merge_binary_array(result)
+    }
+}
+
+fn merge_binary_array(elems: Vec<Json>) -> Json {
+    let mut buf = vec![];
+    for j in elems {
+        if j.as_ref().get_type() != JsonType::Array {
+            buf.push(j)
+        } else {
+            let child_count = j.as_ref().get_elem_count() as usize;
+            for i in 0..child_count {
+                // TODO: try to remove to_owned()
+                buf.push(j.as_ref().array_get_elem(i).to_owned());
             }
-            // rule 3, 4
-            (obj, suffix) => Json::Array(vec![obj, suffix]),
         }
     }
+    Json::from_array(buf)
+}
+
+fn merge_binary_object(objects: &mut Vec<Json>) -> Json {
+    let mut kv_map = BTreeMap::new();
+    for j in objects.drain(..) {
+        let elem_count = j.as_ref().get_elem_count() as usize;
+        for i in 0..elem_count {
+            let key = j.as_ref().object_get_key(i);
+            let val = j.as_ref().object_get_val(i);
+            if let Some(old) = kv_map.remove(&String::from_utf8(key.to_owned()).unwrap()) {
+                let new = Json::merge(vec![old, val.to_owned()]);
+                kv_map.insert(String::from_utf8(key.to_owned()).unwrap(), new);
+            } else {
+                kv_map.insert(String::from_utf8(key.to_owned()).unwrap(), val.to_owned());
+            }
+        }
+    }
+    Json::from_object(kv_map)
 }
 
 #[cfg(test)]
@@ -103,12 +126,14 @@ mod tests {
             ],
         ];
         for case in test_cases {
-            let base: Json = case[0].parse().unwrap();
-            let res = case[1..case.len() - 1]
-                .iter()
-                .map(|s| s.parse().unwrap())
-                .fold(base, Json::merge);
-            let expect: Json = case[case.len() - 1].parse().unwrap();
+            let (to_be_merged, expect) = case.split_at(case.len() - 1);
+            let res = Json::merge(
+                to_be_merged
+                    .iter()
+                    .map(|s| s.parse().unwrap())
+                    .collect::<Vec<Json>>(),
+            );
+            let expect: Json = expect[0].parse().unwrap();
             assert_eq!(res, expect);
         }
     }

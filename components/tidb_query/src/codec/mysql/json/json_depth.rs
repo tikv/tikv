@@ -1,29 +1,42 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Json;
+use super::{Json, JsonRef, JsonType};
 
 impl Json {
     pub fn depth(&self) -> i64 {
-        match &self {
-            Json::Object(_) | Json::Array(_) => depth_json(self),
+        match self.as_ref().get_type() {
+            JsonType::Object | JsonType::Array => depth_json(self.as_ref()),
             _ => 1,
         }
     }
 }
 
-pub fn depth_json(j: &Json) -> i64 {
-    (match *j {
-        Json::Array(ref array) => array
-            .iter()
-            .map(|child| depth_json(child))
-            .max()
-            .unwrap_or(0),
-
-        Json::Object(ref map) => map
-            .iter()
-            .map(|(_, value)| depth_json(value))
-            .max()
-            .unwrap_or(0),
+pub fn depth_json(j: JsonRef<'_>) -> i64 {
+    (match j.get_type() {
+        JsonType::Object => {
+            let length = j.get_elem_count() as usize;
+            let mut max_depth = 0;
+            for i in 0..length {
+                let val = j.object_get_val(i);
+                let depth = depth_json(val);
+                if depth > max_depth {
+                    max_depth = depth;
+                }
+            }
+            max_depth
+        }
+        JsonType::Array => {
+            let length = j.get_elem_count() as usize;
+            let mut max_depth = 0;
+            for i in 0..length {
+                let val = j.array_get_elem(i);
+                let depth = depth_json(val);
+                if depth > max_depth {
+                    max_depth = depth;
+                }
+            }
+            max_depth
+        }
         _ => 0,
     } + 1)
 }

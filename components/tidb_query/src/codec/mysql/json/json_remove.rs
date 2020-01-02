@@ -1,7 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::super::Result;
-use super::path_expr::{PathExpression, PathLeg};
+use super::modifier::BinaryModifier;
+use super::path_expr::PathExpression;
 use super::Json;
 
 impl Json {
@@ -17,40 +18,10 @@ impl Json {
         }
 
         for expr in path_expr_list {
-            self.remove_path(&expr.legs);
+            let modifier = BinaryModifier::new(self.as_ref());
+            *self = modifier.remove(&expr.legs)?;
         }
         Ok(())
-    }
-
-    fn remove_path(&mut self, path_legs: &[PathLeg]) {
-        let (current_leg, sub_path_legs) = path_legs.split_first().unwrap();
-
-        if let PathLeg::Index(index) = *current_leg {
-            if let Json::Array(ref mut array) = *self {
-                let index = index as usize;
-                if array.len() <= index {
-                    return;
-                }
-                if sub_path_legs.is_empty() {
-                    array.remove(index);
-                    return;
-                }
-                array[index].remove_path(sub_path_legs);
-                return;
-            }
-        }
-
-        if let PathLeg::Key(ref key) = *current_leg {
-            if let Json::Object(ref mut obj) = *self {
-                if sub_path_legs.is_empty() {
-                    obj.remove(key);
-                    return;
-                }
-                if let Some(sub_obj) = obj.get_mut(key) {
-                    sub_obj.remove_path(sub_path_legs);
-                }
-            }
-        }
     }
 }
 

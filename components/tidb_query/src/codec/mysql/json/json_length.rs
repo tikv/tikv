@@ -1,19 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::path_expr::PathExpression;
-use super::Json;
+use super::{Json, JsonType};
 
 impl Json {
     pub fn len(&self) -> Option<i64> {
-        match self {
-            Json::Array(array) => Some(array.len() as i64),
-            Json::Object(obj) => Some(obj.len() as i64),
-            Json::None
-            | Json::String(_)
-            | Json::Boolean(_)
-            | Json::U64(_)
-            | Json::I64(_)
-            | Json::Double(_) => Some(1),
+        match self.as_ref().get_type() {
+            JsonType::Array | JsonType::Object => Some(i64::from(self.as_ref().get_elem_count())),
+            JsonType::Literal => self.as_ref().get_literal().map(|_| 1),
+            _ => Some(1),
         }
     }
 
@@ -30,10 +25,10 @@ impl Json {
         if path_expr_list.len() == 1 && path_expr_list[0].contains_any_asterisk() {
             return None;
         }
-        if let Some(json) = self.extract(path_expr_list) {
-            return json.len();
-        }
-        None
+        self.extract(path_expr_list)
+            .or_else(|| Some(Json::none()))
+            .unwrap()
+            .len()
     }
 }
 

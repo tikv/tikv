@@ -35,7 +35,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
-        j.unquote()
+        j.as_ref()
+            .as_ref()
+            .unquote()
             .map_err(Error::from)
             .map(|s| Some(Cow::Owned(s.into_bytes())))
     }
@@ -51,7 +53,7 @@ impl ScalarFunc {
             .iter()
             .map(|e| parser.get_json(ctx, e))
             .collect());
-        Ok(Some(Cow::Owned(Json::Array(elems))))
+        Ok(Some(Cow::Owned(Json::from_array(elems))))
     }
 
     pub fn json_object<'a, 'b: 'a>(
@@ -66,7 +68,7 @@ impl ScalarFunc {
             let val = try_opt!(parser.get_json(ctx, &chunk[1]));
             pairs.insert(key, val);
         }
-        Ok(Some(Cow::Owned(Json::Object(pairs))))
+        Ok(Some(Cow::Owned(Json::from_object(pairs))))
     }
 
     pub fn json_extract<'a, 'b: 'a>(
@@ -141,12 +143,14 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let parser = JsonFuncArgsParser::new(row);
-        let mut head = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
+        let mut jsons = vec![];
+        let head = try_opt!(self.children[0].eval_json(ctx, row)).into_owned();
+        jsons.push(head);
         for e in &self.children[1..] {
-            let suffix = try_opt!(parser.get_json_not_none(ctx, e));
-            head = head.merge(suffix);
+            let j = try_opt!(parser.get_json_not_none(ctx, e));
+            jsons.push(j);
         }
-        Ok(Some(Cow::Owned(head)))
+        Ok(Some(Cow::Owned(Json::merge(jsons))))
     }
 
     fn json_modify<'a, 'b: 'a>(
@@ -200,7 +204,7 @@ impl<'a> JsonFuncArgsParser<'a> {
     fn get_json(&self, ctx: &mut EvalContext, e: &Expression) -> Result<Option<Json>> {
         let j = e
             .eval_json(ctx, self.row)?
-            .map_or(Json::None, Cow::into_owned);
+            .map_or(Json::none(), Cow::into_owned);
         Ok(Some(j))
     }
 
@@ -457,7 +461,7 @@ mod tests {
                     if parse {
                         Datum::Json(s.parse().unwrap())
                     } else {
-                        Datum::Json(Json::String(s.to_owned()))
+                        Datum::Json(Json::from_string(s.to_owned()))
                     }
                 }
             };
@@ -487,9 +491,9 @@ mod tests {
                     Datum::Bytes(b"1".to_vec()),
                     Datum::Null,
                     Datum::Bytes(b"2".to_vec()),
-                    Datum::Json(Json::String("sdf".to_owned())),
+                    Datum::Json(Json::from_string("sdf".to_owned())),
                     Datum::Bytes(b"k1".to_vec()),
-                    Datum::Json(Json::String("v1".to_owned())),
+                    Datum::Json(Json::from_string("v1".to_owned())),
                 ],
                 Datum::Json(r#"{"1":null,"2":"sdf","k1":"v1"}"#.parse().unwrap()),
             ),
@@ -517,9 +521,9 @@ mod tests {
                     Datum::Json("1".parse().unwrap()),
                     Datum::Null,
                     Datum::Json("2".parse().unwrap()),
-                    Datum::Json(Json::String("sdf".to_owned())),
-                    Datum::Json(Json::String("k1".to_owned())),
-                    Datum::Json(Json::String("v1".to_owned())),
+                    Datum::Json(Json::from_string("sdf".to_owned())),
+                    Datum::Json(Json::from_string("k1".to_owned())),
+                    Datum::Json(Json::from_string("v1".to_owned())),
                 ],
                 Datum::Json(r#"[1, null, 2, "sdf", "k1", "v1"]"#.parse().unwrap()),
             ),
@@ -545,27 +549,27 @@ mod tests {
             (
                 ScalarFuncSig::JsonSetSig,
                 vec![
-                    Datum::Json(Json::I64(9)),
+                    Datum::Json(Json::from_i64(9)),
                     Datum::Bytes(b"$[1]".to_vec()),
-                    Datum::Json(Json::U64(3)),
+                    Datum::Json(Json::from_u64(3)),
                 ],
                 Datum::Json(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonInsertSig,
                 vec![
-                    Datum::Json(Json::I64(9)),
+                    Datum::Json(Json::from_i64(9)),
                     Datum::Bytes(b"$[1]".to_vec()),
-                    Datum::Json(Json::U64(3)),
+                    Datum::Json(Json::from_u64(3)),
                 ],
                 Datum::Json(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonReplaceSig,
                 vec![
-                    Datum::Json(Json::I64(9)),
+                    Datum::Json(Json::from_i64(9)),
                     Datum::Bytes(b"$[1]".to_vec()),
-                    Datum::Json(Json::U64(3)),
+                    Datum::Json(Json::from_u64(3)),
                 ],
                 Datum::Json(r#"9"#.parse().unwrap()),
             ),

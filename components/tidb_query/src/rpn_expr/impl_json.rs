@@ -46,7 +46,7 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     assert!(args.len() >= 2);
     // base Json argument
     let base: &Option<Json> = args[0].as_ref();
-    let mut base = base.as_ref().map_or(Json::None, |json| json.to_owned());
+    let mut base = base.as_ref().map_or(Json::none(), |json| json.to_owned());
 
     let buf_size = args.len() / 2;
 
@@ -59,7 +59,7 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
 
         path_expr_list.push(try_opt!(parse_json_path(path)));
 
-        let value = value.as_ref().map_or(Json::None, |json| json.to_owned());
+        let value = value.as_ref().map_or(Json::none(), |json| json.to_owned());
         values.push(value);
     }
     base.modify(&path_expr_list, values, mt)?;
@@ -87,10 +87,10 @@ fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
 #[rpn_fn(varg)]
 #[inline]
 fn json_array(args: &[&Option<Json>]) -> Result<Option<Json>> {
-    Ok(Some(Json::Array(
+    Ok(Some(Json::from_array(
         args.iter()
             .map(|json| match json {
-                None => Json::None,
+                None => Json::none(),
                 Some(json) => json.to_owned(),
             })
             .collect(),
@@ -129,13 +129,13 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
 
         let value: &Option<Json> = chunk[1].as_ref();
         let value = match value {
-            None => Json::None,
+            None => Json::none(),
             Some(v) => v.to_owned(),
         };
 
         pairs.insert(key, value);
     }
-    Ok(Some(Json::Object(pairs)))
+    Ok(Some(Json::from_object(pairs)))
 }
 
 // According to mysql 5.7,
@@ -144,25 +144,24 @@ fn json_object(raw_args: &[ScalarValueRef]) -> Result<Option<Json>> {
 #[inline]
 pub fn json_merge(args: &[&Option<Json>]) -> Result<Option<Json>> {
     // min_args = 2, so it's ok to call args[0]
-    let base_json = match args[0] {
-        None => return Ok(None),
-        Some(json) => json.to_owned(),
-    };
-
-    Ok(args[1..]
-        .iter()
-        .try_fold(base_json, move |base, json_to_merge| {
-            json_to_merge
-                .as_ref()
-                .map(|json| base.merge(json.to_owned()))
-        }))
+    if args[0].is_none() {
+        return Ok(None);
+    }
+    Ok(Some(Json::merge(
+        args.iter()
+            .map(|json| match json {
+                None => Json::none(),
+                Some(json) => json.to_owned(),
+            })
+            .collect(),
+    )))
 }
 
 #[rpn_fn]
 #[inline]
 fn json_unquote(arg: &Option<Json>) -> Result<Option<Bytes>> {
     arg.as_ref().map_or(Ok(None), |json_arg| {
-        Ok(Some(Bytes::from(json_arg.unquote()?)))
+        Ok(Some(Bytes::from(json_arg.as_ref().unquote()?)))
     })
 }
 
@@ -353,27 +352,27 @@ mod tests {
             (
                 ScalarFuncSig::JsonSetSig,
                 vec![
-                    Some(Json::I64(9)).into(),
+                    Some(Json::from_i64(9)).into(),
                     Some(b"$[1]".to_vec()).into(),
-                    Some(Json::U64(3)).into(),
+                    Some(Json::from_u64(3)).into(),
                 ],
                 Some(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonInsertSig,
                 vec![
-                    Some(Json::I64(9)).into(),
+                    Some(Json::from_i64(9)).into(),
                     Some(b"$[1]".to_vec()).into(),
-                    Some(Json::U64(3)).into(),
+                    Some(Json::from_u64(3)).into(),
                 ],
                 Some(r#"[9,3]"#.parse().unwrap()),
             ),
             (
                 ScalarFuncSig::JsonReplaceSig,
                 vec![
-                    Some(Json::I64(9)).into(),
+                    Some(Json::from_i64(9)).into(),
                     Some(b"$[1]".to_vec()).into(),
-                    Some(Json::U64(3)).into(),
+                    Some(Json::from_u64(3)).into(),
                 ],
                 Some(r#"9"#.parse().unwrap()),
             ),
@@ -538,7 +537,7 @@ mod tests {
                 if parse {
                     input.parse().unwrap()
                 } else {
-                    Json::String(input.to_string())
+                    Json::from_string(input.to_string())
                 }
             });
             let expect_output = expect_output.map(Bytes::from);

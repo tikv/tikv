@@ -26,6 +26,7 @@ match_template = { path = "../match_template" }
 nom = "5.1.0"
 num = { version = "0.2", default-features = false }
 num-traits = "0.2"
+num-derive = "0.3"
 openssl = { version = "0.10" }
 ordered-float = "1.0"
 protobuf = "2"

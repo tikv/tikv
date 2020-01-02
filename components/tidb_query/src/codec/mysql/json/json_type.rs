@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::Json;
+use super::{Json, JsonType};
 
 const JSON_TYPE_BOOLEAN: &[u8] = b"BOOLEAN";
 const JSON_TYPE_NONE: &[u8] = b"NULL";
@@ -15,15 +15,17 @@ impl Json {
     // json_type is the implementation for
     // https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-type
     pub fn json_type(&self) -> &'static [u8] {
-        match *self {
-            Json::Object(_) => JSON_TYPE_OBJECT,
-            Json::Array(_) => JSON_TYPE_ARRAY,
-            Json::I64(_) => JSON_TYPE_INTEGER,
-            Json::U64(_) => JSON_TYPE_UNSIGNED_INTEGER,
-            Json::Double(_) => JSON_TYPE_DOUBLE,
-            Json::String(_) => JSON_TYPE_STRING,
-            Json::Boolean(_) => JSON_TYPE_BOOLEAN,
-            Json::None => JSON_TYPE_NONE,
+        match self.as_ref().get_type() {
+            JsonType::Object => JSON_TYPE_OBJECT,
+            JsonType::Array => JSON_TYPE_ARRAY,
+            JsonType::I64 => JSON_TYPE_INTEGER,
+            JsonType::U64 => JSON_TYPE_UNSIGNED_INTEGER,
+            JsonType::Double => JSON_TYPE_DOUBLE,
+            JsonType::String => JSON_TYPE_STRING,
+            JsonType::Literal => match self.as_ref().get_literal() {
+                Some(_) => JSON_TYPE_BOOLEAN,
+                None => JSON_TYPE_NONE,
+            },
         }
     }
 }
