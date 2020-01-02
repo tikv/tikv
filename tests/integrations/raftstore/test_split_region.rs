@@ -759,7 +759,7 @@ fn test_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let max_key = put_till_size(cluster, 9 * item_len, &mut range);
     let target = pd_client.get_region(&max_key).unwrap();
     assert_eq!(region, target);
-    pd_client.must_split_region(target, pdpb::CheckPolicy::Scan, vec![]);
+    pd_client.must_split_region(target, pdpb::CheckPolicy::SCAN, vec![]);
 
     let left = pd_client.get_region(b"").unwrap();
     let right = pd_client.get_region(&max_key).unwrap();
