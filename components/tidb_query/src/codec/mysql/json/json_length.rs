@@ -25,10 +25,7 @@ impl Json {
         if path_expr_list.len() == 1 && path_expr_list[0].contains_any_asterisk() {
             return None;
         }
-        self.extract(path_expr_list)
-            .or_else(|| Some(Json::none()))
-            .unwrap()
-            .len()
+        self.extract(path_expr_list).unwrap_or(Json::none()).len()
     }
 }
 
