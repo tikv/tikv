@@ -1142,6 +1142,7 @@ impl DBConfigManger {
 
 impl ConfigManager for DBConfigManger {
     fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
+        let change_str = format!("{:?}", change);
         let mut change: Vec<(String, ConfigValue)> = change.into_iter().collect();
         let cf_config = change.drain_filter(|(name, _)| name.ends_with("cf"));
         for (cf_name, cf_change) in cf_config {
@@ -1160,7 +1161,11 @@ impl ConfigManager for DBConfigManger {
         let change = config_value_to_string(change);
         let change_slice = config_to_slice(&change);
         self.set_db_config(&change_slice)?;
-
+        info!(
+            "rocksdb config changed";
+            "db" => ?self.db_type,
+            "change" => change_str
+        );
         Ok(())
     }
 }
