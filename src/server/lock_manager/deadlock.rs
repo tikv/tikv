@@ -568,10 +568,12 @@ where
         if self.inner.borrow().role != role {
             match role {
                 Role::Leader => {
-                    info!("became the leader of deadlock detector!"; "self_id" => self.store_id)
+                    info!("became the leader of deadlock detector!"; "self_id" => self.store_id);
+                    DETECTOR_LEADER_GAUGE.set(1);
                 }
                 Role::Follower => {
-                    info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id)
+                    info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id);
+                    DETECTOR_LEADER_GAUGE.set(0);
                 }
             }
         }
