@@ -7,7 +7,6 @@ impl Json {
     pub fn len(&self) -> Option<i64> {
         match self.as_ref().get_type() {
             JsonType::Array | JsonType::Object => Some(i64::from(self.as_ref().get_elem_count())),
-            JsonType::Literal => self.as_ref().get_literal().map(|_| 1),
             _ => Some(1),
         }
     }
@@ -25,7 +24,7 @@ impl Json {
         if path_expr_list.len() == 1 && path_expr_list[0].contains_any_asterisk() {
             return None;
         }
-        self.extract(path_expr_list).unwrap_or(Json::none()).len()
+        self.extract(path_expr_list).and_then(|j| j.len())
     }
 }
 
