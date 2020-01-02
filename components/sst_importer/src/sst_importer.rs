@@ -1072,7 +1072,7 @@ mod tests {
         for cf in &[CF_DEFAULT, CF_WRITE] {
             // creates a sample SST file.
             let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
-            meta.set_cf_name(cf.to_string());
+            meta.set_cf_name((*cf).to_string());
 
             // performs the download.
             let importer_dir = tempfile::tempdir().unwrap();
