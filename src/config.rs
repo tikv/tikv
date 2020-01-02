@@ -1396,16 +1396,16 @@ impl Default for CoprReadPoolConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
-    pub use_yatp: bool,
-    pub yatp: YatpConfig,
+    pub unify_read_pool: bool,
+    pub unified: YatpConfig,
     pub storage: StorageReadPoolConfig,
     pub coprocessor: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
-        if self.use_yatp {
-            self.yatp.validate()?;
+        if self.unify_read_pool {
+            self.unified.validate()?;
         } else {
             self.storage.validate()?;
             self.coprocessor.validate()?;
@@ -1418,8 +1418,8 @@ impl Default for ReadPoolConfig {
     fn default() -> ReadPoolConfig {
         ReadPoolConfig {
             // Switch to true temporarily for benchmark
-            use_yatp: true,
-            yatp: Default::default(),
+            unify_read_pool: true,
+            unified: Default::default(),
             storage: Default::default(),
             coprocessor: Default::default(),
         }
@@ -1431,29 +1431,29 @@ mod readpool_tests {
     use super::*;
 
     #[test]
-    fn test_yatp_disabled() {
+    fn test_unified_disabled() {
         // Allow invalid yatp config when yatp is not used.
-        let yatp = YatpConfig {
+        let unified = YatpConfig {
             min_thread_count: 0,
             max_thread_count: 0,
             max_inplace_spin: 0,
         };
-        assert!(yatp.validate().is_err());
+        assert!(unified.validate().is_err());
         let storage = StorageReadPoolConfig::default();
         assert!(storage.validate().is_ok());
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
         let cfg = ReadPoolConfig {
-            use_yatp: false,
-            yatp,
+            unify_read_pool: false,
+            unified,
             storage,
             coprocessor,
         };
         assert!(cfg.validate().is_ok());
 
         // Storage and coprocessor config must be valid when yatp is not used.
-        let yatp = YatpConfig::default();
-        assert!(yatp.validate().is_ok());
+        let unified = YatpConfig::default();
+        assert!(unified.validate().is_ok());
         let storage = StorageReadPoolConfig {
             high_concurrency: 0,
             ..Default::default()
@@ -1461,8 +1461,8 @@ mod readpool_tests {
         assert!(storage.validate().is_err());
         let coprocessor = CoprReadPoolConfig::default();
         let invalid_cfg = ReadPoolConfig {
-            use_yatp: false,
-            yatp,
+            unify_read_pool: false,
+            unified,
             storage,
             coprocessor,
         };
@@ -1470,10 +1470,10 @@ mod readpool_tests {
     }
 
     #[test]
-    fn test_yatp_enabled() {
+    fn test_unified_enabled() {
         // Allow invalid storage and coprocessor config when yatp is used.
-        let yatp = YatpConfig::default();
-        assert!(yatp.validate().is_ok());
+        let unified = YatpConfig::default();
+        assert!(unified.validate().is_ok());
         let storage = StorageReadPoolConfig {
             high_concurrency: 0,
             ..Default::default()
@@ -1485,27 +1485,27 @@ mod readpool_tests {
         };
         assert!(coprocessor.validate().is_err());
         let cfg = ReadPoolConfig {
-            use_yatp: true,
-            yatp,
+            unify_read_pool: true,
+            unified,
             storage,
             coprocessor,
         };
         assert!(cfg.validate().is_ok());
 
         // Yatp config must be valid when yatp is used.
-        let yatp = YatpConfig {
+        let unified = YatpConfig {
             min_thread_count: 0,
             max_thread_count: 0,
             max_inplace_spin: 0,
         };
-        assert!(yatp.validate().is_err());
+        assert!(unified.validate().is_err());
         let storage = StorageReadPoolConfig::default();
         assert!(storage.validate().is_ok());
         let coprocessor = CoprReadPoolConfig::default();
         assert!(coprocessor.validate().is_ok());
         let cfg = ReadPoolConfig {
-            use_yatp: true,
-            yatp,
+            unify_read_pool: true,
+            unified,
             storage,
             coprocessor,
         };

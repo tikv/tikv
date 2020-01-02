@@ -4,9 +4,9 @@ log-rotation-timespan = "1d"
 panic-when-unexpected-key-or-data = true
 
 [readpool]
-use-yatp = true
+unify-read-pool = true
 
-[readpool.yatp]
+[readpool.unified]
 min-thread-count = 5
 max-thread-count = 10
 max-inplace-spin = 3
