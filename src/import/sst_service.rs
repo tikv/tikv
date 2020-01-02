@@ -2,9 +2,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use engine::name_to_cf;
 use engine::rocks::util::{compact_files_in_range, io_limiter::IOLimiter};
 use engine::rocks::{SstWriterBuilder, DB};
-use engine::name_to_cf;
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
