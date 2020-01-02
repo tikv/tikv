@@ -771,7 +771,7 @@ fn test_split_region<T: Simulator>(cluster: &mut Cluster<T>) {
     let region = pd_client.get_region(b"x").unwrap();
     pd_client.must_split_region(
         region,
-        pdpb::CheckPolicy::Usekey,
+        pdpb::CheckPolicy::USEKEY,
         vec![b"x1".to_vec(), b"y2".to_vec()],
     );
     let x1 = pd_client.get_region(b"x1").unwrap();

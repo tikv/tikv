@@ -822,7 +822,7 @@ impl TestPdClient {
         keys: Vec<Vec<u8>>,
     ) {
         let expect_region_count = self.get_regions_number()
-            + if policy == pdpb::CheckPolicy::Usekey {
+            + if policy == pdpb::CheckPolicy::USEKEY {
                 keys.len()
             } else {
                 1
