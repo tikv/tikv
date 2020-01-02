@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
-use std::{cmp, mem, u64};
+use std::{cmp, mem, u64, usize};
 
 use engine::rocks::{WriteBatch, WriteOptions};
 use engine::Engines;
@@ -25,8 +25,8 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
-    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
-    NO_LIMIT,
+    self, Progress, ProgressState, RawNode, ReadState, Ready, SnapshotStatus, StateRole,
+    INVALID_INDEX, NO_LIMIT,
 };
 use time::Timespec;
 use uuid::Uuid;
@@ -106,6 +106,8 @@ impl Drop for ReadIndexRequest {
 struct ReadIndexQueue {
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
+    // map[uuid] -> offset in `reads`.
+    contexts: HashMap<Uuid, usize>,
 }
 
 impl ReadIndexQueue {
@@ -119,24 +121,46 @@ impl ReadIndexQueue {
     }
 
     /// update the read index of the requests that before the specified id.
-    fn advance(&mut self, id: &[u8], read_index: u64) {
-        if let Some(i) = self.reads.iter().position(|x| x.binary_id() == id) {
-            for pos in 0..=i {
-                let req = &mut self.reads[pos];
-                let index = req.read_index.get_or_insert(read_index);
-                if *index > read_index {
-                    *index = read_index;
+    fn advance_replica_reads(&mut self, states: &[ReadState]) {
+        if !states.is_empty() {
+            let (mut min_offset, mut max_offset) = (usize::MAX, 0);
+            for state in states {
+                let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
+                if let Some(offset) = self.contexts.remove(&uuid) {
+                    self.reads[offset].read_index = Some(state.index);
+                    min_offset = cmp::min(min_offset, offset);
+                    max_offset = cmp::max(max_offset, offset);
+                    continue;
+                }
+                error!(
+                    "cannot find corresponding read from pending reads";
+                    "uuid" => ?uuid, "read-index" => state.index,
+                );
+            }
+            self.fold(min_offset, max_offset);
+        }
+    }
+
+    fn fold(&mut self, min_offset: usize, max_offset: usize) {
+        let mut r_offset = max_offset;
+        loop {
+            let r_idx = self.reads[r_offset].read_index.unwrap();
+            for l_offset in (0..r_offset).rev() {
+                let l_idx = self.reads[l_offset].read_index.get_or_insert(r_idx);
+                match (*l_idx).cmp(&r_idx) {
+                    cmp::Ordering::Greater => *l_idx = r_idx,
+                    cmp::Ordering::Equal => continue,
+                    cmp::Ordering::Less => {
+                        r_offset = l_offset;
+                        break;
+                    }
                 }
             }
-            if self.ready_cnt < i + 1 {
-                self.ready_cnt = i + 1;
+            if r_offset < cmp::min(self.ready_cnt, min_offset + 1) {
+                break;
             }
-        } else {
-            error!(
-                "cannot find corresponding read from pending reads";
-                "id"=>?id, "read-index" =>read_index,
-            );
         }
+        self.ready_cnt = cmp::max(self.ready_cnt, max_offset + 1);
     }
 
     fn gc(&mut self) {
@@ -1492,10 +1516,8 @@ impl Peer {
         if !self.is_leader() {
             // NOTE: there could still be some read requests following, which will be cleared in
             // `clear_uncommitted` later.
-            for state in ready.read_states() {
-                self.pending_reads
-                    .advance(state.request_ctx.as_slice(), state.index);
-            }
+            self.pending_reads
+                .advance_replica_reads(ready.read_states());
             self.post_pending_read_index_on_replica(ctx);
         } else if self.ready_to_handle_read() {
             for state in ready.read_states() {
