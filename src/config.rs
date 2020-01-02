@@ -49,7 +49,7 @@ use engine::rocks::util::{
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
-use pd_client::{Config as PdConfig, PdClient};
+use pd_client::{Config as PdConfig, ConfigClient};
 use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
@@ -1919,7 +1919,7 @@ impl ConfigHandler {
     /// version and config
     pub fn create(
         id: String,
-        pd_client: Arc<impl PdClient>,
+        pd_client: Arc<impl ConfigClient>,
         local_config: TiKvConfig,
     ) -> CfgResult<(configpb::Version, TiKvConfig)> {
         let cfg = toml::to_string(&local_config)?;
@@ -1947,7 +1947,7 @@ impl ConfigHandler {
 
     /// Update the local config if remote config had been changed,
     /// rollback the remote config if the change are invalid.
-    pub fn refresh_config(&mut self, pd_client: Arc<impl PdClient>) -> CfgResult<()> {
+    pub fn refresh_config(&mut self, pd_client: Arc<impl ConfigClient>) -> CfgResult<()> {
         let mut resp = pd_client.get_config(self.get_id(), self.version.clone())?;
         let version = resp.take_version();
         match resp.get_status().get_code() {
@@ -1989,7 +1989,7 @@ impl ConfigHandler {
         &mut self,
         version: configpb::Version,
         entries: Vec<configpb::ConfigEntry>,
-        pd_client: Arc<impl PdClient>,
+        pd_client: Arc<impl ConfigClient>,
     ) -> CfgResult<()> {
         let mut resp = pd_client.update_config(self.get_id(), version, entries)?;
         match resp.get_status().get_code() {

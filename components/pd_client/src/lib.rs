@@ -227,7 +227,10 @@ pub trait PdClient: Send + Sync {
     fn get_operator(&self, _region_id: u64) -> Result<pdpb::GetOperatorResponse> {
         unimplemented!();
     }
+}
 
+/// ConfigClient
+pub trait ConfigClient: Send + Sync {
     fn register_config(
         &self,
         _id: String,

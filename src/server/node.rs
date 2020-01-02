@@ -24,7 +24,7 @@ use engine::Peekable;
 use engine_rocks::RocksEngine;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use pd_client::{Error as PdError, PdClient, INVALID_ID};
+use pd_client::{ConfigClient, Error as PdError, PdClient, INVALID_ID};
 use tikv_util::future_pool::FuturePool;
 use tikv_util::worker::FutureWorker;
 
@@ -48,7 +48,7 @@ where
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static> {
+pub struct Node<C: PdClient + ConfigClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
@@ -60,7 +60,7 @@ pub struct Node<C: PdClient + 'static> {
 
 impl<C> Node<C>
 where
-    C: PdClient,
+    C: PdClient + ConfigClient,
 {
     /// Creates a new Node.
     pub fn new(
@@ -285,9 +285,7 @@ where
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => {
-                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
-                }
+                Err(e) => error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e),
             }
             retry += 1;
             thread::sleep(Duration::from_secs(
