@@ -169,7 +169,6 @@ mod tests {
             ),
         ];
         for (i, (json, path, value, mt, expected, success)) in test_cases.drain(..).enumerate() {
-            dbg!(i);
             let j: Result<Json> = json.parse();
             assert!(j.is_ok(), "#{} expect json parse ok but got {:?}", i, j);
             let p = parse_json_path_expr(path);
@@ -190,7 +189,14 @@ mod tests {
             } else {
                 assert!(r.is_err(), "#{} expect modify error but got {:?}", i, r);
             }
-            assert_eq!(e, j, "#{} expect modified json {:?} == {:?}", i, j.to_string(), e.to_string());
+            assert_eq!(
+                e,
+                j,
+                "#{} expect modified json {:?} == {:?}",
+                i,
+                j.to_string(),
+                e.to_string()
+            );
         }
     }
 }

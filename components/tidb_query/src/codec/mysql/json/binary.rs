@@ -64,15 +64,11 @@ impl<'a> JsonRef<'a> {
         match val_type {
             JsonType::Literal => {
                 let offset = val_entry_off + TYPE_LEN;
-                JsonRef::new(
-                    val_type,
-                    &self.value()[offset..offset + LITERAL_LEN],
-                )
+                JsonRef::new(val_type, &self.value()[offset..offset + LITERAL_LEN])
             }
-            JsonType::U64 | JsonType::I64 | JsonType::Double => JsonRef::new(
-                val_type,
-                &self.value()[val_offset..val_offset + NUMBER_LEN],
-            ),
+            JsonType::U64 | JsonType::I64 | JsonType::Double => {
+                JsonRef::new(val_type, &self.value()[val_offset..val_offset + NUMBER_LEN])
+            }
             JsonType::String => {
                 let (str_len, len_len) =
                     NumberCodec::try_decode_var_u64(&self.value()[val_offset..]).unwrap();
@@ -83,11 +79,9 @@ impl<'a> JsonRef<'a> {
             }
             _ => {
                 let data_size =
-                    NumberCodec::decode_u32_le(&self.value()[val_offset + ELEMENT_COUNT_LEN..]) as usize;
-                JsonRef::new(
-                    val_type,
-                    &self.value()[val_offset..val_offset + data_size],
-                )
+                    NumberCodec::decode_u32_le(&self.value()[val_offset + ELEMENT_COUNT_LEN..])
+                        as usize;
+                JsonRef::new(val_type, &self.value()[val_offset..val_offset + data_size])
             }
         }
     }
@@ -309,7 +303,7 @@ impl<T: BufferWriter> JsonDatumPayloadChunkEncoder for T {}
 pub trait JsonDecoder: NumberDecoder {
     // `read_json` decodes value encoded by `write_json` before.
     fn read_json(&mut self) -> Result<Json> {
-        if self.bytes().len() == 0 {
+        if self.bytes().is_empty() {
             return Err(box_err!("Cant read json from empty bytes"));
         }
         let tp: JsonType = self.read_u8()?.into();
@@ -324,12 +318,8 @@ pub trait JsonDecoder: NumberDecoder {
                 let (str_len, len_len) = NumberCodec::try_decode_var_u64(&value).unwrap();
                 self.read_bytes(str_len as usize + len_len)?
             }
-            JsonType::I64 | JsonType::U64 | JsonType::Double => {
-                self.read_bytes(NUMBER_LEN)?
-            }
-            JsonType::Literal => {
-                self.read_bytes(LITERAL_LEN)?
-            }
+            JsonType::I64 | JsonType::U64 | JsonType::Double => self.read_bytes(NUMBER_LEN)?,
+            JsonType::Literal => self.read_bytes(LITERAL_LEN)?,
         };
         Ok(Json::new(tp, Vec::from(value)))
     }

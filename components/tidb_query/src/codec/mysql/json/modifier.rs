@@ -6,7 +6,6 @@ use super::json_extract::extract_json;
 use super::path_expr::{PathExpression, PathLeg};
 use super::{Json, JsonRef, JsonType};
 use codec::number::NumberCodec;
-use std::cmp::Ordering;
 use std::ptr;
 
 pub struct BinaryModifier<'a> {
@@ -33,8 +32,6 @@ impl<'a> BinaryModifier<'a> {
     pub fn set(mut self, path: &PathExpression, new: Json) -> Result<Json> {
         let result = extract_json(self.old.clone(), path.legs.as_slice());
         if !result.is_empty() {
-            dbg!(result[0].to_string());
-            // dbg!(result[0].offset);
             self.to_be_modified_ptr = result[0].as_ptr();
             self.new_value = Some(new);
         } else {
@@ -80,10 +77,6 @@ impl<'a> BinaryModifier<'a> {
                 self.to_be_modified_ptr = parent_node.as_ptr();
                 match parent_node.get_type() {
                     JsonType::Array => {
-                        let new_value = vec![parent_node.clone(), new.as_ref()];
-                        self.new_value = Some(Json::from_ref_array(new_value));
-                    }
-                    _ => {
                         let elem_count = parent_node.get_elem_count() as usize;
                         let mut elems = vec![];
                         for i in 0..elem_count {
@@ -92,6 +85,10 @@ impl<'a> BinaryModifier<'a> {
                         // We can ignore the idx in the PathLeg here since we have checked the path-value existence
                         elems.push(new.as_ref());
                         self.new_value = Some(Json::from_ref_array(elems));
+                    }
+                    _ => {
+                        let new_value = vec![parent_node.clone(), new.as_ref()];
+                        self.new_value = Some(Json::from_ref_array(new_value));
                     }
                 }
             }
@@ -153,8 +150,8 @@ impl<'a> BinaryModifier<'a> {
         let parent_node = &result[0];
         match &*last_leg {
             PathLeg::Index(remove_idx) => {
-                self.to_be_modified_ptr = parent_node.as_ptr();
                 if parent_node.get_type() == JsonType::Array {
+                    self.to_be_modified_ptr = parent_node.as_ptr();
                     let elems_count = parent_node.get_elem_count() as usize;
                     let mut elems = Vec::with_capacity(elems_count - 1);
                     let remove_idx = *remove_idx as usize;
@@ -168,21 +165,20 @@ impl<'a> BinaryModifier<'a> {
             }
             PathLeg::Key(remove_key) => {
                 // Ignore constant
-                if parent_node.get_type() != JsonType::Object {
-                    return;
-                }
-                self.to_be_modified_ptr = parent_node.as_ptr();
-                let elem_count = parent_node.get_elem_count() as usize;
-                let mut keys = Vec::with_capacity(elem_count + 1);
-                let mut values = Vec::with_capacity(elem_count + 1);
-                for i in 0..elem_count {
-                    let key = parent_node.object_get_key(i);
-                    if key.cmp(remove_key.as_bytes()) != Ordering::Equal {
-                        keys.push(key);
-                        values.push(parent_node.object_get_val(i));
+                if parent_node.get_type() == JsonType::Object {
+                    self.to_be_modified_ptr = parent_node.as_ptr();
+                    let elem_count = parent_node.get_elem_count() as usize;
+                    let mut keys = Vec::with_capacity(elem_count - 1);
+                    let mut values = Vec::with_capacity(elem_count - 1);
+                    for i in 0..elem_count {
+                        let key = parent_node.object_get_key(i);
+                        if key != remove_key.as_bytes() {
+                            keys.push(key);
+                            values.push(parent_node.object_get_val(i));
+                        }
                     }
+                    self.new_value = Some(Json::from_kv_pairs(keys, values));
                 }
-                self.new_value = Some(Json::from_kv_pairs(keys, values));
             }
             _ => {}
         }
@@ -200,6 +196,7 @@ impl<'a> BinaryModifier<'a> {
     fn rebuild_to(&mut self, buf: &mut Vec<u8>) -> Result<JsonType> {
         if self.to_be_modified_ptr == self.old.as_ptr() {
             // Replace the old directly
+            self.to_be_modified_ptr = ptr::null();
             buf.extend_from_slice(&self.new_value.as_ref().unwrap().value);
             return Ok(self.new_value.as_ref().unwrap().as_ref().get_type());
         } else if self.to_be_modified_ptr.is_null() {
@@ -219,29 +216,30 @@ impl<'a> BinaryModifier<'a> {
             JsonType::Object | JsonType::Array => {
                 let doc_off = buf.len();
                 let elem_count = self.old.get_elem_count() as usize;
-                let val_entry_start = match self.old.get_type() {
+                let current = self.old.clone();
+                let val_entry_start = match current.get_type() {
                     JsonType::Array => {
                         let copy_size = HEADER_LEN + elem_count * VALUE_ENTRY_LEN;
-                        buf.extend_from_slice(&self.old.value[..copy_size]);
+                        buf.extend_from_slice(&current.value[..copy_size]);
                         HEADER_LEN
                     }
                     JsonType::Object => {
                         let copy_size = HEADER_LEN + elem_count * (KEY_ENTRY_LEN + VALUE_ENTRY_LEN);
                         // Append kv entries
-                        buf.extend_from_slice(&self.old.value[..copy_size]);
+                        buf.extend_from_slice(&current.value[..copy_size]);
                         // Append keys
                         if elem_count > 0 {
                             let first_key_offset =
-                                NumberCodec::decode_u32_le(&self.old.value[HEADER_LEN..]) as usize;
+                                NumberCodec::decode_u32_le(&current.value[HEADER_LEN..]) as usize;
                             let last_key_offset = NumberCodec::decode_u32_le(
-                                &self.old.value[HEADER_LEN + (elem_count - 1) * KEY_ENTRY_LEN..],
+                                &current.value[HEADER_LEN + (elem_count - 1) * KEY_ENTRY_LEN..],
                             ) as usize;
                             let last_key_len = NumberCodec::decode_u16_le(
-                                &self.old.value
+                                &current.value
                                     [HEADER_LEN + (elem_count - 1) * KEY_ENTRY_LEN + U32_LEN..],
                             ) as usize;
                             buf.extend_from_slice(
-                                &self.old.value[first_key_offset..last_key_offset + last_key_len],
+                                &current.value[first_key_offset..last_key_offset + last_key_len],
                             );
                         }
                         HEADER_LEN + elem_count * KEY_ENTRY_LEN
@@ -251,9 +249,9 @@ impl<'a> BinaryModifier<'a> {
                 // Resolve values
                 for i in 0..elem_count {
                     let val_entry_offset = val_entry_start + i * VALUE_ENTRY_LEN;
-                    self.old = self.old.val_entry_get(val_entry_offset);
+                    self.old = current.val_entry_get(val_entry_offset);
                     let val_offset = buf.len() - doc_off;
-                    // loop until finding the target offset to be modified
+                    // loop until finding the target ptr to be modified
                     let new_tp = self.rebuild_to(buf)?;
                     buf[doc_off + val_entry_offset] = new_tp as u8;
                     match new_tp {
@@ -276,7 +274,10 @@ impl<'a> BinaryModifier<'a> {
                     }
                 }
                 let data_len = buf.len() - doc_off;
-                NumberCodec::encode_u32_le(&mut buf[doc_off + ELEMENT_COUNT_LEN..], data_len as u32);
+                NumberCodec::encode_u32_le(
+                    &mut buf[doc_off + ELEMENT_COUNT_LEN..],
+                    data_len as u32,
+                );
             }
         }
         Ok(tp)
