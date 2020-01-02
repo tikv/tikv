@@ -110,7 +110,7 @@ impl Resolver {
             // If there are some lock, the min_ts must be smaller than
             // the min start ts, so it guarantees to be smaller than
             // any late arriving commit ts.
-            cmp::min(min_start_ts, min_ts)
+            new_resolved_ts // cmp::min(min_start_ts, min_ts)
         } else {
             min_ts
         };
