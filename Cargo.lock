@@ -2919,6 +2919,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "resolved_ts"
+version = "0.0.1"
+dependencies = [
+ "hex 0.3.2",
+ "tikv_util",
+ "txn_types",
+]
+
+[[package]]
 name = "rev_lines"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
