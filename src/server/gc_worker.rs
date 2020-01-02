@@ -34,6 +34,7 @@ use crate::storage::mvcc::{check_need_gc, MvccReader, MvccTxn};
 use crate::storage::{Callback, Error, ErrorInner, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
+use tikv_util::future::paired_future_callback;
 use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 use txn_types::{Key, TimeStamp};
@@ -230,24 +231,15 @@ impl<E: Engine> GcRunner<E> {
             None => return true,
         };
 
-        let (tx, rx) = mpsc::channel();
+        let (cb, rx) = paired_future_callback();
         if region_info_accessor
-            .find_region_by_id(
-                ctx.get_region_id(),
-                Box::new(move |region| match tx.send(region) {
-                    Ok(()) => (),
-                    Err(e) => error!(
-                        "find_region_by_id failed to send result";
-                        "err" => ?e
-                    ),
-                }),
-            )
+            .find_region_by_id(ctx.get_region_id(), Box::new(move |region| cb(region)))
             .is_err()
         {
             return true;
         }
 
-        let region_info = match rx.recv() {
+        let region_info = match rx.wait() {
             Ok(None) | Err(_) => return true,
             Ok(Some(r)) => r,
         };
