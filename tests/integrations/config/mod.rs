@@ -90,7 +90,6 @@ fn test_serde_custom_tikv_config() {
         unified: YatpConfig {
             min_thread_count: 5,
             max_thread_count: 10,
-            max_inplace_spin: 3,
         },
         storage: StorageReadPoolConfig {
             high_concurrency: 1,

@@ -159,7 +159,6 @@ pub fn new_readpool_cfg() -> ReadPoolConfig {
         unified: YatpConfig {
             min_thread_count: 0,
             max_thread_count: 0,
-            max_inplace_spin: 0,
         },
         storage: StorageReadPoolConfig {
             high_concurrency: 1,

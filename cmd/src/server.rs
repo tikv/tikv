@@ -329,8 +329,7 @@ impl TiKVServer {
             let mut builder = yatp::Builder::new("yatp-read-pool");
             builder
                 .min_thread_count(unified_read_pool_cfg.min_thread_count)
-                .max_thread_count(unified_read_pool_cfg.max_thread_count)
-                .max_inplace_spin(unified_read_pool_cfg.max_inplace_spin);
+                .max_thread_count(unified_read_pool_cfg.max_thread_count);
             let multilevel_builder = multilevel::Builder::new(Default::default());
             let read_pool_runner = ReadPoolRunner::new(engines.engine.clone(), Default::default());
             let runner_builder =
