@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_stream::try_stream;
@@ -8,6 +9,7 @@ use futures::{future, Future, Stream};
 use futures03::channel::mpsc;
 use futures03::prelude::*;
 use rand::prelude::*;
+use tokio::sync::Semaphore;
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
@@ -33,6 +35,9 @@ pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPool,
 
+    /// The concurrency limiter of the coprocessor.
+    semaphore: Option<Arc<Semaphore>>,
+
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     ///
     /// Note that this limit is ignored if we are using Prost.
@@ -53,6 +58,7 @@ impl<E: Engine> Clone for Endpoint<E> {
     fn clone(&self) -> Self {
         Self {
             read_pool: self.read_pool.clone(),
+            semaphore: self.semaphore.clone(),
             ..*self
         }
     }
@@ -62,8 +68,13 @@ impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
     pub fn new(cfg: &Config, read_pool: ReadPool) -> Self {
+        let semaphore = match &read_pool {
+            ReadPool::Yatp(_) => Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency))),
+            _ => None,
+        };
         Self {
             read_pool,
+            semaphore,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             enable_batch_if_possible: cfg.end_point_enable_batch_if_possible,
@@ -285,9 +296,16 @@ impl<E: Engine> Endpoint<E> {
     /// the given `handler_builder`. Finally, it calls the unary request interface of the
     /// `RequestHandler` to process the request and produce a result.
     async fn handle_unary_request_impl(
+        semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<coppb::Response> {
+        let _permit = if let Some(semaphore) = semaphore.as_ref() {
+            Some(semaphore.acquire().await)
+        } else {
+            None
+        };
+
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         tracker.req_ctx.deadline.check()?;
@@ -352,7 +370,7 @@ impl<E: Engine> Endpoint<E> {
 
         self.read_pool
             .spawn_handle(
-                Self::handle_unary_request_impl(tracker, handler_builder),
+                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder),
                 priority,
                 task_id,
             )
@@ -385,10 +403,17 @@ impl<E: Engine> Endpoint<E> {
     /// the given `handler_builder`. Finally, it calls the stream request interface of the
     /// `RequestHandler` multiple times to process the request and produce multiple results.
     fn handle_stream_request_impl(
+        semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl futures03::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
+            let _permit = if let Some(semaphore) = semaphore.as_ref() {
+                Some(semaphore.acquire().await)
+            } else {
+                None
+            };
+
             // When this function is being executed, it may be queued for a long time, so that
             // deadline may exceed.
             tracker.req_ctx.deadline.check()?;
@@ -456,7 +481,7 @@ impl<E: Engine> Endpoint<E> {
 
         self.read_pool
             .spawn(
-                Self::handle_stream_request_impl(tracker, handler_builder)
+                Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
                     .then(futures03::future::ok::<_, mpsc::SendError>)
                     .forward(tx)
                     .unwrap_or_else(|e| {
@@ -541,7 +566,7 @@ fn make_error_response(e: Error) -> coppb::Response {
 mod tests {
     use super::*;
 
-    use std::sync::{atomic, mpsc, Arc};
+    use std::sync::{atomic, mpsc};
     use std::thread;
     use std::vec;
 
