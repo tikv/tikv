@@ -113,6 +113,7 @@ struct ReadIndexQueue {
 impl ReadIndexQueue {
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
+            self.contexts.remove(&read.id);
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
@@ -2072,11 +2073,6 @@ impl Peer {
 
         let id = Uuid::new_v4();
         self.raft_group.read_index(id.as_bytes().to_vec());
-        debug!("request to get a read index";
-            "request_id" => ?id,
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-        );
 
         let pending_read_count = self.raft_group.raft.pending_read_count();
         let ready_read_count = self.raft_group.raft.ready_read_count();
@@ -2092,6 +2088,16 @@ impl Peer {
 
         let read_proposal = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
         self.pending_reads.reads.push_back(read_proposal);
+        if !self.is_leader() {
+            self.pending_reads.contexts.insert(id, self.pending_reads.reads.len() - 1);
+        }
+
+        debug!("request to get a read index";
+            "request_id" => ?id,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+            "is_leader" => self.is_leader(),
+        );
 
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
