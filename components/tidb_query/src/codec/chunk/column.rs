@@ -14,8 +14,12 @@ use crate::codec::mysql::{
 };
 use crate::codec::Datum;
 use crate::expr::EvalContext;
-use codec::prelude::*;
-
+use codec::buffer::{BufferReader, BufferWriter};
+use codec::number::{NumberDecoder, NumberEncoder};
+use codec::Error as CodecError;
+use codec::ErrorInner;
+use std::convert::From;
+use std::intrinsics::unlikely;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 
@@ -394,14 +398,25 @@ impl Column {
             // In index, it's flag is `BYTES`. See TiDB's `encode()`.
             datum::BYTES_FLAG => self.append_bytes(&raw_datum.read_datum_payload_bytes()?),
             // In record, it's flag is `COMPACT_BYTES`. See TiDB's `encode()`.
-            datum::COMPACT_BYTES_FLAG => {
-                self.append_bytes(&raw_datum.read_datum_payload_compact_bytes()?)
-            }
+            datum::COMPACT_BYTES_FLAG => self.append_compact_bytes(raw_datum),
             _ => Err(Error::InvalidDataType(format!(
                 "Unsupported datum flag {} for Bytes vector",
                 flag
             ))),
         }
+    }
+
+    #[inline]
+    fn append_compact_bytes(&mut self, mut raw_datum: &[u8]) -> Result<()> {
+        let vn = raw_datum.read_var_i64()? as usize;
+        let data = BufferReader::bytes(&raw_datum);
+        if unlikely(data.len() < vn) {
+            let codec_error: CodecError = CodecError::from(ErrorInner::eof());
+            return Err(Error::from(codec_error));
+        }
+        self.append_bytes(&data[0..vn])?;
+        raw_datum.advance(vn);
+        Ok(())
     }
 
     /// Get the bytes datum of the row in the column.
