@@ -50,7 +50,7 @@ impl AssertionStorage<SimulateEngine> {
         let engine = cluster.sim.rl().storages[&leader.get_id()].clone();
         self.ctx.set_region_id(region.get_id());
         self.ctx.set_region_epoch(region.get_region_epoch().clone());
-        self.ctx.set_peer(leader.clone());
+        self.ctx.set_peer(leader);
         self.store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
     }
 

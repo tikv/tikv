@@ -29,7 +29,7 @@ use super::*;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 pub struct ChannelTransportCore {
-    snap_paths: HashMap<u64, (SnapManager, TempDir)>,
+    snap_paths: HashMap<u64, (SnapManager<RocksEngine>, TempDir)>,
     routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter>>,
 }
 
@@ -197,7 +197,7 @@ impl Simulator for NodeCluster {
         };
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router.clone());
+        let mut coprocessor_host = CoprocessorHost::new(router.clone());
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);

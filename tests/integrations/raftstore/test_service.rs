@@ -95,8 +95,8 @@ fn test_rawkv() {
 
     // Raw delete
     let mut delete_req = RawDeleteRequest::default();
-    delete_req.set_context(ctx.clone());
-    delete_req.key = k.clone();
+    delete_req.set_context(ctx);
+    delete_req.key = k;
     let delete_resp = client.raw_delete(&delete_req).unwrap();
     assert!(!delete_resp.has_region_error());
     assert!(delete_resp.error.is_empty());
@@ -212,7 +212,7 @@ fn test_mvcc_basic() {
     ts += 1;
     let batch_get_version = ts;
     let mut batch_get_req = BatchGetRequest::default();
-    batch_get_req.set_context(ctx.clone());
+    batch_get_req.set_context(ctx);
     batch_get_req.set_keys(vec![k.clone()].into_iter().collect());
     batch_get_req.version = batch_get_version;
     let batch_get_resp = client.kv_batch_get(&batch_get_req).unwrap();
@@ -237,7 +237,7 @@ fn test_mvcc_rollback_and_cleanup() {
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
-    mutation.set_value(v.clone());
+    mutation.set_value(v);
     must_kv_prewrite(
         &client,
         ctx.clone(),
@@ -265,7 +265,7 @@ fn test_mvcc_rollback_and_cleanup() {
     let mut mut_pri = Mutation::default();
     mut_pri.set_op(Op::Put);
     mut_pri.set_key(k2.clone());
-    mut_pri.set_value(v2.clone());
+    mut_pri.set_value(v2);
     let mut mut_sec = Mutation::default();
     mut_sec.set_op(Op::Put);
     mut_sec.set_key(k.clone());
@@ -306,8 +306,8 @@ fn test_mvcc_rollback_and_cleanup() {
     let rollback_resp = client.kv_batch_rollback(&rollback_req.clone()).unwrap();
     assert!(!rollback_resp.has_region_error());
     assert!(!rollback_resp.has_error());
-    rollback_req.set_keys(vec![k.clone()].into_iter().collect());
-    let rollback_resp2 = client.kv_batch_rollback(&rollback_req.clone()).unwrap();
+    rollback_req.set_keys(vec![k].into_iter().collect());
+    let rollback_resp2 = client.kv_batch_rollback(&rollback_req).unwrap();
     assert!(!rollback_resp2.has_region_error());
     assert!(!rollback_resp2.has_error());
 
@@ -316,7 +316,7 @@ fn test_mvcc_rollback_and_cleanup() {
     let mut cleanup_req = CleanupRequest::default();
     cleanup_req.set_context(ctx.clone());
     cleanup_req.start_version = cleanup_start_version;
-    cleanup_req.set_key(k2.clone());
+    cleanup_req.set_key(k2);
     let cleanup_resp = client.kv_cleanup(&cleanup_req).unwrap();
     assert!(!cleanup_resp.has_region_error());
     assert!(!cleanup_resp.has_error());
@@ -325,7 +325,7 @@ fn test_mvcc_rollback_and_cleanup() {
     ts += 1;
     let scan_lock_max_version2 = ts;
     let mut scan_lock_req = ScanLockRequest::default();
-    scan_lock_req.set_context(ctx.clone());
+    scan_lock_req.set_context(ctx);
     scan_lock_req.max_version = scan_lock_max_version2;
     let scan_lock_resp = client.kv_scan_lock(&scan_lock_req).unwrap();
     assert!(!scan_lock_resp.has_region_error());
@@ -347,7 +347,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(k.clone());
-    mutation.set_value(v.clone());
+    mutation.set_value(v);
     must_kv_prewrite(
         &client,
         ctx.clone(),
@@ -379,8 +379,8 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     mut_pri.set_value(new_v.clone());
     let mut mut_sec = Mutation::default();
     mut_sec.set_op(Op::Put);
-    mut_sec.set_key(k2.clone());
-    mut_sec.set_value(v2.clone());
+    mut_sec.set_key(k2);
+    mut_sec.set_value(v2);
     must_kv_prewrite(
         &client,
         ctx.clone(),
@@ -459,7 +459,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
 
     // Delete range
     let mut del_req = DeleteRangeRequest::default();
-    del_req.set_context(ctx.clone());
+    del_req.set_context(ctx);
     del_req.start_key = b"a".to_vec();
     del_req.end_key = b"z".to_vec();
     let del_resp = client.kv_delete_range(&del_req).unwrap();
@@ -541,9 +541,9 @@ fn test_read_index() {
     // Raw put
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
     let mut put_req = RawPutRequest::default();
-    put_req.set_context(ctx.clone());
-    put_req.key = k.clone();
-    put_req.value = v.clone();
+    put_req.set_context(ctx);
+    put_req.key = k;
+    put_req.value = v;
     let put_resp = client.raw_put(&put_req).unwrap();
     assert!(!put_resp.has_region_error());
     assert!(put_resp.error.is_empty());
@@ -724,7 +724,7 @@ fn test_debug_region_size() {
 
     let mut req = debugpb::RegionSizeRequest::default();
     req.set_region_id(region_id);
-    req.set_cfs(cfs.iter().map(|s| s.to_string()).collect());
+    req.set_cfs(cfs.iter().map(|s| (*s).to_string()).collect());
     let entries: Vec<_> = debug_client
         .region_size(&req)
         .unwrap()
@@ -834,7 +834,7 @@ fn test_double_run_node() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), None);
-    let coprocessor_host = CoprocessorHost::new(Default::default(), router.clone());
+    let coprocessor_host = CoprocessorHost::new(router);
     let importer = {
         let dir = Path::new(engines.kv.path()).join("import-sst");
         Arc::new(SSTImporter::new(dir).unwrap())

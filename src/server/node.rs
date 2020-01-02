@@ -21,6 +21,7 @@ use crate::server::Config as ServerConfig;
 use crate::storage::{config::Config as StorageConfig, Storage};
 use engine::Engines;
 use engine::Peekable;
+use engine_rocks::RocksEngine;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
@@ -110,7 +111,7 @@ where
         &mut self,
         engines: Engines,
         trans: T,
-        snap_mgr: SnapManager,
+        snap_mgr: SnapManager<RocksEngine>,
         pd_worker: FutureWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,
@@ -284,7 +285,9 @@ where
                     }
                 },
                 // TODO: should we clean region for other errors too?
-                Err(e) => error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e),
+                Err(e) => {
+                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
+                }
             }
             retry += 1;
             thread::sleep(Duration::from_secs(
@@ -315,7 +318,7 @@ where
         store_id: u64,
         engines: Engines,
         trans: T,
-        snap_mgr: SnapManager,
+        snap_mgr: SnapManager<RocksEngine>,
         pd_worker: FutureWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost,

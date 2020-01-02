@@ -133,10 +133,7 @@ impl TiKVServer {
 
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
-        let mut coprocessor_host = Some(CoprocessorHost::new(
-            config.coprocessor.clone(),
-            router.clone(),
-        ));
+        let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
         region_info_accessor.start();
 
@@ -161,7 +158,7 @@ impl TiKVServer {
         security_mgr: Arc<SecurityManager>,
     ) -> Arc<RpcClient> {
         let pd_client = Arc::new(
-            RpcClient::new(&config.pd, security_mgr.clone())
+            RpcClient::new(&config.pd, security_mgr)
                 .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
         );
 
@@ -282,11 +279,13 @@ impl TiKVServer {
         &mut self,
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
+        let mut cfg_controller = ConfigController::new(self.config.clone());
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
         let lock_mgr = if self.config.pessimistic_txn.enabled {
             let lock_mgr = LockManager::new();
+            cfg_controller.register("pessimistic_txn", Box::new(lock_mgr.config_manager()));
             lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
             Some(lock_mgr)
         } else {
@@ -329,7 +328,7 @@ impl TiKVServer {
         // Create coprocessor endpoint.
         let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
             &self.config.readpool.coprocessor,
-            pd_sender.clone(),
+            pd_sender,
             engines.engine.clone(),
         );
 
@@ -339,7 +338,7 @@ impl TiKVServer {
         let server = Server::new(
             &server_config,
             &self.security_mgr,
-            storage.clone(),
+            storage,
             coprocessor::Endpoint::new(&server_config, cop_read_pool),
             engines.raft_router.clone(),
             self.resolver.clone(),
@@ -356,7 +355,6 @@ impl TiKVServer {
             &self.config.raft_store,
             self.pd_client.clone(),
         );
-        let cfg_controller = ConfigController::new(self.config.clone());
         node.start(
             engines.engines.clone(),
             server.transport(),

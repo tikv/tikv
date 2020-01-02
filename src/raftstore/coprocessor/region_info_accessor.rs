@@ -213,7 +213,7 @@ impl RegionCollector {
         }
 
         // If the region already exists, update it and keep the original role.
-        *old_region = region.clone();
+        *old_region = region;
     }
 
     fn handle_create_region(&mut self, region: Region, role: StateRole) {
