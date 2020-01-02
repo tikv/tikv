@@ -168,6 +168,7 @@ impl ReadIndexQueue {
         if self.reads.capacity() > SHRINK_CACHE_CAPACITY && self.reads.len() < SHRINK_CACHE_CAPACITY
         {
             self.reads.shrink_to_fit();
+            self.contexts.shrink_to_fit();
         }
     }
 }
