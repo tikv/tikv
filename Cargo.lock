@@ -192,9 +192,9 @@ dependencies = [
 
 [[package]]
 name = "bindgen"
-version = "0.51.0"
+version = "0.51.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18270cdd7065ec045a6bb4bdcd5144d14a78b3aedb3bc5111e688773ac8b9ad0"
+checksum = "ebd71393f1ec0509b553aa012b9b58e81dadbdff7130bd3b8cba576e69b32f75"
 dependencies = [
  "bitflags",
  "cexpr",
@@ -202,15 +202,15 @@ dependencies = [
  "clang-sys",
  "clap",
  "env_logger",
- "fxhash",
  "lazy_static",
  "log",
  "peeking_take_while",
- "proc-macro2 0.4.30",
- "quote 0.6.13",
+ "proc-macro2 1.0.4",
+ "quote 1.0.2",
  "regex",
+ "rustc-hash",
  "shlex",
- "which",
+ "which 3.1.0",
 ]
 
 [[package]]
@@ -2441,7 +2441,7 @@ dependencies = [
  "prost 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prost-types",
  "tempfile",
- "which",
+ "which 2.0.1",
 ]
 
 [[package]]
@@ -2958,6 +2958,15 @@ name = "rustc-demangle"
 version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c691c0e608126e00913e33f0ccf3727d5fc84573623b8d65b2df340b5201783"
+
+[[package]]
+name = "rustc-hash"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7540fc8b0c49f096ee9c961cda096467dce8084bec6bdca2fc83895fd9b28cb8"
+dependencies = [
+ "byteorder",
+]
 
 [[package]]
 name = "rustc_version"
@@ -4382,6 +4391,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b57acb10231b9493c8472b20cb57317d0679a49e0bdbee44b3b803a6473af164"
 dependencies = [
  "failure",
+ "libc",
+]
+
+[[package]]
+name = "which"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5475d47078209a02e60614f7ba5e645ef3ed60f771920ac1906d7c1cc65024c8"
+dependencies = [
  "libc",
 ]
 

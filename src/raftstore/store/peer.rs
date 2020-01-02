@@ -358,7 +358,7 @@ impl Peer {
 
         let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
 
-        let ps = PeerStorage::new(engines.clone(), region, sched, peer.get_id(), tag.clone())?;
+        let ps = PeerStorage::new(engines, region, sched, peer.get_id(), tag.clone())?;
 
         let applied_index = ps.applied_index();
 
@@ -1864,7 +1864,9 @@ impl Peer {
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
             }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => unimplemented!(),
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
+                unimplemented!()
+            }
         }
         let healthy = self.count_healthy_node(progress.voters());
         let quorum_after_change = raft::majority(progress.voter_ids().len());
@@ -2617,7 +2619,7 @@ impl RequestInspector for Peer {
 pub struct ReadExecutor<E: KvEngine> {
     check_epoch: bool,
     engine: E,
-    snapshot: Option<<E::Snapshot as Snapshot>::SyncSnapshot>,
+    snapshot: Option<<E::Snapshot as Snapshot<E>>::SyncSnapshot>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
 }
@@ -3008,7 +3010,7 @@ mod tests {
         let mut put = raft_cmdpb::Request::default();
         put.set_cmd_type(CmdType::Put);
         req.set_requests(vec![snap, put].into());
-        err_table.push(req.clone());
+        err_table.push(req);
 
         for req in err_table {
             let mut inspector = DummyInspector {

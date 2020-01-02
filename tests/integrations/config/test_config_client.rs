@@ -170,7 +170,7 @@ fn test_update_config() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+    cfg_handler.refresh_config(pd_client).unwrap();
 
     // config update
     let mut cfg = validated_cfg();
@@ -192,7 +192,7 @@ fn test_update_not_support_config() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+    cfg_handler.refresh_config(pd_client).unwrap();
 
     // nothing change
     assert_eq!(cfg_handler.get_config(), &validated_cfg());
@@ -250,7 +250,7 @@ fn test_compatible_config() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+    cfg_handler.refresh_config(pd_client).unwrap();
 
     let mut new_cfg = validated_cfg();
     new_cfg.raft_store.raft_log_gc_threshold = 2048;
@@ -298,7 +298,7 @@ fn test_dispatch_change() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+    cfg_handler.refresh_config(pd_client).unwrap();
 
     // config update
     assert_eq!(
