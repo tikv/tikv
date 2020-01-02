@@ -103,7 +103,7 @@ impl PdClient for MockPdClient {
         let configs = self.configs.lock().unwrap();
         if let Some(cfg) = configs.get(&id) {
             match cmp_version(&cfg.version, &version) {
-                Ordering::Equal => status.set_code(StatusCode::NotChange),
+                Ordering::Equal => status.set_code(StatusCode::Ok),
                 _ => {
                     resp.set_config(cfg.content.clone());
                     status.set_code(StatusCode::WrongVersion);

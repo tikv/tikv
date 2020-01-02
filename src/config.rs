@@ -1946,12 +1946,12 @@ impl ConfigHandler {
         let mut resp = pd_client.get_config(self.get_id(), self.version.clone())?;
         let version = resp.take_version();
         match resp.get_status().get_code() {
-            StatusCode::NotChange => Ok(()),
+            StatusCode::Ok => Ok(()),
             StatusCode::WrongVersion if cmp_version(&self.version, &version) == Ordering::Less => {
                 let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
                 match self.config_controller.update_or_rollback(incoming)? {
                     Either::Left(rollback_change) => {
-                        debug!(
+                        warn!(
                             "tried to update local config to an invalid config";
                             "version" => ?version
                         );
@@ -1973,7 +1973,7 @@ impl ConfigHandler {
                 Ok(())
             }
             code => {
-                debug!(
+                warn!(
                     "failed to get remote config";
                     "status" => ?code,
                     "version" => ?version
