@@ -3,7 +3,7 @@
 use std::io::{Read, Result, Write};
 use std::sync::Arc;
 
-pub trait IOLimiter {
+pub trait IOLimiter: Send + Sync {
     /// # Arguments
     ///
     /// - `bytes_per_sec`: controls the total write rate of compaction and flush in bytes per second.

@@ -19,7 +19,7 @@ pub trait KvEngine:
     + Debug
     + 'static
 {
-    type Snapshot: Snapshot;
+    type Snapshot: Snapshot<Self>;
     type WriteBatch: WriteBatch;
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()>;
