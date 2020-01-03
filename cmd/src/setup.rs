@@ -1,17 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::ToOwned;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use chrono::Local;
 use clap::ArgMatches;
-
 use tikv::config::{check_critical_config, persist_critical_config, MetricConfig, TiKvConfig};
 use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
-
-use chrono::Local;
-use std::io;
-use std::path::{Path, PathBuf};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -91,6 +89,10 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 
 #[allow(dead_code)]
 pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches<'_>) {
+    if matches.is_present("dynamic-config") {
+        config.dynamic_config = true;
+    }
+
     if let Some(level) = matches.value_of("log-level") {
         config.log_level = logger::get_level_by_string(level).unwrap();
     }

@@ -10,7 +10,7 @@ pub trait IOLimiterExt {
     type IOLimiter: IOLimiter;
 }
 
-pub trait IOLimiter {
+pub trait IOLimiter: Send + Sync {
     /// # Arguments
     ///
     /// - `bytes_per_sec`: controls the total write rate of compaction and flush in bytes per second.
