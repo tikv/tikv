@@ -2358,7 +2358,7 @@ mod tests {
             .unwrap(),
         );
 
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register(
             "rocksdb",
             Box::new(DBConfigManger::new(engine.clone(), DBType::Kv)),
@@ -2395,7 +2395,7 @@ mod tests {
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(64).0);
         assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(8).0);
 
-        let mut incoming = cfg.clone();
+        let mut incoming = cfg;
         incoming.rocksdb.defaultcf.disable_auto_compactions = true;
         incoming.rocksdb.defaultcf.target_file_size_base = ReadableSize::mb(32);
         incoming.rocksdb.defaultcf.block_cache_size = ReadableSize::mb(256);

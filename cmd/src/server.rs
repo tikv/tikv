@@ -316,6 +316,16 @@ impl TiKVServer {
             LocalReader::new(engines.kv.clone(), store_meta.clone(), self.router.clone());
         let raft_router = ServerRaftStoreRouter::new(self.router.clone(), local_reader);
 
+        let cfg_controller = self.cfg_controller.as_mut().unwrap();
+        cfg_controller.register(
+            "rocksdb",
+            Box::new(DBConfigManger::new(engines.kv.clone(), DBType::Kv)),
+        );
+        cfg_controller.register(
+            "raftdb",
+            Box::new(DBConfigManger::new(engines.raft.clone(), DBType::Raft)),
+        );
+
         let engine = RaftKv::new(raft_router.clone());
 
         self.engines = Some(Engines {
@@ -347,6 +357,7 @@ impl TiKVServer {
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
         let mut cfg_controller = self.cfg_controller.take().unwrap();
+
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
@@ -360,17 +371,6 @@ impl TiKVServer {
         };
 
         let engines = self.engines.as_ref().unwrap();
-        cfg_controller.register(
-            "rocksdb",
-            Box::new(DBConfigManger::new(engines.engines.kv.clone(), DBType::Kv)),
-        );
-        cfg_controller.register(
-            "raftdb",
-            Box::new(DBConfigManger::new(
-                engines.engines.raft.clone(),
-                DBType::Raft,
-            )),
-        );
 
         let pd_worker = FutureWorker::new("pd-worker");
         let pd_sender = pd_worker.scheduler();
