@@ -96,7 +96,7 @@
 # grpc-memory-pool-quota = "32G"
 
 ## The number of connections with each TiKV server to send Raft messages.
-# grpc-raft-conn-num = 10
+# grpc-raft-conn-num = 1
 
 ## Amount to read ahead on individual gRPC streams.
 # grpc-stream-initial-window-size = "2MB"
@@ -665,7 +665,7 @@
 # write-buffer-size = "128MB"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
-# max-bytes-for-level-base = "128MB"
+# max-bytes-for-level-base = "32MB"
 # target-file-size-base = "8MB"
 # level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
