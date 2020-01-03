@@ -13,34 +13,24 @@ use uuid::{parser::ParseError, BytesError};
 use crate::metrics::*;
 
 pub fn error_inc(err: &Error) {
-    match err {
-        Error::FileExists(_) => {
-            IMPORTER_ERROR_VEC
-                .with_label_values(&["file_exists"])
-                .inc()
-        }
-        Error::FileCorrupted(_, _) => {
-            IMPORTER_ERROR_VEC
-                .with_label_values(&["file_corrupt"])
-                .inc()
-        }
-        Error::InvalidSSTPath(_) => {
-            IMPORTER_ERROR_VEC
-                .with_label_values(&["invalid_sst"])
-                .inc()
-        }
-        Error::CannotReadExternalStorage(_, _, _) => {
-            IMPORTER_ERROR_VEC
-                .with_label_values(&["read_external_storage"])
-                .inc()
-        }
-        Error::WrongKeyPrefix(_, _, _) => {
-            IMPORTER_ERROR_VEC
-                .with_label_values(&["wrong_prefix"])
-                .inc()
-        }
-        _ => {}
-    }
+    let label = match err {
+        Error::Io(..) => "io",
+        Error::Grpc(..) => "grpc",
+        Error::Uuid(..) => "uuid",
+        Error::UuidBytes(..) => "uuid_bytes",
+        Error::RocksDB(..) => "rocksdb",
+        Error::EngineTraits(..) => "engine_traits",
+        Error::ParseIntError(..) => "parse_int",
+        Error::FileExists(..) => "file_exists",
+        Error::FileCorrupted(..) => "file_corrupt",
+        Error::InvalidSSTPath(..) => "invalid_sst",
+        Error::Engine(..) => "engine",
+        Error::CannotReadExternalStorage(..) => "read_external_storage",
+        Error::WrongKeyPrefix(..) => "wrong_prefix",
+        Error::BadFormat(..) => "bad_format",
+        _ => return,
+    };
+    IMPORTER_ERROR_VEC.with_label_values(&[label]).inc();
 }
 
 quick_error! {
