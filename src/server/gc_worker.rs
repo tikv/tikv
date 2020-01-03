@@ -1963,7 +1963,7 @@ mod tests {
         let mut gc_worker = GcWorker::new(engine, None, None, None, cfg.gc.clone());
         gc_worker.start().unwrap();
 
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("gc", Box::new(gc_worker.get_config_manager()));
 
         (gc_worker, cfg_controller)
