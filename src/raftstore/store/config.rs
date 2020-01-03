@@ -67,6 +67,7 @@ pub struct Config {
     /// Interval (ms) to check whether start compaction for a region.
     pub region_compact_check_interval: ReadableDuration,
     // delay time before deleting a stale peer
+    #[config(skip)]
     pub clean_stale_peer_delay: ReadableDuration,
     /// Number of regions for each time checking.
     pub region_compact_check_step: u64,
@@ -101,6 +102,7 @@ pub struct Config {
 
     pub leader_transfer_max_log_lag: u64,
 
+    #[config(skip)]
     pub snap_apply_batch_size: ReadableSize,
 
     // Interval (ms) to check region whether the data is consistent.
