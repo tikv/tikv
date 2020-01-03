@@ -229,7 +229,7 @@ pub trait PdClient: Send + Sync {
     }
 }
 
-/// ConfigClient
+/// ConfigClient used for manage config
 pub trait ConfigClient: Send + Sync {
     fn register_config(
         &self,
