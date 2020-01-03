@@ -307,7 +307,7 @@ impl<S: CasualRouter> Runner<S> {
 
     fn change_cfg(&mut self, change: ConfigChange) {
         info!(
-            "split check config updated!";
+            "split check config updated";
             "change" => ?change
         );
         self.cfg.update(change);
@@ -373,7 +373,7 @@ mod tests {
         let mut worker: Worker<Task> = Worker::new("split-check-config");
         worker.start(runner).unwrap();
 
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("coprocessor", Box::new(worker.scheduler()));
 
         (cfg_controller, worker)
@@ -398,7 +398,7 @@ mod tests {
         let mut cfg = TiKvConfig::default();
         cfg.validate().unwrap();
         let engine = tmp_engine();
-        let (mut cfg_controller, mut worker) = setup(cfg.clone(), engine.clone());
+        let (mut cfg_controller, mut worker) = setup(cfg.clone(), engine);
         let scheduler = worker.scheduler();
 
         let cop_config = cfg.coprocessor.clone();

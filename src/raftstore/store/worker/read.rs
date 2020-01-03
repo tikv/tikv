@@ -699,7 +699,7 @@ mod tests {
         assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 3);
 
         // Let's read.
-        let region = region1.clone();
+        let region = region1;
         let task = RaftCommand::new(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse<RocksEngine>| {
@@ -778,7 +778,7 @@ mod tests {
         assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 6);
 
         // Stale epoch.
-        let mut epoch12 = epoch13.clone();
+        let mut epoch12 = epoch13;
         epoch12.set_version(2);
         let mut cmd_epoch = cmd.clone();
         cmd_epoch.mut_header().set_region_epoch(epoch12);
@@ -815,7 +815,7 @@ mod tests {
 
         // Reject by term mismatch in lease.
         let previous_term_rejection = reader.metrics.borrow().rejected_by_term_mismatch;
-        let mut cmd9 = cmd.clone();
+        let mut cmd9 = cmd;
         cmd9.mut_header().set_term(term6 + 3);
         let task = RaftCommand::new(
             cmd9.clone(),

@@ -46,8 +46,7 @@ impl MockPdClient {
         let (version, cfg) = ConfigHandler::create(id.to_owned(), self, cfg).unwrap();
         ConfigHandler::start(
             id.to_owned(),
-            ConfigController::new(cfg),
-            version,
+            ConfigController::new(cfg, version),
             FutureWorker::new("test-pd-worker").scheduler(),
         )
         .unwrap()
@@ -104,7 +103,7 @@ impl PdClient for MockPdClient {
         let configs = self.configs.lock().unwrap();
         if let Some(cfg) = configs.get(&id) {
             match cmp_version(&cfg.version, &version) {
-                Ordering::Equal => status.set_code(StatusCode::NotChange),
+                Ordering::Equal => status.set_code(StatusCode::Ok),
                 _ => {
                     resp.set_config(cfg.content.clone());
                     status.set_code(StatusCode::WrongVersion);
@@ -146,6 +145,7 @@ impl PdClient for MockPdClient {
 
 fn validated_cfg() -> TiKvConfig {
     let mut cfg = TiKvConfig::default();
+    cfg.compatible_adjust();
     cfg.validate().unwrap();
     cfg
 }
@@ -170,7 +170,7 @@ fn test_update_config() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+    cfg_handler.refresh_config(pd_client).unwrap();
 
     // config update
     let mut cfg = validated_cfg();
@@ -192,7 +192,7 @@ fn test_update_not_support_config() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+    cfg_handler.refresh_config(pd_client).unwrap();
 
     // nothing change
     assert_eq!(cfg_handler.get_config(), &validated_cfg());
@@ -250,7 +250,7 @@ fn test_compatible_config() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+    cfg_handler.refresh_config(pd_client).unwrap();
 
     let mut new_cfg = validated_cfg();
     new_cfg.raft_store.raft_log_gc_threshold = 2048;
@@ -282,12 +282,11 @@ fn test_dispatch_change() {
     let mut cfg_handler = {
         let (version, cfg) = ConfigHandler::create(id.to_owned(), pd_client.clone(), cfg).unwrap();
         *mgr.0.lock().unwrap() = cfg.raft_store.clone();
-        let mut controller = ConfigController::new(cfg);
+        let mut controller = ConfigController::new(cfg, version);
         controller.register("raft_store", Box::new(mgr.clone()));
         ConfigHandler::start(
             id.to_owned(),
             controller,
-            version,
             FutureWorker::new("test-pd-worker").scheduler(),
         )
         .unwrap()
@@ -298,7 +297,7 @@ fn test_dispatch_change() {
     });
 
     // refresh local config
-    cfg_handler.refresh_config(pd_client.clone()).unwrap();
+    cfg_handler.refresh_config(pd_client).unwrap();
 
     // config update
     assert_eq!(
