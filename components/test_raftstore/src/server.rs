@@ -188,7 +188,7 @@ impl Simulator for ServerCluster {
         let debug_service = DebugService::new(
             engines.clone(),
             pool,
-            raft_router.clone(),
+            raft_router,
             gc_worker.clone(),
             false,
         );
