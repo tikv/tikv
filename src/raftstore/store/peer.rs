@@ -141,7 +141,7 @@ impl ReadIndexQueue {
                 max_changed_offset = cmp::max(max_changed_offset, offset);
                 continue;
             }
-            error!(
+            debug!(
                 "cannot find corresponding read from pending reads";
                 "uuid" => ?uuid, "read-index" => index,
             );
