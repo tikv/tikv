@@ -131,7 +131,7 @@ mod tests {
             mgr.waiter_mgr_scheduler.clone(),
             mgr.detector_scheduler.clone(),
         );
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("pessimistic_txn", Box::new(mgr));
 
         (cfg_controller, w, d, lock_mgr)
