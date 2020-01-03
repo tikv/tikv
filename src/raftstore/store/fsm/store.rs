@@ -1,12 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use configuration::Configuration;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine_rocks::RocksEngine;
 use futures::Future;
-use kvproto::configpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
@@ -196,7 +197,7 @@ pub struct PollContext<T, C: 'static> {
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
-    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
+    pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSST task
     pub cleanup_scheduler: Scheduler<CleanupTask>,
@@ -208,7 +209,7 @@ pub struct PollContext<T, C: 'static> {
     pub store_meta: Arc<Mutex<StoreMeta>>,
     pub future_poller: ThreadPoolSender,
     pub raft_metrics: RaftMetrics,
-    pub snap_mgr: SnapManager,
+    pub snap_mgr: SnapManager<RocksEngine>,
     pub applying_snap_count: Arc<AtomicUsize>,
     pub coprocessor_host: Arc<CoprocessorHost>,
     pub timer: SteadyTimer,
@@ -597,8 +598,12 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                     self.messages_per_tick = incoming.messages_per_tick;
                 }
             }
+            info!(
+                "raftstore config updated";
+                "tag" => ?self.tag,
+                "change" => ?self.poll_ctx.cfg.diff(&incoming),
+            );
             self.poll_ctx.cfg = incoming.clone();
-            info!("raftstore config updated!");
         }
     }
 
@@ -708,7 +713,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
     pd_scheduler: FutureScheduler<PdTask>,
-    consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
+    consistency_check_scheduler: Scheduler<ConsistencyCheckTask<RocksEngine>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
@@ -718,7 +723,7 @@ pub struct RaftPollerBuilder<T, C> {
     pub importer: Arc<SSTImporter>,
     store_meta: Arc<Mutex<StoreMeta>>,
     future_poller: ThreadPoolSender,
-    snap_mgr: SnapManager,
+    snap_mgr: SnapManager<RocksEngine>,
     pub coprocessor_host: Arc<CoprocessorHost>,
     trans: T,
     pd_client: Arc<C>,
@@ -952,7 +957,7 @@ where
 
 struct Workers {
     pd_worker: FutureWorker<PdTask>,
-    consistency_check_worker: Worker<ConsistencyCheckTask>,
+    consistency_check_worker: Worker<ConsistencyCheckTask<RocksEngine>>,
     split_check_worker: Worker<SplitCheckTask>,
     // handle Compact, CleanupSST task
     cleanup_worker: Worker<CleanupTask>,
@@ -982,7 +987,7 @@ impl RaftBatchSystem {
         engines: Engines,
         trans: T,
         pd_client: Arc<C>,
-        mgr: SnapManager,
+        mgr: SnapManager<RocksEngine>,
         pd_worker: FutureWorker<PdTask>,
         store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost,
@@ -1142,9 +1147,8 @@ impl RaftBatchSystem {
         box_try!(workers.cleanup_worker.start(cleanup_runner));
 
         let config_client = box_try!(ConfigHandler::start(
-            cfg_controller.get_current().server.addr.clone(),
+            cfg_controller.get_current().server.advertise_addr.clone(),
             cfg_controller,
-            configpb::Version::new(), // TODO: we can reuse the returned Version of ConfigHandler::create
             workers.pd_worker.scheduler(),
         ));
         let pd_runner = PdRunner::new(
@@ -2213,7 +2217,7 @@ mod tests {
             .clone();
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("raft_store", Box::new(cfg_track.clone()));
         let builder = RaftPollerBuilder {
             cfg: cfg_track,

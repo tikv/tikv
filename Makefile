@@ -145,7 +145,7 @@ prof_release:
 # An optimized build instrumented with failpoints.
 # This is used for schrodinger chaos testing.
 fail_release:
-	FAIL_POINT=1 make release
+	FAIL_POINT=1 make dist_release
 
 ## Distribution builds (true release builds)
 ## -------------------
