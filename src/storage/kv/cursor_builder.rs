@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::Bound;
+
 use crate::storage::kv::Result;
 use crate::storage::{Cursor, Key, ScanMode, Snapshot};
 use engine::CfName;
@@ -16,6 +18,10 @@ pub struct CursorBuilder<'a, S: Snapshot> {
     prefix_seek: bool,
     upper_bound: Option<Key>,
     lower_bound: Option<Key>,
+    // hint for we will only scan data with commit ts >= hint_min_ts
+    hint_min_ts: Option<u64>,
+    // hint for we will only scan data with commit ts <= hint_max_ts
+    hint_max_ts: Option<u64>,
 }
 
 impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
@@ -30,6 +36,8 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             prefix_seek: false,
             upper_bound: None,
             lower_bound: None,
+            hint_min_ts: None,
+            hint_max_ts: None,
         }
     }
 
@@ -71,6 +79,24 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
         self
     }
 
+    /// Set the hint for the minimum commit ts we want to scan.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn hint_min_ts(mut self, min_ts: Option<u64>) -> Self {
+        self.hint_min_ts = min_ts;
+        self
+    }
+
+    /// Set the hint for the maximum commit ts we want to scan.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn hint_max_ts(mut self, max_ts: Option<u64>) -> Self {
+        self.hint_max_ts = max_ts;
+        self
+    }
+
     /// Build `Cursor` from the current configuration.
     pub fn build(self) -> Result<Cursor<S::Iter>> {
         let l_bound = if let Some(b) = self.lower_bound {
@@ -86,6 +112,12 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
             None
         };
         let mut iter_opt = IterOption::new(l_bound, u_bound, self.fill_cache);
+        if let Some(ts) = self.hint_min_ts {
+            iter_opt.set_hint_min_ts(Bound::Included(ts));
+        }
+        if let Some(ts) = self.hint_max_ts {
+            iter_opt.set_hint_max_ts(Bound::Included(ts));
+        }
         if self.prefix_seek {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
         }

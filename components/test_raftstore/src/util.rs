@@ -9,7 +9,9 @@ use rand::RngCore;
 use tempdir::TempDir;
 
 use kvproto::metapb::{self, RegionEpoch};
-use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
+use kvproto::pdpb::{
+    ChangePeer, CheckPolicy, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader,
+};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
@@ -350,9 +352,11 @@ pub fn new_pd_change_peer(
     resp
 }
 
-pub fn new_half_split_region() -> RegionHeartbeatResponse {
-    let split_region = SplitRegion::new();
-    let mut resp = RegionHeartbeatResponse::new();
+pub fn new_split_region(policy: CheckPolicy, keys: Vec<Vec<u8>>) -> RegionHeartbeatResponse {
+    let mut split_region = SplitRegion::default();
+    split_region.set_policy(policy);
+    split_region.set_keys(keys.into());
+    let mut resp = RegionHeartbeatResponse::default();
     resp.set_split_region(split_region);
     resp
 }
