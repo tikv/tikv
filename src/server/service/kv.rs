@@ -787,7 +787,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
 
         let stream = self
             .gc_worker
-            .async_physical_scan_lock(req.take_context(), req.get_max_ts().into())
+            .physical_scan_lock(req.take_context(), req.get_max_ts().into())
             .then(|result| {
                 let mut resp = PhysicalScanLockResponse::default();
                 match result {

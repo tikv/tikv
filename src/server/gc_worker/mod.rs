@@ -1486,7 +1486,7 @@ impl<E: Engine> GcWorker<E> {
         })
     }
 
-    pub fn async_physical_scan_lock(
+    pub fn physical_scan_lock(
         &self,
         ctx: Context,
         max_ts: TimeStamp,
@@ -2261,7 +2261,7 @@ mod tests {
         }
 
         let res: Vec<_> = gc_worker
-            .async_physical_scan_lock(Context::default(), 11.into())
+            .physical_scan_lock(Context::default(), 11.into())
             .wait()
             .map(|r| r.unwrap())
             .flatten()
