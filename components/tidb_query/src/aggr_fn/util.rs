@@ -49,7 +49,7 @@ pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) ->
             .decimal(tidb_query_datatype::UNSPECIFIED_LENGTH)
             .build(),
     };
-    let node = get_cast_fn_rpn_node(ret_field_type, new_ret_field_type)?;
+    let node = get_cast_fn_rpn_node(exp.is_constant(), ret_field_type, new_ret_field_type)?;
     exp.push(node);
     Ok(())
 }
@@ -67,7 +67,7 @@ pub fn rewrite_exp_for_bit_op(schema: &[FieldType], exp: &mut RpnExpression) -> 
             .flag(FieldTypeFlag::UNSIGNED)
             .build(),
     };
-    let node = get_cast_fn_rpn_node(ret_field_type, new_ret_field_type)?;
+    let node = get_cast_fn_rpn_node(exp.is_constant(), ret_field_type, new_ret_field_type)?;
     exp.push(node);
     Ok(())
 }
