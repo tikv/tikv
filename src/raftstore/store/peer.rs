@@ -25,8 +25,8 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
-    self, Progress, ProgressState, RawNode, ReadState, Ready, SnapshotStatus, StateRole,
-    INVALID_INDEX, NO_LIMIT,
+    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
+    NO_LIMIT,
 };
 use time::Timespec;
 use uuid::Uuid;
@@ -106,6 +106,8 @@ impl Drop for ReadIndexRequest {
 struct ReadIndexQueue {
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
+    // How many requests are handled.
+    handled_cnt: usize,
     // map[uuid] -> offset in `reads`.
     contexts: HashMap<Uuid, usize>,
 }
@@ -122,48 +124,48 @@ impl ReadIndexQueue {
     }
 
     /// update the read index of the requests that before the specified id.
-    fn advance_replica_reads(&mut self, states: &[ReadState]) {
-        if !states.is_empty() {
-            let (mut min_offset, mut max_offset) = (usize::MAX, 0);
-            for state in states {
-                let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
-                if let Some(offset) = self.contexts.remove(&uuid) {
-                    self.reads[offset].read_index = Some(state.index);
-                    min_offset = cmp::min(min_offset, offset);
-                    max_offset = cmp::max(max_offset, offset);
-                    continue;
+    fn advance_replica_reads<T: IntoIterator<Item = (Uuid, u64)>>(&mut self, states: T) {
+        let (mut min_changed_offset, mut max_changed_offset) = (usize::MAX, 0);
+        for (uuid, index) in states {
+            if let Some(offset) = self.contexts.remove(&uuid) {
+                let offset = offset.checked_sub(self.handled_cnt).unwrap();
+                self.ready_cnt = cmp::max(self.ready_cnt, offset + 1);
+
+                if let Some(occur_index) = self.reads[offset].read_index {
+                    if occur_index < index {
+                        continue;
+                    }
                 }
-                error!(
-                    "cannot find corresponding read from pending reads";
-                    "uuid" => ?uuid, "read-index" => state.index,
-                );
+                self.reads[offset].read_index = Some(index);
+                min_changed_offset = cmp::min(min_changed_offset, offset);
+                max_changed_offset = cmp::max(max_changed_offset, offset);
+                continue;
             }
-            if max_offset > 0 {
-                self.fold(min_offset, max_offset);
-            }
+            error!(
+                "cannot find corresponding read from pending reads";
+                "uuid" => ?uuid, "read-index" => index,
+            );
+        }
+
+        if self.ready_cnt > 1 && max_changed_offset > 0 {
+            self.fold(min_changed_offset, max_changed_offset);
         }
     }
 
-    fn fold(&mut self, min_offset: usize, max_offset: usize) {
-        let mut r_offset = max_offset;
-        loop {
+    fn fold(&mut self, mut min_changed_offset: usize, max_changed_offset: usize) {
+        let mut r_offset = max_changed_offset;
+        while r_offset >= min_changed_offset && r_offset > 0 {
             let r_idx = self.reads[r_offset].read_index.unwrap();
-            for l_offset in (0..r_offset).rev() {
-                let l_idx = self.reads[l_offset].read_index.get_or_insert(r_idx);
-                match (*l_idx).cmp(&r_idx) {
-                    cmp::Ordering::Greater => *l_idx = r_idx,
-                    cmp::Ordering::Equal => continue,
-                    cmp::Ordering::Less => {
-                        r_offset = l_offset;
-                        break;
-                    }
-                }
+            let l_offset = r_offset - 1;
+            if self.reads[l_offset]
+                .read_index
+                .map_or(true, |l_idx| l_idx > r_idx)
+            {
+                self.reads[l_offset].read_index = Some(r_idx);
+                min_changed_offset = cmp::min(min_changed_offset, l_offset);
             }
-            if r_offset < cmp::min(self.ready_cnt, min_offset + 1) {
-                break;
-            }
+            r_offset -= 1;
         }
-        self.ready_cnt = cmp::max(self.ready_cnt, max_offset + 1);
     }
 
     fn gc(&mut self) {
@@ -1489,6 +1491,7 @@ impl Peer {
                         cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                     }
                     self.pending_reads.ready_cnt -= 1;
+                    self.pending_reads.handled_cnt += 1;
                 } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
                     debug!("handle reads with a read index";
                         "request_id" => ?read.binary_id(),
@@ -1504,6 +1507,7 @@ impl Peer {
                         }
                     }
                     self.pending_reads.ready_cnt -= 1;
+                    self.pending_reads.handled_cnt += 1;
                 } else {
                     self.pending_reads.reads.push_front(read);
                 }
@@ -1520,8 +1524,11 @@ impl Peer {
         if !self.is_leader() {
             // NOTE: there could still be some read requests following, which will be cleared in
             // `clear_uncommitted` later.
-            self.pending_reads
-                .advance_replica_reads(ready.read_states());
+            let states = ready.read_states().iter().map(|state| {
+                let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
+                (uuid, state.index)
+            });
+            self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
         } else if self.ready_to_handle_read() {
             for state in ready.read_states() {
@@ -2092,7 +2099,8 @@ impl Peer {
         let read_proposal = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
         self.pending_reads.reads.push_back(read_proposal);
         if !self.is_leader() {
-            self.pending_reads.contexts.insert(id, self.pending_reads.reads.len() - 1);
+            let offset = self.pending_reads.handled_cnt + self.pending_reads.reads.len() - 1;
+            self.pending_reads.contexts.insert(id, offset);
         }
 
         debug!("request to get a read index";
@@ -3050,5 +3058,59 @@ mod tests {
             };
             assert!(inspector.inspect(&req).is_err());
         }
+    }
+
+    #[test]
+    fn test_read_queue_fold() {
+        let mut queue = ReadIndexQueue::default();
+        queue.handled_cnt = 125;
+        for _ in 0..100 {
+            let id = Uuid::new_v4();
+            queue.reads.push_back(ReadIndexRequest::with_command(
+                id,
+                RaftCmdRequest::default(),
+                Callback::None,
+                Timespec::new(0, 0),
+            ));
+
+            let offset = queue.handled_cnt + queue.reads.len() - 1;
+            queue.contexts.insert(id, offset);
+        }
+
+        queue.advance_replica_reads(vec![(queue.reads[0].id, 100)]);
+        assert_eq!(queue.ready_cnt, 1);
+
+        queue.advance_replica_reads(vec![(queue.reads[1].id, 100)]);
+        assert_eq!(queue.ready_cnt, 2);
+
+        queue.advance_replica_reads(vec![
+            (queue.reads[80].id, 80),
+            (queue.reads[84].id, 100),
+            (queue.reads[82].id, 70),
+            (queue.reads[78].id, 120),
+            (queue.reads[77].id, 40),
+        ]);
+        assert_eq!(queue.ready_cnt, 85);
+
+        queue.advance_replica_reads(vec![
+            (queue.reads[20].id, 80),
+            (queue.reads[24].id, 100),
+            (queue.reads[22].id, 70),
+            (queue.reads[18].id, 120),
+            (queue.reads[17].id, 40),
+        ]);
+        assert_eq!(queue.ready_cnt, 85);
+
+        for i in 0..78 {
+            assert_eq!(queue.reads[i].read_index.unwrap(), 40, "#{} failed", i);
+        }
+        for i in 78..83 {
+            assert_eq!(queue.reads[i].read_index.unwrap(), 70, "#{} failed", i);
+        }
+        for i in 84..85 {
+            assert_eq!(queue.reads[i].read_index.unwrap(), 100, "#{} failed", i);
+        }
+
+        std::mem::forget(queue);
     }
 }
