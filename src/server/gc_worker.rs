@@ -576,15 +576,15 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
             }
         };
 
+        // Refresh config before handle task
+        self.refresh_cfg();
+
         match task {
             GcTask::Gc {
                 mut ctx,
                 safe_point,
                 callback,
             } => {
-                // Gc worker config only use during `Gc` task, so it is
-                // okay not refresh config for `UnsafeDestroyRange` task
-                self.refresh_cfg();
                 let res = self.gc(&mut ctx, safe_point);
                 update_metrics(res.is_err());
                 callback(res);
@@ -2002,7 +2002,7 @@ mod tests {
             assert_eq!(cfg, &GcConfig::default());
         });
 
-        // update cg worker config
+        // Update gc worker config
         let mut incoming = cfg;
         incoming.gc.ratio_threshold = 1.23;
         incoming.gc.batch_keys = 1234;
@@ -2054,6 +2054,7 @@ mod tests {
             assert!(limiter.is_none());
         });
     }
+
     #[test]
     fn test_change_io_limit_by_debugger() {
         // Debugger use GcWorkerConfigManager to change io limit
