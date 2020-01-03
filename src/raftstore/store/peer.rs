@@ -162,6 +162,7 @@ impl ReadIndexQueue {
                 .map_or(true, |l_idx| l_idx > r_idx)
             {
                 self.reads[l_offset].read_index = Some(r_idx);
+                // Update `min_changed_offset`, it's required.
                 min_changed_offset = cmp::min(min_changed_offset, l_offset);
             }
             r_offset -= 1;
