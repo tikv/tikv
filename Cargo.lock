@@ -77,8 +77,10 @@ dependencies = [
 [[package]]
 name = "async-speed-limit"
 version = "0.1.0"
-source = "git+https://github.com/kennytm/async-speed-limit.git#2c5d3a43833974c8bb3a9ed7abc2d88da2c3f69e"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34a4598d0ca093ac0bdcc90cc6f72dc1da2f90572c63a0317d96b2ca0fbb9f9d"
 dependencies = [
+ "futures-core",
  "futures-io",
  "futures-timer",
  "pin-project-lite",

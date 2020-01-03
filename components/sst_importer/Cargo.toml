@@ -5,7 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-async-speed-limit = { version = "0.1", git = "https://github.com/kennytm/async-speed-limit.git" }
+async-speed-limit = "0.1"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 futures-executor = "0.3"
 crc32fast = "1.2"
