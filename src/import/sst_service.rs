@@ -25,7 +25,7 @@ use tikv_util::time::Instant;
 use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
 use sst_importer::service::*;
-use sst_importer::{Config, Error, SSTImporter};
+use sst_importer::{Config, Error, SSTImporter, error_inc};
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
@@ -319,7 +319,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         }
 
         ctx.spawn(
-            future::ok::<_, ()>(SetDownloadSpeedLimitResponse::default())
+            future::ok::<_, Error>(SetDownloadSpeedLimitResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
