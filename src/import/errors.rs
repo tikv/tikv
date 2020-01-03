@@ -16,6 +16,26 @@ use crate::raftstore::errors::Error as RaftStoreError;
 use crate::storage::mvcc::Error as MvccError;
 use tikv_util::codec::Error as CodecError;
 
+use super::metrics::*;
+
+pub fn error_inc(err: &Error) {
+    let label = match err {
+        Error::Io(..) => "io",
+        Error::Grpc(..) => "grpc",
+        Error::Uuid(..) => "uuid",
+        Error::RocksDB(..) => "rocksdb",
+        Error::ParseIntError(..) => "parse_int",
+        Error::FileExists(..) => "file_exists",
+        Error::FileCorrupted(..) => "file_corrupt",
+        Error::InvalidSSTPath(..) => "invalid_sst",
+        Error::Engine(..) => "engine",
+        Error::CannotReadExternalStorage(..) => "read_external_storage",
+        Error::WrongKeyPrefix(..) => "wrong_prefix",
+        _ => return,
+    };
+    IMPORTER_ERROR_VEC.with_label_values(&[label]).inc();
+}
+
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
