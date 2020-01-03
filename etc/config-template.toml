@@ -662,10 +662,10 @@
 [rocksdb.lockcf]
 # compression-per-level = ["no", "no", "no", "no", "no", "no", "no"]
 # block-size = "16KB"
-# write-buffer-size = "128MB"
+# write-buffer-size = "32MB"
 # max-write-buffer-number = 5
 # min-write-buffer-number-to-merge = 1
-# max-bytes-for-level-base = "32MB"
+# max-bytes-for-level-base = "128MB"
 # target-file-size-base = "8MB"
 # level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
