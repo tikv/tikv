@@ -7,6 +7,7 @@ use std::io::Write as _;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use kvproto::backup::StorageBackend;
 use kvproto::import_sstpb::*;
@@ -21,6 +22,7 @@ use engine::CF_WRITE;
 use external_storage::{create_storage, url_of_backend};
 
 use super::{Error, Result};
+use super::metrics::*;
 use crate::raftstore::store::keys;
 
 /// SSTImporter manages SST files that are waiting for ingesting.
@@ -132,6 +134,7 @@ impl SSTImporter {
         speed_limiter: Option<Arc<IOLimiter>>,
         mut sst_writer: SstWriter,
     ) -> Result<Option<Range>> {
+        let start = Instant::now();
         let path = self.dir.join(meta)?;
         let url = url_of_backend(backend);
 
@@ -150,6 +153,7 @@ impl SSTImporter {
                 let reason = format!("length {}, expect {}", file_length, meta.length);
                 return Err(Error::FileCorrupted(path.temp, reason));
             }
+            IMPORTER_DOWNLOAD_BYTES.observe(file_length as _);
             file_writer.sync_data()?;
         }
 
@@ -228,6 +232,10 @@ impl SSTImporter {
         if let Some(range) = direct_retval {
             // TODO: what about encrypted SSTs?
             fs::rename(&path.temp, &path.save)?;
+            let duration = start.elapsed();
+            IMPORTER_DOWNLOAD_DURATION
+                .with_label_values(&["rename"])
+                .observe(duration.as_secs_f64());
             return Ok(Some(range));
         }
 
@@ -278,6 +286,11 @@ impl SSTImporter {
         }
 
         let _ = fs::remove_file(&path.temp);
+
+        let duration = start.elapsed();
+        IMPORTER_DOWNLOAD_DURATION
+            .with_label_values(&["rewrite"])
+            .observe(duration.as_secs_f64());
 
         if let Some(start_key) = first_key {
             sst_writer.finish()?;
@@ -368,6 +381,7 @@ impl ImportDir {
     }
 
     fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
+        let start = Instant::now();
         let path = self.join(meta)?;
         let cf = meta.get_cf_name();
         prepare_sst_for_ingestion(&path.save, &path.clone)?;
@@ -376,6 +390,7 @@ impl ImportDir {
         if length != 0 || crc32 != 0 {
             // we only validate if the length and CRC32 are explicitly provided.
             validate_sst_for_ingestion(db, cf, &path.clone, length, crc32)?;
+            IMPORTER_INGEST_BYTES.observe(length as _)
         } else {
             debug!("skipping SST validation since length and crc32 are both 0");
         }
@@ -384,6 +399,9 @@ impl ImportDir {
         let mut opts = IngestExternalFileOptions::new();
         opts.move_files(true);
         db.ingest_external_file_cf(handle, &opts, &[path.clone.to_str().unwrap()])?;
+        IMPORTER_INGEST_DURATION
+            .with_label_values(&["ingest"])
+            .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
 

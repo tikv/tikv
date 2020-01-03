@@ -21,7 +21,7 @@ use tikv_util::time::Instant;
 use super::import_mode::*;
 use super::metrics::*;
 use super::service::*;
-use super::{Config, Error, SSTImporter};
+use super::{Config, Error, SSTImporter, error_inc};
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
