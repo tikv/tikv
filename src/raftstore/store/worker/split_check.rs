@@ -218,7 +218,7 @@ impl<S: CasualRouter> Runner<S> {
                     }
                 }
             },
-            CheckPolicy::USEKEY => unimplemented!(),
+            CheckPolicy::USEKEY => vec![], // Handled by pd worker directly.
         };
 
         if !split_keys.is_empty() {
