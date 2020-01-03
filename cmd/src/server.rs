@@ -100,6 +100,8 @@ struct TiKVServer {
     store_path: PathBuf,
     engines: Option<Engines>,
     servers: Option<Servers>,
+    region_info_accessor: RegionInfoAccessor,
+    coprocessor_host: Option<CoprocessorHost>,
     to_stop: Vec<Box<dyn Stop>>,
 }
 
@@ -112,7 +114,6 @@ struct Engines {
 
 struct Servers {
     lock_mgr: Option<LockManager>,
-    region_info_accessor: RegionInfoAccessor,
     server: Server<ServerRaftStoreRouter, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
@@ -140,6 +141,9 @@ impl TiKVServer {
 
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
+        let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
+        let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
+        region_info_accessor.start();
 
         TiKVServer {
             config,
@@ -152,6 +156,8 @@ impl TiKVServer {
             store_path,
             engines: None,
             servers: None,
+            region_info_accessor,
+            coprocessor_host,
             to_stop: vec![Box::new(resolve_worker)],
         }
     }
@@ -326,6 +332,7 @@ impl TiKVServer {
             engines.engine.clone(),
             Some(engines.engines.kv.clone()),
             Some(engines.raft_router.clone()),
+            Some(self.region_info_accessor.clone()),
             self.config.gc.clone(),
         );
         gc_worker
@@ -341,7 +348,7 @@ impl TiKVServer {
     ) -> Arc<ServerConfig> {
         let mut cfg_controller = self.cfg_controller.take().unwrap();
         // Create CoprocessorHost.
-        let mut coprocessor_host = CoprocessorHost::new(self.router.clone());
+        let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
         let lock_mgr = if self.config.pessimistic_txn.enabled {
             let lock_mgr = LockManager::new();
@@ -384,10 +391,6 @@ impl TiKVServer {
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
             .build(snap_path, Some(self.router.clone()));
-
-        // Create region collection.
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
-        region_info_accessor.start();
 
         // Create coprocessor endpoint.
         let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
@@ -436,7 +439,7 @@ impl TiKVServer {
         // Start auto gc
         let auto_gc_config = AutoGcConfig::new(
             self.pd_client.clone(),
-            region_info_accessor.clone(),
+            self.region_info_accessor.clone(),
             node.id(),
         );
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config) {
@@ -445,7 +448,6 @@ impl TiKVServer {
 
         self.servers = Some(Servers {
             lock_mgr,
-            region_info_accessor,
             server,
             node,
             importer,
@@ -541,7 +543,7 @@ impl TiKVServer {
         let backup_endpoint = backup::Endpoint::new(
             servers.node.id(),
             engines.engine.clone(),
-            servers.region_info_accessor.clone(),
+            self.region_info_accessor.clone(),
             engines.engines.kv.clone(),
         );
         let backup_timer = backup_endpoint.new_timer();
@@ -607,7 +609,7 @@ impl TiKVServer {
             .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
 
         servers.node.stop();
-        servers.region_info_accessor.stop();
+        self.region_info_accessor.stop();
         if let Some(lm) = servers.lock_mgr.as_mut() {
             lm.stop();
         }
