@@ -1817,6 +1817,9 @@ impl ConfigController {
         &mut self,
         mut incoming: TiKvConfig,
     ) -> CfgResult<Either<ConfigChange, bool>> {
+        // Config from PD have not been checked, call `compatible_adjust()`
+        // and `validate()` before use it
+        incoming.compatible_adjust();
         if incoming.validate().is_err() {
             let diff = incoming.diff(&self.current);
             return Ok(Either::Left(diff));
@@ -1844,6 +1847,7 @@ impl ConfigController {
                 }
             }
         }
+        debug!("all config change had been dispatched"; "change" => ?to_update);
         self.current.update(to_update);
         Ok(Either::Right(true))
     }
@@ -1934,6 +1938,7 @@ impl ConfigHandler {
                     version = configpb::Version::default();
                     incoming = local_config;
                 }
+                info!("register config success"; "version" => ?version);
                 Ok((version, incoming))
             }
             _ => Err(format!("failed to register config, response: {:?}", resp).into()),
@@ -1962,10 +1967,7 @@ impl ConfigHandler {
                         if updated {
                             info!("local config updated"; "version" => ?version);
                         } else {
-                            info!(
-                                "remote config upated, which will take effect after restarting the node";
-                                "version" => ?version
-                            );
+                            info!("config version upated"; "version" => ?version);
                         }
                         self.version = version;
                     }

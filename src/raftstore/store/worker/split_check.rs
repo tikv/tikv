@@ -307,7 +307,7 @@ impl<S: CasualRouter> Runner<S> {
 
     fn change_cfg(&mut self, change: ConfigChange) {
         info!(
-            "split check config updated!";
+            "split check config updated";
             "change" => ?change
         );
         self.cfg.update(change);
