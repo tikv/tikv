@@ -1392,8 +1392,8 @@ impl Peer {
         // update the `read_index` of read request that before this successful
         // `ready`.
         if !self.is_leader() {
-            // NOTE: there could still be some read requests following, which will be cleared in
-            // `clear_uncommitted` later.
+            // NOTE: there could still be some pending reads proposed by the peer when it was
+            // leader. They will be cleared in `clear_uncommitted` later in the function.
             let states = ready.read_states().iter().map(|state| {
                 let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
                 (uuid, state.index)
