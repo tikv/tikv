@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use configuration::Configuration;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
@@ -7,7 +8,6 @@ use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine_rocks::RocksEngine;
 use futures::Future;
-use kvproto::configpb;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
@@ -598,8 +598,12 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                     self.messages_per_tick = incoming.messages_per_tick;
                 }
             }
+            info!(
+                "raftstore config updated";
+                "tag" => ?self.tag,
+                "change" => ?self.poll_ctx.cfg.diff(&incoming),
+            );
             self.poll_ctx.cfg = incoming.clone();
-            info!("raftstore config updated!");
         }
     }
 
@@ -1143,9 +1147,8 @@ impl RaftBatchSystem {
         box_try!(workers.cleanup_worker.start(cleanup_runner));
 
         let config_client = box_try!(ConfigHandler::start(
-            cfg_controller.get_current().server.addr.clone(),
+            cfg_controller.get_current().server.advertise_addr.clone(),
             cfg_controller,
-            configpb::Version::new(), // TODO: we can reuse the returned Version of ConfigHandler::create
             workers.pd_worker.scheduler(),
         ));
         let pd_runner = PdRunner::new(
@@ -2214,7 +2217,7 @@ mod tests {
             .clone();
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
         let cfg_track = Arc::new(VersionTrack::new(cfg.raft_store.clone()));
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("raft_store", Box::new(cfg_track.clone()));
         let builder = RaftPollerBuilder {
             cfg: cfg_track,
