@@ -138,7 +138,9 @@ impl ReadIndexQueue {
                     "uuid" => ?uuid, "read-index" => state.index,
                 );
             }
-            self.fold(min_offset, max_offset);
+            if max_offset > 0 {
+                self.fold(min_offset, max_offset);
+            }
         }
     }
 
