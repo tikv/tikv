@@ -22,6 +22,7 @@ use log_wrappers::DisplayValue;
 use raft::StateRole;
 use tokio_core::reactor::Handle;
 
+use crate::raftstore::coprocessor::RegionInfoAccessor;
 use crate::raftstore::router::ServerRaftStoreRouter;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
@@ -30,7 +31,7 @@ use crate::storage::kv::{
     Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
     Statistics,
 };
-use crate::storage::mvcc::{MvccReader, MvccTxn};
+use crate::storage::mvcc::{check_need_gc, MvccReader, MvccTxn};
 use crate::storage::{Callback, Error, ErrorInner, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
@@ -161,6 +162,7 @@ struct GcRunner<E: Engine> {
     engine: E,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
+    region_info_accessor: Option<RegionInfoAccessor>,
 
     /// Used to limit the write flow of GC.
     limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
@@ -175,6 +177,7 @@ impl<E: Engine> GcRunner<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
+        region_info_accessor: Option<RegionInfoAccessor>,
         limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
         cfg: GcConfig,
     ) -> Self {
@@ -182,6 +185,7 @@ impl<E: Engine> GcRunner<E> {
             engine,
             local_storage,
             raft_store_router,
+            region_info_accessor,
             limiter,
             cfg,
             stats: Statistics::default(),
@@ -201,6 +205,80 @@ impl<E: Engine> GcRunner<E> {
             None => Err(EngineError::from(EngineErrorInner::Timeout(timeout))),
         }
         .map_err(Error::from)
+    }
+
+    /// Check need gc without getting snapshot.
+    /// If this is not supported or any error happens, returns true to do further check after
+    /// getting snapshot.
+    fn need_gc(&self, ctx: &Context, safe_point: TimeStamp) -> bool {
+        let region_info_accessor = match &self.region_info_accessor {
+            Some(r) => r,
+            None => {
+                info!(
+                    "region_info_accessor not set. cannot check need_gc without getting snapshot"
+                );
+                return true;
+            }
+        };
+
+        let db = match &self.local_storage {
+            Some(db) => db,
+            None => {
+                info!("local_storage not set. cannot check need_gc without getting snapshot");
+                return true;
+            }
+        };
+
+        let (tx, rx) = mpsc::channel();
+        if let Err(e) = region_info_accessor.find_region_by_id(
+            ctx.get_region_id(),
+            Box::new(move |region| match tx.send(region) {
+                Ok(()) => (),
+                Err(e) => error!(
+                    "find_region_by_id failed to send result";
+                    "err" => ?e
+                ),
+            }),
+        ) {
+            error!(
+                "failed to find_region_by_id from region_info_accessor";
+                "region_id" => ctx.get_region_id(),
+                "err" => ?e
+            );
+            return true;
+        }
+
+        let region_info = match rx.recv() {
+            Ok(None) => return true,
+            Ok(Some(r)) => r,
+            Err(e) => {
+                error!(
+                    "failed to find_region_by_id from region_info_accessor";
+                    "region_id" => ctx.get_region_id(),
+                    "err" => ?e
+                );
+                return true;
+            }
+        };
+
+        let start_key = keys::data_key(region_info.region.get_start_key());
+        let end_key = keys::data_end_key(region_info.region.get_end_key());
+
+        let collection =
+            match engine::util::get_range_properties_cf(&db, CF_WRITE, &start_key, &end_key) {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(
+                        "failed to get range properties from write cf";
+                        "region_id" => ctx.get_region_id(),
+                        "start_key" => hex::encode_upper(&start_key),
+                        "end_key" => hex::encode_upper(&end_key),
+                        "err" => ?e,
+                    );
+                    return true;
+                }
+            };
+        check_need_gc(safe_point, self.cfg.ratio_threshold, collection)
     }
 
     /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress
@@ -306,6 +384,11 @@ impl<E: Engine> GcRunner<E> {
             "region_id" => ctx.get_region_id(),
             "safe_point" => safe_point
         );
+
+        if !self.need_gc(ctx, safe_point) {
+            GC_SKIPPED_COUNTER.inc();
+            return Ok(());
+        }
 
         let mut next_key = None;
         loop {
@@ -1101,6 +1184,10 @@ pub struct GcWorker<E: Engine> {
     local_storage: Option<Arc<DB>>,
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
     raft_store_router: Option<ServerRaftStoreRouter>,
+    /// Access the region's meta before getting snapshot, which will wake hibernating regions up.
+    /// This is useful to do the `need_gc` check without waking hibernatin regions up.
+    /// This is not set for tests.
+    region_info_accessor: Option<RegionInfoAccessor>,
 
     cfg: Option<GcConfig>,
     limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
@@ -1126,6 +1213,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             engine: self.engine.clone(),
             local_storage: self.local_storage.clone(),
             raft_store_router: self.raft_store_router.clone(),
+            region_info_accessor: self.region_info_accessor.clone(),
             cfg: self.cfg.clone(),
             limiter: self.limiter.clone(),
             scheduled_tasks: self.scheduled_tasks.clone(),
@@ -1158,6 +1246,7 @@ impl<E: Engine> GcWorker<E> {
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
+        region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
     ) -> GcWorker<E> {
         let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
@@ -1173,6 +1262,7 @@ impl<E: Engine> GcWorker<E> {
             engine,
             local_storage,
             raft_store_router,
+            region_info_accessor,
             cfg: Some(cfg),
             limiter: Arc::new(Mutex::new(limiter)),
             scheduled_tasks: Arc::new(atomic::AtomicUsize::new(0)),
@@ -1199,6 +1289,7 @@ impl<E: Engine> GcWorker<E> {
             self.engine.clone(),
             self.local_storage.take(),
             self.raft_store_router.take(),
+            self.region_info_accessor.take(),
             self.limiter.clone(),
             self.cfg.take().unwrap(),
         );
@@ -1668,7 +1759,7 @@ mod tests {
             .build()
             .unwrap();
         let db = engine.get_rocksdb();
-        let mut gc_worker = GcWorker::new(engine, Some(db), None, GcConfig::default());
+        let mut gc_worker = GcWorker::new(engine, Some(db), None, None, GcConfig::default());
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1835,7 +1926,7 @@ mod tests {
     #[test]
     fn test_change_io_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let mut gc_worker = GcWorker::new(engine, None, None, GcConfig::default());
+        let mut gc_worker = GcWorker::new(engine, None, None, None, GcConfig::default());
         gc_worker.start().unwrap();
         assert!(gc_worker.limiter.lock().unwrap().is_none());
 

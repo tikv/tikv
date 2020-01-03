@@ -56,8 +56,13 @@ impl<E: Engine> SyncTestStorageBuilder<E> {
         if let Some(config) = self.config.take() {
             builder = builder.config(config);
         }
-        let mut gc_worker =
-            GcWorker::new(self.engine, None, None, self.gc_config.unwrap_or_default());
+        let mut gc_worker = GcWorker::new(
+            self.engine,
+            None,
+            None,
+            None,
+            self.gc_config.unwrap_or_default(),
+        );
         gc_worker.start()?;
 
         Ok(SyncTestStorage {
