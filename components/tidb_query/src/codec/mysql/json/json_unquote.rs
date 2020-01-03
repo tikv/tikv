@@ -14,6 +14,9 @@ const CHAR_FORMFEED: char = '\x0C';
 const CHAR_CARRIAGE_RETURN: char = '\x0D';
 
 impl<'a> JsonRef<'a> {
+    /// `unquote` recognizes the escape sequences shown in:
+    /// https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#
+    /// json-unquote-character-escape-sequences
     pub fn unquote(&self) -> Result<String> {
         match self.get_type() {
             JsonType::String => {
@@ -26,9 +29,6 @@ impl<'a> JsonRef<'a> {
     }
 }
 
-// unquote_string recognizes the escape sequences shown in:
-// https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#
-// json-unquote-character-escape-sequences
 pub fn unquote_string(s: &str) -> Result<String> {
     let mut ret = String::with_capacity(s.len());
     let mut chars = s.chars();

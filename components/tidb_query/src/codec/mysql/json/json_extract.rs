@@ -6,9 +6,9 @@ use super::path_expr::{
 use super::{Json, JsonRef, JsonType};
 
 impl Json {
-    // extract receives several path expressions as arguments, matches them in j, and returns
-    // the target JSON matched any path expressions, which may be autowrapped as an array.
-    // If there is no any expression matched, it returns None.
+    /// `extract` receives several path expressions as arguments, matches them in j, and returns
+    /// the target JSON matched any path expressions, which may be autowrapped as an array.
+    /// If there is no any expression matched, it returns None.
     pub fn extract(&self, path_expr_list: &[PathExpression]) -> Option<Json> {
         let mut elem_list = Vec::with_capacity(path_expr_list.len());
         for path_expr in path_expr_list {
@@ -28,7 +28,7 @@ impl Json {
     }
 }
 
-// extract_json is used by JSON::extract().
+/// `extract_json` is used by JSON::extract().
 pub fn extract_json<'a>(j: JsonRef<'a>, path_legs: &[PathLeg]) -> Vec<JsonRef<'a>> {
     if path_legs.is_empty() {
         return vec![j];

@@ -11,18 +11,13 @@ use crate::codec::{Error, Result};
 use codec::number::NumberCodec;
 use codec::prelude::*;
 
-// The binary Json format from `MySQL` 5.7 is in the following link:
-// (https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52)
-// The only difference is that we use large `object` or large `array` for
-// the small corresponding ones. That means in our implementation there
-// is no difference between small `object` and big `object`, so does `array`.
 impl<'a> JsonRef<'a> {
-    // Get the ith element in JsonRef
+    /// Gets the ith element in JsonRef
     pub fn array_get_elem(&self, idx: usize) -> JsonRef<'a> {
         self.val_entry_get(HEADER_LEN + idx * VALUE_ENTRY_LEN)
     }
 
-    // Return the ith key in current Object json
+    /// Return the `i`th key in current Object json
     pub fn object_get_key(&self, i: usize) -> &'a [u8] {
         let key_off_start = HEADER_LEN + i * KEY_ENTRY_LEN;
         let key_off = NumberCodec::decode_u32_le(&self.value()[key_off_start..]) as usize;
@@ -30,14 +25,14 @@ impl<'a> JsonRef<'a> {
         &self.value()[key_off..key_off + key_len]
     }
 
-    // Return the JsonRef of ith value in current Object json
+    /// Returns the JsonRef of `i`th value in current Object json
     pub fn object_get_val(&self, i: usize) -> JsonRef<'a> {
         let ele_count = self.get_elem_count() as usize;
         let val_entry_off = HEADER_LEN + ele_count * KEY_ENTRY_LEN + i * VALUE_ENTRY_LEN;
         self.val_entry_get(val_entry_off)
     }
 
-    // Try to get the value index by the give `key` in Object.
+    /// Searches the value index by the give `key` in Object.
     pub fn object_search_key(&self, key: &[u8]) -> Option<usize> {
         let len = self.get_elem_count() as usize;
         let mut j = len;
@@ -56,7 +51,7 @@ impl<'a> JsonRef<'a> {
         None
     }
 
-    // Get the value (JsonRef) by the given offset of the value entry
+    /// Gets the value (JsonRef) by the given offset of the value entry
     pub fn val_entry_get(&self, val_entry_off: usize) -> JsonRef<'a> {
         let val_type: JsonType = self.value()[val_entry_off].into();
         let val_offset =
@@ -86,10 +81,12 @@ impl<'a> JsonRef<'a> {
         }
     }
 
+    /// Returns a raw pointer to the underlying values buffer.
     pub fn as_ptr(&self) -> *const u8 {
         self.value.as_ptr()
     }
 
+    /// Returns the literal value of JSON document
     pub fn as_literal(&self) -> Result<u8> {
         match self.get_type() {
             JsonType::Literal => Ok(self.value()[0]),
@@ -101,6 +98,7 @@ impl<'a> JsonRef<'a> {
         }
     }
 
+    /// Returns the encoding binary length of self
     pub fn binary_len(&self) -> usize {
         TYPE_LEN + self.value.len()
     }

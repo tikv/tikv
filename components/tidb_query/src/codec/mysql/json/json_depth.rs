@@ -3,6 +3,7 @@
 use super::{Json, JsonRef, JsonType};
 
 impl Json {
+    /// Returns maximum depth of JSON document
     pub fn depth(&self) -> i64 {
         match self.as_ref().get_type() {
             JsonType::Object | JsonType::Array => depth_json(self.as_ref()),
@@ -11,7 +12,7 @@ impl Json {
     }
 }
 
-pub fn depth_json(j: JsonRef<'_>) -> i64 {
+fn depth_json(j: JsonRef<'_>) -> i64 {
     (match j.get_type() {
         JsonType::Object => {
             let length = j.get_elem_count() as usize;

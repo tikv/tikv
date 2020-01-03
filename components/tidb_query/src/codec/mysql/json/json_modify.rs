@@ -17,9 +17,9 @@ pub enum ModifyType {
 }
 
 impl Json {
-    // Modifies a Json object by insert, replace or set.
-    // All path expressions cannot contain * or ** wildcard.
-    // If any error occurs, the input won't be changed.
+    /// Modifies a Json object by insert, replace or set.
+    /// All path expressions cannot contain * or ** wildcard.
+    /// If any error occurs, the input won't be changed.
     pub fn modify(
         &mut self,
         path_expr_list: &[PathExpression],

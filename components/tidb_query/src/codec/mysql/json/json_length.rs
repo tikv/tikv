@@ -4,19 +4,15 @@ use super::path_expr::PathExpression;
 use super::{Json, JsonType};
 
 impl Json {
-    pub fn len(&self) -> Option<i64> {
+    fn len(&self) -> Option<i64> {
         match self.as_ref().get_type() {
             JsonType::Array | JsonType::Object => Some(i64::from(self.as_ref().get_elem_count())),
             _ => Some(1),
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len().or_else(|| Some(0)).unwrap() == 0
-    }
-
-    // `json_length` is the implementation for JSON_LENGTH in mysql
-    // https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-length
+    /// `json_length` is the implementation for JSON_LENGTH in mysql
+    /// https://dev.mysql.com/doc/refman/5.7/en/json-attribute-functions.html#function_json-length
     pub fn json_length(&self, path_expr_list: &[PathExpression]) -> Option<i64> {
         if path_expr_list.is_empty() {
             return self.len();

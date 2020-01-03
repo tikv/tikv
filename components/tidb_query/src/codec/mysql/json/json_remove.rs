@@ -6,9 +6,9 @@ use super::path_expr::PathExpression;
 use super::Json;
 
 impl Json {
-    // Remove elements from Json,
-    // All path expressions cannot contain * or ** wildcard.
-    // If any error occurs, the input won't be changed.
+    /// Removes elements from Json,
+    /// All path expressions cannot contain * or ** wildcard.
+    /// If any error occurs, the input won't be changed.
     pub fn remove(&mut self, path_expr_list: &[PathExpression]) -> Result<()> {
         if path_expr_list
             .iter()

@@ -8,17 +8,21 @@ use super::{Json, JsonRef, JsonType};
 use codec::number::NumberCodec;
 use std::ptr;
 
+/// A helper struct that derives a new JSON by combining and manipulating
+/// the encoded bytes directly. Only used by `json_replace`, `json_set`, 
+/// `json_insert` and `json_remove`
 pub struct BinaryModifier<'a> {
     // The target Json to be modified
     old: JsonRef<'a>,
     // The ptr point to the memory location of `old.value` that `new_value` should be appended
     to_be_modified_ptr: *const u8,
     // The new encoded value
-    // TODO(fullstop000): use Json instead ?
+    // TODO(fullstop000): Can we just use Json instead ?
     new_value: Option<Json>,
 }
 
 impl<'a> BinaryModifier<'a> {
+    /// Creates a new `BinaryModifier` from a `JsonRef`
     pub fn new(old: JsonRef<'a>) -> BinaryModifier<'_> {
         Self {
             // The initial offset is 0 by `as_ref()` call
@@ -29,6 +33,8 @@ impl<'a> BinaryModifier<'a> {
         }
     }
 
+    /// Replaces the existing value JSON and adds nonexisting value 
+    /// specified by the expression path with `new`
     pub fn set(mut self, path: &PathExpression, new: Json) -> Result<Json> {
         let result = extract_json(self.old.clone(), path.legs.as_slice());
         if !result.is_empty() {
@@ -40,6 +46,7 @@ impl<'a> BinaryModifier<'a> {
         self.rebuild()
     }
 
+    /// Replaces the existing value JSON specified by the expression path with `new`
     pub fn replace(mut self, path: &PathExpression, new: Json) -> Result<Json> {
         let result = extract_json(self.old.clone(), path.legs.as_slice());
         if result.is_empty() {
@@ -50,6 +57,8 @@ impl<'a> BinaryModifier<'a> {
         self.rebuild()
     }
 
+    /// Inserts a `new` into `old` JSON document by given expression path without replacing
+    /// existing values
     pub fn insert(mut self, path: &PathExpression, new: Json) -> Result<Json> {
         let result = extract_json(self.old.clone(), path.legs.as_slice());
         if !result.is_empty() {
@@ -192,7 +201,8 @@ impl<'a> BinaryModifier<'a> {
         Ok(Json::new(new_tp, buf))
     }
 
-    // Returns current new value's JsonType
+    // Returns the old JSON's `JsonType` if the old is untouched and 
+    // returns the new appended JSON's `JsonType` if the old has been modified
     fn rebuild_to(&mut self, buf: &mut Vec<u8>) -> Result<JsonType> {
         if self.to_be_modified_ptr == self.old.as_ptr() {
             // Replace the old directly
@@ -244,6 +254,7 @@ impl<'a> BinaryModifier<'a> {
                         }
                         HEADER_LEN + elem_count * KEY_ENTRY_LEN
                     }
+                    // This must be impossible
                     _ => return Err(box_err!("Unexpected source json type")),
                 };
                 // Resolve values

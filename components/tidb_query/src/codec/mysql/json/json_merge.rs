@@ -4,14 +4,14 @@ use super::{Json, JsonType};
 use std::collections::BTreeMap;
 
 impl Json {
-    // `merge` is the implementation for JSON_MERGE in mysql
-    // https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#function_json-merge
-    //
-    // The merge rules are listed as following:
-    // 1. adjacent arrays are merged to a single array;
-    // 2. adjacent object are merged to a single object;
-    // 3. a scalar value is autowrapped as an array before merge;
-    // 4. an adjacent array and object are merged by autowrapping the object as an array.
+    /// `merge` is the implementation for JSON_MERGE in mysql
+    /// https://dev.mysql.com/doc/refman/5.7/en/json-modification-functions.html#function_json-merge
+    ///
+    /// The merge rules are listed as following:
+    /// 1. adjacent arrays are merged to a single array;
+    /// 2. adjacent object are merged to a single object;
+    /// 3. a scalar value is autowrapped as an array before merge;
+    /// 4. an adjacent array and object are merged by autowrapping the object as an array.
     pub fn merge(mut bjs: Vec<Json>) -> Json {
         let mut result = vec![];
         let mut objects = vec![];
@@ -45,7 +45,7 @@ fn merge_binary_array(elems: Vec<Json>) -> Json {
         } else {
             let child_count = j.as_ref().get_elem_count() as usize;
             for i in 0..child_count {
-                // TODO: try to remove to_owned()
+                // TODO: Can we remove `to_owned`
                 buf.push(j.as_ref().array_get_elem(i).to_owned());
             }
         }

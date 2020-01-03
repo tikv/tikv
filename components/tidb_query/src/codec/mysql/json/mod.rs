@@ -37,7 +37,7 @@ use constants::{JSON_LITERAL_FALSE, JSON_LITERAL_NIL, JSON_LITERAL_TRUE};
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
-#[repr(u8)]
+/// The types of `Json` which follows https://tools.ietf.org/html/rfc7159#section-3
 #[derive(Eq, PartialEq, FromPrimitive, Clone, Debug, Copy)]
 pub enum JsonType {
     Object = 0x01,
@@ -55,6 +55,7 @@ impl From<u8> for JsonType {
     }
 }
 
+/// Represents a reference of JSON value aiming to reduce memory copy.
 #[derive(Clone, Debug)]
 pub struct JsonRef<'a> {
     type_code: JsonType,
@@ -70,6 +71,7 @@ impl<'a> JsonRef<'a> {
         }
     }
 
+    /// Returns an owned Json via copying
     pub fn to_owned(&self) -> Json {
         Json {
             type_code: self.type_code,
@@ -77,31 +79,38 @@ impl<'a> JsonRef<'a> {
         }
     }
 
+    /// Returns the JSON type
     pub fn get_type(&self) -> JsonType {
         self.type_code
     }
 
+    /// Returns the underlying value slice
     pub fn value(&self) -> &'a [u8] {
         &self.value
     }
 
+    /// Returns the JSON value as u64
     pub fn get_u64(&self) -> u64 {
         NumberCodec::decode_u64_le(self.value())
     }
 
+    /// Returns the JSON value as i64
     pub fn get_i64(&self) -> i64 {
         NumberCodec::decode_i64_le(self.value())
     }
 
+    /// Returns the JSON value as f64
     pub fn get_double(&self) -> f64 {
         NumberCodec::decode_f64_le(self.value())
     }
 
-    // Gets the count of Object or Array
+    /// Gets the count of Object or Array
     pub fn get_elem_count(&self) -> u32 {
         NumberCodec::decode_u32_le(self.value())
     }
 
+    /// Returns `None` if the JSON value is `null`. Otherwise, returns
+    /// `Some(bool)`
     pub fn get_literal(&self) -> Option<bool> {
         match self.value()[0] {
             JSON_LITERAL_FALSE => Some(false),
@@ -110,32 +119,34 @@ impl<'a> JsonRef<'a> {
         }
     }
 
-    // Get string value in bytes
+    /// Returns the string value in bytes
     pub fn get_str_bytes(&self) -> &[u8] {
         let val = self.value();
         let (str_len, len_len) = NumberCodec::try_decode_var_u64(val).unwrap();
         &val[len_len..len_len + str_len as usize]
     }
 
+    /// Returns the value as a &str
     pub fn get_str(&self) -> &str {
         str::from_utf8(self.get_str_bytes()).unwrap()
     }
 }
 
-/// Json implements type json used in tikv, it specifies the following
-/// implementations:
-/// 1. Serialize `json` values into binary representation, and reading values
-///  back from the binary representation.
-/// 2. Serialize `json` values into readable string representation, and reading
-/// values back from string representation.
-/// 3. sql functions like `JSON_TYPE`, etc
+/// Json implements type json used in tikv by Binary Json.
+/// The Binary Json format from `MySQL` 5.7 is in the following link:
+/// (https://github.com/mysql/mysql-server/blob/5.7/sql/json_binary.h#L52)
+/// The only difference is that we use large `object` or large `array` for
+/// the small corresponding ones. That means in our implementation there
+/// is no difference between small `object` and big `object`, so does `array`.
 #[derive(Clone, Debug)]
 pub struct Json {
     type_code: JsonType,
+    /// The binary encoded json data in bytes
     pub value: Vec<u8>,
 }
 
 impl Json {
+    /// Creates a new JSON from the type and encoded bytes
     pub fn new<T: Into<JsonType>>(tp: T, value: Vec<u8>) -> Self {
         Self {
             type_code: tp.into(),
@@ -143,35 +154,28 @@ impl Json {
         }
     }
 
-    pub fn new_empty<T: Into<JsonType>>(tp: T) -> Self {
+    fn new_empty<T: Into<JsonType>>(tp: T) -> Self {
         Self {
             type_code: tp.into(),
             value: vec![],
         }
     }
 
-    pub fn from_slice(src: &[u8]) -> Self {
-        assert!(src.len() > 1);
-        let tp = src[0];
-        let value = Vec::from(&src[1..]);
-        Self {
-            type_code: tp.into(),
-            value,
-        }
-    }
-
+    /// Creates a `string` JSON from a `String`
     pub fn from_string(s: String) -> Self {
         let mut j = Self::new_empty(JsonType::String);
         j.value.write_json_str(s.as_str()).unwrap();
         j
     }
 
+    /// Creates a `string` JSON from a `&str`
     pub fn from_str_val(s: &str) -> Self {
         let mut j = Self::new_empty(JsonType::String);
         j.value.write_json_str(s).unwrap();
         j
     }
 
+    /// Creates a `literal` JSON from a `bool`
     pub fn from_bool(b: bool) -> Self {
         let mut j = Self::new_empty(JsonType::Literal);
         if b {
@@ -182,36 +186,42 @@ impl Json {
         j
     }
 
+    /// Creates a `number` JSON from a `u64`
     pub fn from_u64(v: u64) -> Self {
         let mut j = Self::new_empty(JsonType::U64);
         j.value.write_json_u64(v).unwrap();
         j
     }
 
+    /// Creates a `number` JSON from a `f64`
     pub fn from_f64(v: f64) -> Self {
         let mut j = Self::new_empty(JsonType::Double);
         j.value.write_json_f64(v).unwrap();
         j
     }
 
+    /// Creates a `number` JSON from an `i64`
     pub fn from_i64(v: i64) -> Self {
         let mut j = Self::new_empty(JsonType::I64);
         j.value.write_json_i64(v).unwrap();
         j
     }
 
+    /// Creates a `array` JSON from a collection of `JsonRef`
     pub fn from_ref_array(array: Vec<JsonRef<'_>>) -> Self {
         let mut j = Self::new_empty(JsonType::Array);
         j.value.write_json_ref_array(&array).unwrap();
         j
     }
 
+    /// Creates a `array` JSON from a collection of `Json`
     pub fn from_array(array: Vec<Json>) -> Self {
         let mut j = Self::new_empty(JsonType::Array);
         j.value.write_json_array(&array).unwrap();
         j
     }
 
+    /// Creates a `object` JSON from key-value pairs
     pub fn from_kv_pairs<'a>(keys: Vec<&[u8]>, values: Vec<JsonRef<'a>>) -> Self {
         let mut j = Self::new_empty(JsonType::Object);
         j.value
@@ -220,6 +230,7 @@ impl Json {
         j
     }
 
+    /// Creates a `object` JSON from key-value pairs in BTreeMap
     pub fn from_object(map: BTreeMap<String, Json>) -> Self {
         let mut j = Self::new_empty(JsonType::Object);
         // TODO(fullstop000): use write_json_obj_from_keys_values instead
@@ -227,12 +238,14 @@ impl Json {
         j
     }
 
+    /// Creates a `null` JSON
     pub fn none() -> Self {
         let mut j = Self::new_empty(JsonType::Literal);
         j.value.write_json_literal(JSON_LITERAL_NIL).unwrap();
         j
     }
 
+    /// Returns a `JsonRef` points to the starting of encoded bytes
     pub fn as_ref(&self) -> JsonRef<'_> {
         JsonRef {
             type_code: self.type_code,
@@ -241,7 +254,8 @@ impl Json {
     }
 }
 
-// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array
+/// Create JSON arrayy by given elements
+/// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-array
 pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
     let mut a = Vec::with_capacity(elems.len());
     for elem in elems {
@@ -250,7 +264,8 @@ pub fn json_array(elems: Vec<Datum>) -> Result<Json> {
     Ok(Json::from_array(a))
 }
 
-// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-object
+/// Create JSON object by given key-value pairs
+/// https://dev.mysql.com/doc/refman/5.7/en/json-creation-functions.html#function_json-object
 pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
     let len = kvs.len();
     if !is_even(len) {
