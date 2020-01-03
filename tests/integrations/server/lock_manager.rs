@@ -101,6 +101,7 @@ fn must_transfer_leader(cluster: &mut Cluster<ServerCluster>, region_key: &[u8],
     cluster
         .pd_client
         .region_leader_must_be(region.get_id(), target_peer);
+    cluster.must_get(region_key);
 }
 
 fn find_peer_of_store(region: &Region, store_id: u64) -> Peer {
