@@ -21,7 +21,7 @@ fail = "0.3"
 futures = "0.1"
 futures03 = { package = "futures", version = "0.3" }
 futures-cpupool = "0.1"
-fxhash = "0.2.1"
+ahash = "0.2.18"
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
 hex = "0.3"
 lazy_static = "1.3"
