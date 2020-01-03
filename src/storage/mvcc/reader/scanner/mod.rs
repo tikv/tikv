@@ -2,20 +2,19 @@
 
 mod backward;
 mod forward;
-mod txn_entry;
 
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
+use self::backward::BackwardKvScanner;
+use self::forward::{ForwardKvScanner, ForwardScanner, LatestEntryPolicy, LatestKvPolicy};
 use crate::storage::mvcc::Result;
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
     Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics, Value,
 };
 
-use self::backward::BackwardScanner;
-use self::forward::ForwardScanner;
-pub use self::txn_entry::Scanner as EntryScanner;
+pub use self::forward::EntryScanner;
 
 /// `Scanner` factory.
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
@@ -69,7 +68,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
-    /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardScanner` should scan.
+    /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardKvScanner` should scan.
     /// `None` means unbounded.
     ///
     /// Default is `(None, None)`.
@@ -80,12 +79,30 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    /// Set the hint for the minimum commit ts we want to scan.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn hint_min_ts(mut self, min_ts: Option<u64>) -> Self {
+        self.0.hint_min_ts = min_ts;
+        self
+    }
+
+    /// Set the hint for the maximum commit ts we want to scan.
+    ///
+    /// Default is empty.
+    #[inline]
+    pub fn hint_max_ts(mut self, max_ts: Option<u64>) -> Self {
+        self.0.hint_max_ts = max_ts;
+        self
+    }
+
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
         let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
         let write_cursor = self.create_cf_cursor(CF_WRITE)?;
         if self.desc {
-            Ok(Scanner::Backward(BackwardScanner::new(
+            Ok(Scanner::Backward(BackwardKvScanner::new(
                 self.0,
                 lock_cursor,
                 write_cursor,
@@ -95,30 +112,35 @@ impl<S: Snapshot> ScannerBuilder<S> {
                 self.0,
                 lock_cursor,
                 write_cursor,
+                None,
+                LatestKvPolicy,
             )))
         }
     }
 
-    pub fn build_entry_scanner(mut self) -> Result<EntryScanner<S>> {
-        let lower_bound = self.lower_bound.clone();
+    pub fn build_entry_scanner(
+        mut self,
+        after_ts: u64,
+        output_delete: bool,
+    ) -> Result<EntryScanner<S>> {
         let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
         let write_cursor = self.create_cf_cursor(CF_WRITE)?;
         // Note: Create a default cf cursor will take key range, so we need to
         //       ensure the default cursor is created after lock and write.
         let default_cursor = self.create_cf_cursor(CF_DEFAULT)?;
-        Ok(EntryScanner::new(
+        Ok(ForwardScanner::new(
             self.0,
             lock_cursor,
             write_cursor,
-            default_cursor,
-            lower_bound,
-        )?)
+            Some(default_cursor),
+            LatestEntryPolicy::new(after_ts, output_delete),
+        ))
     }
 }
 
 pub enum Scanner<S: Snapshot> {
-    Forward(ForwardScanner<S>),
-    Backward(BackwardScanner<S>),
+    Forward(ForwardKvScanner<S>),
+    Backward(BackwardKvScanner<S>),
 }
 
 impl<S: Snapshot> StoreScanner for Scanner<S> {
@@ -148,6 +170,10 @@ pub struct ScannerConfig<S: Snapshot> {
     /// created.
     lower_bound: Option<Key>,
     upper_bound: Option<Key>,
+    // hint for we will only scan data with commit ts >= hint_min_ts
+    hint_min_ts: Option<u64>,
+    // hint for we will only scan data with commit ts <= hint_max_ts
+    hint_max_ts: Option<u64>,
 
     ts: u64,
     desc: bool,
@@ -162,6 +188,8 @@ impl<S: Snapshot> ScannerConfig<S> {
             isolation_level: IsolationLevel::SI,
             lower_bound: None,
             upper_bound: None,
+            hint_min_ts: None,
+            hint_max_ts: None,
             ts,
             desc,
         }
@@ -184,10 +212,18 @@ impl<S: Snapshot> ScannerConfig<S> {
         } else {
             (self.lower_bound.clone(), self.upper_bound.clone())
         };
+        // FIXME: Try to find out how to filter default CF SSTs by start ts
+        let (hint_min_ts, hint_max_ts) = if cf == CF_WRITE {
+            (self.hint_min_ts, self.hint_max_ts)
+        } else {
+            (None, None)
+        };
         let cursor = CursorBuilder::new(&self.snapshot, cf)
             .range(lower, upper)
             .fill_cache(self.fill_cache)
             .scan_mode(self.scan_mode())
+            .hint_min_ts(hint_min_ts)
+            .hint_max_ts(hint_max_ts)
             .build()?;
         Ok(cursor)
     }
