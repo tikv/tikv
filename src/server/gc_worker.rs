@@ -1508,7 +1508,7 @@ impl<E: Engine> GcWorker<E> {
             .schedule(GcTask::PhysicalScanLock {
                 ctx,
                 max_ts,
-                sender: tx.clone(),
+                sender: tx,
             })
             .or_else(handle_gc_task_schedule_error);
 
@@ -2190,7 +2190,8 @@ mod tests {
         let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
             .build()
             .unwrap();
-        let mut gc_worker = GcWorker::new(prefixed_engine, Some(db), None, GcConfig::default());
+        let mut gc_worker =
+            GcWorker::new(prefixed_engine, Some(db), None, None, GcConfig::default());
         gc_worker.start().unwrap();
 
         let mut expected_lock_info = Vec::new();
