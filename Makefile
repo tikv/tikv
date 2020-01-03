@@ -230,7 +230,8 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tikv --all ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
+	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --all ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  $(TEST_THREADS) && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
@@ -240,7 +241,9 @@ test:
 
 # This is used for CI test
 ci_test:
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --all-targets --no-run --message-format=json
+	# NOTE: this command won't run failpoint cases.
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tikv --all --all-targets --no-run --message-format=json
+	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --no-run --message-format=json
 
 ## Static analysis
 ## ---------------

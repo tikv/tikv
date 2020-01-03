@@ -46,6 +46,9 @@ failpoints = ["fail/failpoints", "tikv/failpoints"]
 profiling = ["profiler/profiling"]
 protobuf-codec = ["tikv/protobuf-codec", "external_storage/protobuf-codec"]
 prost-codec = ["tikv/prost-codec", "test_coprocessor/prost-codec", "external_storage/prost-codec"]
+jemalloc = ["tikv/jemalloc"]
+sse = ["tikv/sse"]
+portable = ["tikv/portable"]
 
 [dependencies]
 fail = { version = "0.3", optional = true }
