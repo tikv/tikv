@@ -361,7 +361,7 @@ mod tests {
 
     use super::*;
     use crate::codec::chunk::tests::*;
-    use crate::codec::datum::Datum;
+    use crate::codec::datum::{Datum, DatumEncoder};
     use crate::codec::mysql::*;
 
     #[test]
@@ -401,6 +401,63 @@ mod tests {
             }
 
             assert_eq!(row.len(), data.len());
+            assert_eq!(row.idx(), 0);
+        }
+    }
+
+    #[test]
+    fn test_append_lazy_col() {
+        let mut ctx = EvalContext::default();
+        let fields = vec![
+            field_type(FieldTypeTp::LongLong),
+            field_type(FieldTypeTp::Float),
+            field_type(FieldTypeTp::DateTime),
+            field_type(FieldTypeTp::Duration),
+            field_type(FieldTypeTp::NewDecimal),
+            field_type(FieldTypeTp::JSON),
+            field_type(FieldTypeTp::String),
+        ];
+        let json: Json = r#"{"k1":"v1"}"#.parse().unwrap();
+        let time: Time = Time::parse_datetime(&mut ctx, "2012-12-31 11:30:45", -1, true).unwrap();
+        let duration = Duration::parse(b"10:11:12", 0).unwrap();
+        let dec: Decimal = "1234.00".parse().unwrap();
+        let datum_data = vec![
+            Datum::I64(32),
+            Datum::F64(32.5),
+            Datum::Time(time),
+            Datum::Dur(duration),
+            Datum::Dec(dec),
+            Datum::Json(json),
+            Datum::Bytes(b"xxx".to_vec()),
+        ];
+
+        let raw_vec_data = datum_data
+            .iter()
+            .map(|datum| {
+                let mut col = LazyBatchColumn::raw_with_capacity(1);
+                let mut ctx = EvalContext::default();
+                let mut datum_raw = Vec::new();
+                datum_raw
+                    .write_datum(&mut ctx, &[datum.clone()], false)
+                    .unwrap();
+                col.mut_raw().push(&datum_raw);
+                col
+            })
+            .collect::<Vec<_>>();
+
+        let mut chunk = Chunk::new(&fields, 10);
+        for (col_id, val) in raw_vec_data.iter().enumerate() {
+            chunk
+                .append_logical_column(&mut ctx, &[0], &fields[col_id], &mut val.clone(), col_id)
+                .unwrap();
+        }
+        for row in chunk.iter() {
+            for col_id in 0..row.len() {
+                let got = row.get_datum(col_id, &fields[col_id], &mut ctx).unwrap();
+                assert_eq!(got, datum_data[col_id]);
+            }
+
+            assert_eq!(row.len(), datum_data.len());
             assert_eq!(row.idx(), 0);
         }
     }
