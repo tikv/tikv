@@ -486,7 +486,7 @@ impl NumberCodec {
     #[inline]
     pub fn encode_var_i64(buf: &mut [u8], v: i64) -> usize {
         let mut uv = (v as u64) << 1;
-        if unsafe { unlikely(v < 0) } {
+        if unlikely(v < 0) {
             uv = !uv;
         }
         Self::encode_var_u64(buf, uv)
@@ -554,7 +554,7 @@ macro_rules! read {
     ($s:expr, $size:expr, $f:ident) => {{
         let ret = {
             let buf = $s.bytes();
-            if unsafe { unlikely(buf.len() < $size) } {
+            if unlikely(buf.len() < $size) {
                 return Err(ErrorInner::eof().into());
             }
             NumberCodec::$f(buf)
@@ -796,7 +796,7 @@ macro_rules! write {
     ($s:expr, $v:expr, $size:expr, $f:ident) => {{
         {
             let buf = unsafe { $s.bytes_mut($size) };
-            if unsafe { unlikely(buf.len() < $size) } {
+            if unlikely(buf.len() < $size) {
                 return Err(ErrorInner::eof().into());
             }
             NumberCodec::$f(buf, $v);
@@ -1009,7 +1009,7 @@ pub trait NumberEncoder: BufferWriter {
     fn write_var_u64(&mut self, v: u64) -> Result<usize> {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
-            if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
+            if unlikely(buf.len() < MAX_VARINT64_LENGTH) {
                 return Err(ErrorInner::eof().into());
             }
             NumberCodec::encode_var_u64(buf, v)
@@ -1033,7 +1033,7 @@ pub trait NumberEncoder: BufferWriter {
     fn write_var_i64(&mut self, v: i64) -> Result<usize> {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
-            if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
+            if unlikely(buf.len() < MAX_VARINT64_LENGTH) {
                 return Err(ErrorInner::eof().into());
             }
             NumberCodec::encode_var_i64(buf, v)

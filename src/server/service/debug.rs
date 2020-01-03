@@ -48,6 +48,7 @@ pub struct Service<T: RaftStoreRouter> {
     pool: CpuPool,
     debugger: Debugger,
     raft_router: T,
+    dynamic_config: bool,
 }
 
 // TODO: disable modify_tikv_config when dynamic-config feature is enable
@@ -58,12 +59,14 @@ impl<T: RaftStoreRouter> Service<T> {
         pool: CpuPool,
         raft_router: T,
         gc_worker_cfg: GcWorkerConfigManager,
+        dynamic_config: bool,
     ) -> Service<T> {
         let debugger = Debugger::new(engines, Some(gc_worker_cfg));
         Service {
             pool,
             debugger,
             raft_router,
+            dynamic_config,
         }
     }
 
@@ -372,6 +375,14 @@ impl<T: RaftStoreRouter + 'static> debugpb::Debug for Service<T> {
         sink: UnarySink<ModifyTikvConfigResponse>,
     ) {
         const TAG: &str = "modify_tikv_config";
+
+        if self.dynamic_config {
+            let msg =
+                "Dynamic config feature is enabled, please modify tikv config through PD instead";
+            let status = RpcStatus::new(RpcStatusCode::UNAVAILABLE, Some(msg.to_owned()));
+            ctx.spawn(sink.fail(status).map_err(move |e| on_grpc_error(TAG, &e)));
+            return;
+        }
 
         let module = req.get_module();
         let config_name = req.take_config_name();

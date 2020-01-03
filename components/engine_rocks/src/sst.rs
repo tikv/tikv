@@ -109,10 +109,7 @@ pub struct RocksSstWriterBuilder {
     in_memory: bool,
 }
 
-impl SstWriterBuilder for RocksSstWriterBuilder {
-    type KvEngine = RocksEngine;
-    type SstWriter = RocksSstWriter;
-
+impl SstWriterBuilder<RocksEngine> for RocksSstWriterBuilder {
     fn new() -> Self {
         RocksSstWriterBuilder {
             cf: None,
@@ -121,7 +118,7 @@ impl SstWriterBuilder for RocksSstWriterBuilder {
         }
     }
 
-    fn set_db(mut self, db: &Self::KvEngine) -> Self {
+    fn set_db(mut self, db: &RocksEngine) -> Self {
         self.db = Some(db.as_inner().clone());
         self
     }
@@ -136,14 +133,14 @@ impl SstWriterBuilder for RocksSstWriterBuilder {
         self
     }
 
-    fn build(self, path: &str) -> Result<Self::SstWriter> {
+    fn build(self, path: &str) -> Result<RocksSstWriter> {
         let mut env = None;
         let mut io_options = if let Some(db) = self.db.as_ref() {
             env = db.env();
             let handle = db
                 .cf_handle(self.cf.unwrap_or(CF_DEFAULT))
                 .ok_or_else(|| format!("CF {:?} is not found", self.cf))?;
-            db.get_options_cf(handle).clone()
+            db.get_options_cf(handle)
         } else {
             ColumnFamilyOptions::new()
         };

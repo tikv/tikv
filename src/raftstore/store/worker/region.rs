@@ -14,7 +14,7 @@ use engine::rocks::Writable;
 use engine::WriteBatch;
 use engine::CF_RAFT;
 use engine::{util as engine_util, Engines, Mutable, Peekable};
-use engine_rocks::{Compat, RocksSnapshot};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -206,7 +206,7 @@ impl PendingDeleteRanges {
 struct SnapContext {
     engines: Engines,
     batch_size: usize,
-    mgr: SnapManager,
+    mgr: SnapManager<RocksEngine>,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
@@ -325,7 +325,7 @@ impl SnapContext {
         let timer = Instant::now();
         let options = ApplyOptions {
             db: self.engines.kv.c().clone(),
-            region: region.clone(),
+            region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
             coprocessor_host: Arc::clone(&self.coprocessor_host),
@@ -525,7 +525,7 @@ pub struct Runner {
 impl Runner {
     pub fn new(
         engines: Engines,
-        mgr: SnapManager,
+        mgr: SnapManager<RocksEngine>,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
@@ -674,7 +674,7 @@ mod tests {
     use engine::Engines;
     use engine::{Mutable, Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
-    use engine_rocks::RocksSnapshot;
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
     use tikv_util::time;
@@ -774,7 +774,7 @@ mod tests {
             rocks::util::CFOptions::new("lock", cf_opts.clone()),
             rocks::util::CFOptions::new("raft", cf_opts.clone()),
         ];
-        let raft_cfs_opt = rocks::util::CFOptions::new(CF_DEFAULT, cf_opts.clone());
+        let raft_cfs_opt = rocks::util::CFOptions::new(CF_DEFAULT, cf_opts);
         let engine = get_test_db_for_regions(
             &temp_dir,
             None,
@@ -835,7 +835,7 @@ mod tests {
             let s1 = rx.recv().unwrap();
             let data = s1.get_data();
             let key = SnapKey::from_snap(&s1).unwrap();
-            let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+            let mgr = SnapManager::<RocksEngine>::new(snap_dir.path().to_str().unwrap(), None);
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
             let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
             io::copy(&mut s2, &mut s3).unwrap();
