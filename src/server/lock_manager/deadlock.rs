@@ -224,6 +224,11 @@ impl DetectTable {
         self.wait_for_map.clear();
     }
 
+    /// Reset the ttl
+    fn reset_ttl(&mut self, ttl: Duration) {
+        self.ttl = ttl;
+    }
+
     /// The threshold of detect table size to trigger `active_expire`.
     const ACTIVE_EXPIRE_THRESHOLD: usize = 100000;
     /// The interval between `active_expire`.
@@ -307,6 +312,11 @@ pub enum Task {
     ///
     /// It's the only way to change the node from leader to follower, and vice versa.
     ChangeRole(Role),
+    /// Change the ttl of DetectTable
+    ChangeTTL(Duration),
+    /// Task only used for test
+    #[cfg(test)]
+    Validate(Box<dyn FnOnce(u64) + Send>),
 }
 
 impl Display for Task {
@@ -319,6 +329,9 @@ impl Display for Task {
             ),
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
+            Task::ChangeTTL(ttl) => write!(f, "ChangeTTL {{ ttl: {:?} }}", ttl),
+            #[cfg(test)]
+            Task::Validate(_) => write!(f, "Validate dead lock config"),
         }
     }
 }
@@ -367,6 +380,15 @@ impl Scheduler {
 
     fn change_role(&self, role: Role) {
         self.notify_scheduler(Task::ChangeRole(role));
+    }
+
+    pub fn change_ttl(&self, t: u64) {
+        self.notify_scheduler(Task::ChangeTTL(Duration::from_millis(t)));
+    }
+
+    #[cfg(test)]
+    pub fn validate(&self, f: Box<dyn FnOnce(u64) + Send>) {
+        self.notify_scheduler(Task::Validate(f));
     }
 }
 
@@ -545,8 +567,12 @@ where
     fn change_role(&mut self, role: Role) {
         if self.inner.borrow().role != role {
             match role {
-                Role::Leader => info!("became the leader of deadlock detector!"; "self_id" => self.store_id),
-                Role::Follower => info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id),
+                Role::Leader => {
+                    info!("became the leader of deadlock detector!"; "self_id" => self.store_id)
+                }
+                Role::Follower => {
+                    info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id)
+                }
             }
         }
         // If the node is a follower, it will receive a `ChangeRole(Follower)` msg when the leader
@@ -758,6 +784,12 @@ where
         debug!("handle change role"; "role" => ?role);
         self.change_role(role);
     }
+
+    fn handle_change_ttl(&mut self, ttl: Duration) {
+        let mut inner = self.inner.borrow_mut();
+        inner.detect_table.reset_ttl(ttl);
+        info!("Deadlock detector config changed"; "ttl" => ?ttl);
+    }
 }
 
 impl<S, P> FutureRunnable<Task> for Detector<S, P>
@@ -774,6 +806,9 @@ where
                 self.handle_detect_rpc(handle, stream, sink);
             }
             Task::ChangeRole(role) => self.handle_change_role(role),
+            Task::ChangeTTL(ttl) => self.handle_change_ttl(ttl),
+            #[cfg(test)]
+            Task::Validate(f) => f(self.inner.borrow().detect_table.ttl.as_millis() as u64),
         }
     }
 }

@@ -565,7 +565,7 @@ mod tests {
         let cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, opts.clone()),
             CFOptions::new("cf_dynamic_level_bytes", opts.clone()),
-            CFOptions::new("cf1", opts.clone()),
+            CFOptions::new("cf1", opts),
         ];
         {
             let mut db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
@@ -640,7 +640,7 @@ mod tests {
         cf_opts.set_disable_auto_compactions(true);
         let cfs_opts = vec![
             CFOptions::new("default", cf_opts.clone()),
-            CFOptions::new("test", cf_opts.clone()),
+            CFOptions::new("test", cf_opts),
         ];
         let db = new_engine(
             temp_dir.path().to_str().unwrap(),

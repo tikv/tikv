@@ -25,7 +25,7 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 /// Only data within a region can be accessed.
 #[derive(Debug)]
 pub struct RegionSnapshot<E: KvEngine> {
-    snap: <E::Snapshot as Snapshot>::SyncSnapshot,
+    snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
     region: Arc<Region>,
     apply_index: Arc<AtomicU64>,
 }
@@ -44,7 +44,7 @@ where
     }
 
     pub fn from_snapshot(
-        snap: <E::Snapshot as Snapshot>::SyncSnapshot,
+        snap: <E::Snapshot as Snapshot<E>>::SyncSnapshot,
         region: Region,
     ) -> RegionSnapshot<E> {
         RegionSnapshot {
@@ -285,7 +285,7 @@ where
     E: KvEngine,
 {
     pub fn new(
-        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOption,
     ) -> RegionIterator<E> {
@@ -298,7 +298,7 @@ where
     }
 
     pub fn new_cf(
-        snap: &<E::Snapshot as Snapshot>::SyncSnapshot,
+        snap: &<E::Snapshot as Snapshot<E>>::SyncSnapshot,
         region: Arc<Region>,
         mut iter_opt: IterOption,
         cf: &str,
@@ -407,7 +407,7 @@ mod tests {
     use engine::Engines;
     use engine::*;
     use engine::{ALL_CFS, CF_DEFAULT};
-    use engine_rocks::RocksIOLimiter;
+    use engine_rocks::RocksEngine;
     use engine_rocks::{Compat, RocksSnapshot, RocksSstWriterBuilder};
     use engine_traits::{Peekable, SstWriter, SstWriterBuilder};
     use keys::data_key;
@@ -535,7 +535,7 @@ mod tests {
     fn test_seek_and_seek_prev() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
-        let (store, _) = load_default_dataset(engines.clone());
+        let (store, _) = load_default_dataset(engines);
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
 
         let check_seek_result = |snap: &RegionSnapshot<RocksEngine>,
@@ -619,7 +619,7 @@ mod tests {
 
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
-        let (store, _) = load_multiple_levels_dataset(engines.clone());
+        let (store, _) = load_multiple_levels_dataset(engines);
         let snap = RegionSnapshot::<RocksEngine>::new(&store);
 
         seek_table = vec![
@@ -823,7 +823,7 @@ mod tests {
                 break;
             }
         }
-        let mut expect = test_data.clone();
+        let mut expect = test_data;
         expect.reverse();
         assert_eq!(res, expect);
     }
@@ -1047,7 +1047,7 @@ mod tests {
         // Generate a snapshot
         let default_sst_file_path = path.path().join("default.sst");
         let write_sst_file_path = path.path().join("write.sst");
-        build_sst_cf_file::<RocksIOLimiter>(
+        build_sst_cf_file::<RocksEngine>(
             &default_sst_file_path.to_str().unwrap(),
             &RocksSnapshot::new(Arc::clone(&engines.kv)),
             CF_DEFAULT,
@@ -1056,7 +1056,7 @@ mod tests {
             None,
         )
         .unwrap();
-        build_sst_cf_file::<RocksIOLimiter>(
+        build_sst_cf_file::<RocksEngine>(
             &write_sst_file_path.to_str().unwrap(),
             &RocksSnapshot::new(Arc::clone(&engines.kv)),
             CF_WRITE,

@@ -1360,7 +1360,7 @@ pub struct TiKvConfig {
     #[config(submodule)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub coprocessor: CopConfig,
     #[config(skip)]
     pub rocksdb: DbConfig,
@@ -1370,7 +1370,7 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
     #[config(skip)]
     pub import: ImportConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
     #[config(skip)]
     pub gc: GcConfig,
@@ -1945,6 +1945,11 @@ impl ConfigHandler {
                     Either::Right(updated) => {
                         if updated {
                             info!("local config updated"; "version" => ?version);
+                        } else {
+                            info!(
+                                "remote config upated, which will take effect after restarting the node";
+                                "version" => ?version
+                            );
                         }
                         self.version = version;
                     }
@@ -2044,8 +2049,8 @@ mod tests {
         tikv_cfg.raftdb.wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
         let cfg_from_file = TiKvConfig::from_file(file);
-        assert_eq!(cfg_from_file.rocksdb.wal_dir, s2.clone());
-        assert_eq!(cfg_from_file.raftdb.wal_dir, s1.clone());
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
     }
 
     #[test]

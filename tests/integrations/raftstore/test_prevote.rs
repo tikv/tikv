@@ -24,7 +24,7 @@ fn attach_prevote_notifiers<T: Simulator>(cluster: &Cluster<T>, peer: u64) -> mp
     ));
     let request_notifier = Box::new(MessageTypeNotifier::new(
         MessageType::MsgRequestPreVote,
-        tx.clone(),
+        tx,
         Arc::from(AtomicBool::new(true)),
     ));
 

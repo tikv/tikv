@@ -15,7 +15,7 @@ use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
 use engine_rocks::RocksSnapshot;
-use engine_traits::Peekable as PeekableTrait;
+use engine_traits::{KvEngine, Peekable as PeekableTrait};
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
@@ -1344,12 +1344,15 @@ pub fn clear_meta(
     Ok(())
 }
 
-pub fn do_snapshot(
-    mgr: SnapManager,
-    raft_snap: RocksSnapshot,
-    kv_snap: RocksSnapshot,
+pub fn do_snapshot<E>(
+    mgr: SnapManager<E>,
+    raft_snap: E::Snapshot,
+    kv_snap: E::Snapshot,
     region_id: u64,
-) -> raft::Result<Snapshot> {
+) -> raft::Result<Snapshot>
+where
+    E: KvEngine,
+{
     debug!(
         "begin to generate a snapshot";
         "region_id" => region_id,
@@ -2052,7 +2055,7 @@ mod tests {
         s.apply_state = ctx.apply_state;
 
         let (tx, rx) = channel();
-        tx.send(snap.clone()).unwrap();
+        tx.send(snap).unwrap();
         s.set_snap_state(SnapState::Generating(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
@@ -2295,7 +2298,7 @@ mod tests {
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let runner = RegionRunner::new(
             s1.engines.clone(),
-            mgr.clone(),
+            mgr,
             0,
             true,
             Duration::from_secs(0),

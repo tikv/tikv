@@ -302,34 +302,52 @@ impl<E: Engine> GcRunner<E> {
     fn need_gc(&self, ctx: &Context, safe_point: TimeStamp) -> bool {
         let region_info_accessor = match &self.region_info_accessor {
             Some(r) => r,
-            None => return true,
+            None => {
+                info!(
+                    "region_info_accessor not set. cannot check need_gc without getting snapshot"
+                );
+                return true;
+            }
         };
 
         let db = match &self.local_storage {
             Some(db) => db,
-            None => return true,
+            None => {
+                info!("local_storage not set. cannot check need_gc without getting snapshot");
+                return true;
+            }
         };
 
         let (tx, rx) = mpsc::channel();
-        if region_info_accessor
-            .find_region_by_id(
-                ctx.get_region_id(),
-                Box::new(move |region| match tx.send(region) {
-                    Ok(()) => (),
-                    Err(e) => error!(
-                        "find_region_by_id failed to send result";
-                        "err" => ?e
-                    ),
-                }),
-            )
-            .is_err()
-        {
+        if let Err(e) = region_info_accessor.find_region_by_id(
+            ctx.get_region_id(),
+            Box::new(move |region| match tx.send(region) {
+                Ok(()) => (),
+                Err(e) => error!(
+                    "find_region_by_id failed to send result";
+                    "err" => ?e
+                ),
+            }),
+        ) {
+            error!(
+                "failed to find_region_by_id from region_info_accessor";
+                "region_id" => ctx.get_region_id(),
+                "err" => ?e
+            );
             return true;
         }
 
         let region_info = match rx.recv() {
-            Ok(None) | Err(_) => return true,
+            Ok(None) => return true,
             Ok(Some(r)) => r,
+            Err(e) => {
+                error!(
+                    "failed to find_region_by_id from region_info_accessor";
+                    "region_id" => ctx.get_region_id(),
+                    "err" => ?e
+                );
+                return true;
+            }
         };
 
         let start_key = keys::data_key(region_info.region.get_start_key());
@@ -338,7 +356,16 @@ impl<E: Engine> GcRunner<E> {
         let collection =
             match engine::util::get_range_properties_cf(&db, CF_WRITE, &start_key, &end_key) {
                 Ok(c) => c,
-                Err(_) => return true,
+                Err(e) => {
+                    error!(
+                        "failed to get range properties from write cf";
+                        "region_id" => ctx.get_region_id(),
+                        "start_key" => hex::encode_upper(&start_key),
+                        "end_key" => hex::encode_upper(&end_key),
+                        "err" => ?e,
+                    );
+                    return true;
+                }
             };
         check_need_gc(safe_point, self.cfg.ratio_threshold, collection)
     }
@@ -1498,7 +1525,7 @@ impl<E: Engine> GcWorker<E> {
             .schedule(GcTask::PhysicalScanLock {
                 ctx,
                 max_ts,
-                sender: tx.clone(),
+                sender: tx,
             })
             .or_else(handle_gc_task_schedule_error);
 
