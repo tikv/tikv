@@ -12,6 +12,7 @@ mod local_metrics;
 mod metrics;
 mod peer;
 mod peer_storage;
+mod read_queue;
 mod region_snapshot;
 mod snap;
 mod worker;
@@ -35,6 +36,7 @@ pub use self::peer_storage::{
     PeerStorage, SnapState, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX,
     RAFT_INIT_LOG_TERM,
 };
+use self::read_queue::{ReadIndexQueue, ReadIndexRequest};
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::snap::{
     check_abort, copy_snapshot, ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager,

@@ -37,15 +37,14 @@ use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
 };
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
+use crate::raftstore::store::{PdTask, ReadIndexQueue, ReadIndexRequest};
 use crate::raftstore::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
-use tikv_util::MustConsumeVec;
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -56,127 +55,6 @@ use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
-
-struct ReadIndexRequest {
-    id: Uuid,
-    cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksEngine>)>,
-    renew_lease_time: Timespec,
-    read_index: Option<u64>,
-}
-
-impl ReadIndexRequest {
-    // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
-    fn binary_id(&self) -> &[u8] {
-        self.id.as_bytes()
-    }
-
-    fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<RocksEngine>) {
-        RAFT_READ_INDEX_PENDING_COUNT.inc();
-        self.cmds.push((req, cb));
-    }
-
-    fn with_command(
-        id: Uuid,
-        req: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
-        renew_lease_time: Timespec,
-    ) -> Self {
-        RAFT_READ_INDEX_PENDING_COUNT.inc();
-        let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
-        cmds.push((req, cb));
-        ReadIndexRequest {
-            id,
-            cmds,
-            renew_lease_time,
-            read_index: None,
-        }
-    }
-}
-
-impl Drop for ReadIndexRequest {
-    fn drop(&mut self) {
-        let dur = (monotonic_raw_now() - self.renew_lease_time)
-            .to_std()
-            .unwrap();
-        RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
-    }
-}
-
-#[derive(Default)]
-struct ReadIndexQueue {
-    reads: VecDeque<ReadIndexRequest>,
-    ready_cnt: usize,
-    // How many requests are handled.
-    handled_cnt: usize,
-    // map[uuid] -> offset in `reads`.
-    contexts: HashMap<Uuid, usize>,
-}
-
-impl ReadIndexQueue {
-    fn clear_uncommitted(&mut self, term: u64) {
-        for mut read in self.reads.drain(self.ready_cnt..) {
-            self.contexts.remove(&read.id);
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-            for (_, cb) in read.cmds.drain(..) {
-                apply::notify_stale_req(term, cb);
-            }
-        }
-    }
-
-    /// update the read index of the requests that before the specified id.
-    fn advance_replica_reads<T: IntoIterator<Item = (Uuid, u64)>>(&mut self, states: T) {
-        let (mut min_changed_offset, mut max_changed_offset) = (usize::MAX, 0);
-        for (uuid, index) in states {
-            if let Some(offset) = self.contexts.remove(&uuid) {
-                let offset = offset.checked_sub(self.handled_cnt).unwrap();
-                self.ready_cnt = cmp::max(self.ready_cnt, offset + 1);
-
-                if let Some(occur_index) = self.reads[offset].read_index {
-                    if occur_index < index {
-                        continue;
-                    }
-                }
-                self.reads[offset].read_index = Some(index);
-                min_changed_offset = cmp::min(min_changed_offset, offset);
-                max_changed_offset = cmp::max(max_changed_offset, offset);
-                continue;
-            }
-            debug!(
-                "cannot find corresponding read from pending reads";
-                "uuid" => ?uuid, "read-index" => index,
-            );
-        }
-
-        if self.ready_cnt > 1 && max_changed_offset > 0 {
-            self.fold(min_changed_offset, max_changed_offset);
-        }
-    }
-
-    fn fold(&mut self, mut min_changed_offset: usize, max_changed_offset: usize) {
-        let mut r_offset = max_changed_offset;
-        while r_offset >= min_changed_offset && r_offset > 0 {
-            let r_idx = self.reads[r_offset].read_index.unwrap();
-            let l_offset = r_offset - 1;
-            if self.reads[l_offset]
-                .read_index
-                .map_or(true, |l_idx| l_idx > r_idx)
-            {
-                self.reads[l_offset].read_index = Some(r_idx);
-                // Update `min_changed_offset`, it's required.
-                min_changed_offset = cmp::min(min_changed_offset, l_offset);
-            }
-            r_offset -= 1;
-        }
-    }
-
-    fn gc(&mut self) {
-        if self.reads.capacity() > SHRINK_CACHE_CAPACITY && self.reads.len() < SHRINK_CACHE_CAPACITY
-        {
-            self.reads.shrink_to_fit();
-            self.contexts.shrink_to_fit();
-        }
-    }
-}
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -613,12 +491,7 @@ impl Peer {
             }
         }
 
-        for mut read in self.pending_reads.reads.drain(..) {
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-            for (_, cb) in read.cmds.drain(..) {
-                apply::notify_req_region_removed(region.get_id(), cb);
-            }
-        }
+        self.pending_reads.notify_all_removed(region.get_id());
 
         for proposal in self.apply_proposals.drain(..) {
             apply::notify_req_region_removed(region.get_id(), proposal.cb);
@@ -1471,47 +1344,43 @@ impl Peer {
 
     /// Responses to the ready read index request on the replica, the replica is not a leader.
     fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
-        if self.pending_reads.ready_cnt > 0 {
-            for _ in 0..self.pending_reads.ready_cnt {
-                let mut read = self.pending_reads.reads.pop_front().unwrap();
-                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-                assert!(read.read_index.is_some());
+        while let Some(mut read) = self.pending_reads.pop_front() {
+            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+            assert!(read.read_index.is_some());
 
-                let is_read_index_request = read.cmds.len() == 1
-                    && read.cmds[0].0.get_requests().len() == 1
-                    && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
+            let is_read_index_request = read.cmds.len() == 1
+                && read.cmds[0].0.get_requests().len() == 1
+                && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
-                let term = self.term();
-                if is_read_index_request {
-                    debug!("handle reads with a read index";
-                        "request_id" => ?read.binary_id(),
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                    );
-                    for (req, cb) in read.cmds.drain(..) {
-                        cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                    }
-                    self.pending_reads.ready_cnt -= 1;
-                    self.pending_reads.handled_cnt += 1;
-                } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
-                    debug!("handle reads with a read index";
-                        "request_id" => ?read.binary_id(),
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                    );
-                    for (req, cb) in read.cmds.drain(..) {
-                        // We should check epoch since the range could be changed
-                        if req.get_header().get_replica_read() {
-                            cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                        } else {
-                            apply::notify_stale_req(term, cb);
-                        }
-                    }
-                    self.pending_reads.ready_cnt -= 1;
-                    self.pending_reads.handled_cnt += 1;
-                } else {
-                    self.pending_reads.reads.push_front(read);
+            let term = self.term();
+            if is_read_index_request {
+                debug!(
+                    "handle reads with a read index";
+                    "request_id" => ?read.binary_id(),
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                for (req, cb) in read.cmds.drain(..) {
+                    cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                 }
+            } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
+                debug!(
+                    "handle reads with a read index";
+                    "request_id" => ?read.binary_id(),
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                for (req, cb) in read.cmds.drain(..) {
+                    // We should check epoch since the range could be changed
+                    if req.get_header().get_replica_read() {
+                        cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                    } else {
+                        apply::notify_stale_req(term, cb);
+                    }
+                }
+            } else {
+                self.pending_reads.push_front(read);
+                break;
             }
         }
     }
@@ -1533,10 +1402,11 @@ impl Peer {
             self.post_pending_read_index_on_replica(ctx);
         } else if self.ready_to_handle_read() {
             for state in ready.read_states() {
-                let mut read = self.pending_reads.reads.pop_front().unwrap();
+                let mut read = self.pending_reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-                debug!("handle reads with a read index";
+                debug!(
+                    "handle reads with a read index";
                     "request_id" => ?read.binary_id(),
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
@@ -1547,13 +1417,11 @@ impl Peer {
                 propose_time = Some(read.renew_lease_time);
             }
         } else {
-            for state in ready.read_states() {
-                let read = &mut self.pending_reads.reads[self.pending_reads.ready_cnt];
-                assert_eq!(state.request_ctx.as_slice(), read.binary_id());
-                self.pending_reads.ready_cnt += 1;
-                read.read_index = Some(state.index);
-                propose_time = Some(read.renew_lease_time);
-            }
+            let states = ready.read_states().iter().map(|state| {
+                let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
+                (uuid, state.index)
+            });
+            propose_time = self.pending_reads.advance_leader_reads(states);
         }
 
         // Note that only after handle read_states can we identify what requests are
@@ -1606,20 +1474,17 @@ impl Peer {
         if !self.is_leader() {
             self.post_pending_read_index_on_replica(ctx)
         } else {
-            if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
-                for _ in 0..self.pending_reads.ready_cnt {
-                    let mut read = self.pending_reads.reads.pop_front().unwrap();
-                    debug!("handle reads with a read index";
-                        "request_id" => ?read.binary_id(),
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                    );
-                    RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-                    for (req, cb) in read.cmds.drain(..) {
-                        cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                    }
+            while let Some(mut read) = self.pending_reads.pop_front() {
+                debug!(
+                    "handle reads with a read index";
+                    "request_id" => ?read.binary_id(),
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                );
+                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+                for (req, cb) in read.cmds.drain(..) {
+                    cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                 }
-                self.pending_reads.ready_cnt = 0;
             }
         }
         self.pending_reads.gc();
@@ -2048,7 +1913,7 @@ impl Peer {
                 // before or after the previous read index, and the lease can be renewed when get
                 // heartbeat responses.
                 LeaseState::Valid | LeaseState::Expired => {
-                    if let Some(read) = self.pending_reads.reads.back_mut() {
+                    if let Some(read) = self.pending_reads.back_mut() {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
                         if read.renew_lease_time + max_lease > renew_lease_time {
                             read.push_command(req, cb);
@@ -2097,14 +1962,11 @@ impl Peer {
             return false;
         }
 
-        let read_proposal = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
-        self.pending_reads.reads.push_back(read_proposal);
-        if !self.is_leader() {
-            let offset = self.pending_reads.handled_cnt + self.pending_reads.reads.len() - 1;
-            self.pending_reads.contexts.insert(id, offset);
-        }
+        let read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        self.pending_reads.push_back(read, self.is_leader());
 
-        debug!("request to get a read index";
+        debug!(
+            "request to get a read index";
             "request_id" => ?id,
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
@@ -2420,10 +2282,7 @@ impl Peer {
 
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
-        for mut read in self.pending_reads.reads.drain(..) {
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-            read.cmds.clear();
-        }
+        self.pending_reads.on_stop();
     }
 }
 
@@ -3059,59 +2918,5 @@ mod tests {
             };
             assert!(inspector.inspect(&req).is_err());
         }
-    }
-
-    #[test]
-    fn test_read_queue_fold() {
-        let mut queue = ReadIndexQueue::default();
-        queue.handled_cnt = 125;
-        for _ in 0..100 {
-            let id = Uuid::new_v4();
-            queue.reads.push_back(ReadIndexRequest::with_command(
-                id,
-                RaftCmdRequest::default(),
-                Callback::None,
-                Timespec::new(0, 0),
-            ));
-
-            let offset = queue.handled_cnt + queue.reads.len() - 1;
-            queue.contexts.insert(id, offset);
-        }
-
-        queue.advance_replica_reads(vec![(queue.reads[0].id, 100)]);
-        assert_eq!(queue.ready_cnt, 1);
-
-        queue.advance_replica_reads(vec![(queue.reads[1].id, 100)]);
-        assert_eq!(queue.ready_cnt, 2);
-
-        queue.advance_replica_reads(vec![
-            (queue.reads[80].id, 80),
-            (queue.reads[84].id, 100),
-            (queue.reads[82].id, 70),
-            (queue.reads[78].id, 120),
-            (queue.reads[77].id, 40),
-        ]);
-        assert_eq!(queue.ready_cnt, 85);
-
-        queue.advance_replica_reads(vec![
-            (queue.reads[20].id, 80),
-            (queue.reads[24].id, 100),
-            (queue.reads[22].id, 70),
-            (queue.reads[18].id, 120),
-            (queue.reads[17].id, 40),
-        ]);
-        assert_eq!(queue.ready_cnt, 85);
-
-        for i in 0..78 {
-            assert_eq!(queue.reads[i].read_index.unwrap(), 40, "#{} failed", i);
-        }
-        for i in 78..83 {
-            assert_eq!(queue.reads[i].read_index.unwrap(), 70, "#{} failed", i);
-        }
-        for i in 84..85 {
-            assert_eq!(queue.reads[i].read_index.unwrap(), 100, "#{} failed", i);
-        }
-
-        std::mem::forget(queue);
     }
 }
