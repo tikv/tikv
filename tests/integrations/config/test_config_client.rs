@@ -145,6 +145,7 @@ impl PdClient for MockPdClient {
 
 fn validated_cfg() -> TiKvConfig {
     let mut cfg = TiKvConfig::default();
+    cfg.compatible_adjust();
     cfg.validate().unwrap();
     cfg
 }
