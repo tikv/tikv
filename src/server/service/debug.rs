@@ -49,6 +49,7 @@ pub struct Service<T: RaftStoreRouter, E: Engine> {
     pool: CpuPool,
     debugger: Debugger<E>,
     raft_router: T,
+    dynamic_config: bool,
 }
 
 impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
@@ -58,12 +59,14 @@ impl<T: RaftStoreRouter, E: Engine> Service<T, E> {
         pool: CpuPool,
         raft_router: T,
         gc_worker: GcWorker<E>,
+        dynamic_config: bool,
     ) -> Service<T, E> {
         let debugger = Debugger::new(engines, Some(gc_worker));
         Service {
             pool,
             debugger,
             raft_router,
+            dynamic_config,
         }
     }
 
@@ -372,6 +375,14 @@ impl<T: RaftStoreRouter + 'static, E: Engine + 'static> debugpb::Debug for Servi
         sink: UnarySink<ModifyTikvConfigResponse>,
     ) {
         const TAG: &str = "modify_tikv_config";
+
+        if self.dynamic_config {
+            let msg =
+                "Dynamic config feature is enabled, please modify tikv config through PD instead";
+            let status = RpcStatus::new(RpcStatusCode::UNAVAILABLE, Some(msg.to_owned()));
+            ctx.spawn(sink.fail(status).map_err(move |e| on_grpc_error(TAG, &e)));
+            return;
+        }
 
         let module = req.get_module();
         let config_name = req.take_config_name();
