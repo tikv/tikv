@@ -14,7 +14,7 @@ use crate::codec::error::{ERR_DATA_OUT_OF_RANGE, WARN_DATA_TRUNCATED};
 use crate::codec::mysql::{binary_literal, Time};
 use crate::codec::Error;
 use crate::expr::EvalContext;
-use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta, RpnStackNode};
+use crate::rpn_expr::{RpnExpressionNode, RpnFnCallExtra, RpnFnMeta};
 use crate::Result;
 use std::convert::TryInto;
 use std::num::IntErrorKind;
@@ -77,10 +77,14 @@ fn get_cast_fn_rpn_meta(
             }
         }
         (EvalType::Bytes, EvalType::Real) => {
-            if !to_field_type.is_unsigned() {
-                cast_string_as_signed_real_fn_meta()
-            } else {
-                cast_string_as_unsigned_real_fn_meta()
+            match (
+                from_field_type.is_binary_string_like(),
+                to_field_type.is_unsigned(),
+            ) {
+                (true, true) => cast_binary_string_as_unsigned_real_fn_meta(),
+                (true, false) => cast_binary_string_as_signed_real_fn_meta(),
+                (false, true) => cast_string_as_unsigned_real_fn_meta(),
+                (false, false) => cast_string_as_signed_real_fn_meta(),
             }
         }
         (EvalType::Decimal, EvalType::Real) => {
@@ -459,45 +463,16 @@ fn cast_real_as_unsigned_real(
     }
 }
 
-fn get_child_scalar_value_and_field_type<'a>(
-    args: &'a [RpnStackNode<'a>],
-    row_index: usize,
-) -> (ScalarValueRef<'a>, &'a FieldType) {
-    match &args[0] {
-        RpnStackNode::Vector {
-            value, field_type, ..
-        } => {
-            let physical_vector = value.as_ref();
-            let logical_rows = value.logical_rows();
-            (
-                physical_vector.get_scalar_ref(logical_rows[row_index]),
-                field_type,
-            )
-        }
-        RpnStackNode::Scalar {
-            value, field_type, ..
-        } => (value.as_scalar_value_ref(), field_type),
-    }
-}
-
-#[rpn_fn(capture = [ctx, extra, args, row_index])]
+#[rpn_fn(capture = [ctx, extra])]
 #[inline]
 fn cast_string_as_signed_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    args: &[RpnStackNode<'_>],
-    row_index: usize,
-    _: &Option<Bytes>,
+    val: &Option<Bytes>,
 ) -> Result<Option<Real>> {
-    let (scalar_arg, field_type) = get_child_scalar_value_and_field_type(args, row_index);
-    let val: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
     match val {
         None => Ok(None),
         Some(val) => {
-            if field_type.as_accessor().is_binary_string_like() {
-                let v = binary_literal::to_uint(ctx, val)?;
-                return Ok(Real::new(v as i64 as f64).ok());
-            }
             let r: f64 = val.convert(ctx)?;
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
             Ok(Real::new(r).ok())
@@ -505,29 +480,55 @@ fn cast_string_as_signed_real(
     }
 }
 
-#[rpn_fn(capture = [ctx, extra, args, row_index, metadata], metadata_type = tipb::InUnionMetadata)]
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_binary_string_as_signed_real(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Bytes>,
+) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let r = binary_literal::to_uint(ctx, val)? as i64 as f64;
+            let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
+            Ok(Real::new(r).ok())
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_type = tipb::InUnionMetadata)]
 #[inline]
 fn cast_string_as_unsigned_real(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
-    args: &[RpnStackNode<'_>],
-    row_index: usize,
     metadata: &tipb::InUnionMetadata,
-    _: &Option<Bytes>,
+    val: &Option<Bytes>,
 ) -> Result<Option<Real>> {
-    let (scalar_arg, field_type) = get_child_scalar_value_and_field_type(args, row_index);
-    let val: &Option<Bytes> = Evaluable::borrow_scalar_value_ref(&scalar_arg);
     match val {
         None => Ok(None),
         Some(val) => {
-            if field_type.as_accessor().is_binary_string_like() {
-                let v = binary_literal::to_uint(ctx, val)?;
-                return Ok(Real::new(v as f64).ok());
-            }
             let mut r: f64 = val.convert(ctx)?;
             if metadata.get_in_union() && r < 0f64 {
                 r = 0f64;
             }
+            let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
+            Ok(Real::new(r).ok())
+        }
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+fn cast_binary_string_as_unsigned_real(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: &Option<Bytes>,
+) -> Result<Option<Real>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let r = binary_literal::to_uint(ctx, val)? as f64;
             let r = produce_float_with_specified_tp(ctx, extra.ret_field_type, r)?;
             Ok(Real::new(r).ok())
         }
@@ -2767,6 +2768,12 @@ mod tests {
         for (input, expected) in cases {
             let output: Result<Option<Real>> = RpnFnScalarEvaluator::new()
                 .metadata(Box::new(make_metadata(false)))
+                .return_field_type(FieldTypeConfig {
+                    flen: tidb_query_datatype::UNSPECIFIED_LENGTH,
+                    decimal: tidb_query_datatype::UNSPECIFIED_LENGTH,
+                    tp: Some(FieldTypeTp::Double),
+                    ..FieldTypeConfig::default()
+                })
                 .push_param_with_field_type(
                     input.clone(),
                     FieldTypeConfig {
@@ -2778,6 +2785,7 @@ mod tests {
                 .evaluate(ScalarFuncSig::CastStringAsReal);
 
             if let Some(exp) = expected {
+                assert!(output.is_ok(), "input: {:?}", input);
                 assert!(
                     (output.unwrap().unwrap().into_inner() - exp).abs() < std::f64::EPSILON,
                     "input={:?}",
