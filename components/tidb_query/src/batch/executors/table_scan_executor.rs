@@ -617,7 +617,7 @@ mod tests {
         let mut executor = BatchTableScanExecutor::new(
             helper.store(),
             Arc::new(EvalConfig::default()),
-            columns_info.clone(),
+            columns_info,
             ranges,
             false,
         )
@@ -1056,9 +1056,9 @@ mod tests {
         // We should get error.
         {
             let mut executor = BatchTableScanExecutor::new(
-                store.clone(),
+                store,
                 Arc::new(EvalConfig::default()),
-                columns_info.clone(),
+                columns_info,
                 vec![key_range_point[1].clone()],
                 false,
             )
@@ -1103,7 +1103,7 @@ mod tests {
         let store = FixtureStorage::new(iter::once((key, (Ok(value)))).collect());
 
         let mut executor = BatchTableScanExecutor::new(
-            store.clone(),
+            store,
             Arc::new(EvalConfig::default()),
             columns_info,
             vec![key_range],
