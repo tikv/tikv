@@ -170,6 +170,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::f64::INFINITY;
     use std::sync::Arc;
 
     use super::*;
@@ -178,6 +179,7 @@ mod tests {
     use engine::CF_DEFAULT;
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use tempfile::Builder;
+    use tikv_util::time::Limiter;
 
     struct TestStaleDetector;
     impl StaleDetector for TestStaleDetector {
@@ -265,6 +267,7 @@ mod tests {
     #[test]
     fn test_cf_build_and_apply_sst_files() {
         let db_creaters = &[open_test_empty_db, open_test_db];
+        let limiter = Limiter::new(INFINITY);
         for db_creater in db_creaters {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
@@ -278,7 +281,7 @@ mod tests {
                     CF_DEFAULT,
                     b"a",
                     b"z",
-                    None,
+                    &limiter,
                 )
                 .unwrap();
                 if stats.key_count == 0 {

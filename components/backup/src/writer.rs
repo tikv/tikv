@@ -190,6 +190,7 @@ mod tests {
     use super::*;
     use engine::Iterable;
     use std::collections::BTreeMap;
+    use std::f64::INFINITY;
     use std::path::Path;
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
@@ -244,12 +245,12 @@ mod tests {
         let storage = external_storage::create_storage(&backend).unwrap();
 
         // Test empty file.
-        let mut writer = BackupWriter::new(db.clone(), "foo", None).unwrap();
+        let mut writer = BackupWriter::new(db.clone(), "foo", Limiter::new(INFINITY)).unwrap();
         writer.write(vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).unwrap().is_empty());
 
         // Test write only txn.
-        let mut writer = BackupWriter::new(db.clone(), "foo1", None).unwrap();
+        let mut writer = BackupWriter::new(db.clone(), "foo1", Limiter::new(INFINITY)).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {
@@ -268,7 +269,7 @@ mod tests {
         );
 
         // Test write and default.
-        let mut writer = BackupWriter::new(db, "foo2", None).unwrap();
+        let mut writer = BackupWriter::new(db, "foo2", Limiter::new(INFINITY)).unwrap();
         writer
             .write(
                 vec![TxnEntry::Commit {

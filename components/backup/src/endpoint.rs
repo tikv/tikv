@@ -740,7 +740,7 @@ pub mod tests {
                 let ls = LocalStorage::new(tmp.path()).unwrap();
                 let storage = LimitedStorage {
                     storage: Arc::new(ls) as _,
-                    limiter: None,
+                    limiter: Limiter::new(INFINITY),
                 };
                 let (tx, rx) = unbounded();
                 let task = Task {
@@ -856,9 +856,9 @@ pub mod tests {
             let (mut task, _) = Task::new(req, tx).unwrap();
             if len % 2 == 0 {
                 // Make sure the rate limiter is set.
-                assert!(task.storage.limiter.is_some());
+                assert!(task.storage.limiter.speed_limit().is_finite());
                 // Share the same rate limiter.
-                task.storage.limiter = Some(limiter.clone());
+                task.storage.limiter = limiter.clone();
             }
             endpoint.handle_backup_task(task);
             let (resp, rx) = rx.into_future().wait().unwrap();

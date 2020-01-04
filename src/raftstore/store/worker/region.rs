@@ -674,7 +674,7 @@ mod tests {
     use engine::Engines;
     use engine::{Mutable, Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
-    use engine_rocks::{RocksEngine, RocksSnapshot};
+    use engine_rocks::RocksSnapshot;
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
     use tikv_util::time;
@@ -835,7 +835,7 @@ mod tests {
             let s1 = rx.recv().unwrap();
             let data = s1.get_data();
             let key = SnapKey::from_snap(&s1).unwrap();
-            let mgr = SnapManager::<RocksEngine>::new(snap_dir.path().to_str().unwrap(), None);
+            let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
             let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
             io::copy(&mut s2, &mut s3).unwrap();

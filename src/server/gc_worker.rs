@@ -1916,36 +1916,18 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut gc_worker = GcWorker::new(engine, None, None, None, GcConfig::default());
         gc_worker.start().unwrap();
-        assert!(gc_worker.limiter.lock().unwrap().is_none());
+        assert_eq!(gc_worker.limiter.speed_limit(), INFINITY);
 
         // Enable io iolimit
         gc_worker.change_io_limit(1024).unwrap();
-        assert_eq!(
-            gc_worker
-                .limiter
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .get_bytes_per_second(),
-            1024
-        );
+        assert_eq!(gc_worker.limiter.speed_limit(), 1024.0);
 
         // Change io limit
         gc_worker.change_io_limit(2048).unwrap();
-        assert_eq!(
-            gc_worker
-                .limiter
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .get_bytes_per_second(),
-            2048,
-        );
+        assert_eq!(gc_worker.limiter.speed_limit(), 2048.0);
 
         // Disable io limit
         gc_worker.change_io_limit(0).unwrap();
-        assert!(gc_worker.limiter.lock().unwrap().is_none());
+        assert_eq!(gc_worker.limiter.speed_limit(), INFINITY);
     }
 }

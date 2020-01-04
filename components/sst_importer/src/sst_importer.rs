@@ -606,6 +606,8 @@ mod tests {
     use super::*;
     use test_sst_importer::*;
 
+    use std::f64::INFINITY;
+
     use engine_traits::{collect, name_to_cf, Iterable, Iterator, SeekKey, CF_DEFAULT, DATA_CFS};
     use engine_traits::{Error as TraitError, SstWriterBuilder, TablePropertiesExt};
     use engine_traits::{ExternalSstFileInfo, SstExt};
@@ -906,7 +908,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -955,7 +957,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t567", 0),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -1001,7 +1003,7 @@ mod tests {
                 &backend,
                 "sample_default.sst",
                 &new_rewrite_rule(b"", b"", 16),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -1043,7 +1045,7 @@ mod tests {
                 &backend,
                 "sample_write.sst",
                 &new_rewrite_rule(b"", b"", 16),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -1104,7 +1106,7 @@ mod tests {
                     &backend,
                     "sample.sst",
                     &new_rewrite_rule(b"t123", b"t9102", 0),
-                    None,
+                    Limiter::new(INFINITY),
                     sst_writer,
                 )
                 .unwrap()
@@ -1167,7 +1169,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &RewriteRule::default(),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -1210,7 +1212,7 @@ mod tests {
                 &backend,
                 "sample.sst",
                 &new_rewrite_rule(b"t123", b"t5", 0),
-                None,
+                Limiter::new(INFINITY),
                 sst_writer,
             )
             .unwrap()
@@ -1253,7 +1255,7 @@ mod tests {
             &backend,
             "sample.sst",
             &RewriteRule::default(),
-            None,
+            Limiter::new(INFINITY),
             sst_writer,
         );
         match &result {
@@ -1277,7 +1279,7 @@ mod tests {
             &backend,
             "sample.sst",
             &RewriteRule::default(),
-            None,
+            Limiter::new(INFINITY),
             sst_writer,
         );
 
@@ -1299,7 +1301,7 @@ mod tests {
             &backend,
             "sample.sst",
             &new_rewrite_rule(b"xxx", b"yyy", 0),
-            None,
+            Limiter::new(INFINITY),
             sst_writer,
         );
 

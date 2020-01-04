@@ -1428,6 +1428,7 @@ impl SnapManagerBuilder {
 #[cfg(test)]
 pub mod tests {
     use std::cmp;
+    use std::f64::INFINITY;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::path::Path;
@@ -1440,7 +1441,7 @@ pub mod tests {
     use engine::{Engines, Mutable, Peekable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
-    use engine_traits::{Iterable, KvEngine};
+    use engine_traits::Iterable;
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
@@ -1448,10 +1449,12 @@ pub mod tests {
     use protobuf::Message;
     use std::path::PathBuf;
     use tempfile::{Builder, TempDir};
+    use tikv_util::time::Limiter;
 
     use super::{
-        ApplyOptions, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, Snapshot,
-        SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
+        ApplyOptions, GenericSnapshot, Snap, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder,
+        Snapshot, SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS,
+        SNAP_GEN_PREFIX,
     };
 
     use crate::raftstore::coprocessor::CoprocessorHost;
@@ -1656,7 +1659,7 @@ pub mod tests {
             .unwrap();
         let key = SnapKey::new(1, 1, 1);
         let prefix = format!("{}_{}", SNAP_GEN_PREFIX, key);
-        let display_path = Snap::<RocksEngine>::get_display_path(dir.path(), &prefix);
+        let display_path = Snap::get_display_path(dir.path(), &prefix);
         assert_ne!(display_path, "");
     }
 
@@ -1689,12 +1692,12 @@ pub mod tests {
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::<RocksEngine>::new_for_building(
+        let mut s1 = Snap::new_for_building(
             src_dir.path(),
             &key,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         // Ensure that this snapshot file doesn't exist before being built.
@@ -1704,7 +1707,8 @@ pub mod tests {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(
+        Snapshot::<RocksEngine>::build(
+            &mut s1,
             &snapshot,
             &region,
             &mut snap_data,
@@ -1723,7 +1727,7 @@ pub mod tests {
         assert_eq!(stat.kv_count, get_kv_count(&snapshot));
 
         // Ensure this snapshot could be read for sending.
-        let mut s2 = Snap::<RocksEngine>::new_for_sending(
+        let mut s2 = Snap::new_for_sending(
             src_dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -1740,13 +1744,13 @@ pub mod tests {
             .tempdir()
             .unwrap();
 
-        let mut s3 = Snap::<RocksEngine>::new_for_receiving(
+        let mut s3 = Snap::new_for_receiving(
             dst_dir.path(),
             &key,
             snap_data.take_meta(),
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s3.exists());
@@ -1768,7 +1772,7 @@ pub mod tests {
         assert_eq!(size_track.load(Ordering::SeqCst), size);
 
         // Ensure a snapshot could be applied to DB.
-        let mut s4 = Snap::<RocksEngine>::new_for_applying(
+        let mut s4 = Snap::new_for_applying(
             dst_dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -1833,12 +1837,12 @@ pub mod tests {
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::<RocksEngine>::new_for_building(
+        let mut s1 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s1.exists());
@@ -1846,7 +1850,8 @@ pub mod tests {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(
+        Snapshot::<RocksEngine>::build(
+            &mut s1,
             &snapshot,
             &region,
             &mut snap_data,
@@ -1856,17 +1861,17 @@ pub mod tests {
         .unwrap();
         assert!(s1.exists());
 
-        let mut s2 = Snap::<RocksEngine>::new_for_building(
+        let mut s2 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(s2.exists());
 
-        s2.build(&snapshot, &region, &mut snap_data, &mut stat, deleter)
+        Snapshot::<RocksEngine>::build(&mut s2, &snapshot, &region, &mut snap_data, &mut stat, deleter)
             .unwrap();
         assert!(s2.exists());
     }
@@ -1978,7 +1983,7 @@ pub mod tests {
         snapshot_meta: SnapshotMeta,
         deleter: Box<DummyDeleter>,
     ) {
-        let mut from = Snap::<RocksEngine>::new_for_sending(
+        let mut from = Snap::new_for_sending(
             from_dir.path(),
             key,
             Arc::clone(&size_track),
@@ -1987,13 +1992,13 @@ pub mod tests {
         .unwrap();
         assert!(from.exists());
 
-        let mut to = Snap::<RocksEngine>::new_for_receiving(
+        let mut to = Snap::new_for_receiving(
             to_dir.path(),
             key,
             snapshot_meta,
             Arc::clone(&size_track),
             deleter,
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
 
@@ -2021,12 +2026,12 @@ pub mod tests {
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::<RocksEngine>::new_for_building(
+        let mut s1 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s1.exists());
@@ -2034,7 +2039,8 @@ pub mod tests {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(
+        Snapshot::<RocksEngine>::build(
+            &mut s1,
             &snapshot,
             &region,
             &mut snap_data,
@@ -2046,7 +2052,7 @@ pub mod tests {
 
         corrupt_snapshot_size_in(dir.path());
 
-        assert!(Snap::<RocksEngine>::new_for_sending(
+        assert!(Snap::new_for_sending(
             dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -2054,16 +2060,17 @@ pub mod tests {
         )
         .is_err());
 
-        let mut s2 = Snap::<RocksEngine>::new_for_building(
+        let mut s2 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s2.exists());
-        s2.build(
+        Snapshot::<RocksEngine>::build(
+            &mut s2,
             &snapshot,
             &region,
             &mut snap_data,
@@ -2090,7 +2097,7 @@ pub mod tests {
         assert_eq!(1, metas.len());
         let snap_meta = metas.pop().unwrap();
 
-        let mut s5 = Snap::<RocksEngine>::new_for_applying(
+        let mut s5 = Snap::new_for_applying(
             dst_dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -2114,16 +2121,16 @@ pub mod tests {
         assert!(s5.apply(options).is_err());
 
         corrupt_snapshot_size_in(dst_dir.path());
-        assert!(Snap::<RocksEngine>::new_for_receiving(
+        assert!(Snap::new_for_receiving(
             dst_dir.path(),
             &key,
             snap_meta,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .is_err());
-        assert!(Snap::<RocksEngine>::new_for_applying(
+        assert!(Snap::new_for_applying(
             dst_dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -2150,12 +2157,12 @@ pub mod tests {
         let key = SnapKey::new(region_id, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(DummyDeleter {});
-        let mut s1 = Snap::<RocksEngine>::new_for_building(
+        let mut s1 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s1.exists());
@@ -2163,7 +2170,8 @@ pub mod tests {
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(
+        Snapshot::<RocksEngine>::build(
+            &mut s1,
             &snapshot,
             &region,
             &mut snap_data,
@@ -2175,7 +2183,7 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dir.path()));
 
-        assert!(Snap::<RocksEngine>::new_for_sending(
+        assert!(Snap::new_for_sending(
             dir.path(),
             &key,
             Arc::clone(&size_track),
@@ -2183,16 +2191,17 @@ pub mod tests {
         )
         .is_err());
 
-        let mut s2 = Snap::<RocksEngine>::new_for_building(
+        let mut s2 = Snap::new_for_building(
             dir.path(),
             &key,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         assert!(!s2.exists());
-        s2.build(
+        Snapshot::<RocksEngine>::build(
+            &mut s2,
             &snapshot,
             &region,
             &mut snap_data,
@@ -2217,20 +2226,20 @@ pub mod tests {
 
         assert_eq!(1, corrupt_snapshot_meta_file(dst_dir.path()));
 
-        assert!(Snap::<RocksEngine>::new_for_applying(
+        assert!(Snap::new_for_applying(
             dst_dir.path(),
             &key,
             Arc::clone(&size_track),
             deleter.clone()
         )
         .is_err());
-        assert!(Snap::<RocksEngine>::new_for_receiving(
+        assert!(Snap::new_for_receiving(
             dst_dir.path(),
             &key,
             snap_data.take_meta(),
             Arc::clone(&size_track),
             deleter,
-            None,
+            Limiter::new(INFINITY),
         )
         .is_err());
     }
@@ -2245,7 +2254,7 @@ pub mod tests {
         let temp_path = temp_dir.path().join("snap1");
         let path = temp_path.to_str().unwrap().to_owned();
         assert!(!temp_path.exists());
-        let mut mgr = SnapManager::<RocksEngine>::new(path, None);
+        let mut mgr = SnapManager::new(path, None);
         mgr.init().unwrap();
         assert!(temp_path.exists());
 
@@ -2253,7 +2262,7 @@ pub mod tests {
         let temp_path2 = temp_dir.path().join("snap2");
         let path2 = temp_path2.to_str().unwrap().to_owned();
         File::create(temp_path2).unwrap();
-        mgr = SnapManager::<RocksEngine>::new(path2, None);
+        mgr = SnapManager::new(path2, None);
         assert!(mgr.init().is_err());
     }
 
@@ -2261,7 +2270,7 @@ pub mod tests {
     fn test_snap_mgr_v2() {
         let temp_dir = Builder::new().prefix("test-snap-mgr-v2").tempdir().unwrap();
         let path = temp_dir.path().to_str().unwrap().to_owned();
-        let mgr = SnapManager::<RocksEngine>::new(path.clone(), None);
+        let mgr = SnapManager::new(path.clone(), None);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), 0);
 
@@ -2273,19 +2282,20 @@ pub mod tests {
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(mgr);
-        let mut s1 = Snap::<RocksEngine>::new_for_building(
+        let mut s1 = Snap::new_for_building(
             &path,
             &key1,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         let mut region = gen_test_region(1, 1, 1);
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
-        s1.build(
+        Snapshot::<RocksEngine>::build(
+            &mut s1,
             &snapshot,
             &region,
             &mut snap_data,
@@ -2293,7 +2303,7 @@ pub mod tests {
             deleter.clone(),
         )
         .unwrap();
-        let mut s = Snap::<RocksEngine>::new_for_sending(
+        let mut s = Snap::new_for_sending(
             &path,
             &key1,
             Arc::clone(&size_track),
@@ -2301,13 +2311,13 @@ pub mod tests {
         )
         .unwrap();
         let expected_size = s.total_size().unwrap();
-        let mut s2 = Snap::<RocksEngine>::new_for_receiving(
+        let mut s2 = Snap::new_for_receiving(
             &path,
             &key1,
             snap_data.get_meta().clone(),
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
         let n = io::copy(&mut s, &mut s2).unwrap();
@@ -2317,21 +2327,21 @@ pub mod tests {
         let key2 = SnapKey::new(2, 1, 1);
         region.set_id(2);
         snap_data.set_region(region);
-        let s3 = Snap::<RocksEngine>::new_for_building(
+        let s3 = Snap::new_for_building(
             &path,
             &key2,
             Arc::clone(&size_track),
             deleter.clone(),
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
-        let s4 = Snap::<RocksEngine>::new_for_receiving(
+        let s4 = Snap::new_for_receiving(
             &path,
             &key2,
             snap_data.take_meta(),
             Arc::clone(&size_track),
             deleter,
-            None,
+            Limiter::new(INFINITY),
         )
         .unwrap();
 
@@ -2340,7 +2350,7 @@ pub mod tests {
         assert!(!s3.exists());
         assert!(!s4.exists());
 
-        let mgr = SnapManager::<RocksEngine>::new(path, None);
+        let mgr = SnapManager::new(path, None);
         mgr.init().unwrap();
         assert_eq!(mgr.get_total_snap_size(), expected_size * 2);
 
@@ -2374,7 +2384,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let src_path = src_temp_dir.path().to_str().unwrap().to_owned();
-        let src_mgr = SnapManager::<RocksEngine>::new(src_path, None);
+        let src_mgr = SnapManager::new(src_path, None);
         src_mgr.init().unwrap();
 
         let src_db_dir = Builder::new()
@@ -2389,7 +2399,7 @@ pub mod tests {
 
         // Ensure the snapshot being built will not be deleted on GC.
         src_mgr.register(key.clone(), SnapEntry::Generating);
-        let mut s1 = src_mgr.get_snapshot_for_building(&key).unwrap();
+        let mut s1 = src_mgr.get_snapshot_for_building::<RocksEngine>(&key).unwrap();
         let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
@@ -2415,7 +2425,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let dst_path = dst_temp_dir.path().to_str().unwrap().to_owned();
-        let dst_mgr = SnapManager::<RocksEngine>::new(dst_path, None);
+        let dst_mgr = SnapManager::new(dst_path, None);
         dst_mgr.init().unwrap();
 
         // Ensure the snapshot being received will not be deleted on GC.
@@ -2457,7 +2467,7 @@ pub mod tests {
         let max_total_size = 10240;
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
-            .build::<_, RocksEngine>(snapfiles_path.path().to_str().unwrap(), None);
+            .build::<_>(snapfiles_path.path().to_str().unwrap(), None);
         let snapshot = RocksSnapshot::new(engine.kv);
 
         // Add an oldest snapshot for receiving.
@@ -2465,7 +2475,7 @@ pub mod tests {
         let recv_head = {
             let mut stat = SnapshotStatistics::new();
             let mut snap_data = RaftSnapshotData::default();
-            let mut s = snap_mgr.get_snapshot_for_building(&recv_key).unwrap();
+            let mut s = snap_mgr.get_snapshot_for_building::<RocksEngine>(&recv_key).unwrap();
             s.build(
                 &snapshot,
                 &gen_test_region(100, 1, 1),
@@ -2492,7 +2502,7 @@ pub mod tests {
         for (i, region_id) in regions.into_iter().enumerate() {
             let key = SnapKey::new(region_id, 1, 1);
             let region = gen_test_region(region_id, 1, 1);
-            let mut s = snap_mgr.get_snapshot_for_building(&key).unwrap();
+            let mut s = snap_mgr.get_snapshot_for_building::<RocksEngine>(&key).unwrap();
             let mut snap_data = RaftSnapshotData::default();
             let mut stat = SnapshotStatistics::new();
             s.build(
