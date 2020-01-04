@@ -12,6 +12,7 @@ use criterion::black_box;
 use criterion::measurement::Measurement;
 
 use kvproto::coprocessor::KeyRange;
+use tipb::DagRequestNonCacheablePartial;
 use tipb::Executor as PbExecutor;
 
 use test_coprocessor::*;
@@ -44,6 +45,7 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
 
     tikv::coprocessor::dag::build_handler(
         black_box(dag),
+        DagRequestNonCacheablePartial::default(),
         black_box(ranges.to_vec()),
         0,
         black_box(ToTxnStore::<TargetTxnStore>::to_store(store)),

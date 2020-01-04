@@ -3,13 +3,15 @@
 use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::{self, ExecType, ExecutorExecutionSummary};
+use tipb::{self, ExecType};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
+use tipb::{DagRequestNonCacheablePartial, DagResponseNonCacheablePartial};
 
 use tikv_util::deadline::Deadline;
 
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
+use crate::execute_stats::ExecuteStatsOutputLocation;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::metrics::*;
 use crate::storage::Storage;
@@ -42,7 +44,7 @@ pub struct BatchExecutorsRunner<SS> {
     config: Arc<EvalConfig>,
 
     /// Whether or not execution summary need to be collected.
-    collect_exec_summary: bool,
+    collect_exec_summary: ExecuteStatsOutputLocation,
 
     exec_stats: ExecuteStats,
 
@@ -285,12 +287,20 @@ pub fn build_executors<S: Storage + 'static>(
 impl<SS: 'static> BatchExecutorsRunner<SS> {
     pub fn from_request<S: Storage<Statistics = SS> + 'static>(
         mut req: DagRequest,
+        req_part_2: DagRequestNonCacheablePartial,
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
-        let collect_exec_summary = req.get_collect_execution_summaries();
+        let collect_exec_summary = match (
+            req_part_2.get_collect_execution_summaries(),
+            req.get_collect_execution_summaries_fallback(),
+        ) {
+            (true, _) => ExecuteStatsOutputLocation::NonCacheablePartial,
+            (false, true) => ExecuteStatsOutputLocation::DAGResponse,
+            (false, false) => ExecuteStatsOutputLocation::NoOutput,
+        };
         let config = Arc::new(EvalConfig::from_request(&req)?);
         let encode_type = req.get_encode_type();
 
@@ -323,7 +333,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         })
     }
 
-    pub async fn handle_request(&mut self) -> Result<SelectResponse> {
+    pub async fn handle_request(
+        &mut self,
+    ) -> Result<(SelectResponse, DagResponseNonCacheablePartial)> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
         let mut warnings = self.config.new_eval_warnings();
@@ -400,39 +412,24 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 let mut sel_resp = SelectResponse::default();
                 sel_resp.set_chunks(chunks.into());
                 sel_resp.set_encode_type(self.encode_type);
-
-                // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
-                sel_resp.set_output_counts(
-                    self.exec_stats
-                        .scanned_rows_per_range
-                        .iter()
-                        .map(|v| *v as i64)
-                        .collect(),
-                );
-
-                if self.collect_exec_summary {
-                    let summaries = self
-                        .exec_stats
-                        .summary_per_executor
-                        .iter()
-                        .map(|summary| {
-                            let mut ret = ExecutorExecutionSummary::default();
-                            ret.set_num_iterations(summary.num_iterations as u64);
-                            ret.set_num_produced_rows(summary.num_produced_rows as u64);
-                            ret.set_time_processed_ns(summary.time_processed_ns as u64);
-                            ret
-                        })
-                        .collect::<Vec<_>>();
-                    sel_resp.set_execution_summaries(summaries.into());
-                }
-
                 sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
 
-                // In case of this function is called multiple times.
-                self.exec_stats.clear();
+                // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
+                sel_resp.set_output_counts(self.exec_stats.take_scanned_rows().into());
+                if self.collect_exec_summary == ExecuteStatsOutputLocation::DAGResponse {
+                    sel_resp.set_execution_summaries_fallback(
+                        self.exec_stats.take_execution_summary().into(),
+                    );
+                }
 
-                return Ok(sel_resp);
+                let mut non_cacheable_resp = DagResponseNonCacheablePartial::default();
+                if self.collect_exec_summary == ExecuteStatsOutputLocation::NonCacheablePartial {
+                    non_cacheable_resp
+                        .set_execution_summaries(self.exec_stats.take_execution_summary().into());
+                }
+
+                return Ok((sel_resp, non_cacheable_resp));
             }
 
             // Grow batch size

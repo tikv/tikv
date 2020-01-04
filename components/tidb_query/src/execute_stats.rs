@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use derive_more::{Add, AddAssign};
+use tipb::ExecutorExecutionSummary;
 
 /// Execution summaries to support `EXPLAIN ANALYZE` statements. We don't use
 /// `ExecutorExecutionSummary` directly since it is less efficient.
@@ -105,6 +106,14 @@ pub struct WithSummaryCollector<C: ExecSummaryCollector, T> {
     pub(super) inner: T,
 }
 
+/// The output location of the execution statistics.
+#[derive(PartialEq, Eq)]
+pub enum ExecuteStatsOutputLocation {
+    NoOutput,
+    NonCacheablePartial,
+    DAGResponse,
+}
+
 /// Execution statistics to be flowed between parent and child executors at once during
 /// `collect_exec_stats()` invocation.
 pub struct ExecuteStats {
@@ -134,5 +143,35 @@ impl ExecuteStats {
             *item = ExecSummary::default();
         }
         self.scanned_rows_per_range.clear();
+    }
+
+    /// Takes the scanned rows statistics for returning to TiDB.
+    pub fn take_scanned_rows(&mut self) -> Vec<i64> {
+        let ret = self
+            .scanned_rows_per_range
+            .iter()
+            .map(|v| *v as i64)
+            .collect();
+        self.scanned_rows_per_range.clear();
+        ret
+    }
+
+    /// Takes the execution statistics for returning to TiDB.
+    pub fn take_execution_summary(&mut self) -> Vec<ExecutorExecutionSummary> {
+        let ret = self
+            .summary_per_executor
+            .iter()
+            .map(|summary| {
+                let mut ret = ExecutorExecutionSummary::default();
+                ret.set_num_iterations(summary.num_iterations as u64);
+                ret.set_num_produced_rows(summary.num_produced_rows as u64);
+                ret.set_time_processed_ns(summary.time_processed_ns as u64);
+                ret
+            })
+            .collect::<Vec<_>>();
+        for item in self.summary_per_executor.iter_mut() {
+            *item = ExecSummary::default();
+        }
+        ret
     }
 }

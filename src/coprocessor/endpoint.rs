@@ -14,7 +14,7 @@ use protobuf::CodedInputStream;
 use protobuf::Message;
 use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
-use tipb::{DagRequest, ExecType};
+use tipb::{DagRequest, DagRequestNonCacheablePartial, ExecType};
 
 use crate::server::Config;
 use crate::storage::kv::with_tls_engine;
@@ -142,9 +142,10 @@ impl<E: Engine> Endpoint<E> {
             "unsupported tp (failpoint)"
         )));
 
-        let (context, data, ranges, mut start_ts) = (
+        let (context, data, non_cacheable_data, ranges, mut start_ts) = (
             req.take_context(),
             req.take_data(),
+            req.take_non_cacheable_data(),
             req.take_ranges().to_vec(),
             req.get_start_ts(),
         );
@@ -164,6 +165,12 @@ impl<E: Engine> Endpoint<E> {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
                 parser.merge_to(&mut dag)?;
+
+                let mut dag_non_cacheable = DagRequestNonCacheablePartial::default();
+                if !non_cacheable_data.is_empty() {
+                    box_try!(dag_non_cacheable.merge_from_bytes(&non_cacheable_data));
+                }
+
                 let mut table_scan = false;
                 let mut is_desc_scan = false;
                 if let Some(scan) = dag.get_executors().iter().next() {
@@ -202,6 +209,7 @@ impl<E: Engine> Endpoint<E> {
                     );
                     dag::build_handler(
                         dag,
+                        dag_non_cacheable,
                         ranges,
                         start_ts,
                         store,

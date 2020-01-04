@@ -389,6 +389,7 @@ impl ScalarFunc {
 
             // unimplemented signature
             ScalarFuncSig::TruncateUint
+            | ScalarFuncSig::UpperUtf8
             | ScalarFuncSig::AesDecryptIv
             | ScalarFuncSig::AesEncryptIv
             | ScalarFuncSig::Encode

@@ -1564,7 +1564,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#705501101234770886dff3c7434de7c88fcc7188"
+source = "git+https://github.com/pingcap/kvproto.git?branch=non_cachable_data#dedb6515aed04f386aa7165eedfcbd36c928ed81"
 dependencies = [
  "bytes",
  "futures 0.1.29",
@@ -3919,7 +3919,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#44f75c9bef33cef5c39e0e0e4fed71b15c735313"
+source = "git+https://github.com/pingcap/tipb.git?branch=non_cacheable_data#4ef5577ce0e06e89cc8c9d9c55cbbd33e28040b2"
 dependencies = [
  "bytes",
  "lazy_static",

@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use kvproto::coprocessor::KeyRange;
 use protobuf::Message;
-use tipb::{self, ExecType, ExecutorExecutionSummary};
+use tipb::{self, ExecType};
 use tipb::{Chunk, DagRequest, SelectResponse, StreamResponse};
+use tipb::{DagRequestNonCacheablePartial, DagResponseNonCacheablePartial};
 
 use tikv_util::deadline::Deadline;
 
@@ -21,7 +22,7 @@ pub struct ExecutorsRunner<SS> {
     executor: Box<dyn Executor<StorageStats = SS> + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
-    collect_exec_summary: bool,
+    collect_exec_summary: ExecuteStatsOutputLocation,
     context: EvalContext,
     exec_stats: ExecuteStats,
 }
@@ -155,6 +156,7 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
 impl<SS: 'static> ExecutorsRunner<SS> {
     pub fn from_request<S: Storage<Statistics = SS> + 'static>(
         mut req: DagRequest,
+        req_part_2: DagRequestNonCacheablePartial,
         ranges: Vec<KeyRange>,
         storage: S,
         deadline: Deadline,
@@ -162,11 +164,18 @@ impl<SS: 'static> ExecutorsRunner<SS> {
         is_streaming: bool,
     ) -> Result<Self> {
         let executors_len = req.get_executors().len();
-        let collect_exec_summary = req.get_collect_execution_summaries();
+        let collect_exec_summary = match (
+            req_part_2.get_collect_execution_summaries(),
+            req.get_collect_execution_summaries_fallback(),
+        ) {
+            (true, _) => ExecuteStatsOutputLocation::NonCacheablePartial,
+            (false, true) => ExecuteStatsOutputLocation::DAGResponse,
+            (false, false) => ExecuteStatsOutputLocation::NoOutput,
+        };
         let config = Arc::new(EvalConfig::from_request(&req)?);
         let context = EvalContext::new(config.clone());
 
-        let executor = if !(req.get_collect_execution_summaries()) {
+        let executor = if collect_exec_summary == ExecuteStatsOutputLocation::NoOutput {
             build_executors::<_, ExecSummaryCollectorDisabled>(
                 req.take_executors().into(),
                 storage,
@@ -184,11 +193,13 @@ impl<SS: 'static> ExecutorsRunner<SS> {
             )?
         };
 
-        let exec_stats = ExecuteStats::new(if collect_exec_summary {
-            executors_len
-        } else {
-            0 // Avoid allocation for executor summaries when it is not needed
-        });
+        let exec_stats = ExecuteStats::new(
+            if collect_exec_summary == ExecuteStatsOutputLocation::NoOutput {
+                0 // Avoid allocation for executor summaries when it is not needed
+            } else {
+                executors_len
+            },
+        );
 
         Ok(Self {
             deadline,
@@ -223,7 +234,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
         Ok(s_resp)
     }
 
-    pub fn handle_request(&mut self) -> Result<SelectResponse> {
+    pub fn handle_request(&mut self) -> Result<(SelectResponse, DagResponseNonCacheablePartial)> {
         let mut record_cnt = 0;
         let mut chunks = Vec::new();
         loop {
@@ -250,35 +261,24 @@ impl<SS: 'static> ExecutorsRunner<SS> {
                         sel_resp.set_warnings(eval_warnings.warnings.into());
                         sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
                     }
-                    // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
-                    sel_resp.set_output_counts(
-                        self.exec_stats
-                            .scanned_rows_per_range
-                            .iter()
-                            .map(|v| *v as i64)
-                            .collect(),
-                    );
 
-                    if self.collect_exec_summary {
-                        let summaries = self
-                            .exec_stats
-                            .summary_per_executor
-                            .iter()
-                            .map(|summary| {
-                                let mut ret = ExecutorExecutionSummary::default();
-                                ret.set_num_iterations(summary.num_iterations as u64);
-                                ret.set_num_produced_rows(summary.num_produced_rows as u64);
-                                ret.set_time_processed_ns(summary.time_processed_ns as u64);
-                                ret
-                            })
-                            .collect::<Vec<_>>();
-                        sel_resp.set_execution_summaries(summaries.into());
+                    // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
+                    sel_resp.set_output_counts(self.exec_stats.take_scanned_rows().into());
+                    if self.collect_exec_summary == ExecuteStatsOutputLocation::DAGResponse {
+                        sel_resp.set_execution_summaries_fallback(
+                            self.exec_stats.take_execution_summary().into(),
+                        );
                     }
 
-                    // In case of this function is called multiple times.
-                    self.exec_stats.clear();
+                    let mut non_cacheable_resp = DagResponseNonCacheablePartial::default();
+                    if self.collect_exec_summary == ExecuteStatsOutputLocation::NonCacheablePartial
+                    {
+                        non_cacheable_resp.set_execution_summaries(
+                            self.exec_stats.take_execution_summary().into(),
+                        );
+                    }
 
-                    return Ok(sel_resp);
+                    return Ok((sel_resp, non_cacheable_resp));
                 }
             }
         }

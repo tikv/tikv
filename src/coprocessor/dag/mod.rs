@@ -9,6 +9,7 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query::storage::IntervalRange;
 use tipb::{DagRequest, SelectResponse, StreamResponse};
+use tipb::{DagRequestNonCacheablePartial, DagResponseNonCacheablePartial};
 
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::{Deadline, RequestHandler, Result};
@@ -16,6 +17,7 @@ use crate::storage::{Statistics, Store};
 
 pub fn build_handler<S: Store + 'static>(
     req: DagRequest,
+    req_part_2: DagRequestNonCacheablePartial,
     ranges: Vec<KeyRange>,
     start_ts: u64,
     store: S,
@@ -40,11 +42,15 @@ pub fn build_handler<S: Store + 'static>(
 
     if is_batch {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        Ok(BatchDAGHandler::new(req, ranges, store, data_version, deadline)?.into_boxed())
+        Ok(
+            BatchDAGHandler::new(req, req_part_2, ranges, store, data_version, deadline)?
+                .into_boxed(),
+        )
     } else {
         COPR_DAG_REQ_COUNT.with_label_values(&["normal"]).inc();
         Ok(DAGHandler::new(
             req,
+            req_part_2,
             ranges,
             store,
             data_version,
@@ -64,6 +70,7 @@ pub struct DAGHandler {
 impl DAGHandler {
     pub fn new<S: Store + 'static>(
         req: DagRequest,
+        req_part_2: DagRequestNonCacheablePartial,
         ranges: Vec<KeyRange>,
         store: S,
         data_version: Option<u64>,
@@ -74,6 +81,7 @@ impl DAGHandler {
         Ok(Self {
             runner: tidb_query::executor::ExecutorsRunner::from_request(
                 req,
+                req_part_2,
                 ranges,
                 TiKVStorage::from(store),
                 deadline,
@@ -108,6 +116,7 @@ pub struct BatchDAGHandler {
 impl BatchDAGHandler {
     pub fn new<S: Store + 'static>(
         req: DagRequest,
+        req_part_2: DagRequestNonCacheablePartial,
         ranges: Vec<KeyRange>,
         store: S,
         data_version: Option<u64>,
@@ -116,6 +125,7 @@ impl BatchDAGHandler {
         Ok(Self {
             runner: tidb_query::batch::runner::BatchExecutorsRunner::from_request(
                 req,
+                req_part_2,
                 ranges,
                 TiKVStorage::from(store),
                 deadline,
@@ -137,15 +147,16 @@ impl RequestHandler for BatchDAGHandler {
 }
 
 fn handle_qe_response(
-    result: tidb_query::Result<SelectResponse>,
+    result: tidb_query::Result<(SelectResponse, DagResponseNonCacheablePartial)>,
     data_version: Option<u64>,
 ) -> Result<Response> {
     use tidb_query::error::ErrorInner;
 
     match result {
-        Ok(sel_resp) => {
+        Ok((sel_resp, non_cacheable_resp)) => {
             let mut resp = Response::default();
             resp.set_data(box_try!(sel_resp.write_to_bytes()));
+            resp.set_non_cacheable_data(box_try!(non_cacheable_resp.write_to_bytes()));
             resp.set_is_cache_hit(false);
             if let Some(v) = data_version {
                 resp.set_cache_last_version(v);
