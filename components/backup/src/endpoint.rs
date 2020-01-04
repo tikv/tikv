@@ -2,12 +2,12 @@
 
 use std::cell::RefCell;
 use std::cmp;
+use std::f64::INFINITY;
 use std::fmt;
 use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use async_speed_limit::Limiter;
 use engine::DB;
 use external_storage::*;
 use futures::lazy;
@@ -21,6 +21,7 @@ use tikv::raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, RegionInfoProvider};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
 use tikv::storage::Statistics;
+use tikv_util::time::Limiter;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
@@ -64,7 +65,7 @@ impl fmt::Debug for Task {
 
 #[derive(Clone)]
 struct LimitedStorage {
-    limiter: Option<Limiter>,
+    limiter: Limiter,
     storage: Arc<dyn ExternalStorage>,
 }
 
@@ -76,11 +77,12 @@ impl Task {
     ) -> Result<(Task, Arc<AtomicBool>)> {
         let cancel = Arc::new(AtomicBool::new(false));
 
-        let limiter = if req.get_rate_limit() != 0 {
-            Some(Limiter::new(req.get_rate_limit() as _))
+        let speed_limit = req.get_rate_limit();
+        let limiter = Limiter::new(if speed_limit > 0 {
+            speed_limit as f64
         } else {
-            None
-        };
+            INFINITY
+        });
         let storage = LimitedStorage {
             storage: create_storage(req.get_storage_backend())?,
             limiter,

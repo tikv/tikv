@@ -9,7 +9,6 @@ name = "integrations"
 path = "tests/integrations/mod.rs"
 
 [dependencies]
-async-speed-limit = "0.1"
 futures-util = { version = "0.3", default-features = false, features = ["io", "io-compat"] }
 crc64fast = "0.1"
 engine = { path = "../engine" }

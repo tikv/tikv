@@ -76,9 +76,9 @@ dependencies = [
 
 [[package]]
 name = "async-speed-limit"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34a4598d0ca093ac0bdcc90cc6f72dc1da2f90572c63a0317d96b2ca0fbb9f9d"
+checksum = "8960ff0e84c4330f6d3d882fad4a3d292cdb1729b1acbc1c22dab0af0f77e6f1"
 dependencies = [
  "futures-core",
  "futures-io",
@@ -160,7 +160,6 @@ dependencies = [
 name = "backup"
 version = "0.0.1"
 dependencies = [
- "async-speed-limit",
  "crc64fast",
  "engine",
  "engine_rocks",
@@ -3291,7 +3290,6 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sst_importer"
 version = "0.1.0"
 dependencies = [
- "async-speed-limit",
  "crc32fast",
  "engine_traits",
  "external_storage",
@@ -3772,7 +3770,6 @@ dependencies = [
 name = "tikv"
 version = "4.0.0-alpha"
 dependencies = [
- "async-speed-limit",
  "async-stream",
  "async-trait",
  "backtrace",
@@ -3882,6 +3879,7 @@ dependencies = [
 name = "tikv_util"
 version = "0.1.0"
 dependencies = [
+ "async-speed-limit",
  "backtrace",
  "byteorder",
  "chrono",

@@ -3,7 +3,6 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use async_speed_limit::{Limiter, Resource};
 use engine::{CF_DEFAULT, CF_WRITE, DB};
 use engine_rocks::{RocksEngine, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::{ExternalSstFileInfo, SstWriter, SstWriterBuilder};
@@ -12,7 +11,7 @@ use futures_util::io::AllowStdIo;
 use kvproto::backup::File;
 use tikv::coprocessor::checksum_crc64_xor;
 use tikv::storage::txn::TxnEntry;
-use tikv_util::{self, box_err, file::Sha256Reader};
+use tikv_util::{self, box_err, file::Sha256Reader, time::Limiter};
 
 use crate::metrics::*;
 use crate::{Error, Result};
@@ -61,7 +60,7 @@ impl Writer {
         self,
         name: &str,
         cf: &'static str,
-        limiter: Option<Limiter>,
+        limiter: Limiter,
         storage: &dyn ExternalStorage,
     ) -> Result<File> {
         let (sst_info, sst_reader) = self.writer.finish_read()?;
@@ -72,7 +71,7 @@ impl Writer {
 
         let reader = Sha256Reader::new(sst_reader)
             .map_err(|e| Error::Other(box_err!("Sha256 error: {:?}", e)))?;
-        let mut reader = Resource::new(limiter, AllowStdIo::new(reader));
+        let mut reader = limiter.limit(AllowStdIo::new(reader));
         storage.write(&file_name, &mut reader)?;
         let sha256 = reader
             .into_inner()
@@ -99,12 +98,12 @@ pub struct BackupWriter {
     name: String,
     default: Writer,
     write: Writer,
-    limiter: Option<Limiter>,
+    limiter: Limiter,
 }
 
 impl BackupWriter {
     /// Create a new BackupWriter.
-    pub fn new(db: Arc<DB>, name: &str, limiter: Option<Limiter>) -> Result<BackupWriter> {
+    pub fn new(db: Arc<DB>, name: &str, limiter: Limiter) -> Result<BackupWriter> {
         let default = RocksSstWriterBuilder::new()
             .set_in_memory(true)
             .set_cf(CF_DEFAULT)

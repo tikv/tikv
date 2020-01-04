@@ -3,14 +3,12 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader};
 use std::{fs, usize};
 
-use async_speed_limit::Limiter;
-use futures_executor::block_on;
-
 use engine::CfName;
 use engine_traits::{ImportExt, IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
 use engine_traits::{Mutable, WriteBatch};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
+use tikv_util::time::Limiter;
 
 use super::Error;
 
@@ -67,7 +65,7 @@ pub fn build_sst_cf_file<E>(
     cf: CfName,
     start_key: &[u8],
     end_key: &[u8],
-    io_limiter: &Option<Limiter>,
+    io_limiter: &Limiter,
 ) -> Result<BuildStatistics, Error>
 where
     E: KvEngine,
@@ -76,9 +74,7 @@ where
     let mut stats = BuildStatistics::default();
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
-        if let Some(ref io_limiter) = io_limiter {
-            block_on(io_limiter.consume(entry_len));
-        }
+        io_limiter.blocking_consume(entry_len);
         stats.key_count += 1;
         stats.total_size += entry_len;
         if let Err(e) = sst_writer.put(key, value) {

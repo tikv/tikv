@@ -12,7 +12,6 @@ use kvproto::backup::StorageBackend;
 use kvproto::import_sstpb::*;
 use uuid::{Builder as UuidBuilder, Uuid};
 
-use async_speed_limit::{Limiter, Resource};
 use engine_traits::{IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterator, CF_WRITE};
 use engine_traits::{SeekKey, SstReader, SstWriter};
@@ -20,6 +19,7 @@ use external_storage::{create_storage, url_of_backend};
 use futures_executor::block_on;
 use futures_util::io::{copy, AllowStdIo};
 use keys;
+use tikv_util::time::Limiter;
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use super::{Error, Result};
@@ -103,7 +103,7 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limiter: Option<Limiter>,
+        speed_limiter: Limiter,
         sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
         debug!("download start";
@@ -111,7 +111,7 @@ impl SSTImporter {
             "url" => ?backend,
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
-            "speed_limit" => speed_limiter.as_ref().map_or(0.0, |l| l.speed_limit()),
+            "speed_limit" => speed_limiter.speed_limit(),
         );
         match self.do_download::<E>(meta, backend, name, rewrite_rule, speed_limiter, sst_writer) {
             Ok(r) => {
@@ -131,7 +131,7 @@ impl SSTImporter {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
-        speed_limiter: Option<Limiter>,
+        speed_limiter: Limiter,
         mut sst_writer: E::SstWriter,
     ) -> Result<Option<Range>> {
         let start = Instant::now();
@@ -143,7 +143,7 @@ impl SSTImporter {
         let ext_reader = ext_storage
             .read(name)
             .map_err(|e| Error::CannotReadExternalStorage(url.to_string(), name.to_owned(), e))?;
-        let ext_reader = Resource::new(speed_limiter, ext_reader);
+        let ext_reader = speed_limiter.limit(ext_reader);
 
         // do the I/O copy from external_storage to the local file.
         {
