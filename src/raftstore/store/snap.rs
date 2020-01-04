@@ -12,8 +12,11 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
+use async_speed_limit::{Limiter, Resource};
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use engine_traits::{KvEngine, Snapshot as EngineSnapshot};
+use futures_executor::block_on;
+use futures_util::io::{AllowStdIo, AsyncWriteExt};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
@@ -23,7 +26,6 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use crate::raftstore::errors::Error as RaftStoreError;
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
-use engine_traits::{IOLimiter, LimitWriter};
 use keys::{enc_end_key, enc_start_key};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size, sync_dir};
@@ -167,37 +169,34 @@ where
 ///   3. receive snapshot from remote raftstore and write it to local storage
 ///   4. apply snapshot
 ///   5. snapshot gc
-pub trait Snapshot<E>
-where
-    Self: Read + Write + Send,
-    E: KvEngine,
-{
+pub trait Snapshot<E: KvEngine>: GenericSnapshot {
     fn build(
         &mut self,
         kv_snap: &E::Snapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
-        deleter: Box<dyn SnapshotDeleter<E>>,
+        deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()>;
+    fn apply(&mut self, options: ApplyOptions<E>) -> Result<()>;
+}
+
+/// `GenericSnapshot` is a snapshot not tied to any KV engines.
+pub trait GenericSnapshot: Read + Write + Send {
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
     fn delete(&self);
     fn meta(&self) -> io::Result<Metadata>;
     fn total_size(&self) -> io::Result<u64>;
     fn save(&mut self) -> io::Result<()>;
-    fn apply(&mut self, options: ApplyOptions<E>) -> Result<()>;
 }
 
 // A helper function to copy snapshot.
 // Only used in tests.
-pub fn copy_snapshot<E>(
-    mut from: Box<dyn Snapshot<E>>,
-    mut to: Box<dyn Snapshot<E>>,
-) -> io::Result<()>
-where
-    E: KvEngine,
-{
+pub fn copy_snapshot(
+    mut from: Box<dyn GenericSnapshot>,
+    mut to: Box<dyn GenericSnapshot>,
+) -> io::Result<()> {
     if !to.exists() {
         io::copy(&mut from, &mut to)?;
         to.save()?;
@@ -208,23 +207,18 @@ where
 /// `SnapshotDeleter` is a trait for deleting snapshot.
 /// It's used to ensure that the snapshot deletion happens under the protection of locking
 /// to avoid race case for concurrent read/write.
-pub trait SnapshotDeleter<E>
-where
-    E: KvEngine,
-{
+pub trait SnapshotDeleter {
     // Return true if it successfully delete the specified snapshot.
-    fn delete_snapshot(&self, key: &SnapKey, snap: &dyn Snapshot<E>, check_entry: bool) -> bool;
+    fn delete_snapshot(&self, key: &SnapKey, snap: &dyn GenericSnapshot, check_entry: bool)
+        -> bool;
 }
 
 // Try to delete the specified snapshot using deleter, return true if the deletion is done.
-pub fn retry_delete_snapshot<E>(
-    deleter: Box<dyn SnapshotDeleter<E>>,
+pub fn retry_delete_snapshot(
+    deleter: Box<dyn SnapshotDeleter>,
     key: &SnapKey,
-    snap: &dyn Snapshot<E>,
-) -> bool
-where
-    E: KvEngine,
-{
+    snap: &dyn GenericSnapshot,
+) -> bool {
     let d = time::Duration::from_millis(DELETE_RETRY_TIME_MILLIS);
     for _ in 0..DELETE_RETRY_MAX_TIMES {
         if deleter.delete_snapshot(key, snap, true) {
@@ -314,12 +308,7 @@ struct MetaFile {
     pub tmp_path: PathBuf,
 }
 
-// NOTE: This is only parameterized over E because IOLimiter is engine-specific.
-// I general-purpose IOLimiter could remove E.
-pub struct Snap<E>
-where
-    E: KvEngine,
-{
+pub struct Snap {
     key: SnapKey,
     is_sending: bool,
     display_path: String,
@@ -328,23 +317,20 @@ where
     cf_index: usize,
     meta_file: MetaFile,
     size_track: Arc<AtomicU64>,
-    limiter: Option<Arc<E::IOLimiter>>,
+    limiter: Option<Limiter>,
     hold_tmp_files: bool,
 }
 
-impl<E> Snap<E>
-where
-    E: KvEngine,
-{
+impl Snap {
     fn new<T: Into<PathBuf>>(
         dir: T,
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
         is_sending: bool,
         to_build: bool,
-        deleter: Box<dyn SnapshotDeleter<E>>,
-        limiter: Option<Arc<E::IOLimiter>>,
-    ) -> RaftStoreResult<Snap<E>> {
+        deleter: Box<dyn SnapshotDeleter>,
+        limiter: Option<Limiter>,
+    ) -> RaftStoreResult<Self> {
         let dir_path = dir.into();
         if !dir_path.exists() {
             fs::create_dir_all(dir_path.as_path())?;
@@ -355,7 +341,7 @@ where
             SNAP_REV_PREFIX
         };
         let prefix = format!("{}_{}", snap_prefix, key);
-        let display_path = Snap::<E>::get_display_path(&dir_path, &prefix);
+        let display_path = Self::get_display_path(&dir_path, &prefix);
 
         let mut cf_files = Vec::with_capacity(SNAPSHOT_CFS.len());
         for cf in SNAPSHOT_CFS {
@@ -422,10 +408,10 @@ where
         dir: T,
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter<E>>,
-        limiter: Option<Arc<E::IOLimiter>>,
-    ) -> RaftStoreResult<Snap<E>> {
-        let mut s = Snap::<E>::new(dir, key, size_track, true, true, deleter, limiter)?;
+        deleter: Box<dyn SnapshotDeleter>,
+        limiter: Option<Limiter>,
+    ) -> RaftStoreResult<Self> {
+        let mut s = Self::new(dir, key, size_track, true, true, deleter, limiter)?;
         s.init_for_building()?;
         Ok(s)
     }
@@ -434,9 +420,9 @@ where
         dir: T,
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter<E>>,
-    ) -> RaftStoreResult<Snap<E>> {
-        let mut s = Snap::<E>::new(dir, key, size_track, true, false, deleter, None)?;
+        deleter: Box<dyn SnapshotDeleter>,
+    ) -> RaftStoreResult<Self> {
+        let mut s = Self::new(dir, key, size_track, true, false, deleter, None)?;
 
         if !s.exists() {
             // Skip the initialization below if it doesn't exists.
@@ -457,10 +443,10 @@ where
         key: &SnapKey,
         snapshot_meta: SnapshotMeta,
         size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter<E>>,
-        limiter: Option<Arc<E::IOLimiter>>,
-    ) -> RaftStoreResult<Snap<E>> {
-        let mut s = Snap::<E>::new(dir, key, size_track, false, false, deleter, limiter)?;
+        deleter: Box<dyn SnapshotDeleter>,
+        limiter: Option<Limiter>,
+    ) -> RaftStoreResult<Self> {
+        let mut s = Self::new(dir, key, size_track, false, false, deleter, limiter)?;
         s.set_snapshot_meta(snapshot_meta)?;
         if s.exists() {
             return Ok(s);
@@ -491,9 +477,9 @@ where
         dir: T,
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
-        deleter: Box<dyn SnapshotDeleter<E>>,
-    ) -> RaftStoreResult<Snap<E>> {
-        let s = Snap::<E>::new(dir, key, size_track, false, false, deleter, None)?;
+        deleter: Box<dyn SnapshotDeleter>,
+    ) -> RaftStoreResult<Self> {
+        let s = Self::new(dir, key, size_track, false, false, deleter, None)?;
         Ok(s)
     }
 
@@ -632,12 +618,12 @@ where
         }
     }
 
-    fn do_build(
+    fn do_build<E: KvEngine>(
         &mut self,
         kv_snap: &E::Snapshot,
         region: &Region,
         stat: &mut SnapshotStatistics,
-        deleter: Box<dyn SnapshotDeleter<E>>,
+        deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()>
     where
         E: KvEngine,
@@ -675,9 +661,13 @@ where
             let cf_stat = if plain_file_used(cf_file.cf) {
                 snap_io::build_plain_cf_file::<E>(path, kv_snap, cf_file.cf, &begin_key, &end_key)?
             } else {
-                let limiter = self.limiter.as_ref().map(|c| c.as_ref());
                 snap_io::build_sst_cf_file::<E>(
-                    path, kv_snap, cf_file.cf, &begin_key, &end_key, limiter,
+                    path,
+                    kv_snap,
+                    cf_file.cf,
+                    &begin_key,
+                    &end_key,
+                    &self.limiter,
                 )?
             };
             cf_file.kv_count = cf_stat.key_count as u64;
@@ -717,10 +707,7 @@ where
     }
 }
 
-impl<E> fmt::Debug for Snap<E>
-where
-    E: KvEngine,
-{
+impl fmt::Debug for Snap {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Snap")
             .field("key", &self.key)
@@ -729,7 +716,7 @@ where
     }
 }
 
-impl<E> Snapshot<E> for Snap<E>
+impl<E> Snapshot<E> for Snap
 where
     E: KvEngine,
 {
@@ -739,10 +726,10 @@ where
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
-        deleter: Box<dyn SnapshotDeleter<E>>,
+        deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        self.do_build(kv_snap, region, stat, deleter)?;
+        self.do_build::<E>(kv_snap, region, stat, deleter)?;
 
         let total_size = self.total_size()?;
         stat.size = total_size;
@@ -764,6 +751,44 @@ where
         Ok(())
     }
 
+    fn apply(&mut self, options: ApplyOptions<E>) -> Result<()> {
+        box_try!(self.validate(&options.db));
+
+        let abort_checker = ApplyAbortChecker(options.abort);
+        let coprocessor_host = options.coprocessor_host;
+        let region = options.region;
+        for cf_file in &mut self.cf_files {
+            if cf_file.size == 0 {
+                // Skip empty cf file.
+                continue;
+            }
+            let cf = cf_file.cf;
+            if plain_file_used(cf_file.cf) {
+                let path = cf_file.path.to_str().unwrap();
+                let batch_size = options.write_batch_size;
+                let cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
+                    coprocessor_host.pre_apply_plain_kvs_from_snapshot(&region, cf, kv)
+                };
+                snap_io::apply_plain_cf_file(
+                    path,
+                    &abort_checker,
+                    &options.db,
+                    cf,
+                    batch_size,
+                    cb,
+                )?;
+            } else {
+                let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
+                let path = cf_file.clone_path.to_str().unwrap();
+                coprocessor_host.pre_apply_sst_from_snapshot(&region, cf, path);
+                snap_io::apply_sst_cf_file(path, &options.db, cf)?
+            }
+        }
+        Ok(())
+    }
+}
+
+impl GenericSnapshot for Snap {
     fn path(&self) -> &str {
         &self.display_path
     }
@@ -867,42 +892,6 @@ where
         self.hold_tmp_files = false;
         Ok(())
     }
-
-    fn apply(&mut self, options: ApplyOptions<E>) -> Result<()> {
-        box_try!(self.validate(&options.db));
-
-        let abort_checker = ApplyAbortChecker(options.abort);
-        let coprocessor_host = options.coprocessor_host;
-        let region = options.region;
-        for cf_file in &mut self.cf_files {
-            if cf_file.size == 0 {
-                // Skip empty cf file.
-                continue;
-            }
-            let cf = cf_file.cf;
-            if plain_file_used(cf_file.cf) {
-                let path = cf_file.path.to_str().unwrap();
-                let batch_size = options.write_batch_size;
-                let cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
-                    coprocessor_host.pre_apply_plain_kvs_from_snapshot(&region, cf, kv)
-                };
-                snap_io::apply_plain_cf_file(
-                    path,
-                    &abort_checker,
-                    &options.db,
-                    cf,
-                    batch_size,
-                    cb,
-                )?;
-            } else {
-                let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
-                let path = cf_file.clone_path.to_str().unwrap();
-                coprocessor_host.pre_apply_sst_from_snapshot(&region, cf, path);
-                snap_io::apply_sst_cf_file(path, &options.db, cf)?
-            }
-        }
-        Ok(())
-    }
 }
 
 // To check whether a procedure about apply snapshot aborts or not.
@@ -913,10 +902,7 @@ impl snap_io::StaleDetector for ApplyAbortChecker {
     }
 }
 
-impl<E> Read for Snap<E>
-where
-    E: KvEngine,
-{
+impl Read for Snap {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -942,10 +928,7 @@ where
     }
 }
 
-impl<E> Write for Snap<E>
-where
-    E: KvEngine,
-{
+impl Write for Snap {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -965,17 +948,18 @@ where
                 continue;
             }
 
-            let mut file = LimitWriter::new(self.limiter.clone(), cf_file.file.as_mut().unwrap());
+            let file = AllowStdIo::new(cf_file.file.as_mut().unwrap());
+            let mut file = Resource::new(self.limiter.clone(), file);
             let digest = cf_file.write_digest.as_mut().unwrap();
 
             if next_buf.len() > left {
-                file.write_all(&next_buf[0..left])?;
+                block_on(file.write_all(&next_buf[0..left]))?;
                 digest.update(&next_buf[0..left]);
                 cf_file.written_size += left as u64;
                 self.cf_index += 1;
                 next_buf = &next_buf[left..];
             } else {
-                file.write_all(next_buf)?;
+                block_on(file.write_all(next_buf))?;
                 digest.update(next_buf);
                 cf_file.written_size += next_buf.len() as u64;
                 return Ok(buf.len());
@@ -994,10 +978,7 @@ where
     }
 }
 
-impl<E> Drop for Snap<E>
-where
-    E: KvEngine,
-{
+impl Drop for Snap {
     fn drop(&mut self) {
         // cleanup if some of the cf files and meta file is partly written
         if self
@@ -1049,36 +1030,17 @@ fn notify_stats(ch: Option<&RaftRouter>) {
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
-pub struct SnapManager<E>
-where
-    E: KvEngine,
-{
+#[derive(Clone)]
+pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
     router: Option<RaftRouter>,
-    limiter: Option<Arc<E::IOLimiter>>,
+    limiter: Option<Limiter>,
     max_total_size: u64,
 }
 
-impl<E> Clone for SnapManager<E>
-where
-    E: KvEngine,
-{
-    fn clone(&self) -> SnapManager<E> {
-        SnapManager {
-            core: self.core.clone(),
-            router: self.router.clone(),
-            limiter: self.limiter.clone(),
-            max_total_size: self.max_total_size,
-        }
-    }
-}
-
-impl<E> SnapManager<E>
-where
-    E: KvEngine,
-{
-    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter>) -> SnapManager<E> {
+impl SnapManager {
+    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter>) -> Self {
         SnapManagerBuilder::default().build(path, router)
     }
 
@@ -1175,7 +1137,7 @@ where
         self.core.rl().registry.contains_key(key)
     }
 
-    pub fn get_snapshot_for_building(
+    pub fn get_snapshot_for_building<E: KvEngine>(
         &self,
         key: &SnapKey,
     ) -> RaftStoreResult<Box<dyn Snapshot<E>>> {
@@ -1209,7 +1171,7 @@ where
             let core = self.core.rl();
             (core.base.clone(), Arc::clone(&core.snap_size))
         };
-        let f = Snap::<E>::new_for_building(
+        let f = Snap::new_for_building(
             dir,
             key,
             snap_size,
@@ -1219,9 +1181,12 @@ where
         Ok(Box::new(f))
     }
 
-    pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<dyn Snapshot<E>>> {
+    pub fn get_snapshot_for_sending(
+        &self,
+        key: &SnapKey,
+    ) -> RaftStoreResult<Box<dyn GenericSnapshot>> {
         let core = self.core.rl();
-        let s = Snap::<E>::new_for_sending(
+        let s = Snap::new_for_sending(
             &core.base,
             key,
             Arc::clone(&core.snap_size),
@@ -1234,11 +1199,11 @@ where
         &self,
         key: &SnapKey,
         data: &[u8],
-    ) -> RaftStoreResult<Box<dyn Snapshot<E>>> {
+    ) -> RaftStoreResult<Box<dyn GenericSnapshot>> {
         let core = self.core.rl();
         let mut snapshot_data = RaftSnapshotData::default();
         snapshot_data.merge_from_bytes(data)?;
-        let f = Snap::<E>::new_for_receiving(
+        let f = Snap::new_for_receiving(
             &core.base,
             key,
             snapshot_data.take_meta(),
@@ -1249,12 +1214,9 @@ where
         Ok(Box::new(f))
     }
 
-    pub fn get_snapshot_for_applying(
-        &self,
-        key: &SnapKey,
-    ) -> RaftStoreResult<Box<dyn Snapshot<E>>> {
+    fn get_concrete_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snap>> {
         let core = self.core.rl();
-        let s = Snap::<E>::new_for_applying(
+        let s = Snap::new_for_applying(
             &core.base,
             key,
             Arc::clone(&core.snap_size),
@@ -1267,6 +1229,20 @@ where
             ))));
         }
         Ok(Box::new(s))
+    }
+
+    pub fn get_snapshot_for_applying(
+        &self,
+        key: &SnapKey,
+    ) -> RaftStoreResult<Box<dyn GenericSnapshot>> {
+        Ok(self.get_concrete_snapshot_for_applying(key)?)
+    }
+
+    pub fn get_snapshot_for_applying_to_engine<E: KvEngine>(
+        &self,
+        key: &SnapKey,
+    ) -> RaftStoreResult<Box<dyn Snapshot<E>>> {
+        Ok(self.get_concrete_snapshot_for_applying(key)?)
     }
 
     /// Get the approximate size of snap file exists in snap directory.
@@ -1363,11 +1339,13 @@ where
     }
 }
 
-impl<E> SnapshotDeleter<E> for SnapManager<E>
-where
-    E: KvEngine,
-{
-    fn delete_snapshot(&self, key: &SnapKey, snap: &dyn Snapshot<E>, check_entry: bool) -> bool {
+impl SnapshotDeleter for SnapManager {
+    fn delete_snapshot(
+        &self,
+        key: &SnapKey,
+        snap: &dyn GenericSnapshot,
+        check_entry: bool,
+    ) -> bool {
         let core = self.core.rl();
         if check_entry {
             if let Some(e) = core.registry.get(key) {
@@ -1407,12 +1385,9 @@ impl SnapManagerBuilder {
         self.max_total_size = bytes;
         self
     }
-    pub fn build<T: Into<String>, E>(&self, path: T, router: Option<RaftRouter>) -> SnapManager<E>
-    where
-        E: KvEngine,
-    {
+    pub fn build<T: Into<String>>(&self, path: T, router: Option<RaftRouter>) -> SnapManager {
         let limiter = if self.max_write_bytes_per_sec > 0 {
-            Some(Arc::new(E::IOLimiter::new(self.max_write_bytes_per_sec)))
+            Some(Limiter::new(self.max_write_bytes_per_sec as f64))
         } else {
             None
         };
@@ -1477,11 +1452,8 @@ pub mod tests {
     #[derive(Clone)]
     struct DummyDeleter;
 
-    impl<E> SnapshotDeleter<E> for DummyDeleter
-    where
-        E: KvEngine,
-    {
-        fn delete_snapshot(&self, _: &SnapKey, snap: &dyn Snapshot<E>, _: bool) -> bool {
+    impl SnapshotDeleter for DummyDeleter {
+        fn delete_snapshot(&self, _: &SnapKey, snap: &dyn GenericSnapshot, _: bool) -> bool {
             snap.delete();
             true
         }
@@ -2367,11 +2339,7 @@ pub mod tests {
         assert_eq!(mgr.get_total_snap_size(), 0);
     }
 
-    fn check_registry_around_deregister(
-        mgr: SnapManager<RocksEngine>,
-        key: &SnapKey,
-        entry: &SnapEntry,
-    ) {
+    fn check_registry_around_deregister(mgr: SnapManager, key: &SnapKey, entry: &SnapEntry) {
         let snap_keys = mgr.list_idle_snap().unwrap();
         assert!(snap_keys.is_empty());
         assert!(mgr.has_registered(key));

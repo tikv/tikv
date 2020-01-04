@@ -206,7 +206,7 @@ impl PendingDeleteRanges {
 struct SnapContext {
     engines: Engines,
     batch_size: usize,
-    mgr: SnapManager<RocksEngine>,
+    mgr: SnapManager,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
@@ -223,7 +223,7 @@ impl SnapContext {
         notifier: SyncSender<RaftSnapshot>,
     ) -> Result<()> {
         // do we need to check leader here?
-        let snap = box_try!(store::do_snapshot(
+        let snap = box_try!(store::do_snapshot::<RocksEngine>(
             self.mgr.clone(),
             raft_snap,
             kv_snap,
@@ -317,7 +317,7 @@ impl SnapContext {
         defer!({
             self.mgr.deregister(&snap_key, &SnapEntry::Applying);
         });
-        let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
+        let mut s = box_try!(self.mgr.get_snapshot_for_applying_to_engine(&snap_key));
         if !s.exists() {
             return Err(box_err!("missing snapshot file {}", s.path()));
         }
@@ -525,7 +525,7 @@ pub struct Runner {
 impl Runner {
     pub fn new(
         engines: Engines,
-        mgr: SnapManager<RocksEngine>,
+        mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,

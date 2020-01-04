@@ -20,7 +20,6 @@ use crate::raftstore::store::SnapManager;
 use crate::server::gc_worker::GcWorker;
 use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
-use engine_rocks::RocksEngine;
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Worker;
@@ -55,7 +54,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     trans: ServerTransport<T, S>,
     raft_router: T,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager<RocksEngine>,
+    snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
@@ -75,7 +74,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
-        snap_mgr: SnapManager<RocksEngine>,
+        snap_mgr: SnapManager,
         gc_worker: GcWorker<E>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.

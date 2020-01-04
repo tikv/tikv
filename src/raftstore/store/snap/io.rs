@@ -3,8 +3,10 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader};
 use std::{fs, usize};
 
+use async_speed_limit::Limiter;
+use futures_executor::block_on;
+
 use engine::CfName;
-use engine_traits::IOLimiter;
 use engine_traits::{ImportExt, IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
 use engine_traits::{Mutable, WriteBatch};
@@ -65,25 +67,17 @@ pub fn build_sst_cf_file<E>(
     cf: CfName,
     start_key: &[u8],
     end_key: &[u8],
-    io_limiter: Option<&E::IOLimiter>,
+    io_limiter: &Option<Limiter>,
 ) -> Result<BuildStatistics, Error>
 where
     E: KvEngine,
 {
     let mut sst_writer = create_sst_file_writer::<E>(snap, cf, path)?;
     let mut stats = BuildStatistics::default();
-    let base = io_limiter
-        .as_ref()
-        .map_or(0 as i64, |l| l.get_max_bytes_per_time());
-    let mut bytes: i64 = 0;
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         if let Some(ref io_limiter) = io_limiter {
-            if bytes >= base {
-                bytes = 0;
-                io_limiter.request(base);
-            }
-            bytes += entry_len as i64
+            block_on(io_limiter.consume(entry_len));
         }
         stats.key_count += 1;
         stats.total_size += entry_len;
