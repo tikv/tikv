@@ -397,10 +397,10 @@ const LEADER_KEY: &[u8] = b"";
 /// `RoleChangeNotifier` observes region or role change events of raftstore. If the
 /// region is the leader region and the role of this node is changed, a `ChangeRole`
 /// task will be scheduled to the deadlock detector. It's the only way to change the
-/// node from the leader of deadlock detecotr to follower, and vice versa.
+/// node from the leader of deadlock detector to follower, and vice versa.
 #[derive(Clone)]
 pub(crate) struct RoleChangeNotifier {
-    /// The id of the leader region.
+    /// The id of the valid leader region.
     // raftstore.coprocessor needs it to be Sync + Send.
     leader_region_id: Arc<Mutex<u64>>,
     scheduler: Scheduler,
@@ -437,10 +437,10 @@ impl Coprocessor for RoleChangeNotifier {}
 impl RoleObserver for RoleChangeNotifier {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
         let region = ctx.region();
-        if Self::is_leader_region(region) {
-            // A region is created first, so the leader region id must be valid
-            // and equal to the region id here.
-            assert_eq!(*self.leader_region_id.lock().unwrap(), region.get_id());
+        // A region is created first, so the leader region id must be valid.
+        if Self::is_leader_region(region)
+            && *self.leader_region_id.lock().unwrap() == region.get_id()
+        {
             self.scheduler.change_role(role.into());
         }
     }
@@ -639,8 +639,12 @@ where
     fn change_role(&mut self, role: Role) {
         if self.inner.borrow().role != role {
             match role {
-                Role::Leader => info!("became the leader of deadlock detector!"; "self_id" => self.store_id),
-                Role::Follower => info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id),
+                Role::Leader => {
+                    info!("became the leader of deadlock detector!"; "self_id" => self.store_id)
+                }
+                Role::Follower => {
+                    info!("changed from the leader of deadlock detector to follower!"; "self_id" => self.store_id)
+                }
             }
         }
         // If the node is a follower, it will receive a `ChangeRole(Follower)` msg when the leader
