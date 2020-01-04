@@ -192,7 +192,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&engine_3, b"k1", b"v1");
 
     // Remove peer2 from first region.
-    pd_client.must_remove_peer(region_id, peer2.clone());
+    pd_client.must_remove_peer(region_id, peer2);
 
     let (key, value) = (b"k3", b"v3");
     cluster.must_put(key, value);
@@ -209,7 +209,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let peer4 = new_conf_change_peer(&stores[1], &pd_client);
     pd_client.must_add_peer(region_id, peer4.clone());
     // Remove peer3 from first region.
-    pd_client.must_remove_peer(region_id, peer3.clone());
+    pd_client.must_remove_peer(region_id, peer3);
 
     let (key, value) = (b"k4", b"v4");
     cluster.must_put(key, value);
@@ -311,7 +311,7 @@ fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
     wait_till_reach_count(Arc::clone(&pd_client), region_id, 6);
     must_get_equal(&engine, b"k1", b"v1");
     peer.set_is_learner(false);
-    pd_client.must_add_peer(region_id, peer.clone());
+    pd_client.must_add_peer(region_id, peer);
 
     // it should remove extra replica.
     pd_client.enable_default_operator();

@@ -1204,14 +1204,9 @@ mod tests {
                 .into_boxed())
             });
             let resp_future_3 = cop
-                .handle_stream_request(req_with_exec_detail.clone(), handler_builder)
+                .handle_stream_request(req_with_exec_detail, handler_builder)
                 .unwrap();
-            let sender = tx.clone();
-            thread::spawn(move || {
-                sender
-                    .send(resp_future_3.collect().wait().unwrap())
-                    .unwrap()
-            });
+            thread::spawn(move || tx.send(resp_future_3.collect().wait().unwrap()).unwrap());
 
             // Response 1
             let resp = &rx.recv().unwrap()[0];

@@ -572,12 +572,11 @@ pub mod tests {
             })))
             .unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(1));
-        let tx_ = tx.clone();
         router
             .send(
                 1,
                 Some(Box::new(move |_: &mut Runner| {
-                    tx_.send(2).unwrap();
+                    tx.send(2).unwrap();
                 })),
             )
             .unwrap();

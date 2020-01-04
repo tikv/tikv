@@ -69,7 +69,8 @@ impl RegionInfo {
 type RegionsMap = HashMap<u64, RegionInfo>;
 type RegionRangesMap = BTreeMap<Vec<u8>, u64>;
 
-pub type SeekRegionCallback = Box<dyn Fn(&mut dyn Iterator<Item = &RegionInfo>) + Send>;
+pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
+pub type SeekRegionCallback = Box<dyn FnOnce(&mut dyn Iterator<Item = &RegionInfo>) + Send>;
 
 /// `RegionInfoAccessor` has its own thread. Queries and updates are done by sending commands to the
 /// thread.
@@ -78,6 +79,10 @@ enum RegionInfoQuery {
     SeekRegion {
         from: Vec<u8>,
         callback: SeekRegionCallback,
+    },
+    FindRegionById {
+        region_id: u64,
+        callback: Callback<Option<RegionInfo>>,
     },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
@@ -89,6 +94,9 @@ impl Display for RegionInfoQuery {
             RegionInfoQuery::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
             RegionInfoQuery::SeekRegion { from, .. } => {
                 write!(f, "SeekRegion(from: {})", hex::encode_upper(from))
+            }
+            RegionInfoQuery::FindRegionById { region_id, .. } => {
+                write!(f, "FindRegionById(region_id: {})", region_id)
             }
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
@@ -205,7 +213,7 @@ impl RegionCollector {
         }
 
         // If the region already exists, update it and keep the original role.
-        *old_region = region.clone();
+        *old_region = region;
     }
 
     fn handle_create_region(&mut self, region: Region, role: StateRole) {
@@ -349,6 +357,10 @@ impl RegionCollector {
         callback(&mut iter)
     }
 
+    pub fn handle_find_region_by_id(&self, region_id: u64, callback: Callback<Option<RegionInfo>>) {
+        callback(self.regions.get(&region_id).cloned());
+    }
+
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         {
             let region = event.get_region();
@@ -398,6 +410,12 @@ impl Runnable<RegionInfoQuery> for RegionCollector {
             }
             RegionInfoQuery::SeekRegion { from, callback } => {
                 self.handle_seek_region(from, callback);
+            }
+            RegionInfoQuery::FindRegionById {
+                region_id,
+                callback,
+            } => {
+                self.handle_find_region_by_id(region_id, callback);
             }
             RegionInfoQuery::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
@@ -482,6 +500,20 @@ impl RegionInfoProvider for RegionInfoAccessor {
     fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
         let msg = RegionInfoQuery::SeekRegion {
             from: from.to_vec(),
+            callback,
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
+    }
+
+    fn find_region_by_id(
+        &self,
+        region_id: u64,
+        callback: Callback<Option<RegionInfo>>,
+    ) -> EngineResult<()> {
+        let msg = RegionInfoQuery::FindRegionById {
+            region_id,
             callback,
         };
         self.scheduler
