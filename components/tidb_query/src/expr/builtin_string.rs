@@ -19,15 +19,6 @@ use crate::expr_util;
 
 const SPACE: u8 = 0o40u8;
 
-// see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
-// mysql base64 doc: A newline is added after each 76 characters of encoded output
-// const BASE64_LINE_WRAP_LENGTH: usize = 76;
-
-// mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
-const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
-const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
-// const BASE64_LINE_WRAP: u8 = b'\n';
-
 enum TrimDirection {
     Both = 1,
     Leading,
@@ -514,10 +505,11 @@ impl ScalarFunc {
         let input_copy = strip_whitespace(&input);
         let will_overflow = input_copy
             .len()
-            .checked_mul(BASE64_INPUT_CHUNK_LENGTH)
+            .checked_mul(expr_util::string::BASE64_INPUT_CHUNK_LENGTH)
             .is_none();
         // mysql will return "" when the input is incorrectly padded
-        let invalid_padding = input_copy.len() % BASE64_ENCODED_CHUNK_LENGTH != 0;
+        let invalid_padding =
+            input_copy.len() % expr_util::string::BASE64_ENCODED_CHUNK_LENGTH != 0;
         if will_overflow || invalid_padding {
             return Ok(Some(Cow::Borrowed(b"")));
         }

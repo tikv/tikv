@@ -5,12 +5,12 @@ use base64;
 
 // see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_to-base64
 // mysql base64 doc: A newline is added after each 76 characters of encoded output
-const BASE64_LINE_WRAP_LENGTH: usize = 76;
+pub const BASE64_LINE_WRAP_LENGTH: usize = 76;
 
 // mysql base64 doc: Each 3 bytes of the input data are encoded using 4 characters.
-const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
-const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
-const BASE64_LINE_WRAP: u8 = b'\n';
+pub const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
+pub const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
+pub const BASE64_LINE_WRAP: u8 = b'\n';
 
 pub fn to_base64(s: Vec<u8>) -> Option<Bytes> {
     if let Some(size) = encoded_size(s.len()) {
@@ -24,7 +24,7 @@ pub fn to_base64(s: Vec<u8>) -> Option<Bytes> {
     }
 }
 
-fn encoded_size(len: usize) -> Option<usize> {
+pub fn encoded_size(len: usize) -> Option<usize> {
     if len == 0 {
         return Some(0);
     }
@@ -63,6 +63,7 @@ fn line_wrap(buf: &mut [u8], input_len: usize) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[test]
     fn test_encoded_size() {
         assert_eq!(encoded_size(0).unwrap(), 0);
