@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
-use std::convert::TryFrom;
+use std::f64::INFINITY;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::mpsc;
@@ -13,8 +13,6 @@ use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use engine_rocks::RocksIOLimiter;
-use engine_traits::IOLimiter;
 use futures::Future;
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
@@ -35,7 +33,7 @@ use crate::storage::mvcc::{check_need_gc, MvccReader, MvccTxn};
 use crate::storage::{Callback, Error, ErrorInner, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
-use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::time::{duration_to_sec, Limiter, SlowTimer};
 use tikv_util::worker::{
     FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
 };
@@ -165,7 +163,7 @@ struct GcRunner<E: Engine> {
     region_info_accessor: Option<RegionInfoAccessor>,
 
     /// Used to limit the write flow of GC.
-    limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
+    limiter: Limiter,
 
     cfg: GcConfig,
 
@@ -178,7 +176,7 @@ impl<E: Engine> GcRunner<E> {
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
         region_info_accessor: Option<RegionInfoAccessor>,
-        limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
+        limiter: Limiter,
         cfg: GcConfig,
     ) -> Self {
         Self {
@@ -370,9 +368,7 @@ impl<E: Engine> GcRunner<E> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
-            if let Some(limiter) = &*self.limiter.lock().unwrap() {
-                limiter.request(write_size as i64);
-            }
+            self.limiter.blocking_consume(write_size);
             self.engine.write(ctx, modifies)?;
         }
         Ok(next_scan_key)
@@ -1190,7 +1186,7 @@ pub struct GcWorker<E: Engine> {
     region_info_accessor: Option<RegionInfoAccessor>,
 
     cfg: Option<GcConfig>,
-    limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
+    limiter: Limiter,
 
     /// How many requests are scheduled from outside and unfinished.
     scheduled_tasks: Arc<atomic::AtomicUsize>,
@@ -1251,20 +1247,18 @@ impl<E: Engine> GcWorker<E> {
     ) -> GcWorker<E> {
         let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
-        let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
-            let bps = i64::try_from(cfg.max_write_bytes_per_sec.0)
-                .expect("snap_max_write_bytes_per_sec > i64::max_value");
-            Some(IOLimiter::new(bps))
+        let limiter = Limiter::new(if cfg.max_write_bytes_per_sec.0 > 0 {
+            cfg.max_write_bytes_per_sec.0 as f64
         } else {
-            None
-        };
+            INFINITY
+        });
         GcWorker {
             engine,
             local_storage,
             raft_store_router,
             region_info_accessor,
             cfg: Some(cfg),
-            limiter: Arc::new(Mutex::new(limiter)),
+            limiter,
             scheduled_tasks: Arc::new(atomic::AtomicUsize::new(0)),
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             worker,
@@ -1369,14 +1363,8 @@ impl<E: Engine> GcWorker<E> {
     }
 
     pub fn change_io_limit(&self, limit: i64) -> Result<()> {
-        let mut limiter = self.limiter.lock().unwrap();
-        if limit == 0 {
-            limiter.take();
-        } else {
-            limiter
-                .get_or_insert_with(|| RocksIOLimiter::new(limit))
-                .set_bytes_per_second(limit as i64);
-        }
+        self.limiter
+            .set_speed_limit(if limit > 0 { limit as f64 } else { INFINITY });
         info!("GC io limit changed"; "max_write_bytes_per_sec" => limit);
         Ok(())
     }
