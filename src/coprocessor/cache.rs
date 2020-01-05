@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use kvproto::coprocessor::Response;
 

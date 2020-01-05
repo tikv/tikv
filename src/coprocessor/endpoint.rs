@@ -22,7 +22,6 @@ use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 use tikv_util::future_pool::FuturePool;
 
-use crate::coprocessor::cache::CachedRequestHandler;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
@@ -318,14 +317,10 @@ impl<E: Engine> Endpoint<E> {
         // When snapshot is retrieved, deadline may exceed.
         tracker.req_ctx.deadline.check()?;
 
-        let mut handler = if tracker.req_ctx.cache_match_version.is_some()
-            && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
-        {
-            // Build a cached request handler instead if cache version is matching.
-            CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
-        } else {
-            handler_builder(snapshot, &tracker.req_ctx)?
-        };
+        let cache_is_hit = tracker.req_ctx.cache_match_version.is_some()
+            && tracker.req_ctx.cache_match_version == snapshot.get_data_version();
+
+        let mut handler = handler_builder(snapshot, &tracker.req_ctx)?;
 
         tracker.on_begin_all_items();
         tracker.on_begin_item();
@@ -347,6 +342,7 @@ impl<E: Engine> Endpoint<E> {
             }
             Err(e) => make_error_response(e),
         };
+        resp.set_is_cache_hit(cache_is_hit);
         resp.set_exec_details(exec_details);
         Ok(resp)
     }

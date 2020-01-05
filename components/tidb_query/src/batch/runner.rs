@@ -419,7 +419,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                             let mut ret = ExecutorExecutionSummary::default();
                             ret.set_num_iterations(summary.num_iterations as u64);
                             ret.set_num_produced_rows(summary.num_produced_rows as u64);
-                            ret.set_time_processed_ns(summary.time_processed_ns as u64);
+                            // ret.set_time_processed_ns(summary.time_processed_ns as u64);
                             ret
                         })
                         .collect::<Vec<_>>();
