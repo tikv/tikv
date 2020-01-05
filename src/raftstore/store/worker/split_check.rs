@@ -307,7 +307,7 @@ impl<S: CasualRouter> Runner<S> {
 
     fn change_cfg(&mut self, change: ConfigChange) {
         info!(
-            "split check config updated!";
+            "split check config updated";
             "change" => ?change
         );
         self.cfg.update(change);
@@ -349,19 +349,20 @@ mod tests {
 
     use tempfile::Builder;
 
-    fn setup(cfg: TiKvConfig) -> (ConfigController, Scheduler<Task>) {
-        let engine = {
-            let path = Builder::new().prefix("test-config").tempdir().unwrap();
-            Arc::new(
-                rocks::util::new_engine(
-                    path.path().join("db").to_str().unwrap(),
-                    None,
-                    &["split-check-config"],
-                    None,
-                )
-                .unwrap(),
+    fn tmp_engine() -> Arc<DB> {
+        let path = Builder::new().prefix("test-config").tempdir().unwrap();
+        Arc::new(
+            rocks::util::new_engine(
+                path.path().join("db").to_str().unwrap(),
+                None,
+                &["split-check-config"],
+                None,
             )
-        };
+            .unwrap(),
+        )
+    }
+
+    fn setup(cfg: TiKvConfig, engine: Arc<DB>) -> (ConfigController, Worker<Task>) {
         let (router, _) = sync_channel(1);
         let runner = Runner::new(
             engine,
@@ -372,10 +373,10 @@ mod tests {
         let mut worker: Worker<Task> = Worker::new("split-check-config");
         worker.start(runner).unwrap();
 
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("coprocessor", Box::new(worker.scheduler()));
 
-        (cfg_controller, worker.scheduler())
+        (cfg_controller, worker)
     }
 
     fn validate<F>(scheduler: &Scheduler<Task>, f: F)
@@ -396,7 +397,9 @@ mod tests {
     fn test_update_split_check_config() {
         let mut cfg = TiKvConfig::default();
         cfg.validate().unwrap();
-        let (mut cfg_controller, scheduler) = setup(cfg.clone());
+        let engine = tmp_engine();
+        let (mut cfg_controller, mut worker) = setup(cfg.clone(), engine);
+        let scheduler = worker.scheduler();
 
         let cop_config = cfg.coprocessor.clone();
         let mut incoming = cfg.clone();
@@ -423,5 +426,7 @@ mod tests {
         validate(&scheduler, move |cfg: &Config| {
             assert_eq!(cfg, &cop_config);
         });
+
+        worker.stop().unwrap().join().unwrap();
     }
 }

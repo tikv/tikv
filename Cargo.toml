@@ -69,6 +69,7 @@ futures-cpupool = "0.1"
 futures-locks = "0.1"
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }
 hex = "0.3"
+itertools = "0.8"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 keys = { path = "components/keys" }
 txn_types = { path = "components/txn_types" }
@@ -160,6 +161,7 @@ members = [
   "fuzz/fuzzer-libfuzzer",
   "fuzz/fuzzer-honggfuzz",
   "tests",
+  "cmd",
   "components/test_raftstore",
   "components/test_storage",
   "components/test_coprocessor",
@@ -182,7 +184,7 @@ members = [
   "components/keys",
   "components/sst_importer",
   "components/txn_types",
-  "cmd",
+  "components/resolved_ts"
 ]
 default-members = ["cmd"]
 

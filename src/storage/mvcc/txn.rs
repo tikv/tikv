@@ -39,7 +39,7 @@ impl<S: Snapshot> MvccTxn<S> {
         // IsolationLevel is `Si`, actually the method we use in MvccTxn does not rely on
         // isolation level, so it can be any value.
         Self::from_reader(
-            MvccReader::new(snapshot.clone(), None, fill_cache, IsolationLevel::Si),
+            MvccReader::new(snapshot, None, fill_cache, IsolationLevel::Si),
             start_ts,
         )
     }
@@ -55,7 +55,7 @@ impl<S: Snapshot> MvccTxn<S> {
         fill_cache: bool,
     ) -> MvccTxn<S> {
         Self::from_reader(
-            MvccReader::new(snapshot.clone(), scan_mode, fill_cache, IsolationLevel::Si),
+            MvccReader::new(snapshot, scan_mode, fill_cache, IsolationLevel::Si),
             start_ts,
         )
     }

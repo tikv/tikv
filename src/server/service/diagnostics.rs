@@ -190,7 +190,7 @@ mod sys {
                     let mut pairs = vec![];
                     for (val, name) in parts.zip(&names) {
                         let mut pair = ServerInfoPair::default();
-                        pair.set_key(name.to_string());
+                        pair.set_key((*name).to_string());
                         pair.set_value(val.to_string());
                         pairs.push(pair);
                     }
@@ -771,7 +771,8 @@ mod log {
     use std::path::Path;
 
     use chrono::DateTime;
-    use futures::{Async, Poll, Stream};
+    use futures::stream::{iter_ok, Stream};
+    use itertools::Itertools;
     use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
     use nom::bytes::complete::{tag, take};
     use nom::character::complete::{alpha1, space0, space1};
@@ -1019,30 +1020,20 @@ mod log {
         Ok((file_start_time, file_end_time))
     }
 
-    struct LogStream(LogIterator);
-
     // Batch size of the log streaming
     const LOG_ITEM_BATCH_SIZE: usize = 256;
 
-    impl Stream for LogStream {
-        type Item = SearchLogResponse;
-        type Error = ();
-
-        fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            let mut items = vec![];
-            while let Some(item) = self.0.next() {
-                items.push(item);
-                if items.len() >= LOG_ITEM_BATCH_SIZE {
-                    break;
-                }
+    fn bacth_log_item(item: LogIterator) -> impl Stream<Item = SearchLogResponse, Error = ()> {
+        iter_ok(item.batching(|iter| {
+            let batch = iter.take(LOG_ITEM_BATCH_SIZE).collect_vec();
+            if batch.is_empty() {
+                None
+            } else {
+                let mut resp = SearchLogResponse::default();
+                resp.set_messages(batch.into());
+                Some(resp)
             }
-            if items.is_empty() {
-                return Ok(Async::Ready(None));
-            }
-            let mut resp = SearchLogResponse::default();
-            resp.set_messages(items.into());
-            Ok(Async::Ready(Some(resp)))
-        }
+        }))
     }
 
     pub fn search<P: AsRef<Path>>(
@@ -1063,7 +1054,7 @@ mod log {
             .into_iter()
             .fold(0, |acc, x| acc | (1 << (x as usize)));
         let item = LogIterator::new(log_file, begin_time, end_time, level_flag, patterns)?;
-        Ok(LogStream(item))
+        Ok(bacth_log_item(item))
     }
 
     #[cfg(test)]

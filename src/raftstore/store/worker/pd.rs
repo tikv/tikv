@@ -481,7 +481,7 @@ impl<T: PdClient> Runner<T> {
 
         let f = self
             .pd_client
-            .region_heartbeat(term, region.clone(), peer.clone(), region_stat)
+            .region_heartbeat(term, region.clone(), peer, region_stat)
             .map_err(move |e| {
                 debug!(
                     "failed to send heartbeat";
@@ -1038,7 +1038,7 @@ fn send_destroy_peer_message(
     let mut message = RaftMessage::default();
     message.set_region_id(local_region.get_id());
     message.set_from_peer(peer.clone());
-    message.set_to_peer(peer.clone());
+    message.set_to_peer(peer);
     message.set_region_epoch(pd_region.get_region_epoch().clone());
     message.set_is_tombstone(true);
     if let Err(e) = router.send_raft_message(message) {
@@ -1070,8 +1070,7 @@ mod tests {
             scheduler: Scheduler<Task>,
             store_stat: Arc<Mutex<StoreStat>>,
         ) -> RunnerTest {
-            let mut stats_monitor =
-                StatsMonitor::new(Duration::from_secs(interval), scheduler.clone());
+            let mut stats_monitor = StatsMonitor::new(Duration::from_secs(interval), scheduler);
             if let Err(e) = stats_monitor.start() {
                 error!("failed to start stats collector, error = {:?}", e);
             }

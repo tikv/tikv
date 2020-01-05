@@ -79,7 +79,8 @@ mod tests {
     use super::super::LockManager;
     use super::*;
     use crate::config::*;
-    use crate::server::resolve;
+    use crate::server::resolve::{Callback, StoreAddrResolver};
+    use crate::server::{Error, Result};
     use pd_client::PdClient;
     use tikv_util::security::SecurityManager;
 
@@ -96,13 +97,33 @@ mod tests {
     struct MockPdClient;
     impl PdClient for MockPdClient {}
 
-    fn setup(cfg: TiKvConfig) -> (ConfigController, WaiterMgrScheduler, DeadlockScheduler) {
+    #[derive(Clone)]
+    struct MockResolver;
+    impl StoreAddrResolver for MockResolver {
+        fn resolve(&self, _store_id: u64, _cb: Callback) -> Result<()> {
+            Err(Error::Other(box_err!("unimplemented")))
+        }
+    }
+
+    fn setup(
+        cfg: TiKvConfig,
+    ) -> (
+        ConfigController,
+        WaiterMgrScheduler,
+        DeadlockScheduler,
+        LockManager,
+    ) {
         let mut lock_mgr = LockManager::new();
         let pd_client = Arc::new(MockPdClient);
-        let (_, resolver) = resolve::new_resolver(Arc::clone(&pd_client)).unwrap();
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         lock_mgr
-            .start(1, pd_client, resolver, security_mgr, &cfg.pessimistic_txn)
+            .start(
+                1,
+                pd_client,
+                MockResolver,
+                security_mgr,
+                &cfg.pessimistic_txn,
+            )
             .unwrap();
 
         let mgr = lock_mgr.config_manager();
@@ -110,10 +131,10 @@ mod tests {
             mgr.waiter_mgr_scheduler.clone(),
             mgr.detector_scheduler.clone(),
         );
-        let mut cfg_controller = ConfigController::new(cfg);
+        let mut cfg_controller = ConfigController::new(cfg, Default::default());
         cfg_controller.register("pessimistic_txn", Box::new(mgr));
 
-        (cfg_controller, w, d)
+        (cfg_controller, w, d, lock_mgr)
     }
 
     fn validate_waiter<F>(router: &WaiterMgrScheduler, f: F)
@@ -148,7 +169,7 @@ mod tests {
         cfg.pessimistic_txn.wait_for_lock_timeout = DEFAULT_TIMEOUT;
         cfg.pessimistic_txn.wake_up_delay_duration = DEFAULT_DELAY;
         cfg.validate().unwrap();
-        let (mut cfg_controller, waiter, deadlock) = setup(cfg.clone());
+        let (mut cfg_controller, waiter, deadlock, mut lock_mgr) = setup(cfg.clone());
 
         // update of other module's config should not effect lock manager config
         let mut incoming = cfg.clone();
@@ -206,5 +227,7 @@ mod tests {
         validate_dead_lock(&deadlock, move |ttl: u64| {
             assert_eq!(ttl, 4321);
         });
+
+        lock_mgr.stop();
     }
 }
