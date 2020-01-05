@@ -5,17 +5,18 @@
 //! represents a peer, the other is control FSM, which usually represents something
 //! that controls how the former is created or metrics are collected.
 
-use crate::fsm::{Fsm, FsmScheduler, FsmState, Managed};
+use crate::fsm::{Fsm, FsmScheduler};
 use crate::mailbox::BasicMailbox;
 use crate::router::Router;
 use crossbeam::channel::{self, SendError, TryRecvError};
+use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
 use tikv_util::mpsc;
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 enum FsmTypes<N, C> {
-    Normal(FsmState<N>),
-    Control(FsmState<C>),
+    Normal(Box<N>),
+    Control(Box<C>),
     // Used as a signal that scheduler should be shutdown.
     Empty,
 }
@@ -43,7 +44,7 @@ macro_rules! impl_sched {
             type Fsm = $fsm;
 
             #[inline]
-            fn schedule(&self, fsm: FsmState<Self::Fsm>) {
+            fn schedule(&self, fsm: Box<Self::Fsm>) {
                 match self.sender.send($ty(fsm)) {
                     Ok(()) => {}
                     // TODO: use debug instead.
@@ -67,9 +68,10 @@ impl_sched!(NormalScheduler, FsmTypes::Normal, Fsm = N);
 impl_sched!(ControlScheduler, FsmTypes::Control, Fsm = C);
 
 /// A basic struct for a round of polling.
-pub struct Batch<N: Fsm, C: Fsm> {
-    normals: Vec<Managed<N>>,
-    control: Option<Managed<C>>,
+#[allow(clippy::vec_box)]
+pub struct Batch<N, C> {
+    normals: Vec<Box<N>>,
+    control: Option<Box<C>>,
 }
 
 impl<N: Fsm, C: Fsm> Batch<N, C> {
@@ -81,22 +83,16 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
-    pub fn normals_mut(&mut self) -> &mut [Managed<N>] {
+    pub fn normals_mut(&mut self) -> &mut [Box<N>] {
         &mut self.normals
     }
 
     fn push(&mut self, fsm: FsmTypes<N, C>) -> bool {
         match fsm {
-            FsmTypes::Normal(n) => {
-                if let Some(n) = n.enter_polling() {
-                    self.normals.push(n)
-                }
-            }
+            FsmTypes::Normal(n) => self.normals.push(n),
             FsmTypes::Control(c) => {
-                if let Some(c) = c.enter_polling() {
-                    assert!(self.control.is_none());
-                    self.control = Some(c);
-                }
+                assert!(self.control.is_none());
+                self.control = Some(c);
             }
             FsmTypes::Empty => return false,
         }
@@ -118,40 +114,73 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     }
 
     /// Put back the FSM located at index.
-    pub fn release(&mut self, index: usize) -> bool {
-        let fsm = self.normals.swap_remove(index);
-        if let Some(s) = fsm.try_release() {
-            let last_index = self.normals.len();
-            self.normals.push(s);
-            self.normals.swap(index, last_index);
-            false
-        } else {
+    ///
+    /// Only when channel length is larger than `checked_len` will trigger
+    /// further notification. This function may fail if channel length is
+    /// larger than the given value before FSM is released.
+    pub fn release(&mut self, index: usize, checked_len: usize) -> bool {
+        let mut fsm = self.normals.swap_remove(index);
+        let mailbox = fsm.take_mailbox().unwrap();
+        mailbox.release(fsm);
+        if mailbox.len() == checked_len {
             true
+        } else {
+            match mailbox.take_fsm() {
+                None => true,
+                Some(mut s) => {
+                    s.set_mailbox(Cow::Owned(mailbox));
+                    let last_index = self.normals.len();
+                    self.normals.push(s);
+                    self.normals.swap(index, last_index);
+                    false
+                }
+            }
         }
     }
 
     /// Remove the normal FSM located at `index`.
-    #[allow(dead_code)]
-    pub fn reschedule(&mut self, index: usize, scheduler: &NormalScheduler<N, C>) {
-        let fsm = self.normals.swap_remove(index);
-        fsm.reschedule(scheduler);
+    ///
+    /// This method should only be called when the FSM is stopped.
+    /// If there are still messages in channel, the FSM is untouched and
+    /// the function will return false to let caller to keep polling.
+    pub fn remove(&mut self, index: usize) -> bool {
+        let mut fsm = self.normals.swap_remove(index);
+        let mailbox = fsm.take_mailbox().unwrap();
+        if mailbox.is_empty() {
+            mailbox.release(fsm);
+            true
+        } else {
+            fsm.set_mailbox(Cow::Owned(mailbox));
+            let last_index = self.normals.len();
+            self.normals.push(fsm);
+            self.normals.swap(index, last_index);
+            false
+        }
     }
 
     /// Same as `release`, but working on control FSM.
-    pub fn release_control(&mut self) -> bool {
+    pub fn release_control(&mut self, control_box: &BasicMailbox<C>, checked_len: usize) -> bool {
         let s = self.control.take().unwrap();
-        if let Some(s) = s.try_release() {
-            self.control = Some(s);
-            false
-        } else {
+        control_box.release(s);
+        if control_box.len() == checked_len {
             true
+        } else {
+            match control_box.take_fsm() {
+                None => true,
+                Some(s) => {
+                    self.control = Some(s);
+                    false
+                }
+            }
         }
     }
 
     /// Same as `remove`, but working on control FSM.
-    #[allow(dead_code)]
-    pub fn reschedule_control(&mut self, scheduler: &ControlScheduler<N, C>) {
-        self.control.take().unwrap().reschedule(scheduler)
+    pub fn remove_control(&mut self, control_box: &BasicMailbox<C>) {
+        if control_box.is_empty() {
+            let s = self.control.take().unwrap();
+            control_box.release(s);
+        }
     }
 }
 
@@ -171,23 +200,26 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 ///
 /// Note that, every poll thread has its own handler, which doesn't have to be
 /// Sync.
-pub trait PollHandler<N: Fsm, C: Fsm> {
+pub trait PollHandler<N, C> {
     /// This function is called at the very beginning of every round.
     fn begin(&mut self, batch_size: usize);
 
     /// This function is called when handling readiness for control FSM.
     ///
-    /// Returned value is a hint to show whether the control fsm needs another
-    /// round of processing.
-    fn handle_control(&mut self, control: &mut Managed<C>) -> bool;
+    /// If returned value is Some, then it represents a length of channel. This
+    /// function will only be called for the same fsm after channel's lengh is
+    /// larger than the value. If it returns None, then this function will
+    /// still be called for the same FSM in the next loop unless the FSM is
+    /// stopped.
+    fn handle_control(&mut self, control: &mut C) -> Option<usize>;
 
     /// This function is called when handling readiness for normal FSM.
     ///
     /// The returned value is handled in the same way as `handle_control`.
-    fn handle_normal(&mut self, normal: &mut Managed<N>) -> bool;
+    fn handle_normal(&mut self, normal: &mut N) -> Option<usize>;
 
     /// This function is called at the end of every round.
-    fn end(&mut self, batch: &mut [Managed<N>]);
+    fn end(&mut self, batch: &mut [Box<N>]);
 
     /// This function is called when batch system is going to sleep.
     fn pause(&mut self) {}
@@ -195,7 +227,7 @@ pub trait PollHandler<N: Fsm, C: Fsm> {
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
 struct Poller<N: Fsm, C: Fsm, Handler> {
-    _router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
+    router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
     fsm_receiver: channel::Receiver<FsmTypes<N, C>>,
     handler: Handler,
     max_batch_size: usize,
@@ -245,23 +277,33 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         self.fetch_batch(&mut batch, self.max_batch_size);
         while !batch.is_empty() {
             self.handler.begin(batch.len());
-            if batch.control.is_some()
-                && !self.handler.handle_control(batch.control.as_mut().unwrap())
-            {
-                batch.release_control();
+            if batch.control.is_some() {
+                let len = self.handler.handle_control(batch.control.as_mut().unwrap());
+                if batch.control.as_ref().unwrap().is_stopped() {
+                    batch.remove_control(&self.router.control_box);
+                } else if let Some(len) = len {
+                    batch.release_control(&self.router.control_box, len);
+                }
             }
             if !batch.normals.is_empty() {
                 for (i, p) in batch.normals.iter_mut().enumerate() {
-                    if !self.handler.handle_normal(p) {
-                        exhausted_fsms.push(i);
+                    let len = self.handler.handle_normal(p);
+                    if p.is_stopped() {
+                        exhausted_fsms.push((i, None));
+                    } else if len.is_some() {
+                        exhausted_fsms.push((i, len));
                     }
                 }
             }
             self.handler.end(batch.normals_mut());
             // Because release use `swap_remove` internally, so using pop here
             // to remove the correct FSM.
-            while let Some(r) = exhausted_fsms.pop() {
-                batch.release(r);
+            while let Some((r, mark)) = exhausted_fsms.pop() {
+                if let Some(m) = mark {
+                    batch.release(r, m);
+                } else {
+                    batch.remove(r);
+                }
             }
             // Fetch batch after every round is finished. It's helpful to protect regions
             // from becoming hungry if some regions are hot points.
@@ -271,7 +313,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 }
 
 /// A builder trait that can build up poll handlers.
-pub trait HandlerBuilder<N: Fsm, C: Fsm> {
+pub trait HandlerBuilder<N, C> {
     type Handler: PollHandler<N, C>;
 
     fn build(&mut self) -> Self::Handler;
@@ -309,7 +351,7 @@ where
         for i in 0..self.pool_size {
             let handler = builder.build();
             let mut poller = Poller {
-                _router: self.router.clone(),
+                router: self.router.clone(),
                 fsm_receiver: self.receiver.clone(),
                 handler,
                 max_batch_size: self.max_batch_size,

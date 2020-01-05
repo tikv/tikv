@@ -2,24 +2,41 @@
 
 extern crate test;
 
-use test::*;
 use batch_system::*;
+use test::*;
+use std::borrow::Cow;
 use tikv_util::mpsc;
 
 pub type Message = ();
 
 pub struct Runner {
+    is_stopped: bool,
     recv: mpsc::Receiver<Message>,
+    mailbox: Option<BasicMailbox<Runner>>,
 }
 
 impl Fsm for Runner {
     type Message = Message;
+
+    fn is_stopped(&self) -> bool {
+        self.is_stopped
+    }
+
+    fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>) {
+        self.mailbox = Some(mailbox.into_owned());
+    }
+
+    fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>> {
+        self.mailbox.take()
+    }
 }
 
 pub fn new_runner(cap: usize) -> (mpsc::LooseBoundedSender<Message>, Box<Runner>) {
     let (tx, rx) = mpsc::loose_bounded(cap);
     let fsm = Runner {
+        is_stopped: false,
         recv: rx,
+        mailbox: None,
     };
     (tx, Box::new(fsm))
 }
@@ -27,22 +44,19 @@ pub fn new_runner(cap: usize) -> (mpsc::LooseBoundedSender<Message>, Box<Runner>
 pub struct Handler;
 
 impl PollHandler<Runner, Runner> for Handler {
-    fn begin(&mut self, _batch_size: usize) {
+    fn begin(&mut self, _batch_size: usize) {}
+
+    fn handle_control(&mut self, control: &mut Runner) -> Option<usize> {
+        while let Ok(_) = control.recv.try_recv() {}
+        Some(0)
     }
 
-    fn handle_control(&mut self, control: &mut Managed<Runner>) -> bool {
-        while let Ok(_) = control.recv.try_recv() {
-        }
-        false
+    fn handle_normal(&mut self, normal: &mut Runner) -> Option<usize> {
+        while let Ok(_) = normal.recv.try_recv() {}
+        Some(0)
     }
 
-    fn handle_normal(&mut self, normal: &mut Managed<Runner>) -> bool {
-        while let Ok(_) = normal.recv.try_recv() {
-        }
-        false
-    }
-
-    fn end(&mut self, _normals: &mut [Managed<Runner>]) {}
+    fn end(&mut self, _normals: &mut [Box<Runner>]) {}
 }
 
 pub struct Builder;

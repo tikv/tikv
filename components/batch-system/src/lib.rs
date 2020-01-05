@@ -11,6 +11,6 @@ mod mailbox;
 mod router;
 
 pub use self::batch::{create_system, BatchRouter, BatchSystem, HandlerBuilder, PollHandler};
-pub use self::fsm::{Fsm, Managed};
+pub use self::fsm::Fsm;
 pub use self::mailbox::{BasicMailbox, Mailbox};
 pub use self::router::Router;
