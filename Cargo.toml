@@ -184,7 +184,8 @@ members = [
   "components/keys",
   "components/sst_importer",
   "components/txn_types",
-  "components/resolved_ts"
+  "components/resolved_ts",
+  "components/batch-system",
 ]
 default-members = ["cmd"]
 
