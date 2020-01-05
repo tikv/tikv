@@ -3,8 +3,8 @@
 extern crate test;
 
 use batch_system::*;
-use test::*;
 use std::borrow::Cow;
+use test::*;
 use tikv_util::mpsc;
 
 pub type Message = ();

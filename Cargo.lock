@@ -3752,6 +3752,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "backtrace",
+ "batch-system",
  "bitflags",
  "byteorder",
  "bytes",
