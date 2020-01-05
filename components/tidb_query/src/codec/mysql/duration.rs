@@ -124,7 +124,7 @@ mod parser {
             } else {
                 (buf_to_int(&buf[..=fsp]), fsp + 1)
             };
-            fraction * TEN_POW[MICRO_WIDTH.checked_sub(len).unwrap_or(0)]
+            fraction * TEN_POW[MICRO_WIDTH.saturating_sub(len)]
         })
     }
 

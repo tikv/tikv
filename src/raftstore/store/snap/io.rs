@@ -4,7 +4,6 @@ use std::io::{self, BufReader};
 use std::{fs, usize};
 
 use engine::CfName;
-use engine_rocks::{RocksSnapshot, RocksSstWriter, RocksSstWriterBuilder};
 use engine_traits::IOLimiter;
 use engine_traits::{ImportExt, IngestExternalFileOptions, KvEngine};
 use engine_traits::{Iterable, Snapshot as SnapshotTrait, SstWriter, SstWriterBuilder};
@@ -27,15 +26,15 @@ pub struct BuildStatistics {
 /// Build a snapshot file for the given column family in plain format.
 /// If there are no key-value pairs fetched, no files will be created at `path`,
 /// otherwise the file will be created and synchronized.
-pub fn build_plain_cf_file<S>(
+pub fn build_plain_cf_file<E>(
     path: &str,
-    snap: &S,
+    snap: &E::Snapshot,
     cf: &str,
     start_key: &[u8],
     end_key: &[u8],
 ) -> Result<BuildStatistics, Error>
 where
-    S: SnapshotTrait,
+    E: KvEngine,
 {
     let mut file = box_try!(OpenOptions::new().write(true).create_new(true).open(path));
     let mut stats = BuildStatistics::default();
@@ -60,15 +59,18 @@ where
 /// Build a snapshot file for the given column family in sst format.
 /// If there are no key-value pairs fetched, no files will be created at `path`,
 /// otherwise the file will be created and synchronized.
-pub fn build_sst_cf_file<L: IOLimiter>(
+pub fn build_sst_cf_file<E>(
     path: &str,
-    snap: &RocksSnapshot,
+    snap: &E::Snapshot,
     cf: CfName,
     start_key: &[u8],
     end_key: &[u8],
-    io_limiter: Option<&L>,
-) -> Result<BuildStatistics, Error> {
-    let mut sst_writer = create_sst_file_writer(snap, cf, path)?;
+    io_limiter: Option<&E::IOLimiter>,
+) -> Result<BuildStatistics, Error>
+where
+    E: KvEngine,
+{
+    let mut sst_writer = create_sst_file_writer::<E>(snap, cf, path)?;
     let mut stats = BuildStatistics::default();
     let base = io_limiter
         .as_ref()
@@ -100,35 +102,52 @@ pub fn build_sst_cf_file<L: IOLimiter>(
     Ok(stats)
 }
 
-/// Apply the given snapshot file into a column family.
-pub fn apply_plain_cf_file<E>(
+/// Apply the given snapshot file into a column family. `callback` will be invoked for each batch of
+/// key value pairs written to db.
+pub fn apply_plain_cf_file<E, F>(
     path: &str,
     stale_detector: &impl StaleDetector,
     db: &E,
     cf: &str,
     batch_size: usize,
+    mut callback: F,
 ) -> Result<(), Error>
 where
     E: KvEngine,
+    F: for<'r> FnMut(&'r [(Vec<u8>, Vec<u8>)]),
 {
     let mut decoder = BufReader::new(box_try!(File::open(path)));
+
+    let mut write_to_wb = |batch: &mut Vec<_>, wb: &E::WriteBatch| {
+        callback(batch);
+        batch.drain(..).try_for_each(|(k, v)| wb.put_cf(cf, &k, &v))
+    };
+
     let wb = db.write_batch();
+    // Collect keys to a vec rather than wb so that we can invoke the callback less times.
+    let mut batch = Vec::with_capacity(1024);
+    let mut batch_data_size = 0;
+
     loop {
         if stale_detector.is_stale() {
             return Err(Error::Abort);
         }
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
-            if !wb.is_empty() {
+            if !batch.is_empty() {
+                box_try!(write_to_wb(&mut batch, &wb));
                 box_try!(db.write(&wb));
             }
             return Ok(());
         }
         let value = box_try!(decoder.decode_compact_bytes());
-        box_try!(wb.put_cf(cf, &key, &value));
-        if wb.data_size() >= batch_size {
+        batch_data_size += key.len() + value.len();
+        batch.push((key, value));
+        if batch_data_size >= batch_size {
+            box_try!(write_to_wb(&mut batch, &wb));
             box_try!(db.write(&wb));
             wb.clear();
+            batch_data_size = 0;
         }
     }
 }
@@ -144,25 +163,30 @@ where
     Ok(())
 }
 
-fn create_sst_file_writer(
-    snap: &RocksSnapshot,
+fn create_sst_file_writer<E>(
+    snap: &E::Snapshot,
     cf: CfName,
     path: &str,
-) -> Result<RocksSstWriter, Error> {
+) -> Result<E::SstWriter, Error>
+where
+    E: KvEngine,
+{
     let engine = snap.get_db();
-    let builder = RocksSstWriterBuilder::new().set_db(&engine).set_cf(cf);
+    let builder = E::SstWriterBuilder::new().set_db(&engine).set_cf(cf);
     let writer = box_try!(builder.build(path));
     Ok(writer)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
     use crate::raftstore::store::snap::tests::*;
+    use crate::raftstore::store::snap::SNAPSHOT_CFS;
     use engine::CF_DEFAULT;
-    use engine_rocks::{Compat, RocksIOLimiter};
+    use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
     use tempfile::Builder;
 
     struct TestStaleDetector;
@@ -179,41 +203,71 @@ mod tests {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
                 let db = db_creater(&dir.path(), db_opt.clone(), None).unwrap();
-
-                let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
-                let plain_file_path = snap_cf_dir.path().join("plain");
-                let snap = RocksSnapshot::new(Arc::clone(&db));
-                let stats = build_plain_cf_file(
-                    &plain_file_path.to_str().unwrap(),
-                    &snap,
-                    CF_DEFAULT,
-                    b"a",
-                    b"z",
-                )
-                .unwrap();
-                if stats.key_count == 0 {
-                    assert_eq!(
-                        fs::metadata(&plain_file_path).unwrap_err().kind(),
-                        io::ErrorKind::NotFound
-                    );
-                    continue;
-                }
-
+                // Collect keys via the key_callback into a collection.
+                let mut applied_keys: HashMap<_, Vec<_>> = HashMap::new();
                 let dir1 = Builder::new()
                     .prefix("test-snap-cf-db-apply")
                     .tempdir()
                     .unwrap();
                 let db1 = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
-                let detector = TestStaleDetector {};
-                apply_plain_cf_file(
-                    &plain_file_path.to_str().unwrap(),
-                    &detector,
-                    db1.c(),
-                    CF_DEFAULT,
-                    16,
-                )
-                .unwrap();
+
+                let snap = RocksSnapshot::new(Arc::clone(&db));
+                for cf in SNAPSHOT_CFS {
+                    let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
+                    let plain_file_path = snap_cf_dir.path().join("plain");
+                    let stats = build_plain_cf_file::<RocksEngine>(
+                        &plain_file_path.to_str().unwrap(),
+                        &snap,
+                        cf,
+                        &keys::data_key(b"a"),
+                        &keys::data_end_key(b"z"),
+                    )
+                    .unwrap();
+                    if stats.key_count == 0 {
+                        assert_eq!(
+                            fs::metadata(&plain_file_path).unwrap_err().kind(),
+                            io::ErrorKind::NotFound
+                        );
+                        continue;
+                    }
+
+                    let detector = TestStaleDetector {};
+                    apply_plain_cf_file(
+                        &plain_file_path.to_str().unwrap(),
+                        &detector,
+                        db1.c(),
+                        cf,
+                        16,
+                        |v| {
+                            v.to_owned()
+                                .into_iter()
+                                .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))
+                        },
+                    )
+                    .unwrap();
+                }
+
                 assert_eq_db(&db, &db1);
+
+                // Scan keys from db
+                let mut keys_in_db: HashMap<_, Vec<_>> = HashMap::new();
+                for cf in SNAPSHOT_CFS {
+                    snap.scan_cf(
+                        cf,
+                        &keys::data_key(b"a"),
+                        &keys::data_end_key(b"z"),
+                        true,
+                        |k, v| {
+                            keys_in_db
+                                .entry(cf)
+                                .or_default()
+                                .push((k.to_owned(), v.to_owned()));
+                            Ok(true)
+                        },
+                    )
+                    .unwrap();
+                }
+                assert_eq!(applied_keys, keys_in_db);
             }
         }
     }
@@ -228,7 +282,7 @@ mod tests {
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let sst_file_path = snap_cf_dir.path().join("sst");
-                let stats = build_sst_cf_file::<RocksIOLimiter>(
+                let stats = build_sst_cf_file::<RocksEngine>(
                     &sst_file_path.to_str().unwrap(),
                     &RocksSnapshot::new(Arc::clone(&db)),
                     CF_DEFAULT,

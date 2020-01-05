@@ -6,6 +6,7 @@
 //! made up of many other configuration types.
 
 use std::cmp::{self, Ord, Ordering};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -54,6 +55,7 @@ use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::FutureScheduler;
+use tikv_util::Either;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -420,7 +422,7 @@ impl Default for DefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -487,7 +489,7 @@ impl Default for WriteCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -539,7 +541,7 @@ impl Default for LockCfConfig {
             block_based_bloom_filter: false,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
-            write_buffer_size: ReadableSize::mb(128),
+            write_buffer_size: ReadableSize::mb(32),
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(128),
@@ -556,7 +558,7 @@ impl Default for LockCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -615,7 +617,7 @@ impl Default for RaftCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -897,7 +899,7 @@ impl Default for RaftDefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
-            force_consistency_checks: false,
+            force_consistency_checks: true,
             prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
             prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             enable_doubly_skiplist: true,
@@ -1334,12 +1336,16 @@ impl ReadPoolConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct TiKvConfig {
     #[config(skip)]
+    pub dynamic_config: bool,
+    #[config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
     #[config(skip)]
     pub log_file: String,
     #[config(skip)]
     pub log_rotation_timespan: ReadableDuration,
+    #[config(skip)]
+    pub log_rotation_size: ReadableSize,
     #[config(skip)]
     pub panic_when_unexpected_key_or_data: bool,
     pub refresh_config_interval: ReadableDuration,
@@ -1356,7 +1362,7 @@ pub struct TiKvConfig {
     #[config(submodule)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub coprocessor: CopConfig,
     #[config(skip)]
     pub rocksdb: DbConfig,
@@ -1366,7 +1372,7 @@ pub struct TiKvConfig {
     pub security: SecurityConfig,
     #[config(skip)]
     pub import: ImportConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
     #[config(skip)]
     pub gc: GcConfig,
@@ -1375,9 +1381,11 @@ pub struct TiKvConfig {
 impl Default for TiKvConfig {
     fn default() -> TiKvConfig {
         TiKvConfig {
+            dynamic_config: false,
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
+            log_rotation_size: ReadableSize::mb(300),
             panic_when_unexpected_key_or_data: false,
             refresh_config_interval: ReadableDuration::secs(30),
             readpool: ReadPoolConfig::default(),
@@ -1743,33 +1751,124 @@ pub fn cmp_version(current: &configpb::Version, incoming: &configpb::Version) ->
 
 type CfgResult<T> = Result<T, Box<dyn Error>>;
 
+pub trait ConfigManager: Send {
+    fn dispatch(&mut self, _: ConfigChange) -> Result<(), Box<dyn Error>>;
+}
+
+#[derive(PartialEq, Eq, Hash)]
+pub enum Module {
+    Readpool,
+    Server,
+    Metric,
+    Raftstore,
+    Coprocessor,
+    Pd,
+    Rocksdb,
+    Raftdb,
+    Storage,
+    Security,
+    Import,
+    PessimisticTxn,
+    Gc,
+    Unknown(String),
+}
+
+impl From<&str> for Module {
+    fn from(m: &str) -> Module {
+        match m {
+            "readpool" => Module::Readpool,
+            "server" => Module::Server,
+            "metric" => Module::Metric,
+            "raft_store" => Module::Raftstore,
+            "coprocessor" => Module::Coprocessor,
+            "pd" => Module::Pd,
+            "rocksdb" => Module::Rocksdb,
+            "raftdb" => Module::Raftdb,
+            "storage" => Module::Storage,
+            "security" => Module::Security,
+            "import" => Module::Import,
+            "pessimistic_txn" => Module::PessimisticTxn,
+            "gc" => Module::Gc,
+            n => Module::Unknown(n.to_owned()),
+        }
+    }
+}
+
 /// ConfigController use to register each module's config manager,
 /// and dispatch the change of config to corresponding managers or
 /// return the change if the incoming change is invalid.
 #[derive(Default)]
 pub struct ConfigController {
     current: TiKvConfig,
+    config_mgrs: HashMap<Module, Box<dyn ConfigManager>>,
+    start_version: Option<configpb::Version>,
 }
 
 impl ConfigController {
-    pub fn new(cfg: TiKvConfig) -> Self {
-        ConfigController { current: cfg }
+    pub fn new(current: TiKvConfig, version: configpb::Version) -> Self {
+        ConfigController {
+            current,
+            config_mgrs: HashMap::new(),
+            start_version: Some(version),
+        }
     }
 
-    fn update_or_rollback(&mut self, mut incoming: TiKvConfig) -> Option<ConfigChange> {
+    pub fn update_or_rollback(
+        &mut self,
+        mut incoming: TiKvConfig,
+    ) -> CfgResult<Either<ConfigChange, bool>> {
+        // Config from PD have not been checked, call `compatible_adjust()`
+        // and `validate()` before use it
+        incoming.compatible_adjust();
         if incoming.validate().is_err() {
-            return Some(incoming.diff(&self.current));
+            let diff = incoming.diff(&self.current);
+            return Ok(Either::Left(diff));
         }
         let diff = self.current.diff(&incoming);
-        if !diff.is_empty() {
-            // TODO: dispatch change to each module
-            self.current.update(diff);
+        if diff.is_empty() {
+            return Ok(Either::Right(false));
         }
-        None
+        let mut to_update = HashMap::with_capacity(diff.len());
+        for (name, change) in diff.into_iter() {
+            match change {
+                ConfigValue::Module(change) => {
+                    // update a submodule's config only if changes had been sucessfully
+                    // dispatched to corresponding config manager, to avoid double dispatch change
+                    if let Some(mgr) = self.config_mgrs.get_mut(&Module::from(name.as_str())) {
+                        if let Err(e) = mgr.dispatch(change.clone()) {
+                            self.current.update(to_update);
+                            return Err(e);
+                        }
+                    }
+                    to_update.insert(name, ConfigValue::Module(change));
+                }
+                _ => {
+                    let _ = to_update.insert(name, change);
+                }
+            }
+        }
+        debug!("all config change had been dispatched"; "change" => ?to_update);
+        self.current.update(to_update);
+        Ok(Either::Right(true))
+    }
+
+    pub fn register(&mut self, module: &str, cfg_mgr: Box<dyn ConfigManager>) {
+        match Module::from(module) {
+            Module::Unknown(name) => warn!("tried to register unknown module: {}", name),
+            m => {
+                if self.config_mgrs.insert(m, cfg_mgr).is_some() {
+                    warn!("config manager for module {} already registered", module)
+                }
+            }
+        }
     }
 
     pub fn get_current(&self) -> &TiKvConfig {
         &self.current
+    }
+
+    pub fn get_current_mut(&mut self) -> &mut TiKvConfig {
+        &mut self.current
     }
 }
 
@@ -1782,16 +1881,15 @@ pub struct ConfigHandler {
 impl ConfigHandler {
     pub fn start(
         id: String,
-        controller: ConfigController,
-        version: configpb::Version,
-        _scheduler: FutureScheduler<PdTask>,
+        mut controller: ConfigController,
+        scheduler: FutureScheduler<PdTask>,
     ) -> CfgResult<Self> {
-        // TODO: currently we can't handle RefreshConfig task, because
-        // PD have not implement such service yet.
-
-        // if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
-        //     return Err(format!("failed to schedule refresh config task: {:?}", e).into());
-        // }
+        if controller.get_current().dynamic_config {
+            if let Err(e) = scheduler.schedule(PdTask::RefreshConfig) {
+                return Err(format!("failed to schedule refresh config task: {:?}", e).into());
+            }
+        }
+        let version = controller.start_version.take().unwrap_or_default();
         Ok(ConfigHandler {
             id,
             version,
@@ -1817,24 +1915,33 @@ impl ConfigHandler {
 }
 
 impl ConfigHandler {
-    /// Register the local config to pd
+    /// Register the local config to pd and get the latest
+    /// version and config
     pub fn create(
         id: String,
         pd_client: Arc<impl PdClient>,
-        cfg: TiKvConfig,
+        local_config: TiKvConfig,
     ) -> CfgResult<(configpb::Version, TiKvConfig)> {
-        let cfg = toml::to_string(&cfg)?;
+        let cfg = toml::to_string(&local_config)?;
         let version = configpb::Version::default();
         let mut resp = pd_client.register_config(id, version, cfg)?;
         match resp.get_status().get_code() {
-            StatusCode::Ok => {
-                let cfg: TiKvConfig = toml::from_str(resp.get_config())?;
-                Ok((resp.take_version(), cfg))
+            StatusCode::Ok | StatusCode::WrongVersion => {
+                let mut incoming: TiKvConfig = toml::from_str(resp.get_config())?;
+                let mut version = resp.take_version();
+                if let Err(e) = incoming.validate() {
+                    warn!(
+                        "config from pd is invalid, fallback to local config";
+                        "version" => ?version,
+                        "error" => ?e,
+                    );
+                    version = configpb::Version::default();
+                    incoming = local_config;
+                }
+                info!("register config success"; "version" => ?version);
+                Ok((version, incoming))
             }
-            code => {
-                debug!("failed to register config"; "status" => ?code);
-                Err(format!("{:?}", resp).into())
-            }
+            _ => Err(format!("failed to register config, response: {:?}", resp).into()),
         }
     }
 
@@ -1844,24 +1951,31 @@ impl ConfigHandler {
         let mut resp = pd_client.get_config(self.get_id(), self.version.clone())?;
         let version = resp.take_version();
         match resp.get_status().get_code() {
-            StatusCode::NotChange => Ok(()),
+            StatusCode::Ok => Ok(()),
             StatusCode::WrongVersion if cmp_version(&self.version, &version) == Ordering::Less => {
                 let incoming: TiKvConfig = toml::from_str(resp.get_config())?;
-                if let Some(rollback_change) = self.config_controller.update_or_rollback(incoming) {
-                    debug!(
-                        "tried to update local config to an invalid config";
-                        "version" => ?resp.version
-                    );
-                    let entries = to_config_entry(rollback_change)?;
-                    self.update_config(version, entries, pd_client)?;
-                } else {
-                    info!("local config updated"; "version" => ?resp.version);
-                    self.version = version;
+                match self.config_controller.update_or_rollback(incoming)? {
+                    Either::Left(rollback_change) => {
+                        warn!(
+                            "tried to update local config to an invalid config";
+                            "version" => ?version
+                        );
+                        let entries = to_config_entry(rollback_change)?;
+                        self.update_config(version, entries, pd_client)?;
+                    }
+                    Either::Right(updated) => {
+                        if updated {
+                            info!("local config updated"; "version" => ?version);
+                        } else {
+                            info!("config version upated"; "version" => ?version);
+                        }
+                        self.version = version;
+                    }
                 }
                 Ok(())
             }
             code => {
-                debug!(
+                warn!(
                     "failed to get remote config";
                     "status" => ?code,
                     "version" => ?version
@@ -1953,8 +2067,8 @@ mod tests {
         tikv_cfg.raftdb.wal_dir = s1.clone();
         tikv_cfg.write_to_file(file).unwrap();
         let cfg_from_file = TiKvConfig::from_file(file);
-        assert_eq!(cfg_from_file.rocksdb.wal_dir, s2.clone());
-        assert_eq!(cfg_from_file.raftdb.wal_dir, s1.clone());
+        assert_eq!(cfg_from_file.rocksdb.wal_dir, s2);
+        assert_eq!(cfg_from_file.raftdb.wal_dir, s1);
     }
 
     #[test]

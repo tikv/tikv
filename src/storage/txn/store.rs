@@ -2,16 +2,14 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
+use super::{Error, ErrorInner, Result};
+use crate::storage::kv::{Snapshot, Statistics};
 use crate::storage::metrics::*;
 use crate::storage::mvcc::{
-    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, Scanner as MvccScanner,
-    ScannerBuilder, WriteRef,
+    EntryScanner, Error as MvccError, ErrorInner as MvccErrorInner, PointGetter,
+    PointGetterBuilder, Scanner as MvccScanner, ScannerBuilder,
 };
-use crate::storage::mvcc::{PointGetter, PointGetterBuilder};
-use crate::storage::{Snapshot, Statistics};
-use txn_types::{Key, KvPair, TimeStamp, TsSet, Value};
-
-use super::{Error, ErrorInner, Result};
+use txn_types::{Key, KvPair, TimeStamp, TsSet, Value, WriteRef};
 
 pub trait Store: Send {
     /// The scanner type returned by `scanner()`.
@@ -60,7 +58,9 @@ pub trait Scanner: Send {
                 }
                 Ok(None) => break,
                 Err(
-                    e @ Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
+                    e
+                    @
+                    Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked {
                         ..
                     }))),
                 ) => {
@@ -85,6 +85,8 @@ pub trait TxnEntryStore: Send {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        after_ts: TimeStamp,
+        output_delete: bool,
     ) -> Result<Self::Scanner>;
 }
 
@@ -290,6 +292,8 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
         &self,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        after_ts: TimeStamp,
+        output_delete: bool,
     ) -> Result<EntryScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
@@ -300,7 +304,9 @@ impl<S: Snapshot> TxnEntryStore for SnapshotStore<S> {
                 .fill_cache(self.fill_cache)
                 .isolation_level(self.isolation_level)
                 .bypass_locks(self.bypass_locks.clone())
-                .build_entry_scanner()?;
+                .hint_min_ts(Some(after_ts.next()))
+                .hint_max_ts(Some(self.start_ts))
+                .build_entry_scanner(after_ts, output_delete)?;
 
         Ok(scanner)
     }
@@ -516,11 +522,11 @@ impl Scanner for FixtureStoreScanner {
 mod tests {
     use super::*;
     use crate::storage::kv::{
-        Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+        Cursor, Engine, Iterator, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+        TestEngineBuilder,
     };
-    use crate::storage::mvcc::MvccTxn;
-    use crate::storage::{CfName, Cursor, Iterator, Mutation, Options, TestEngineBuilder};
-    use engine::IterOption;
+    use crate::storage::mvcc::{Mutation, MvccTxn};
+    use engine::{CfName, IterOption};
     use kvproto::kvrpcpb::Context;
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -565,7 +571,10 @@ mod tests {
                     txn.prewrite(
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
-                        &Options::default(),
+                        false,
+                        0,
+                        0,
+                        TimeStamp::default(),
                     )
                     .unwrap();
                 }
@@ -611,11 +620,11 @@ mod tests {
     struct MockRangeSnapshotIter {}
 
     impl Iterator for MockRangeSnapshotIter {
-        fn next(&mut self) -> bool {
-            true
+        fn next(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
-        fn prev(&mut self) -> bool {
-            true
+        fn prev(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
         fn seek(&mut self, _: &Key) -> EngineResult<bool> {
             Ok(true)
@@ -623,17 +632,14 @@ mod tests {
         fn seek_for_prev(&mut self, _: &Key) -> EngineResult<bool> {
             Ok(true)
         }
-        fn seek_to_first(&mut self) -> bool {
-            true
+        fn seek_to_first(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
-        fn seek_to_last(&mut self) -> bool {
-            true
+        fn seek_to_last(&mut self) -> EngineResult<bool> {
+            Ok(true)
         }
-        fn valid(&self) -> bool {
-            true
-        }
-        fn status(&self) -> EngineResult<()> {
-            Ok(())
+        fn valid(&self) -> EngineResult<bool> {
+            Ok(true)
         }
         fn validate_key(&self, _: &Key) -> EngineResult<()> {
             Ok(())
@@ -835,7 +841,7 @@ mod tests {
             .scanner(false, false, Some(bound_b.clone()), Some(bound_d.clone()))
             .is_err());
         assert!(store
-            .scanner(false, false, Some(bound_a.clone()), Some(bound_d.clone()))
+            .scanner(false, false, Some(bound_a.clone()), Some(bound_d))
             .is_err());
 
         // Store with whole range
@@ -852,11 +858,9 @@ mod tests {
             .scanner(false, false, Some(bound_a.clone()), None)
             .is_ok());
         assert!(store2
-            .scanner(false, false, Some(bound_a.clone()), Some(bound_b.clone()))
+            .scanner(false, false, Some(bound_a), Some(bound_b))
             .is_ok());
-        assert!(store2
-            .scanner(false, false, None, Some(bound_c.clone()))
-            .is_ok());
+        assert!(store2.scanner(false, false, None, Some(bound_c)).is_ok());
     }
 
     fn gen_fixture_store() -> FixtureStore {
@@ -1172,7 +1176,7 @@ mod benches {
             data.insert(Key::from_raw(&key), Ok(gen_payload(100)));
         }
         let store = FixtureStore::new(data);
-        let mut query_user_key = user_key.clone();
+        let mut query_user_key = user_key;
         query_user_key.push(10);
         let query_key = Key::from_raw(&query_user_key);
         b.iter(|| {

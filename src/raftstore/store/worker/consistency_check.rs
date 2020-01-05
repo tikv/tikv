@@ -7,24 +7,30 @@ use kvproto::metapb::Region;
 
 use crate::raftstore::store::{CasualMessage, CasualRouter};
 use engine::CF_RAFT;
-use engine_rocks::RocksSnapshot;
-use engine_traits::{Iterable, Peekable, Snapshot};
+use engine_rocks::RocksEngine;
+use engine_traits::{Iterable, KvEngine, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;
 use crate::raftstore::store::metrics::*;
 
 /// Consistency checking task.
-pub enum Task {
+pub enum Task<E>
+where
+    E: KvEngine,
+{
     ComputeHash {
         index: u64,
         region: Region,
-        snap: RocksSnapshot,
+        snap: E::Snapshot,
     },
 }
 
-impl Task {
-    pub fn compute_hash(region: Region, index: u64, snap: RocksSnapshot) -> Task {
+impl<E> Task<E>
+where
+    E: KvEngine,
+{
+    pub fn compute_hash(region: Region, index: u64, snap: E::Snapshot) -> Task<E> {
         Task::ComputeHash {
             region,
             index,
@@ -33,7 +39,10 @@ impl Task {
     }
 }
 
-impl Display for Task {
+impl<E> Display for Task<E>
+where
+    E: KvEngine,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::ComputeHash {
@@ -53,7 +62,10 @@ impl<C: CasualRouter> Runner<C> {
     }
 
     /// Computes the hash of the Region.
-    fn compute_hash(&mut self, region: Region, index: u64, snap: RocksSnapshot) {
+    fn compute_hash<E>(&mut self, region: Region, index: u64, snap: E::Snapshot)
+    where
+        E: KvEngine,
+    {
         let region_id = region.get_id();
         info!(
             "computing hash";
@@ -128,14 +140,14 @@ impl<C: CasualRouter> Runner<C> {
     }
 }
 
-impl<C: CasualRouter> Runnable<Task> for Runner<C> {
-    fn run(&mut self, task: Task) {
+impl<C: CasualRouter> Runnable<Task<RocksEngine>> for Runner<C> {
+    fn run(&mut self, task: Task<RocksEngine>) {
         match task {
             Task::ComputeHash {
                 region,
                 index,
                 snap,
-            } => self.compute_hash(region, index, snap),
+            } => self.compute_hash::<RocksEngine>(region, index, snap),
         }
     }
 }

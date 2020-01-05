@@ -1,11 +1,48 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::{types::ProcessResult, StorageCallback, TimeStamp};
+use crate::storage::{txn::ProcessResult, types::StorageCallback};
+use std::time::Duration;
+use txn_types::TimeStamp;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Lock {
     pub ts: TimeStamp,
     pub hash: u64,
+}
+
+/// Time to wait for lock released when encountering locks.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum WaitTimeout {
+    Default,
+    Millis(u64),
+}
+
+impl WaitTimeout {
+    pub fn into_duration_with_ceiling(self, ceiling: u64) -> Duration {
+        match self {
+            WaitTimeout::Default => Duration::from_millis(ceiling),
+            WaitTimeout::Millis(ms) if ms > ceiling => Duration::from_millis(ceiling),
+            WaitTimeout::Millis(ms) => Duration::from_millis(ms),
+        }
+    }
+
+    /// Timeouts are encoded as i64s in protobufs where 0 means using default timeout.
+    /// Negative means no wait.
+    pub fn from_encoded(i: i64) -> Option<WaitTimeout> {
+        use std::cmp::Ordering::*;
+
+        match i.cmp(&0) {
+            Equal => Some(WaitTimeout::Default),
+            Less => None,
+            Greater => Some(WaitTimeout::Millis(i as u64)),
+        }
+    }
+}
+
+impl From<u64> for WaitTimeout {
+    fn from(i: u64) -> WaitTimeout {
+        WaitTimeout::Millis(i)
+    }
 }
 
 /// `LockManager` manages transactions waiting for locks held by other transactions.
@@ -24,7 +61,7 @@ pub trait LockManager: Clone + Send + 'static {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
-        timeout: i64,
+        timeout: Option<WaitTimeout>,
     );
 
     /// The locks with `lock_ts` and `hashes` are released, tries to wake up transactions.
@@ -56,7 +93,7 @@ impl LockManager for DummyLockManager {
         _pr: ProcessResult,
         _lock: Lock,
         _is_first_lock: bool,
-        _wait_timeout: i64,
+        _wait_timeout: Option<WaitTimeout>,
     ) {
     }
 

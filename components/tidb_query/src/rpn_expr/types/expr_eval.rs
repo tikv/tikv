@@ -234,7 +234,6 @@ impl RpnExpression {
                     func_meta,
                     args_len,
                     field_type: ret_field_type,
-                    implicit_args,
                     metadata,
                 } => {
                     // Suppose that we have function call `Foo(A, B, C)`, the RPN nodes looks like
@@ -245,10 +244,7 @@ impl RpnExpression {
                     assert!(stack.len() >= *args_len);
                     let stack_slice_begin = stack.len() - *args_len;
                     let stack_slice = &stack[stack_slice_begin..];
-                    let mut call_extra = RpnFnCallExtra {
-                        ret_field_type,
-                        implicit_args,
-                    };
+                    let mut call_extra = RpnFnCallExtra { ret_field_type };
                     let ret = (func_meta.fn_ptr)(
                         ctx,
                         output_rows,
@@ -370,7 +366,7 @@ mod tests {
         assert_eq!(val.vector_value().unwrap().logical_rows(), &[2, 0, 1]);
         assert_eq!(val.field_type().as_accessor().tp(), FieldTypeTp::LongLong);
 
-        let mut c = columns.clone();
+        let mut c = columns;
         let exp = RpnExpressionBuilder::new().push_column_ref(0).build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, &schema, &mut c, &logical_rows, 5);
@@ -401,7 +397,7 @@ mod tests {
         });
         assert!(hooked_eval.is_err());
 
-        let mut c = columns.clone();
+        let mut c = columns;
         let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
         let hooked_eval = panic_hook::recover_safe(|| {
@@ -1063,7 +1059,7 @@ mod tests {
         use tipb::{Expr, ScalarFuncSig};
 
         #[allow(clippy::trivially_copy_pass_by_ref)]
-        #[rpn_fn(capture = [metadata], metadata_ctor = prepare_a::<T>)]
+        #[rpn_fn(capture = [metadata], metadata_mapper = prepare_a::<T>)]
         fn fn_a<T: Evaluable>(metadata: &i64, v: &Option<Int>) -> Result<Option<Int>> {
             assert_eq!(*metadata, 42);
             Ok(v.map(|v| v + *metadata))
@@ -1074,7 +1070,7 @@ mod tests {
         }
 
         #[allow(clippy::trivially_copy_pass_by_ref, clippy::ptr_arg)]
-        #[rpn_fn(varg, capture = [metadata], metadata_ctor = prepare_b::<T>)]
+        #[rpn_fn(varg, capture = [metadata], metadata_mapper = prepare_b::<T>)]
         fn fn_b<T: Evaluable>(metadata: &String, v: &[&Option<T>]) -> Result<Option<T>> {
             assert_eq!(metadata, &format!("{}", std::mem::size_of::<T>()));
             Ok(v[0].clone())
@@ -1085,7 +1081,7 @@ mod tests {
         }
 
         #[allow(clippy::trivially_copy_pass_by_ref)]
-        #[rpn_fn(raw_varg, capture = [metadata], metadata_ctor = prepare_c::<T>)]
+        #[rpn_fn(raw_varg, capture = [metadata], metadata_mapper = prepare_c::<T>)]
         fn fn_c<T: Evaluable>(
             _data: &std::marker::PhantomData<T>,
             args: &[ScalarValueRef<'_>],
