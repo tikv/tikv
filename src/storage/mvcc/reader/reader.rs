@@ -304,7 +304,7 @@ impl<S: Snapshot> MvccReader<S> {
         self.create_write_cursor()?;
 
         let cursor = self.write_cursor.as_mut().unwrap();
-        let mut ok = cursor.seek_to_first(&mut self.statistics.write);
+        let mut ok = cursor.seek_to_first(&mut self.statistics.write)?;
 
         while ok {
             if Write::parse(cursor.value(&mut self.statistics.write))?.start_ts == ts {
@@ -313,7 +313,7 @@ impl<S: Snapshot> MvccReader<S> {
                         .truncate_ts()?,
                 ));
             }
-            ok = cursor.next(&mut self.statistics.write);
+            ok = cursor.next(&mut self.statistics.write)?;
         }
         Ok(None)
     }
@@ -333,7 +333,7 @@ impl<S: Snapshot> MvccReader<S> {
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
             Some(ref x) => cursor.seek(x, &mut self.statistics.lock)?,
-            None => cursor.seek_to_first(&mut self.statistics.lock),
+            None => cursor.seek_to_first(&mut self.statistics.lock)?,
         };
         if !ok {
             return Ok((vec![], false));
@@ -348,7 +348,7 @@ impl<S: Snapshot> MvccReader<S> {
                     return Ok((locks, true));
                 }
             }
-            cursor.next(&mut self.statistics.lock);
+            cursor.next(&mut self.statistics.lock)?;
         }
         self.statistics.lock.processed += locks.len();
         // If we reach here, `cursor.valid()` is `false`, so there MUST be no more locks.
@@ -367,7 +367,7 @@ impl<S: Snapshot> MvccReader<S> {
         loop {
             let ok = match start {
                 Some(ref x) => cursor.near_seek(x, &mut self.statistics.write)?,
-                None => cursor.seek_to_first(&mut self.statistics.write),
+                None => cursor.seek_to_first(&mut self.statistics.write)?,
             };
             if !ok {
                 return Ok((keys, None));
@@ -400,7 +400,7 @@ impl<S: Snapshot> MvccReader<S> {
             } else {
                 break;
             }
-            ok = cursor.next(&mut self.statistics.data);
+            ok = cursor.next(&mut self.statistics.data)?;
         }
         Ok(v)
     }
