@@ -207,17 +207,12 @@ fn json_with_path_validator(expr: &tipb::Expr) -> Result<()> {
 #[inline]
 fn json_keys(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(!args.is_empty() && args.len() <= 2);
-    let j: &Option<Json> = args[0].as_ref();
-    let j = match j.as_ref() {
-        None => return Ok(None),
-        Some(j) => j.to_owned(),
-    };
-    let path_expr_list = parse_json_path_list(&args[1..])?;
-    if path_expr_list.is_none() {
-        Ok(None)
-    } else {
-        Ok(j.keys(&path_expr_list.unwrap())?)
+    if let Some(j) = args[0].as_json() {
+        if let Some(list) = parse_json_path_list(&args[1..])? {
+            return Ok(j.keys(&list)?);
+        }
     }
+    Ok(None)
 }
 
 #[rpn_fn(raw_varg,min_args= 1, max_args = 2, extra_validator = json_with_path_validator)]
