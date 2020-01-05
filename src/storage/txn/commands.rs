@@ -17,10 +17,10 @@ use crate::storage::Result;
 /// Store Transaction scheduler commands.
 ///
 /// Learn more about our transaction system at
-/// [Deep Dive TiKV: Distributed Transactions](https://tikv.org/deep-dive/distributed-transaction/)
+/// [Deep Dive TiKV: Distributed Transactions](https://tikv.org/docs/deep-dive/distributed-transaction/introduction/)
 ///
 /// These are typically scheduled and used through the [`Storage`](Storage) with functions like
-/// [`Storage::async_prewrite`](Storage::async_prewrite) trait and are executed asyncronously.
+/// [`Storage::prewrite`](Storage::prewrite) trait and are executed asynchronously.
 // Logic related to these can be found in the `src/storage/txn/proccess.rs::process_write_impl` function.
 pub struct Command {
     pub ctx: Context,
@@ -182,9 +182,15 @@ impl From<CheckTxnStatusRequest> for TypedCommand<TxnStatus> {
 
 impl From<ScanLockRequest> for TypedCommand<Vec<LockInfo>> {
     fn from(mut req: ScanLockRequest) -> Self {
+        let start_key = if req.get_start_key().is_empty() {
+            None
+        } else {
+            Some(Key::from_raw(req.get_start_key()))
+        };
+
         ScanLock::new(
             req.get_max_version().into(),
-            &req.take_start_key(),
+            start_key,
             req.get_limit() as usize,
             req.take_context(),
         )
@@ -627,15 +633,10 @@ pub struct ScanLock {
 impl ScanLock {
     pub fn new(
         max_ts: TimeStamp,
-        start_key: &[u8],
+        start_key: Option<Key>,
         limit: usize,
         ctx: Context,
     ) -> TypedCommand<Vec<LockInfo>> {
-        let start_key = if start_key.is_empty() {
-            None
-        } else {
-            Some(Key::from_raw(start_key))
-        };
         Command {
             ctx,
             kind: CommandKind::ScanLock(ScanLock {

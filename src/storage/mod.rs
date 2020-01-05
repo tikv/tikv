@@ -3226,14 +3226,14 @@ mod tests {
 
         storage
             .sched_txn_command(
-                commands::ScanLock::new(99.into(), &[], 10, Context::default()),
+                commands::ScanLock::new(99.into(), None, 10, Context::default()),
                 expect_value_callback(tx.clone(), 0, vec![]),
             )
             .unwrap();
         rx.recv().unwrap();
         storage
             .sched_txn_command(
-                commands::ScanLock::new(100.into(), &[], 10, Context::default()),
+                commands::ScanLock::new(100.into(), None, 10, Context::default()),
                 expect_value_callback(
                     tx.clone(),
                     0,
@@ -3244,7 +3244,12 @@ mod tests {
         rx.recv().unwrap();
         storage
             .sched_txn_command(
-                commands::ScanLock::new(100.into(), b"a", 10, Context::default()),
+                commands::ScanLock::new(
+                    100.into(),
+                    Some(Key::from_raw(b"a")),
+                    10,
+                    Context::default(),
+                ),
                 expect_value_callback(
                     tx.clone(),
                     0,
@@ -3255,14 +3260,19 @@ mod tests {
         rx.recv().unwrap();
         storage
             .sched_txn_command(
-                commands::ScanLock::new(100.into(), b"y", 10, Context::default()),
+                commands::ScanLock::new(
+                    100.into(),
+                    Some(Key::from_raw(b"y")),
+                    10,
+                    Context::default(),
+                ),
                 expect_value_callback(tx.clone(), 0, vec![lock_y.clone(), lock_z.clone()]),
             )
             .unwrap();
         rx.recv().unwrap();
         storage
             .sched_txn_command(
-                commands::ScanLock::new(101.into(), &[], 10, Context::default()),
+                commands::ScanLock::new(101.into(), None, 10, Context::default()),
                 expect_value_callback(
                     tx.clone(),
                     0,
@@ -3280,7 +3290,7 @@ mod tests {
         rx.recv().unwrap();
         storage
             .sched_txn_command(
-                commands::ScanLock::new(101.into(), &[], 4, Context::default()),
+                commands::ScanLock::new(101.into(), None, 4, Context::default()),
                 expect_value_callback(
                     tx.clone(),
                     0,
@@ -3291,7 +3301,12 @@ mod tests {
         rx.recv().unwrap();
         storage
             .sched_txn_command(
-                commands::ScanLock::new(101.into(), b"b", 4, Context::default()),
+                commands::ScanLock::new(
+                    101.into(),
+                    Some(Key::from_raw(b"b")),
+                    4,
+                    Context::default(),
+                ),
                 expect_value_callback(
                     tx.clone(),
                     0,
@@ -3307,7 +3322,12 @@ mod tests {
         rx.recv().unwrap();
         storage
             .sched_txn_command(
-                commands::ScanLock::new(101.into(), b"b", 0, Context::default()),
+                commands::ScanLock::new(
+                    101.into(),
+                    Some(Key::from_raw(b"b")),
+                    0,
+                    Context::default(),
+                ),
                 expect_value_callback(tx, 0, vec![lock_b, lock_c, lock_x, lock_y, lock_z]),
             )
             .unwrap();
@@ -3418,7 +3438,7 @@ mod tests {
                 // All locks should be resolved except for a, b and c.
                 storage
                     .sched_txn_command(
-                        commands::ScanLock::new(ts, &[], 0, Context::default()),
+                        commands::ScanLock::new(ts, None, 0, Context::default()),
                         expect_value_callback(
                             tx.clone(),
                             0,
@@ -3479,7 +3499,7 @@ mod tests {
         };
         storage
             .sched_txn_command(
-                commands::ScanLock::new(99.into(), &[], 0, Context::default()),
+                commands::ScanLock::new(99.into(), None, 0, Context::default()),
                 expect_value_callback(tx.clone(), 0, vec![lock_a]),
             )
             .unwrap();
@@ -3540,7 +3560,7 @@ mod tests {
         };
         storage
             .sched_txn_command(
-                commands::ScanLock::new(101.into(), &[], 0, Context::default()),
+                commands::ScanLock::new(101.into(), None, 0, Context::default()),
                 expect_value_callback(tx, 0, vec![lock_a]),
             )
             .unwrap();
