@@ -16,11 +16,10 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Json>>> {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
         let parser = JsonFuncArgsParser::new(row);
-        let path_exprs: Vec<_> = match parser.get_path_exprs(ctx, &self.children[1..])? {
-            Some(list) => list,
-            None => return Ok(None),
-        };
-        Ok(j.keys(&path_exprs)?.map(Cow::Owned))
+        if let Some(path_exprs) = parser.get_path_exprs(ctx, &self.children[1..])? {
+            return Ok(j.keys(&path_exprs)?.map(Cow::Owned));
+        }
+        Ok(None)
     }
 
     #[inline]
