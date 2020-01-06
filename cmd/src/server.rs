@@ -62,7 +62,10 @@ use tikv_util::{
     time::Monitor,
     worker::{FutureWorker, Worker},
 };
-use yatp::{pool::CloneRunnerBuilder, queue::multilevel};
+use yatp::{
+    pool::CloneRunnerBuilder,
+    queue::{multilevel, QueueType},
+};
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
 /// case the server will be properly stopped.
@@ -405,7 +408,7 @@ impl TiKVServer {
             let runner_builder =
                 multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
             Some(builder.build_with_queue_and_runner(
-                move |worker_num| multilevel_builder.build(worker_num),
+                QueueType::Multilevel(multilevel_builder),
                 runner_builder,
             ))
         } else {
@@ -414,7 +417,7 @@ impl TiKVServer {
 
         // Create coprocessor endpoint.
         let cop_read_pool = if self.config.readpool.unify_read_pool {
-            ReadPool::from(yatp_read_pool.as_ref().unwrap().remote())
+            ReadPool::from(yatp_read_pool.as_ref().unwrap().remote().clone())
         } else {
             let cop_read_pools = coprocessor::readpool_impl::build_read_pool(
                 &self.config.readpool.coprocessor,

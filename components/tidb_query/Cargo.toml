@@ -63,7 +63,7 @@ rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 
 [dependencies.yatp]
 git = "https://github.com/tikv/yatp.git"
-rev = "f8e0f9fc05cb902ec2d124466e6c17e8606b4d66"
+rev = "4e3ac06b948f1c2dffe92986a760ef561d0bdbb9"
 
 [dev-dependencies]
 profiler = { path = "../profiler" }

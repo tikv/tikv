@@ -47,7 +47,7 @@ impl ReadPool {
                     CommandPri::Low => Some(2),
                 };
                 let extras = Extras::new_multilevel(task_id, fixed_level);
-                let task_cell = TaskCell::new(f, remote.clone(), extras);
+                let task_cell = TaskCell::new(f, extras);
                 remote.spawn(task_cell);
             }
         }
