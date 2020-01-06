@@ -68,8 +68,8 @@ pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
-const FUTURE_STREAM_BUFFER_SIZE: usize = 16;
-const SCAN_LOCK_BATCH_SIZE: usize = 128;
+const FUTURE_STREAM_BUFFER_SIZE: usize = 4;
+const SCAN_LOCK_BATCH_SIZE: usize = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -223,7 +223,7 @@ impl<S: Snapshot> LockScanner<S> {
         let mut lock_infos = Vec::with_capacity(locks.len());
 
         for (key, lock) in locks {
-            let raw_key = match key.to_raw() {
+            let raw_key = match key.into_raw() {
                 Ok(k) => k,
                 Err(e) => {
                     self.is_finished = true;
