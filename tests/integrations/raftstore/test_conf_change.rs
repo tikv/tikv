@@ -930,7 +930,6 @@ where
 /// Tests if conf change relies on heartbeat.
 #[test]
 fn test_conf_change_fast() {
-    test_util::init_log_for_test();
     let mut cluster = new_server_cluster(0, 3);
     // Sets heartbeat timeout to more than 5 seconds. It also changes the election timeout,
     // but it's OK as the cluster starts with only one peer, it will campaigns immediately.
