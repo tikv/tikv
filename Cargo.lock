@@ -2200,6 +2200,7 @@ dependencies = [
  "tikv_util",
  "tokio-core",
  "tokio-timer",
+ "txn_types",
 ]
 
 [[package]]
