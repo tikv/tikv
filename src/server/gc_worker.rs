@@ -700,6 +700,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
 fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
+    error!("failed to schedule gc task: {:?}", e);
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 
