@@ -1119,13 +1119,13 @@ impl YatpConfig {
         // elsewhere.
 
         if self.min_thread_count == 0 {
-            return Err("readpool.yatp.min-thread-count should be > 0"
+            return Err("readpool.unified.min-thread-count should be > 0"
                 .to_string()
                 .into());
         }
         if self.max_thread_count < self.min_thread_count {
             return Err(
-                "readpool.yatp.max-thread-count should be >= readpool.yatp.min-thread-count"
+                "readpool.unified.max-thread-count should be >= readpool.unified.min-thread-count"
                     .to_string()
                     .into(),
             );
