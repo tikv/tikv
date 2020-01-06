@@ -586,7 +586,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                 &incoming.messages_per_tick,
                 &self.poll_ctx.cfg.messages_per_tick,
             ) {
-                CmpOrdering::Equal => {}
                 CmpOrdering::Greater => {
                     self.store_msg_buf.reserve(incoming.messages_per_tick);
                     self.peer_msg_buf.reserve(incoming.messages_per_tick);
@@ -597,6 +596,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                     self.peer_msg_buf.shrink_to(incoming.messages_per_tick);
                     self.messages_per_tick = incoming.messages_per_tick;
                 }
+                _ => {}
             }
             info!(
                 "raftstore config updated";
