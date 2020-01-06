@@ -152,8 +152,8 @@ impl Simulator for ServerCluster {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            None,
-            None,
+            Some(engines.kv.clone()),
+            Some(raft_router.clone()),
             Some(region_info_accessor.clone()),
             cfg.gc.clone(),
         );
@@ -184,8 +184,9 @@ impl Simulator for ServerCluster {
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
             .create();
+
         let debug_service =
-            DebugService::new(engines.clone(), pool, raft_router, gc_worker.clone());
+            DebugService::new(engines.clone(), pool, raft_router, gc_worker.clone(), false);
 
         // Create deadlock service.
         let deadlock_service = lock_mgr.deadlock_service();
@@ -248,7 +249,7 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let cfg_controller = ConfigController::new(cfg);
+        let cfg_controller = ConfigController::new(cfg, Default::default());
         node.start(
             engines,
             simulate_trans.clone(),

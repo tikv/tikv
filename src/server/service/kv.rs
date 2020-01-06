@@ -794,14 +794,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
                     Ok(locks) => resp.set_locks(locks.into()),
                     Err(e) => resp.set_error(format!("{:?}", e)),
                 }
-                Ok(resp)
+                Ok::<_, GrpcError>(resp)
             })
-            .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
-            .map_err(|e: ()| {
-                let code = RpcStatusCode::UNKNOWN;
-                let msg = Some(format!("{:?}", e));
-                GrpcError::RpcFailure(RpcStatus::new(code, msg))
-            });
+            .map(|resp| (resp, WriteFlags::default().buffer_hint(true)));
+
         let future = sink
             .send_all(stream)
             .map(|_| timer.observe_duration())

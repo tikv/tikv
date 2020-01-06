@@ -71,8 +71,8 @@ pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
-const FUTURE_STREAM_BUFFER_SIZE: usize = 16;
-const SCAN_LOCK_BATCH_SIZE: usize = 128;
+const FUTURE_STREAM_BUFFER_SIZE: usize = 4;
+const SCAN_LOCK_BATCH_SIZE: usize = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -195,13 +195,8 @@ impl<S: Snapshot> LockScanner<S> {
             is_finished: false,
         }
     }
-}
 
-impl<S: Snapshot> Stream for LockScanner<S> {
-    type Item = Vec<LockInfo>;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_impl(&mut self) -> Poll<Option<Vec<LockInfo>>, Error> {
         if self.is_finished {
             return Ok(Async::Ready(None));
         }
@@ -231,7 +226,7 @@ impl<S: Snapshot> Stream for LockScanner<S> {
         let mut lock_infos = Vec::with_capacity(locks.len());
 
         for (key, lock) in locks {
-            let raw_key = match key.to_raw() {
+            let raw_key = match key.into_raw() {
                 Ok(k) => k,
                 Err(e) => {
                     self.is_finished = true;
@@ -243,6 +238,29 @@ impl<S: Snapshot> Stream for LockScanner<S> {
         }
 
         Ok(Async::Ready(Some(lock_infos)))
+    }
+
+    fn update_statistics_metrics(&mut self) {
+        let mut stats = Statistics::default();
+        self.reader.collect_statistics_into(&mut stats);
+        for (cf, details) in stats.details().iter() {
+            for (tag, count) in details.iter() {
+                GC_PHYSICAL_SCAN_LOCK_COUNTER_VEC
+                    .with_label_values(&[cf, *tag])
+                    .inc_by(*count as i64);
+            }
+        }
+    }
+}
+
+impl<S: Snapshot> Stream for LockScanner<S> {
+    type Item = Vec<LockInfo>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        let result = self.poll_impl();
+        self.update_statistics_metrics();
+        result
     }
 }
 
@@ -703,6 +721,7 @@ impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
 
 /// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
 fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
+    error!("failed to schedule gc task: {:?}", e);
     Err(box_err!("failed to schedule gc task: {:?}", e))
 }
 

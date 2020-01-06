@@ -172,6 +172,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref GC_PHYSICAL_SCAN_LOCK_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_gcworker_physical_scan_lock_keys",
+        "Counter of keys affected during physical_scan_lock",
+        &["cf", "tag"]
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_RECV_COUNTER: IntCounter = register_int_counter!(
         "tikv_server_raft_message_recv_total",
         "Total number of raft messages received"

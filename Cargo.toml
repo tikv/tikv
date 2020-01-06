@@ -73,7 +73,7 @@ itertools = "0.8"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 keys = { path = "components/keys" }
 txn_types = { path = "components/txn_types" }
-kvproto = { git = "https://github.com/MyonKeminta/kvproto.git", default-features = false, branch = "misono/green-gc" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", default-features = false }
 lazy_static = "1.3"
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
@@ -145,7 +145,6 @@ test_sst_importer = { path = "components/test_sst_importer" }
 "protobuf:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "prost:0.5.0" = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }
-"https://github.com/pingcap/kvproto.git#kvproto:0.0.2" = { git = "https://github.com/MyonKeminta/kvproto", branch = "misono/green-gc" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
