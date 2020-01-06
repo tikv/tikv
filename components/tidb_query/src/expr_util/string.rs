@@ -12,7 +12,7 @@ pub const BASE64_INPUT_CHUNK_LENGTH: usize = 3;
 pub const BASE64_ENCODED_CHUNK_LENGTH: usize = 4;
 pub const BASE64_LINE_WRAP: u8 = b'\n';
 
-pub fn to_base64(s: Vec<u8>) -> Option<Bytes> {
+pub fn to_base64(s: &[u8]) -> Option<Bytes> {
     if let Some(size) = encoded_size(s.len()) {
         let mut buf = vec![0; size];
         let input = s.to_vec();

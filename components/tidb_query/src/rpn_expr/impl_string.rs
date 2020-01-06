@@ -360,7 +360,7 @@ pub fn to_base64(s: &Option<Bytes>) -> Result<Option<Bytes>> {
         if s.len() > tidb_query_datatype::MAX_BLOB_WIDTH as usize {
             return Ok(None);
         }
-        let result = expr_util::string::to_base64(s.to_vec());
+        let result = expr_util::string::to_base64(&s.to_vec());
         match result {
             Some(val) => Ok(Some(val)),
             None => Ok(None),

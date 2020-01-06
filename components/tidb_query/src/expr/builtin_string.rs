@@ -486,7 +486,7 @@ impl ScalarFunc {
             return Ok(Some(Cow::Owned(b"".to_vec())));
         }
 
-        if let Some(result) = expr_util::string::to_base64(s.to_vec()) {
+        if let Some(result) = expr_util::string::to_base64(&s.to_vec()) {
             Ok(Some(Cow::Owned(result)))
         } else {
             Ok(Some(Cow::Owned(b"".to_vec())))
