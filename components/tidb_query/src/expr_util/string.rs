@@ -14,11 +14,11 @@ pub const BASE64_LINE_WRAP: u8 = b'\n';
 
 pub fn to_base64(s: &[u8]) -> Option<Bytes> {
     if let Some(size) = encoded_size(s.len()) {
-        let mut buf = vec![0; size];
+        let mut result = vec![0; size];
         let input = s.to_vec();
-        let len_without_wrap = base64::encode_config_slice(&input, base64::STANDARD, &mut buf);
-        line_wrap(&mut buf, len_without_wrap);
-        Some(buf)
+        let len_without_wrap = base64::encode_config_slice(&input, base64::STANDARD, &mut result);
+        line_wrap(&mut result, len_without_wrap);
+        Some(result)
     } else {
         None
     }
