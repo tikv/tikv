@@ -68,8 +68,8 @@ pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
-const FUTURE_STREAM_BUFFER_SIZE: usize = 4;
-const SCAN_LOCK_BATCH_SIZE: usize = 4;
+const FUTURE_STREAM_BUFFER_SIZE: usize = 8;
+const SCAN_LOCK_BATCH_SIZE: usize = 128;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
