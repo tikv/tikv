@@ -37,8 +37,7 @@ use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
 };
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
-use crate::raftstore::store::{PdTask, ReadIndexQueue, ReadIndexRequest};
+use crate::raftstore::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
@@ -50,6 +49,7 @@ use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
+use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::DestroyPeerJob;
@@ -2263,7 +2263,7 @@ impl Peer {
 
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
-        self.pending_reads.on_stop();
+        self.pending_reads.notify_all_removed(self.region_id);
     }
 }
 

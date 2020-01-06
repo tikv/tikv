@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::VecDeque;
 use std::{cmp, usize};
@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 const READ_QUEUE_SHRINK_SIZE: usize = 64;
 
-pub(super) struct ReadIndexRequest {
+pub struct ReadIndexRequest {
     pub id: Uuid,
     pub cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksEngine>)>,
     pub renew_lease_time: Timespec,
@@ -26,16 +26,16 @@ pub(super) struct ReadIndexRequest {
 
 impl ReadIndexRequest {
     // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
-    pub(super) fn binary_id(&self) -> &[u8] {
+    pub fn binary_id(&self) -> &[u8] {
         self.id.as_bytes()
     }
 
-    pub(super) fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<RocksEngine>) {
+    pub fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<RocksEngine>) {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         self.cmds.push((req, cb));
     }
 
-    pub(super) fn with_command(
+    pub fn with_command(
         id: Uuid,
         req: RaftCmdRequest,
         cb: Callback<RocksEngine>,
@@ -63,7 +63,7 @@ impl Drop for ReadIndexRequest {
 }
 
 #[derive(Default)]
-pub(super) struct ReadIndexQueue {
+pub struct ReadIndexQueue {
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
     // How many requests are handled.
@@ -73,17 +73,7 @@ pub(super) struct ReadIndexQueue {
 }
 
 impl ReadIndexQueue {
-    pub(super) fn on_stop(&mut self) {
-        for mut read in self.reads.drain(..) {
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-            read.cmds.clear();
-        }
-        self.contexts.clear();
-        self.ready_cnt = 0;
-        self.handled_cnt = 0;
-    }
-
-    pub(super) fn notify_all_removed(&mut self, region_id: u64) {
+    pub fn notify_all_removed(&mut self, region_id: u64) {
         for mut read in self.reads.drain(..) {
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             for (_, cb) in read.cmds.drain(..) {
@@ -95,17 +85,17 @@ impl ReadIndexQueue {
         self.handled_cnt = 0;
     }
 
-    pub(super) fn clear_uncommitted(&mut self, term: u64) {
+    pub fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
             self.contexts.remove(&read.id);
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
+            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
         }
     }
 
-    pub(super) fn push_back(&mut self, read: ReadIndexRequest, is_leader: bool) {
+    pub fn push_back(&mut self, read: ReadIndexRequest, is_leader: bool) {
         if !is_leader {
             let offset = self.handled_cnt + self.reads.len();
             self.contexts.insert(read.id, offset);
@@ -113,11 +103,11 @@ impl ReadIndexQueue {
         self.reads.push_back(read);
     }
 
-    pub(super) fn back_mut(&mut self) -> Option<&mut ReadIndexRequest> {
+    pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest> {
         self.reads.back_mut()
     }
 
-    pub(super) fn advance_leader_reads<T>(&mut self, states: T) -> Option<Timespec>
+    pub fn advance_leader_reads<T>(&mut self, states: T) -> Option<Timespec>
     where
         T: IntoIterator<Item = (Uuid, u64)>,
     {
@@ -132,7 +122,7 @@ impl ReadIndexQueue {
     }
 
     /// update the read index of the requests that before the specified id.
-    pub(super) fn advance_replica_reads<T>(&mut self, states: T)
+    pub fn advance_replica_reads<T>(&mut self, states: T)
     where
         T: IntoIterator<Item = (Uuid, u64)>,
     {
@@ -163,7 +153,7 @@ impl ReadIndexQueue {
         }
     }
 
-    pub(super) fn fold(&mut self, mut min_changed_offset: usize, max_changed_offset: usize) {
+    pub fn fold(&mut self, mut min_changed_offset: usize, max_changed_offset: usize) {
         let mut r_offset = max_changed_offset;
         while r_offset >= min_changed_offset && r_offset > 0 {
             let r_idx = self.reads[r_offset].read_index.unwrap();
@@ -180,7 +170,7 @@ impl ReadIndexQueue {
         }
     }
 
-    pub(super) fn gc(&mut self) {
+    pub fn gc(&mut self) {
         if self.reads.capacity() > READ_QUEUE_SHRINK_SIZE
             && self.reads.len() < READ_QUEUE_SHRINK_SIZE
         {
@@ -189,7 +179,7 @@ impl ReadIndexQueue {
         }
     }
 
-    pub(super) fn pop_front(&mut self) -> Option<ReadIndexRequest> {
+    pub fn pop_front(&mut self) -> Option<ReadIndexRequest> {
         if self.ready_cnt == 0 {
             return None;
         }
@@ -199,7 +189,7 @@ impl ReadIndexQueue {
     }
 
     /// Raft could have not been ready to handle the poped task. So put it back into the queue.
-    pub(super) fn push_front(&mut self, read: ReadIndexRequest) {
+    pub fn push_front(&mut self, read: ReadIndexRequest) {
         self.reads.push_front(read);
         self.ready_cnt += 1;
         self.handled_cnt -= 1;
