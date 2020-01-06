@@ -145,7 +145,7 @@ prof_release:
 # An optimized build instrumented with failpoints.
 # This is used for schrodinger chaos testing.
 fail_release:
-	FAIL_POINT=1 make release
+	FAIL_POINT=1 make dist_release
 
 ## Distribution builds (true release builds)
 ## -------------------
@@ -230,17 +230,23 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS) && \
 	cargo test --no-default-features --features "${ENABLE_FEATURES}" -p tests --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  $(TEST_THREADS) && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
+	# TODO: remove the section after https://github.com/rust-lang/cargo/issues/5364 is resolved.
+	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
+	export LOG_LEVEL=DEBUG && \
+	export RUST_BACKTRACE=1 && \
+	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} -- --nocapture $(TEST_THREADS)
 
 # This is used for CI test
 ci_test:
-	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --all-targets --no-run --message-format=json
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all --exclude tests --all-targets --no-run --message-format=json
+	cd tests && cargo test --no-default-features --features "${ENABLE_FEATURES}" --no-run --message-format=json
 
 ## Static analysis
 ## ---------------

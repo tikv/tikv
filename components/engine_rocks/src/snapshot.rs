@@ -35,9 +35,8 @@ impl RocksSnapshot {
     }
 }
 
-impl Snapshot for RocksSnapshot {
+impl Snapshot<RocksEngine> for RocksSnapshot {
     type SyncSnapshot = RocksSyncSnapshot;
-    type KvEngine = RocksEngine;
 
     fn cf_names(&self) -> Vec<&str> {
         self.db.cf_names()
