@@ -166,8 +166,8 @@
 //!         let (regex, arg) = self.extract(0);
 //!         let regex = build_regex(regex);
 //!         let mut result = Vec::with_capacity(output_rows);
-//!         for row in 0..output_rows {
-//!             let (text, _) = arg.extract(row);
+//!         for row_index in 0..output_rows {
+//!             let (text, _) = arg.extract(row_index);
 //!             result.push(regex_match_impl(&regex, text)?);
 //!         }
 //!         Ok(Evaluable::into_vector_value(result))
@@ -603,8 +603,10 @@ fn generate_metadata_type_checker(
                     extra: &mut crate::rpn_expr::RpnFnCallExtra<'_>,
                     expr: &mut ::tipb::Expr,
                 ) #where_clause {
-                    let metadata = #metadata_expr;
-                    #fn_body
+                    for row_index in 0..output_rows {
+                        let metadata = #metadata_expr;
+                        #fn_body
+                    }
                 }
             };
         }
@@ -1061,8 +1063,8 @@ impl NormalRpnFn {
                     #downcast_metadata
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
-                    for row in 0..output_rows {
-                        #(let (#extract, arg) = arg.extract(row));*;
+                    for row_index in 0..output_rows {
+                        #(let (#extract, arg) = arg.extract(row_index));*;
                         result.push( #fn_ident #ty_generics_turbofish ( #(#captures,)* #(#call_arg),* )?);
                     }
                     Ok(crate::codec::data_type::Evaluable::into_vector_value(result))
@@ -1246,9 +1248,9 @@ mod tests_normal {
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
-                    for row in 0..output_rows {
-                        let (arg0, arg) = arg.extract(row);
-                        let (arg1, arg) = arg.extract(row);
+                    for row_index in 0..output_rows {
+                        let (arg0, arg) = arg.extract(row_index);
+                        let (arg1, arg) = arg.extract(row_index);
                         result.push(foo(arg0, arg1)?);
                     }
                     Ok(crate::codec::data_type::Evaluable::into_vector_value(result))
@@ -1414,8 +1416,8 @@ mod tests_normal {
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
-                    for row in 0..output_rows {
-                        let (arg0, arg) = arg.extract(row);
+                    for row_index in 0..output_rows {
+                        let (arg0, arg) = arg.extract(row_index);
                         result.push(foo :: <A, B> (arg0)?);
                     }
                     Ok(crate::codec::data_type::Evaluable::into_vector_value(result))
@@ -1560,9 +1562,9 @@ mod tests_normal {
                 ) -> crate::Result<crate::codec::data_type::VectorValue> {
                     let arg = &self;
                     let mut result = Vec::with_capacity(output_rows);
-                    for row in 0..output_rows {
-                        let (arg0, arg) = arg.extract(row);
-                        let (arg1, arg) = arg.extract(row);
+                    for row_index in 0..output_rows {
+                        let (arg0, arg) = arg.extract(row_index);
+                        let (arg1, arg) = arg.extract(row_index);
                         result.push(foo(ctx, arg0, arg1)?);
                     }
                     Ok(crate::codec::data_type::Evaluable::into_vector_value(result))
