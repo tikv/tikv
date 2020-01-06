@@ -71,8 +71,8 @@ pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
-const FUTURE_STREAM_BUFFER_SIZE: usize = 4;
-const SCAN_LOCK_BATCH_SIZE: usize = 4;
+const FUTURE_STREAM_BUFFER_SIZE: usize = 8;
+const SCAN_LOCK_BATCH_SIZE: usize = 128;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -628,6 +628,8 @@ impl<E: Engine> GcRunner<E> {
             }
         };
 
+        info!("physical scan lock started"; "max_ts" => %max_ts);
+
         // Create a `RegionSnapshot`, which can converts the 'z'-prefixed keys into normal keys
         // internally. A fake region meta is given to make the snapshot's range unbounded.
         // TODO: Should we implement a special snapshot and iterator types for this?
@@ -642,7 +644,9 @@ impl<E: Engine> GcRunner<E> {
             .map_err(|e| {
                 error!("send physical scan lock result from GCRunner failed"; "err" => ?e);
             })
-            .map(|_| ());
+            .map(move |_| {
+                info!("physical scan lock finished"; "max_ts" => %max_ts);
+            });
 
         handle.spawn(future);
     }

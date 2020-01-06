@@ -2200,6 +2200,7 @@ dependencies = [
  "tikv_util",
  "tokio-core",
  "tokio-timer",
+ "txn_types",
 ]
 
 [[package]]
@@ -3585,6 +3586,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "external_storage",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.1",
  "futures-cpupool",
