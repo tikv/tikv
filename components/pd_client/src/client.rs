@@ -586,12 +586,10 @@ impl PdClient for RpcClient {
             let cli = client.read().unwrap();
             let (req_sink, resp_stream) = cli.client_stub.tso().unwrap();
             let (keep_req_tx, mut keep_req_rx) = oneshot::channel();
-            let send_once = req_sink
-                .send((req.clone(), WriteFlags::default()))
-                .then(|s| {
-                    let _ = keep_req_tx.send(s);
-                    Ok(())
-                });
+            let send_once = req_sink.send((req, WriteFlags::default())).then(|s| {
+                let _ = keep_req_tx.send(s);
+                Ok(())
+            });
             cli.client_stub.spawn(send_once);
             Box::new(
                 resp_stream
