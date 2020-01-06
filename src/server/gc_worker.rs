@@ -192,13 +192,8 @@ impl<S: Snapshot> LockScanner<S> {
             is_finished: false,
         }
     }
-}
 
-impl<S: Snapshot> Stream for LockScanner<S> {
-    type Item = Vec<LockInfo>;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_impl(&mut self) -> Poll<Option<Vec<LockInfo>>, Error> {
         if self.is_finished {
             return Ok(Async::Ready(None));
         }
@@ -240,6 +235,29 @@ impl<S: Snapshot> Stream for LockScanner<S> {
         }
 
         Ok(Async::Ready(Some(lock_infos)))
+    }
+
+    fn update_statistics_metrics(&mut self) {
+        let mut stats = Statistics::default();
+        self.reader.collect_statistics_into(&mut stats);
+        for (cf, details) in stats.details().iter() {
+            for (tag, count) in details.iter() {
+                GC_PHYSICAL_SCAN_LOCK_COUNTER_VEC
+                    .with_label_values(&[cf, *tag])
+                    .inc_by(*count as i64);
+            }
+        }
+    }
+}
+
+impl<S: Snapshot> Stream for LockScanner<S> {
+    type Item = Vec<LockInfo>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        let result = self.poll_impl();
+        self.update_statistics_metrics();
+        result
     }
 }
 
