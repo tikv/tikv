@@ -325,7 +325,7 @@ impl WaitTable {
     /// Removes all waiters waiting for the lock.
     fn remove(&mut self, lock: Lock) {
         self.wait_table.remove(&lock.hash);
-        WAIT_TABLE_STATUS_GAUGE.locks.inc();
+        WAIT_TABLE_STATUS_GAUGE.locks.dec();
     }
 
     fn remove_waiter(&mut self, lock: Lock, waiter_ts: TimeStamp) -> Option<Waiter> {
@@ -335,7 +335,7 @@ impl WaitTable {
             .position(|waiter| waiter.start_ts == waiter_ts)?;
         let waiter = waiters.swap_remove(idx);
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
-        WAIT_TABLE_STATUS_GAUGE.txns.inc();
+        WAIT_TABLE_STATUS_GAUGE.txns.dec();
         if waiters.is_empty() {
             self.remove(lock);
         }
@@ -356,7 +356,7 @@ impl WaitTable {
             .0;
         let oldest = waiters.swap_remove(oldest_idx);
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
-        WAIT_TABLE_STATUS_GAUGE.txns.inc();
+        WAIT_TABLE_STATUS_GAUGE.txns.dec();
         Some((oldest, waiters))
     }
 
