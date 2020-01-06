@@ -135,6 +135,12 @@ impl Simulator for ServerCluster {
 
         let raft_engine = RaftKv::new(sim_router.clone());
 
+        // Create coprocessor.
+        let mut coprocessor_host = CoprocessorHost::new(router.clone());
+
+        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+        region_info_accessor.start();
+
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
         let storage_read_pool = storage::build_read_pool_for_test(
@@ -144,7 +150,13 @@ impl Simulator for ServerCluster {
 
         let engine = RaftKv::new(sim_router.clone());
 
-        let mut gc_worker = GcWorker::new(engine.clone(), None, None, cfg.gc.clone());
+        let mut gc_worker = GcWorker::new(
+            engine.clone(),
+            Some(engines.kv.clone()),
+            Some(raft_router.clone()),
+            Some(region_info_accessor.clone()),
+            cfg.gc.clone(),
+        );
         gc_worker.start().unwrap();
 
         let mut lock_mgr = LockManager::new();
@@ -172,8 +184,9 @@ impl Simulator for ServerCluster {
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
             .create();
+
         let debug_service =
-            DebugService::new(engines.clone(), pool, raft_router, gc_worker.clone());
+            DebugService::new(engines.clone(), pool, raft_router, gc_worker.clone(), false);
 
         // Create deadlock service.
         let deadlock_service = lock_mgr.deadlock_service();
@@ -233,16 +246,10 @@ impl Simulator for ServerCluster {
             Arc::clone(&self.pd_client),
         );
 
-        // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(router.clone());
-
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
-        region_info_accessor.start();
-
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let cfg_controller = ConfigController::new(cfg);
+        let cfg_controller = ConfigController::new(cfg, Default::default());
         node.start(
             engines,
             simulate_trans.clone(),
