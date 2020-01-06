@@ -575,7 +575,7 @@ impl PdClient for RpcClient {
 
     // TODO: The current implementation is not efficient, because it creates
     //       a RPC for every `PdFuture<TimeStamp>`. As a duplex streaming RPC,
-    //       we could use one RPC for many PdFuture<TimeStamp>.
+    //       we could use one RPC for many `PdFuture<TimeStamp>`.
     fn get_tso(&self) -> PdFuture<TimeStamp> {
         let timer = Instant::now();
 
