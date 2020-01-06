@@ -106,7 +106,7 @@ impl ReadIndexQueue {
     }
 
     pub(super) fn push_back(&mut self, read: ReadIndexRequest, is_leader: bool) {
-        if is_leader {
+        if !is_leader {
             let offset = self.handled_cnt + self.reads.len();
             self.contexts.insert(read.id, offset);
         }
@@ -117,10 +117,10 @@ impl ReadIndexQueue {
         self.reads.back_mut()
     }
 
-    pub(super) fn advance_leader_reads<T: IntoIterator<Item = (Uuid, u64)>>(
-        &mut self,
-        states: T,
-    ) -> Option<Timespec> {
+    pub(super) fn advance_leader_reads<T>(&mut self, states: T) -> Option<Timespec>
+    where
+        T: IntoIterator<Item = (Uuid, u64)>,
+    {
         let mut ts = None;
         for (uuid, index) in states {
             assert_eq!(uuid, self.reads[self.ready_cnt].id);
@@ -132,7 +132,10 @@ impl ReadIndexQueue {
     }
 
     /// update the read index of the requests that before the specified id.
-    pub(super) fn advance_replica_reads<T: IntoIterator<Item = (Uuid, u64)>>(&mut self, states: T) {
+    pub(super) fn advance_replica_reads<T>(&mut self, states: T)
+    where
+        T: IntoIterator<Item = (Uuid, u64)>,
+    {
         let (mut min_changed_offset, mut max_changed_offset) = (usize::MAX, 0);
         for (uuid, index) in states {
             if let Some(offset) = self.contexts.remove(&uuid) {

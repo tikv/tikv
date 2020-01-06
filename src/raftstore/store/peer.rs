@@ -1342,42 +1342,46 @@ impl Peer {
         self.proposals.gc();
     }
 
+    fn response_read<T, C>(
+        &mut self,
+        mut read: ReadIndexRequest,
+        ctx: &mut PollContext<T, C>,
+        replica_read: bool,
+    ) {
+        debug!(
+            "handle reads with a read index";
+            "request_id" => ?read.binary_id(),
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
+        RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+        for (req, cb) in read.cmds.drain(..) {
+            if !replica_read {
+                cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                continue;
+            }
+            if req.get_header().get_replica_read() {
+                // We should check epoch since the range could be changed.
+                cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+            } else {
+                let term = self.term();
+                apply::notify_stale_req(term, cb);
+            }
+        }
+    }
+
     /// Responses to the ready read index request on the replica, the replica is not a leader.
     fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
-        while let Some(mut read) = self.pending_reads.pop_front() {
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+        while let Some(read) = self.pending_reads.pop_front() {
             assert!(read.read_index.is_some());
-
             let is_read_index_request = read.cmds.len() == 1
                 && read.cmds[0].0.get_requests().len() == 1
                 && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
-            let term = self.term();
             if is_read_index_request {
-                debug!(
-                    "handle reads with a read index";
-                    "request_id" => ?read.binary_id(),
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
-                for (req, cb) in read.cmds.drain(..) {
-                    cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                }
+                self.response_read(read, ctx, false);
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
-                debug!(
-                    "handle reads with a read index";
-                    "request_id" => ?read.binary_id(),
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
-                for (req, cb) in read.cmds.drain(..) {
-                    // We should check epoch since the range could be changed
-                    if req.get_header().get_replica_read() {
-                        cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                    } else {
-                        apply::notify_stale_req(term, cb);
-                    }
-                }
+                self.response_read(read, ctx, true);
             } else {
                 self.pending_reads.push_front(read);
                 break;
@@ -1387,6 +1391,11 @@ impl Peer {
 
     fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         let mut propose_time = None;
+        let states = ready.read_states().iter().map(|state| {
+            let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
+            (uuid, state.index)
+        });
+
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
         // update the `read_index` of read request that before this successful
@@ -1394,34 +1403,15 @@ impl Peer {
         if !self.is_leader() {
             // NOTE: there could still be some pending reads proposed by the peer when it was
             // leader. They will be cleared in `clear_uncommitted` later in the function.
-            let states = ready.read_states().iter().map(|state| {
-                let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
-                (uuid, state.index)
-            });
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
-        } else if self.ready_to_handle_read() {
-            for state in ready.read_states() {
-                let mut read = self.pending_reads.pop_front().unwrap();
-                assert_eq!(state.request_ctx.as_slice(), read.binary_id());
-                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-                debug!(
-                    "handle reads with a read index";
-                    "request_id" => ?read.binary_id(),
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
-                for (req, cb) in read.cmds.drain(..) {
-                    cb.invoke_read(self.handle_read(ctx, req, true, Some(state.index)));
-                }
-                propose_time = Some(read.renew_lease_time);
-            }
         } else {
-            let states = ready.read_states().iter().map(|state| {
-                let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
-                (uuid, state.index)
-            });
             propose_time = self.pending_reads.advance_leader_reads(states);
+            if self.ready_to_handle_read() {
+                while let Some(read) = self.pending_reads.pop_front() {
+                    self.response_read(read, ctx, false);
+                }
+            }
         }
 
         // Note that only after handle read_states can we identify what requests are
@@ -1473,18 +1463,9 @@ impl Peer {
         }
         if !self.is_leader() {
             self.post_pending_read_index_on_replica(ctx)
-        } else {
-            while let Some(mut read) = self.pending_reads.pop_front() {
-                debug!(
-                    "handle reads with a read index";
-                    "request_id" => ?read.binary_id(),
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
-                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-                for (req, cb) in read.cmds.drain(..) {
-                    cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                }
+        } else if self.ready_to_handle_read() {
+            while let Some(read) = self.pending_reads.pop_front() {
+                self.response_read(read, ctx, false);
             }
         }
         self.pending_reads.gc();
