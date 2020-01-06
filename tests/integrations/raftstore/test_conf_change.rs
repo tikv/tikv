@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::*;
 
 use futures::Future;
 
@@ -938,8 +938,10 @@ fn test_conf_change_fast() {
     pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
     cluster.must_put(b"k1", b"v1");
+    let timer = Instant::now();
     // If conf change relies on heartbeat, it will take more than 5 seconds to finish,
     // hence it must timeout.
     pd_client.must_add_peer(r1, new_peer(2, 2));
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    assert!(timer.elapsed() < Duration::from_secs(5));
 }
