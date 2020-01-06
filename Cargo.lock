@@ -1564,7 +1564,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#705501101234770886dff3c7434de7c88fcc7188"
+source = "git+https://github.com/pingcap/kvproto.git#7ca20c9dda49827a0e2d1179aefe157697eca57e"
 dependencies = [
  "bytes",
  "futures 0.1.29",
@@ -2200,6 +2200,7 @@ dependencies = [
  "tikv_util",
  "tokio-core",
  "tokio-timer",
+ "txn_types",
 ]
 
 [[package]]
@@ -3550,6 +3551,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "external_storage",
+ "fail",
  "futures 0.1.29",
  "futures 0.3.1",
  "futures-cpupool",

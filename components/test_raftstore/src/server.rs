@@ -152,8 +152,8 @@ impl Simulator for ServerCluster {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            None,
-            None,
+            Some(engines.kv.clone()),
+            Some(raft_router.clone()),
             Some(region_info_accessor.clone()),
             cfg.gc.clone(),
         );
@@ -185,13 +185,8 @@ impl Simulator for ServerCluster {
             .pool_size(1)
             .create();
 
-        let debug_service = DebugService::new(
-            engines.clone(),
-            pool,
-            raft_router.clone(),
-            gc_worker.clone(),
-            false,
-        );
+        let debug_service =
+            DebugService::new(engines.clone(), pool, raft_router, gc_worker.clone(), false);
 
         // Create deadlock service.
         let deadlock_service = lock_mgr.deadlock_service();
