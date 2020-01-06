@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use futures::sync::mpsc;
 use futures::{future, Future, Sink, Stream};
 use grpcio::{CallOption, EnvBuilder, WriteFlags};
+use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 
@@ -21,6 +22,7 @@ use tikv_util::{Either, HandyRwLock};
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
+const CONFIG_COMPONENT: &str = "tikv";
 
 pub struct RpcClient {
     cluster_id: u64,
@@ -63,6 +65,12 @@ impl RpcClient {
     /// Creates a new request header.
     fn header(&self) -> pdpb::RequestHeader {
         let mut header = pdpb::RequestHeader::default();
+        header.set_cluster_id(self.cluster_id);
+        header
+    }
+
+    fn get_config_header(&self) -> configpb::Header {
+        let mut header = configpb::Header::default();
         header.set_cluster_id(self.cluster_id);
         header
     }
@@ -562,4 +570,69 @@ impl PdClient for RpcClient {
 
         Ok(resp)
     }
+
+    fn register_config(
+        &self,
+        id: String,
+        version: configpb::Version,
+        cfg: String,
+    ) -> Result<configpb::CreateResponse> {
+        let mut req = configpb::CreateRequest::default();
+        req.set_header(self.get_config_header());
+        req.set_component(CONFIG_COMPONENT.to_owned());
+        req.set_component_id(id);
+        req.set_version(version);
+        req.set_config(cfg);
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            client.config().create_opt(&req, Self::call_option())
+        })?;
+
+        Ok(resp)
+    }
+
+    fn get_config(&self, id: String, version: configpb::Version) -> Result<configpb::GetResponse> {
+        let mut req = configpb::GetRequest::default();
+        req.set_header(self.get_config_header());
+        req.set_component(CONFIG_COMPONENT.to_owned());
+        req.set_component_id(id);
+        req.set_version(version);
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            client.config().get_opt(&req, Self::call_option())
+        })?;
+
+        Ok(resp)
+    }
+
+    fn update_config(
+        &self,
+        id: String,
+        version: configpb::Version,
+        entries: Vec<configpb::ConfigEntry>,
+    ) -> Result<configpb::UpdateResponse> {
+        let mut local = configpb::Local::default();
+        local.set_component_id(id);
+        let mut kind = configpb::ConfigKind::default();
+        kind.kind = Some(config_kind::Kind::Local(local));
+        let mut req = configpb::UpdateRequest::default();
+        req.set_header(self.get_config_header());
+        req.set_kind(kind);
+        req.set_version(version);
+        req.set_entries(entries.into());
+
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            client.config().update_opt(&req, Self::call_option())
+        })?;
+
+        Ok(resp)
+    }
+}
+
+#[cfg(feature = "protobuf-codec")]
+mod config_kind {
+    pub type Kind = kvproto::configpb::ConfigKind_oneof_kind;
+}
+
+#[cfg(feature = "prost-codec")]
+mod config_kind {
+    pub type Kind = kvproto::configpb::config_kind::Kind;
 }

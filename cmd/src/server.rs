@@ -20,7 +20,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tikv::config::TiKvConfig;
+use tikv::config::{ConfigController, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
@@ -320,6 +320,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         lm.register_detector_role_change_observer(&mut coprocessor_host);
     }
 
+    let cfg_controller = ConfigController::new(cfg.clone());
     node.start(
         engines.clone(),
         trans,
@@ -328,6 +329,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         store_meta,
         coprocessor_host,
         importer,
+        cfg_controller,
     )
     .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
     initial_metric(&cfg.metric, Some(node.id()));

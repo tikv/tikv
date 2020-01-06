@@ -1,11 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::mvcc::write::{WriteRef, WriteType};
-use crate::storage::mvcc::{default_not_found_error, Lock, Result, TimeStamp, TsSet};
+use crate::storage::mvcc::{default_not_found_error, Result};
 use crate::storage::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics, CF_LOCK};
 use crate::storage::{CF_DEFAULT, CF_WRITE};
-use keys::{Key, Value};
 use kvproto::kvrpcpb::IsolationLevel;
+use txn_types::{Key, Lock, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
 /// `PointGetter` factory.
 pub struct PointGetterBuilder<S: Snapshot> {
@@ -177,6 +176,7 @@ impl<S: Snapshot> PointGetter<S> {
             self.statistics.lock.processed += 1;
             let lock = Lock::parse(lock_value)?;
             lock.check_ts_conflict(user_key, self.ts, &self.bypass_locks)
+                .map_err(Into::into)
         } else {
             Ok(())
         }
@@ -271,9 +271,9 @@ mod tests {
 
     use engine_rocks::RocksSyncSnapshot;
     use kvproto::kvrpcpb::Context;
+    use txn_types::SHORT_VALUE_MAX_LEN;
 
     use crate::storage::mvcc::tests::*;
-    use crate::storage::SHORT_VALUE_MAX_LEN;
     use crate::storage::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {

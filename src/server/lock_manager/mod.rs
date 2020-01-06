@@ -19,7 +19,6 @@ use crate::storage::{
     lock_manager::{Lock, LockManager as LockManagerTrait},
     ProcessResult, StorageCallback,
 };
-use keys::TimeStamp;
 use pd_client::PdClient;
 use spin::Mutex;
 use std::collections::hash_map::DefaultHasher;
@@ -30,6 +29,7 @@ use std::thread::JoinHandle;
 use tikv_util::collections::HashSet;
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::FutureWorker;
+use txn_types::TimeStamp;
 
 const DETECTED_SLOTS_NUM: usize = 128;
 
@@ -414,19 +414,25 @@ mod tests {
         recv(&rx);
 
         // If key_hashes is none, no wake up
-        let prev_wake_up = TASK_COUNTER_VEC.wake_up.get();
+        let prev_wake_up = TASK_COUNTER_METRICS.with(|m| m.wake_up.get());
         lock_mgr.wake_up(70.into(), None, 70.into(), false);
-        assert_eq!(TASK_COUNTER_VEC.wake_up.get(), prev_wake_up);
+        assert_eq!(TASK_COUNTER_METRICS.with(|m| m.wake_up.get()), prev_wake_up);
 
         // If it's non-pessimistic-txn, no clean up
-        let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
+        let prev_clean_up = TASK_COUNTER_METRICS.with(|m| m.clean_up.get());
         lock_mgr.wake_up(80.into(), None, 80.into(), false);
-        assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
+        assert_eq!(
+            TASK_COUNTER_METRICS.with(|m| m.clean_up.get()),
+            prev_clean_up
+        );
 
         // If the txn doesn't wait for locks, no clean up
-        let prev_clean_up = TASK_COUNTER_VEC.clean_up.get();
+        let prev_clean_up = TASK_COUNTER_METRICS.with(|m| m.clean_up.get());
         lock_mgr.wake_up(80.into(), None, 80.into(), true);
-        assert_eq!(TASK_COUNTER_VEC.clean_up.get(), prev_clean_up);
+        assert_eq!(
+            TASK_COUNTER_METRICS.with(|m| m.clean_up.get()),
+            prev_clean_up
+        );
     }
 
     #[test]
