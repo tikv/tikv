@@ -1,0 +1,10 @@
+[package]
+name = "resolved_ts"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+tikv_util = { path = "../tikv_util" }
+txn_types = { path = "../txn_types" }
+hex = "0.3"

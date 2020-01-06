@@ -166,6 +166,7 @@ members = [
   "fuzz/fuzzer-libfuzzer",
   "fuzz/fuzzer-honggfuzz",
   "tests",
+  "cmd",
   "components/test_raftstore",
   "components/test_storage",
   "components/test_coprocessor",
@@ -188,7 +189,7 @@ members = [
   "components/keys",
   "components/sst_importer",
   "components/txn_types",
-  "cmd",
+  "components/resolved_ts"
 ]
 default-members = ["cmd"]
 
