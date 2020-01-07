@@ -277,7 +277,6 @@ mod tests {
     use crate::server::resolve::Callback;
     use tikv_util::security::SecurityConfig;
 
-    use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
 
@@ -299,10 +298,12 @@ mod tests {
     }
 
     fn start_lock_manager() -> LockManager {
-        let (tx, _rx) = mpsc::sync_channel(100);
-        let mut coprocessor_host = CoprocessorHost::new(tx);
+        let mut coprocessor_host = CoprocessorHost::default();
 
         let mut lock_mgr = LockManager::new();
+        let mut cfg = Config::default();
+        cfg.wait_for_lock_timeout = 3000;
+        cfg.wake_up_delay_duration = 100;
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
         lock_mgr
             .start(
@@ -310,7 +311,7 @@ mod tests {
                 Arc::new(MockPdClient {}),
                 MockResolver {},
                 Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()),
-                &Config::default(),
+                &cfg,
             )
             .unwrap();
 
