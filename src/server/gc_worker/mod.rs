@@ -1580,7 +1580,7 @@ impl<E: Engine> GcWorker<E> {
             .and_then(move |c| c.start_collecting(max_ts, callback))
     }
 
-    pub fn fetch_result(
+    pub fn get_collected_locks(
         &self,
         max_ts: TimeStamp,
         callback: LockCollectorCallback<(Vec<LockInfo>, bool)>,
@@ -1588,7 +1588,7 @@ impl<E: Engine> GcWorker<E> {
         self.applied_lock_collector
             .as_ref()
             .ok_or_else(|| box_err!("applied_lock_collector not supported"))
-            .and_then(move |c| c.fetch_result(max_ts, callback))
+            .and_then(move |c| c.get_collected_locks(max_ts, callback))
     }
 
     pub fn stop_collecting(

@@ -716,7 +716,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
             .start_coarse_timer();
 
         let (cb, f) = paired_future_callback();
-        let res = self.gc_worker.fetch_result(req.get_max_ts().into(), cb);
+        let res = self
+            .gc_worker
+            .get_collected_locks(req.get_max_ts().into(), cb);
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {

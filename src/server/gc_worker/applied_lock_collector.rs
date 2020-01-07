@@ -52,7 +52,7 @@ enum LockCollectorTask {
         max_ts: TimeStamp,
         callback: Callback<()>,
     },
-    FetchResult {
+    GetCollectedLocks {
         max_ts: TimeStamp,
         callback: Callback<(Vec<LockInfo>, bool)>,
     },
@@ -72,8 +72,8 @@ impl Debug for LockCollectorTask {
                 .debug_struct("StartCollecting")
                 .field("max_ts", max_ts)
                 .finish(),
-            LockCollectorTask::FetchResult { max_ts, .. } => f
-                .debug_struct("FetchResult")
+            LockCollectorTask::GetCollectedLocks { max_ts, .. } => f
+                .debug_struct("GetCollectedLocks")
                 .field("max_ts", max_ts)
                 .finish(),
             LockCollectorTask::StopCollecting { max_ts, .. } => f
@@ -268,7 +268,7 @@ impl LockCollectorRunner {
         Ok(())
     }
 
-    fn fetch_result(&mut self, max_ts: TimeStamp) -> Result<(Vec<LockInfo>, bool)> {
+    fn get_collected_locks(&mut self, max_ts: TimeStamp) -> Result<(Vec<LockInfo>, bool)> {
         let curr_max_ts = self.observer_state.max_ts.load(Ordering::Acquire);
         let curr_max_ts = TimeStamp::new(curr_max_ts);
         if curr_max_ts != max_ts {
@@ -324,8 +324,8 @@ impl Runnable<LockCollectorTask> for LockCollectorRunner {
             LockCollectorTask::StartCollecting { max_ts, callback } => {
                 callback(self.start_collecting(max_ts))
             }
-            LockCollectorTask::FetchResult { max_ts, callback } => {
-                callback(self.fetch_result(max_ts))
+            LockCollectorTask::GetCollectedLocks { max_ts, callback } => {
+                callback(self.get_collected_locks(max_ts))
             }
             LockCollectorTask::StopCollecting { max_ts, callback } => {
                 callback(self.stop_collecting(max_ts))
@@ -382,13 +382,13 @@ impl AppliedLockCollector {
     /// Collects at most `MAX_COLLECT_SIZE` locks. If there are (even potentially) more locks than
     /// `MAX_COLLECT_SIZE` or any error happens, the flag `is_clean` will be unset, which represents
     /// `AppliedLockCollector` cannot collect all locks.
-    pub fn fetch_result(
+    pub fn get_collected_locks(
         &self,
         max_ts: TimeStamp,
         callback: Callback<(Vec<LockInfo>, bool)>,
     ) -> Result<()> {
         self.scheduler
-            .schedule(LockCollectorTask::FetchResult { max_ts, callback })
+            .schedule(LockCollectorTask::GetCollectedLocks { max_ts, callback })
             .map_err(|e| box_err!("failed to schedule task: {:?}", e))
     }
 
@@ -478,9 +478,9 @@ mod tests {
         rx.recv().unwrap()
     }
 
-    fn fetch_result(c: &AppliedLockCollector, max_ts: u64) -> Result<(Vec<LockInfo>, bool)> {
+    fn get_collected_locks(c: &AppliedLockCollector, max_ts: u64) -> Result<(Vec<LockInfo>, bool)> {
         let (tx, rx) = channel();
-        c.fetch_result(max_ts.into(), Box::new(move |r| tx.send(r).unwrap()))
+        c.get_collected_locks(max_ts.into(), Box::new(move |r| tx.send(r).unwrap()))
             .unwrap();
         rx.recv().unwrap()
     }
@@ -496,24 +496,24 @@ mod tests {
     fn test_start_stop() {
         let (c, _) = new_test_collector();
         // Not started.
-        fetch_result(&c, 1).unwrap_err();
+        get_collected_locks(&c, 1).unwrap_err();
         stop_collecting(&c, 1).unwrap_err();
 
         // Started.
         start_collecting(&c, 2).unwrap();
-        fetch_result(&c, 2).unwrap();
+        get_collected_locks(&c, 2).unwrap();
         stop_collecting(&c, 2).unwrap();
         // Stopped.
-        fetch_result(&c, 2).unwrap_err();
+        get_collected_locks(&c, 2).unwrap_err();
         stop_collecting(&c, 2).unwrap_err();
 
         // When start_collecting is invoked twice, the later one will ovewrite the previous one.
         start_collecting(&c, 3).unwrap();
-        fetch_result(&c, 3).unwrap();
-        fetch_result(&c, 4).unwrap_err();
+        get_collected_locks(&c, 3).unwrap();
+        get_collected_locks(&c, 4).unwrap_err();
         start_collecting(&c, 4).unwrap();
-        fetch_result(&c, 3).unwrap_err();
-        fetch_result(&c, 4).unwrap();
+        get_collected_locks(&c, 3).unwrap_err();
+        get_collected_locks(&c, 4).unwrap();
         stop_collecting(&c, 4).unwrap();
     }
 
@@ -546,7 +546,7 @@ mod tests {
         let mut expected_result = vec![];
 
         start_collecting(&c, 100).unwrap();
-        assert_eq!(fetch_result(&c, 100).unwrap(), (vec![], true));
+        assert_eq!(get_collected_locks(&c, 100).unwrap(), (vec![], true));
 
         // Only puts in lock cf will be monitered.
         let req = vec![
@@ -562,7 +562,7 @@ mod tests {
         coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req));
         expected_result.push(locks[0].clone());
         assert_eq!(
-            fetch_result(&c, 100).unwrap(),
+            get_collected_locks(&c, 100).unwrap(),
             (expected_result.clone(), true)
         );
 
@@ -578,14 +578,17 @@ mod tests {
                 .cloned(),
         );
         coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req.clone()));
-        assert_eq!(fetch_result(&c, 100).unwrap(), (expected_result, true));
+        assert_eq!(
+            get_collected_locks(&c, 100).unwrap(),
+            (expected_result, true)
+        );
 
         // When start_collecting is double-invoked again on another ts, the previous results are
         // dropped.
         start_collecting(&c, 110).unwrap();
-        assert_eq!(fetch_result(&c, 110).unwrap(), (vec![], true));
+        assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
         coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req));
-        assert_eq!(fetch_result(&c, 110).unwrap(), (locks, true));
+        assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, true));
     }
 
     #[test]
@@ -623,7 +626,7 @@ mod tests {
             CF_DEFAULT,
             &lock_kvs,
         );
-        assert_eq!(fetch_result(&c, 100).unwrap(), (vec![], true));
+        assert_eq!(get_collected_locks(&c, 100).unwrap(), (vec![], true));
 
         // Apply plain file to lock cf. Locks with ts before 100 will be collected.
         let expected_locks: Vec<_> = locks
@@ -633,27 +636,30 @@ mod tests {
             .collect();
         coprocessor_host.pre_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
         assert_eq!(
-            fetch_result(&c, 100).unwrap(),
+            get_collected_locks(&c, 100).unwrap(),
             (expected_locks.clone(), true)
         );
         // Fetch result twice gets the same result.
-        assert_eq!(fetch_result(&c, 100).unwrap(), (expected_locks, true));
+        assert_eq!(
+            get_collected_locks(&c, 100).unwrap(),
+            (expected_locks, true)
+        );
 
         // When start_collecting is double-invoked again on another ts, the previous results are
         // dropped.
         start_collecting(&c, 110).unwrap();
-        assert_eq!(fetch_result(&c, 110).unwrap(), (vec![], true));
+        assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
         coprocessor_host.pre_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
-        assert_eq!(fetch_result(&c, 110).unwrap(), (locks.clone(), true));
+        assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks.clone(), true));
 
         // Apply SST file to other cfs. Nothing happens.
         coprocessor_host.pre_apply_sst_from_snapshot(&Region::default(), CF_DEFAULT, "");
-        assert_eq!(fetch_result(&c, 110).unwrap(), (locks.clone(), true));
+        assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks.clone(), true));
 
         // Apply SST file to lock cf is not supported. This will cause error and therefore
         // `is_clean` will be set to false.
         coprocessor_host.pre_apply_sst_from_snapshot(&Region::default(), CF_LOCK, "");
-        assert_eq!(fetch_result(&c, 110).unwrap(), (locks, false));
+        assert_eq!(get_collected_locks(&c, 110).unwrap(), (locks, false));
     }
 
     #[test]
@@ -665,20 +671,20 @@ mod tests {
         let (k, v) = (Key::from_raw(b"k1").into_encoded(), b"v1".to_vec());
         let req = make_apply_request(k.clone(), v.clone(), CF_LOCK, CmdType::Put);
         coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(vec![req]));
-        assert_eq!(fetch_result(&c, 1).unwrap(), (vec![], false));
+        assert_eq!(get_collected_locks(&c, 1).unwrap(), (vec![], false));
 
         // `is_clean` should be reset after invoking `start_collecting`.
         start_collecting(&c, 2).unwrap();
-        assert_eq!(fetch_result(&c, 2).unwrap(), (vec![], true));
+        assert_eq!(get_collected_locks(&c, 2).unwrap(), (vec![], true));
         coprocessor_host.pre_apply_plain_kvs_from_snapshot(
             &Region::default(),
             CF_LOCK,
-            &[(keys::data_key(&k), v.clone())],
+            &[(keys::data_key(&k), v)],
         );
-        assert_eq!(fetch_result(&c, 2).unwrap(), (vec![], false));
+        assert_eq!(get_collected_locks(&c, 2).unwrap(), (vec![], false));
 
         start_collecting(&c, 3).unwrap();
-        assert_eq!(fetch_result(&c, 3).unwrap(), (vec![], true));
+        assert_eq!(get_collected_locks(&c, 3).unwrap(), (vec![], true));
 
         // If there are too many locks, `is_clean` should be set to false.
         let mut lock = LockInfo::default();
@@ -695,31 +701,31 @@ mod tests {
         };
 
         batch_generate_locks(MAX_COLLECT_SIZE - 1);
-        let (locks, is_clean) = fetch_result(&c, 3).unwrap();
+        let (locks, is_clean) = get_collected_locks(&c, 3).unwrap();
         assert_eq!(locks.len(), MAX_COLLECT_SIZE - 1);
         assert!(is_clean);
 
         batch_generate_locks(1);
-        let (locks, is_clean) = fetch_result(&c, 3).unwrap();
+        let (locks, is_clean) = get_collected_locks(&c, 3).unwrap();
         assert_eq!(locks.len(), MAX_COLLECT_SIZE);
         assert!(is_clean);
 
         batch_generate_locks(1);
         // If there are more locks, they will be dropped.
-        let (locks, is_clean) = fetch_result(&c, 3).unwrap();
+        let (locks, is_clean) = get_collected_locks(&c, 3).unwrap();
         assert_eq!(locks.len(), MAX_COLLECT_SIZE);
         assert!(!is_clean);
 
         start_collecting(&c, 4).unwrap();
-        assert_eq!(fetch_result(&c, 4).unwrap(), (vec![], true));
+        assert_eq!(get_collected_locks(&c, 4).unwrap(), (vec![], true));
 
         batch_generate_locks(MAX_COLLECT_SIZE - 5);
-        let (locks, is_clean) = fetch_result(&c, 4).unwrap();
+        let (locks, is_clean) = get_collected_locks(&c, 4).unwrap();
         assert_eq!(locks.len(), MAX_COLLECT_SIZE - 5);
         assert!(is_clean);
 
         batch_generate_locks(10);
-        let (locks, is_clean) = fetch_result(&c, 4).unwrap();
+        let (locks, is_clean) = get_collected_locks(&c, 4).unwrap();
         assert_eq!(locks.len(), MAX_COLLECT_SIZE);
         assert!(!is_clean);
     }
