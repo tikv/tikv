@@ -1919,12 +1919,12 @@ impl ConfigHandler {
     /// version and config
     pub fn create(
         id: String,
-        pd_client: Arc<impl ConfigClient>,
+        cfg_client: Arc<impl ConfigClient>,
         local_config: TiKvConfig,
     ) -> CfgResult<(configpb::Version, TiKvConfig)> {
         let cfg = toml::to_string(&local_config)?;
         let version = configpb::Version::default();
-        let mut resp = pd_client.register_config(id, version, cfg)?;
+        let mut resp = cfg_client.register_config(id, version, cfg)?;
         match resp.get_status().get_code() {
             StatusCode::Ok | StatusCode::WrongVersion => {
                 let mut incoming: TiKvConfig = toml::from_str(resp.get_config())?;
@@ -1947,8 +1947,8 @@ impl ConfigHandler {
 
     /// Update the local config if remote config had been changed,
     /// rollback the remote config if the change are invalid.
-    pub fn refresh_config(&mut self, pd_client: Arc<impl ConfigClient>) -> CfgResult<()> {
-        let mut resp = pd_client.get_config(self.get_id(), self.version.clone())?;
+    pub fn refresh_config(&mut self, cfg_client: Arc<impl ConfigClient>) -> CfgResult<()> {
+        let mut resp = cfg_client.get_config(self.get_id(), self.version.clone())?;
         let version = resp.take_version();
         match resp.get_status().get_code() {
             StatusCode::Ok => Ok(()),
@@ -1961,7 +1961,7 @@ impl ConfigHandler {
                             "version" => ?version
                         );
                         let entries = to_config_entry(rollback_change)?;
-                        self.update_config(version, entries, pd_client)?;
+                        self.update_config(version, entries, cfg_client)?;
                     }
                     Either::Right(updated) => {
                         if updated {
@@ -1989,9 +1989,9 @@ impl ConfigHandler {
         &mut self,
         version: configpb::Version,
         entries: Vec<configpb::ConfigEntry>,
-        pd_client: Arc<impl ConfigClient>,
+        cfg_client: Arc<impl ConfigClient>,
     ) -> CfgResult<()> {
-        let mut resp = pd_client.update_config(self.get_id(), version, entries)?;
+        let mut resp = cfg_client.update_config(self.get_id(), version, entries)?;
         match resp.get_status().get_code() {
             StatusCode::Ok => {
                 self.version = resp.take_version();
