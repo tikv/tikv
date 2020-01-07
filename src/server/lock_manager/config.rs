@@ -22,7 +22,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             enabled: true,
-            wait_for_lock_timeout: 300,
+            wait_for_lock_timeout: 1000,
             wake_up_delay_duration: 20,
         }
     }
