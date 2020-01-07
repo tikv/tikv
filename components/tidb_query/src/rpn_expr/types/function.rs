@@ -28,7 +28,7 @@ use tidb_query_datatype::{EvalType, FieldTypeAccessor};
 use tipb::{Expr, FieldType};
 
 use super::RpnStackNode;
-use crate::codec::data_type::{Evaluable, ScalarValue, ScalarValueRef, VectorValue};
+use crate::codec::data_type::{Evaluable, ScalarValueRef, VectorValue};
 use crate::expr::EvalContext;
 use crate::Result;
 
@@ -42,7 +42,7 @@ pub struct RpnFnMeta {
     pub validator_ptr: fn(expr: &Expr) -> Result<()>,
 
     /// The metadata constructor of the RPN function.
-    pub metadata_ctor_ptr: fn(expr: &mut Expr) -> Box<dyn Any + Send>,
+    pub metadata_expr_ptr: fn(expr: &mut Expr) -> Result<Box<dyn Any + Send>>,
 
     #[allow(clippy::type_complexity)]
     /// The RPN function.
@@ -67,9 +67,6 @@ impl std::fmt::Debug for RpnFnMeta {
 pub struct RpnFnCallExtra<'a> {
     /// The field type of the return value.
     pub ret_field_type: &'a FieldType,
-
-    /// Implicit constant arguments.
-    pub implicit_args: &'a [ScalarValue],
 }
 
 /// A single argument of an RPN function.
@@ -262,10 +259,33 @@ pub fn validate_expr_arguments_gte(expr: &Expr, args: usize) -> Result<()> {
     }
 }
 
+/// Validates whether the number of arguments of an expression node <= expectation.
+pub fn validate_expr_arguments_lte(expr: &Expr, args: usize) -> Result<()> {
+    let received_args = expr.get_children().len();
+    if received_args <= args {
+        Ok(())
+    } else {
+        Err(other_err!(
+            "Expect at most {} arguments, received {}",
+            args,
+            received_args
+        ))
+    }
+}
+
 thread_local! {
     pub static VARG_PARAM_BUF: std::cell::RefCell<Vec<usize>> =
         std::cell::RefCell::new(Vec::with_capacity(20));
 
     pub static RAW_VARG_PARAM_BUF: std::cell::RefCell<Vec<ScalarValueRef<'static>>> =
         std::cell::RefCell::new(Vec::with_capacity(20));
+}
+
+pub fn extract_metadata_from_val<T: protobuf::Message + Default>(val: &[u8]) -> Result<T> {
+    if val.is_empty() {
+        Ok(T::default())
+    } else {
+        protobuf::parse_from_bytes::<T>(val)
+            .map_err(|e| other_err!("Decode metadata failed: {}", e))
+    }
 }

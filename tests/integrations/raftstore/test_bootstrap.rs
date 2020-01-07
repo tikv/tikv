@@ -10,10 +10,11 @@ use kvproto::raft_serverpb::RegionLocalState;
 
 use engine::*;
 use test_raftstore::*;
+use tikv::config::ConfigController;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::store::StoreMeta;
-use tikv::raftstore::store::{bootstrap_store, fsm, keys, SnapManager};
+use tikv::raftstore::store::{bootstrap_store, fsm, SnapManager};
 use tikv::server::Node;
 use tikv_util::worker::FutureWorker;
 
@@ -77,12 +78,14 @@ fn test_node_bootstrap_with_prepared_data() {
         .is_some());
 
     // Create coprocessor.
-    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_router());
+    let coprocessor_host = CoprocessorHost::new(node.get_router());
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
         Arc::new(SSTImporter::new(dir).unwrap())
     };
+
+    let cfg_controller = ConfigController::new(cfg, Default::default());
 
     // try to restart this node, will clear the prepare data
     node.start(
@@ -93,6 +96,7 @@ fn test_node_bootstrap_with_prepared_data() {
         Arc::new(Mutex::new(StoreMeta::new(0))),
         coprocessor_host,
         importer,
+        cfg_controller,
     )
     .unwrap();
     assert!(Arc::clone(&engine)

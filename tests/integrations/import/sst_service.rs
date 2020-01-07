@@ -32,7 +32,7 @@ fn new_cluster() -> (Cluster<ServerCluster>, Context) {
     let epoch = cluster.get_region_epoch(region_id);
     let mut ctx = Context::default();
     ctx.set_region_id(region_id);
-    ctx.set_peer(leader.clone());
+    ctx.set_peer(leader);
     ctx.set_region_epoch(epoch);
 
     (cluster, ctx)
@@ -48,7 +48,7 @@ fn new_cluster_and_tikv_import_client(
         ChannelBuilder::new(env).connect(cluster.sim.rl().get_addr(node))
     };
     let tikv = TikvClient::new(ch.clone());
-    let import = ImportSstClient::new(ch.clone());
+    let import = ImportSstClient::new(ch);
 
     (cluster, ctx, tikv, import)
 }
@@ -134,7 +134,7 @@ fn test_download_sst() {
     // Checks that downloading a non-existing storage returns error.
     let mut download = DownloadRequest::default();
     download.set_sst(meta.clone());
-    download.set_url(format!("local://{}", temp_dir.path().display()));
+    download.set_storage_backend(external_storage::make_local_backend(temp_dir.path()));
     download.set_name("missing.sst".to_owned());
 
     let result = import.download(&download);

@@ -25,12 +25,20 @@ mod cf_options;
 pub use crate::cf_options::*;
 mod db_options;
 pub use crate::db_options::*;
+mod db_vector;
+pub use crate::db_vector::*;
 mod engine;
 pub use crate::engine::*;
 mod import;
 pub use crate::import::*;
+mod io_limiter;
+pub use crate::io_limiter::*;
 mod snapshot;
 pub use crate::snapshot::*;
+mod sst;
+pub use crate::sst::*;
+mod table_properties;
+pub use crate::table_properties::*;
 mod write_batch;
 pub use crate::write_batch::*;
 
@@ -38,4 +46,7 @@ mod engine_iterator;
 pub use crate::engine_iterator::*;
 
 mod options;
-mod util;
+pub mod util;
+
+mod compat;
+pub use compat::*;

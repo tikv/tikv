@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::cf_options::CFOptions;
+use crate::cf_options::ColumnFamilyOptions;
 use crate::errors::Result;
 
 /// Trait for engines with column family handles.
@@ -17,10 +17,10 @@ pub trait CFHandleExt {
     // https://github.com/rust-lang/rfcs/pull/1598
     // https://github.com/rust-lang/rust/issues/44265
     type CFHandle: CFHandle;
-    type CFOptions: CFOptions;
+    type ColumnFamilyOptions: ColumnFamilyOptions;
 
-    fn get_cf_handle(&self, name: &str) -> Option<&Self::CFHandle>;
-    fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::CFOptions;
+    fn cf_handle(&self, name: &str) -> Result<&Self::CFHandle>;
+    fn get_options_cf(&self, cf: &Self::CFHandle) -> Self::ColumnFamilyOptions;
     fn set_options_cf(&self, cf: &Self::CFHandle, options: &[(&str, &str)]) -> Result<()>;
 }
 

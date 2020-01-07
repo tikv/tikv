@@ -30,9 +30,6 @@ pub struct LocalStorage {
 }
 
 impl LocalStorage {
-    /// The url scheme of the `LocalStorage`.
-    pub const SCHEME: &'static str = "local";
-
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
@@ -129,7 +126,6 @@ mod tests {
         ls.write("", &mut magic_contents.clone().as_slice())
             .unwrap_err();
         // root is not allowed.
-        ls.write("/", &mut magic_contents.clone().as_slice())
-            .unwrap_err();
+        ls.write("/", &mut magic_contents.as_slice()).unwrap_err();
     }
 }

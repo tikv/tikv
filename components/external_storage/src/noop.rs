@@ -10,9 +10,6 @@ use super::ExternalStorage;
 pub struct NoopStorage {}
 
 impl NoopStorage {
-    /// The url scheme of the `NoopStorage`.
-    pub const SCHEME: &'static str = "noop";
-
     /// Create a new noop storage in the given path.
     pub fn new() -> NoopStorage {
         info!("create noop storage");

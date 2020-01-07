@@ -134,7 +134,9 @@ pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str 
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
         ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
-        ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => unimplemented!(),
+        ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
+            unimplemented!()
+        }
     }
 }
 
@@ -545,9 +547,11 @@ fn u64_to_timespec(u: u64) -> Timespec {
 // TODO: make sure received entries are not corrupted
 #[inline]
 pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: &str) -> T {
-    protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
+    let mut result = T::default();
+    result.merge_from_bytes(data).unwrap_or_else(|e| {
         panic!("{} data is corrupted at {}: {:?}", tag, index, e);
-    })
+    });
+    result
 }
 
 /// Check if two regions are sibling.

@@ -11,7 +11,7 @@ use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use crate::raftstore::store::{CasualMessage, CasualRouter};
 
 use super::super::error::Result;
 use super::super::metrics::*;
@@ -98,23 +98,12 @@ impl SplitChecker for Checker {
 }
 
 pub struct SizeCheckObserver<C> {
-    region_max_size: u64,
-    split_size: u64,
-    split_limit: u64,
     router: Mutex<C>,
 }
 
 impl<C: CasualRouter> SizeCheckObserver<C> {
-    pub fn new(
-        region_max_size: u64,
-        split_size: u64,
-        split_limit: u64,
-        router: C,
-    ) -> SizeCheckObserver<C> {
+    pub fn new(router: C) -> SizeCheckObserver<C> {
         SizeCheckObserver {
-            region_max_size,
-            split_size,
-            split_limit,
             router: Mutex::new(router),
         }
     }
@@ -142,9 +131,9 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 );
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
-                    self.region_max_size,
-                    self.split_size,
-                    self.split_limit,
+                    host.cfg.region_max_size.0,
+                    host.cfg.region_split_size.0,
+                    host.cfg.batch_split_limit,
                     policy,
                 )));
                 return;
@@ -162,22 +151,22 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
         }
 
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
-        if region_size >= self.region_max_size {
+        if region_size >= host.cfg.region_max_size.0 {
             info!(
                 "approximate size over threshold, need to do split check";
                 "region_id" => region.get_id(),
                 "size" => region_size,
-                "threshold" => self.region_max_size,
+                "threshold" => host.cfg.region_max_size.0,
             );
             // when meet large region use approximate way to produce split keys
-            if region_size >= self.region_max_size * self.split_limit * 2 {
+            if region_size >= host.cfg.region_max_size.0 * host.cfg.batch_split_limit * 2 {
                 policy = CheckPolicy::Approximate
             }
             // Need to check size.
             host.add_checker(Box::new(Checker::new(
-                self.region_max_size,
-                self.split_size,
-                self.split_limit,
+                host.cfg.region_max_size.0,
+                host.cfg.region_split_size.0,
+                host.cfg.batch_split_limit,
                 policy,
             )));
         } else {
@@ -186,7 +175,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
                 "approximate size less than threshold, does not need to do split check";
                 "region_id" => region.get_id(),
                 "size" => region_size,
-                "threshold" => self.region_max_size,
+                "threshold" => host.cfg.region_max_size.0,
             );
         }
     }
@@ -347,10 +336,7 @@ pub mod tests {
     use super::Checker;
     use crate::raftstore::coprocessor::properties::RangePropertiesCollectorFactory;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
-    use crate::raftstore::store::{
-        keys, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask,
-    };
-    use crate::storage::Key;
+    use crate::raftstore::store::{CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask};
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
@@ -363,6 +349,7 @@ pub mod tests {
     use tempfile::Builder;
     use tikv_util::config::ReadableSize;
     use tikv_util::worker::Runnable;
+    use txn_types::Key;
 
     use super::*;
 
@@ -427,7 +414,8 @@ pub mod tests {
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
-            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
+            Arc::new(CoprocessorHost::new(tx)),
+            cfg,
         );
 
         // so split key will be [z0006]
@@ -436,7 +424,11 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
 
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         // size has not reached the max_size 100 yet.
         match rx.try_recv() {
             Ok((region_id, CasualMessage::RegionApproximateSize { .. })) => {
@@ -454,7 +446,11 @@ pub mod tests {
         // we flush it to SST so we can use the size properties instead.
         engine.flush(true).unwrap();
 
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         must_split_at(&rx, &region, vec![b"0006".to_vec()]);
 
         // so split keys will be [z0006, z0012]
@@ -463,7 +459,11 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
         engine.flush(true).unwrap();
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         must_split_at(&rx, &region, vec![b"0006".to_vec(), b"0012".to_vec()]);
 
         // for test batch_split_limit
@@ -473,7 +473,11 @@ pub mod tests {
             engine.put(&s, &s).unwrap();
         }
         engine.flush(true).unwrap();
-        runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(
+            region.clone(),
+            true,
+            CheckPolicy::Scan,
+        ));
         must_split_at(
             &rx,
             &region,
@@ -488,7 +492,7 @@ pub mod tests {
 
         drop(rx);
         // It should be safe even the result can't be sent back.
-        runnable.run(SplitCheckTask::new(region, true, CheckPolicy::Scan));
+        runnable.run(SplitCheckTask::split_check(region, true, CheckPolicy::Scan));
     }
 
     #[test]

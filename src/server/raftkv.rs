@@ -8,24 +8,27 @@ use std::time::Duration;
 use engine::rocks::TablePropertiesCollection;
 use engine::CfName;
 use engine::IterOption;
-use engine::Peekable;
 use engine::CF_DEFAULT;
+use engine_rocks::RocksEngine;
+use engine_traits::Peekable;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
     CmdType, DeleteRangeRequest, DeleteRequest, PutRequest, RaftCmdRequest, RaftCmdResponse,
     RaftRequestHeader, Request, Response,
 };
+use txn_types::{Key, Value};
 
 use super::metrics::*;
 use crate::raftstore::errors::Error as RaftServerError;
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use crate::raftstore::store::{RegionIterator, RegionSnapshot};
-use crate::server::transport::RaftStoreRouter;
 use crate::storage::kv::{
-    Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify, ScanMode, Snapshot,
+    Callback, CbContext, Cursor, Engine, Error as KvError, ErrorInner as KvErrorInner,
+    Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
-use crate::storage::{self, kv, Key, Value};
+use crate::storage::{self, kv};
 
 quick_error! {
     #[derive(Debug)]
@@ -73,13 +76,13 @@ fn get_status_kind_from_error(e: &Error) -> RequestStatusKind {
 
 fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
     match *e {
-        kv::Error::Request(ref header) => {
+        KvError(box KvErrorInner::Request(ref header)) => {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
         }
 
-        kv::Error::Timeout(_) => RequestStatusKind::err_timeout,
-        kv::Error::EmptyRequest => RequestStatusKind::err_empty_request,
-        kv::Error::Other(_) => RequestStatusKind::err_other,
+        KvError(box KvErrorInner::Timeout(_)) => RequestStatusKind::err_timeout,
+        KvError(box KvErrorInner::EmptyRequest) => RequestStatusKind::err_empty_request,
+        KvError(box KvErrorInner::Other(_)) => RequestStatusKind::err_other,
     }
 }
 
@@ -88,16 +91,16 @@ pub type Result<T> = result::Result<T, Error>;
 impl From<Error> for kv::Error {
     fn from(e: Error) -> kv::Error {
         match e {
-            Error::RequestFailed(e) => kv::Error::Request(e),
+            Error::RequestFailed(e) => KvError::from(KvErrorInner::Request(e)),
             Error::Server(e) => e.into(),
             e => box_err!(e),
         }
     }
 }
 
-impl From<RaftServerError> for kv::Error {
-    fn from(e: RaftServerError) -> kv::Error {
-        kv::Error::Request(e.into())
+impl From<RaftServerError> for KvError {
+    fn from(e: RaftServerError) -> KvError {
+        KvError(Box::new(KvErrorInner::Request(e.into())))
     }
 }
 
@@ -109,7 +112,7 @@ pub struct RaftKv<S: RaftStoreRouter + 'static> {
 
 pub enum CmdRes {
     Resp(Vec<Response>),
-    Snap(RegionSnapshot),
+    Snap(RegionSnapshot<RocksEngine>),
 }
 
 fn new_ctx(resp: &RaftCmdResponse) -> CbContext {
@@ -142,7 +145,10 @@ fn on_write_result(mut write_resp: WriteResponse, req_cnt: usize) -> (CbContext,
     (cb_ctx, Ok(CmdRes::Resp(resps.into())))
 }
 
-fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Result<CmdRes>) {
+fn on_read_result(
+    mut read_resp: ReadResponse<RocksEngine>,
+    req_cnt: usize,
+) -> (CbContext, Result<CmdRes>) {
     let cb_ctx = new_ctx(&read_resp.response);
     if let Err(e) = check_raft_cmd_response(&mut read_resp.response, req_cnt) {
         return (cb_ctx, Err(e));
@@ -244,7 +250,7 @@ impl<S: RaftStoreRouter> Debug for RaftKv<S> {
 }
 
 impl<S: RaftStoreRouter> Engine for RaftKv<S> {
-    type Snap = RegionSnapshot;
+    type Snap = RegionSnapshot<RocksEngine>;
 
     fn async_write(
         &self,
@@ -254,7 +260,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     ) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if modifies.is_empty() {
-            return Err(kv::Error::EmptyRequest);
+            return Err(KvError::from(KvErrorInner::EmptyRequest));
         }
 
         let mut reqs = Vec::with_capacity(modifies.len());
@@ -360,8 +366,8 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
     }
 }
 
-impl Snapshot for RegionSnapshot {
-    type Iter = RegionIterator;
+impl Snapshot for RegionSnapshot<RocksEngine> {
+    type Iter = RegionIterator<RocksEngine>;
 
     fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
@@ -414,15 +420,20 @@ impl Snapshot for RegionSnapshot {
     fn upper_bound(&self) -> Option<&[u8]> {
         Some(self.get_end_key())
     }
+
+    #[inline]
+    fn get_data_version(&self) -> Option<u64> {
+        self.get_apply_index().ok()
+    }
 }
 
-impl EngineIterator for RegionIterator {
-    fn next(&mut self) -> bool {
-        RegionIterator::next(self)
+impl EngineIterator for RegionIterator<RocksEngine> {
+    fn next(&mut self) -> kv::Result<bool> {
+        RegionIterator::next(self).map_err(KvError::from)
     }
 
-    fn prev(&mut self) -> bool {
-        RegionIterator::prev(self)
+    fn prev(&mut self) -> kv::Result<bool> {
+        RegionIterator::prev(self).map_err(KvError::from)
     }
 
     fn seek(&mut self, key: &Key) -> kv::Result<bool> {
@@ -439,20 +450,16 @@ impl EngineIterator for RegionIterator {
         RegionIterator::seek_for_prev(self, key.as_encoded()).map_err(From::from)
     }
 
-    fn seek_to_first(&mut self) -> bool {
-        RegionIterator::seek_to_first(self)
+    fn seek_to_first(&mut self) -> kv::Result<bool> {
+        RegionIterator::seek_to_first(self).map_err(KvError::from)
     }
 
-    fn seek_to_last(&mut self) -> bool {
-        RegionIterator::seek_to_last(self)
+    fn seek_to_last(&mut self) -> kv::Result<bool> {
+        RegionIterator::seek_to_last(self).map_err(KvError::from)
     }
 
-    fn valid(&self) -> bool {
-        RegionIterator::valid(self)
-    }
-
-    fn status(&self) -> kv::Result<()> {
-        RegionIterator::status(self).map_err(From::from)
+    fn valid(&self) -> kv::Result<bool> {
+        RegionIterator::valid(self).map_err(KvError::from)
     }
 
     fn validate_key(&self, key: &Key) -> kv::Result<()> {

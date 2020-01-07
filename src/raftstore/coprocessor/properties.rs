@@ -6,15 +6,14 @@ use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use crate::raftstore::store::keys;
-use crate::storage::mvcc::{Write, WriteType};
-use crate::storage::types::Key;
+use crate::storage::mvcc::{TimeStamp, Write, WriteType};
 use engine::rocks::{
     CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory,
     TitanBlobIndex, UserCollectedProperties, DB,
 };
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{Error, Result};
+use txn_types::Key;
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -44,8 +43,8 @@ fn get_entry_size(value: &[u8], entry_type: DBEntryType) -> std::result::Result<
 
 #[derive(Clone, Debug, Default)]
 pub struct MvccProperties {
-    pub min_ts: u64,           // The minimal timestamp.
-    pub max_ts: u64,           // The maximal timestamp.
+    pub min_ts: TimeStamp,     // The minimal timestamp.
+    pub max_ts: TimeStamp,     // The maximal timestamp.
     pub num_rows: u64,         // The number of rows.
     pub num_puts: u64,         // The number of MVCC puts of all rows.
     pub num_versions: u64,     // The number of MVCC versions of all rows.
@@ -55,8 +54,8 @@ pub struct MvccProperties {
 impl MvccProperties {
     pub fn new() -> MvccProperties {
         MvccProperties {
-            min_ts: u64::MAX,
-            max_ts: u64::MIN,
+            min_ts: TimeStamp::max(),
+            max_ts: TimeStamp::zero(),
             num_rows: 0,
             num_puts: 0,
             num_versions: 0,
@@ -75,8 +74,8 @@ impl MvccProperties {
 
     pub fn encode(&self) -> UserProperties {
         let mut props = UserProperties::new();
-        props.encode_u64(PROP_MIN_TS, self.min_ts);
-        props.encode_u64(PROP_MAX_TS, self.max_ts);
+        props.encode_u64(PROP_MIN_TS, self.min_ts.into_inner());
+        props.encode_u64(PROP_MAX_TS, self.max_ts.into_inner());
         props.encode_u64(PROP_NUM_ROWS, self.num_rows);
         props.encode_u64(PROP_NUM_PUTS, self.num_puts);
         props.encode_u64(PROP_NUM_VERSIONS, self.num_versions);
@@ -86,8 +85,8 @@ impl MvccProperties {
 
     pub fn decode<T: DecodeProperties>(props: &T) -> Result<MvccProperties> {
         let mut res = MvccProperties::new();
-        res.min_ts = props.decode_u64(PROP_MIN_TS)?;
-        res.max_ts = props.decode_u64(PROP_MAX_TS)?;
+        res.min_ts = props.decode_u64(PROP_MIN_TS)?.into();
+        res.max_ts = props.decode_u64(PROP_MAX_TS)?.into();
         res.num_rows = props.decode_u64(PROP_NUM_ROWS)?;
         res.num_puts = props.decode_u64(PROP_NUM_PUTS)?;
         res.num_versions = props.decode_u64(PROP_NUM_VERSIONS)?;
@@ -672,12 +671,11 @@ mod tests {
     use test::Bencher;
 
     use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
-    use crate::raftstore::store::keys;
     use crate::storage::mvcc::{Write, WriteType};
-    use crate::storage::Key;
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::{CF_WRITE, LARGE_CFS};
+    use txn_types::Key;
 
     use super::*;
 
@@ -701,11 +699,19 @@ mod tests {
 
         let cases = ["a", "b", "c"];
         for &key in &cases {
-            let k1 = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
+            let k1 = keys::data_key(
+                Key::from_raw(key.as_bytes())
+                    .append_ts(2.into())
+                    .as_encoded(),
+            );
             let write_cf = db.cf_handle(CF_WRITE).unwrap();
             db.put_cf(write_cf, &k1, b"v1").unwrap();
             db.delete_cf(write_cf, &k1).unwrap();
-            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(3).as_encoded());
+            let key = keys::data_key(
+                Key::from_raw(key.as_bytes())
+                    .append_ts(3.into())
+                    .as_encoded(),
+            );
             db.put_cf(write_cf, &key, b"v2").unwrap();
             db.flush_cf(write_cf, true).unwrap();
         }
@@ -734,16 +740,17 @@ mod tests {
         ];
         let mut collector = MvccPropertiesCollector::new();
         for &(key, ts, write_type, entry_type) in &cases {
+            let ts = ts.into();
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
             let k = keys::data_key(k.as_encoded());
-            let v = Write::new(write_type, ts, None).to_bytes();
+            let v = Write::new(write_type, ts, None).as_ref().to_bytes();
             collector.add(&k, &v, entry_type, 0, 0);
         }
         let result = UserProperties(collector.finish());
 
         let props = MvccProperties::decode(&result).unwrap();
-        assert_eq!(props.min_ts, 1);
-        assert_eq!(props.max_ts, 7);
+        assert_eq!(props.min_ts, 1.into());
+        assert_eq!(props.max_ts, 7.into());
         assert_eq!(props.num_rows, 4);
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 7);
@@ -752,7 +759,7 @@ mod tests {
 
     #[bench]
     fn bench_mvcc_properties(b: &mut Bencher) {
-        let ts = 1;
+        let ts = 1.into();
         let num_entries = 100;
         let mut entries = Vec::new();
         for i in 0..num_entries {
@@ -760,7 +767,7 @@ mod tests {
             let k = Key::from_raw(s.as_bytes()).append_ts(ts);
             let k = keys::data_key(k.as_encoded());
             let w = Write::new(WriteType::Put, ts, Some(s.as_bytes().to_owned()));
-            entries.push((k, w.to_bytes()));
+            entries.push((k, w.as_ref().to_bytes()));
         }
 
         let mut collector = MvccPropertiesCollector::new();

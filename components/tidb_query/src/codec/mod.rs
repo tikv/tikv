@@ -18,10 +18,11 @@ pub mod chunk;
 pub mod convert;
 pub mod data_type;
 pub mod datum;
+pub mod datum_codec;
 pub mod error;
 pub mod mysql;
 mod overflow;
-pub mod raw_datum;
+pub mod row;
 pub mod table;
 
 pub use self::datum::Datum;

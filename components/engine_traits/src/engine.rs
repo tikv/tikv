@@ -11,13 +11,16 @@ pub trait KvEngine:
     + DBOptionsExt
     + CFHandleExt
     + ImportExt
+    + SstExt
+    + IOLimiterExt
+    + TablePropertiesExt
     + Send
     + Sync
     + Clone
     + Debug
     + 'static
 {
-    type Snapshot: Snapshot;
+    type Snapshot: Snapshot<Self>;
     type WriteBatch: WriteBatch;
 
     fn write_opt(&self, opts: &WriteOptions, wb: &Self::WriteBatch) -> Result<()>;
@@ -30,4 +33,8 @@ pub trait KvEngine:
     fn sync(&self) -> Result<()>;
 
     fn cf_names(&self) -> Vec<&str>;
+
+    /// This only exists as a temporary hack during refactoring.
+    /// It cannot be used forever.
+    fn bad_downcast<T: 'static>(&self) -> &T;
 }

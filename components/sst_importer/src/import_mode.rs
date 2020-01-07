@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CFOptions, DBOptions, KvEngine};
+use engine_traits::{ColumnFamilyOptions, DBOptions, KvEngine};
 use kvproto::import_sstpb::*;
 
 use super::Result;
@@ -56,6 +56,10 @@ impl ImportModeSwitcher {
         self.mode = SwitchMode::Import;
         Ok(())
     }
+
+    pub fn get_mode(&self) -> SwitchMode {
+        self.mode
+    }
 }
 
 struct ImportModeDBOptions {
@@ -107,7 +111,7 @@ impl ImportModeCFOptions {
     }
 
     fn new_options(db: &impl KvEngine, cf_name: &str) -> ImportModeCFOptions {
-        let cf = db.get_cf_handle(cf_name).unwrap();
+        let cf = db.cf_handle(cf_name).unwrap();
         let cf_opts = db.get_options_cf(cf);
 
         ImportModeCFOptions {
@@ -120,7 +124,7 @@ impl ImportModeCFOptions {
     }
 
     fn set_options(&self, db: &impl KvEngine, cf_name: &str, mf: RocksDBMetricsFn) -> Result<()> {
-        let cf = db.get_cf_handle(cf_name).unwrap();
+        let cf = db.cf_handle(cf_name).unwrap();
         let cf_opts = db.get_options_cf(cf);
         cf_opts.set_block_cache_capacity(self.block_cache_size)?;
         mf(cf_name, "block_cache_size", self.block_cache_size as f64);
@@ -176,7 +180,7 @@ mod tests {
         );
 
         for cf_name in db.cf_names() {
-            let cf = db.get_cf_handle(cf_name).unwrap();
+            let cf = db.cf_handle(cf_name).unwrap();
             let cf_opts = db.get_options_cf(cf);
             assert_eq!(
                 cf_opts.get_block_cache_capacity(),

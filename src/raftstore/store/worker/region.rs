@@ -13,18 +13,18 @@ use engine::rocks;
 use engine::rocks::Writable;
 use engine::WriteBatch;
 use engine::CF_RAFT;
-use engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
+use engine::{util as engine_util, Engines, Mutable, Peekable};
+use engine_rocks::{Compat, RocksEngine, RocksSnapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
+use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
 use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
-use crate::raftstore::store::{
-    self, check_abort, keys, ApplyOptions, SnapEntry, SnapKey, SnapManager,
-};
+use crate::raftstore::store::{self, check_abort, ApplyOptions, SnapEntry, SnapKey, SnapManager};
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time;
 use tikv_util::timer::Timer;
@@ -47,8 +47,8 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 pub enum Task {
     Gen {
         region_id: u64,
-        raft_snap: Snapshot,
-        kv_snap: Snapshot,
+        raft_snap: RocksSnapshot,
+        kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     },
     Apply {
@@ -206,10 +206,11 @@ impl PendingDeleteRanges {
 struct SnapContext {
     engines: Engines,
     batch_size: usize,
-    mgr: SnapManager,
+    mgr: SnapManager<RocksEngine>,
     use_delete_range: bool,
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
+    coprocessor_host: Arc<CoprocessorHost>,
 }
 
 impl SnapContext {
@@ -217,8 +218,8 @@ impl SnapContext {
     fn generate_snap(
         &self,
         region_id: u64,
-        raft_snap: Snapshot,
-        kv_snap: Snapshot,
+        raft_snap: RocksSnapshot,
+        kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) -> Result<()> {
         // do we need to check leader here?
@@ -245,8 +246,8 @@ impl SnapContext {
     fn handle_gen(
         &self,
         region_id: u64,
-        raft_snap: Snapshot,
-        kv_snap: Snapshot,
+        raft_snap: RocksSnapshot,
+        kv_snap: RocksSnapshot,
         notifier: SyncSender<RaftSnapshot>,
     ) {
         SNAP_COUNTER_VEC
@@ -269,7 +270,7 @@ impl SnapContext {
     /// Applies snapshot data of the Region.
     fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("begin apply snap data"; "region_id" => region_id);
-        fail_point!("region_apply_snap");
+        fail_point!("region_apply_snap", |_| { Ok(()) });
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
@@ -296,6 +297,7 @@ impl SnapContext {
             self.use_delete_range
         ));
         check_abort(&abort)?;
+        fail_point!("apply_snap_cleanup_range");
 
         let state_key = keys::apply_state_key(region_id);
         let apply_state: RaftApplyState =
@@ -322,10 +324,11 @@ impl SnapContext {
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
-            db: Arc::clone(&self.engines.kv),
-            region: region.clone(),
+            db: self.engines.kv.c().clone(),
+            region,
             abort: Arc::clone(&abort),
             write_batch_size: self.batch_size,
+            coprocessor_host: Arc::clone(&self.coprocessor_host),
         };
         s.apply(options)?;
 
@@ -502,16 +505,8 @@ impl SnapContext {
             if plain_file_used(cf) {
                 continue;
             }
-
-            let handle = rocks::util::get_cf_handle(&self.engines.kv, cf).unwrap();
-            if let Some(n) = rocks::util::get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
-                let options = self.engines.kv.get_options_cf(handle);
-                let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
-                // Leave enough buffer to tolerate heavy write workload,
-                // which may flush some memtables in a short time.
-                if n > u64::from(slowdown_trigger) / 2 {
-                    return true;
-                }
+            if rocks::util::ingest_maybe_slowdown_writes(&self.engines.kv, cf) {
+                return true;
             }
         }
         false
@@ -530,10 +525,11 @@ pub struct Runner {
 impl Runner {
     pub fn new(
         engines: Engines,
-        mgr: SnapManager,
+        mgr: SnapManager<RocksEngine>,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
+        coprocessor_host: Arc<CoprocessorHost>,
     ) -> Runner {
         Runner {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap-generator"))
@@ -546,6 +542,7 @@ impl Runner {
                 use_delete_range,
                 clean_stale_peer_delay,
                 pending_delete_ranges: PendingDeleteRanges::default(),
+                coprocessor_host,
             },
             pending_applies: VecDeque::new(),
         }
@@ -566,6 +563,7 @@ impl Runner {
 
     /// Tries to apply pending tasks if there is some.
     fn handle_pending_applies(&mut self) {
+        fail_point!("apply_pending_snapshot", |_| {});
         while !self.pending_applies.is_empty() {
             // should not handle too many applies than the number of files that can be ingested.
             // check level 0 every time because we can not make sure how does the number of level 0 files change.
@@ -666,15 +664,17 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use crate::raftstore::coprocessor::CoprocessorHost;
     use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
-    use crate::raftstore::store::{keys, SnapKey, SnapManager};
+    use crate::raftstore::store::{SnapKey, SnapManager};
     use engine::rocks;
-    use engine::rocks::{ColumnFamilyOptions, Snapshot, Writable, WriteBatch};
+    use engine::rocks::{ColumnFamilyOptions, Writable, WriteBatch};
     use engine::Engines;
     use engine::{Mutable, Peekable};
     use engine::{CF_DEFAULT, CF_RAFT};
+    use engine_rocks::{RocksEngine, RocksSnapshot};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempfile::Builder;
     use tikv_util::time;
@@ -774,7 +774,7 @@ mod tests {
             rocks::util::CFOptions::new("lock", cf_opts.clone()),
             rocks::util::CFOptions::new("raft", cf_opts.clone()),
         ];
-        let raft_cfs_opt = rocks::util::CFOptions::new(CF_DEFAULT, cf_opts.clone());
+        let raft_cfs_opt = rocks::util::CFOptions::new(CF_DEFAULT, cf_opts);
         let engine = get_test_db_for_regions(
             &temp_dir,
             None,
@@ -809,7 +809,14 @@ mod tests {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let runner = RegionRunner::new(engines.clone(), mgr, 0, true, Duration::from_secs(0));
+        let runner = RegionRunner::new(
+            engines.clone(),
+            mgr,
+            0,
+            true,
+            Duration::from_secs(0),
+            Arc::new(CoprocessorHost::default()),
+        );
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(100), Event::CheckApply);
         worker.start_with_timer(runner, timer).unwrap();
@@ -820,15 +827,15 @@ mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    raft_snap: Snapshot::new(engines.raft.clone()),
-                    kv_snap: Snapshot::new(engines.kv.clone()),
+                    raft_snap: RocksSnapshot::new(engines.raft.clone()),
+                    kv_snap: RocksSnapshot::new(engines.kv.clone()),
                     notifier: tx,
                 })
                 .unwrap();
             let s1 = rx.recv().unwrap();
             let data = s1.get_data();
             let key = SnapKey::from_snap(&s1).unwrap();
-            let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
+            let mgr = SnapManager::<RocksEngine>::new(snap_dir.path().to_str().unwrap(), None);
             let mut s2 = mgr.get_snapshot_for_sending(&key).unwrap();
             let mut s3 = mgr.get_snapshot_for_receiving(&key, &data[..]).unwrap();
             io::copy(&mut s2, &mut s3).unwrap();

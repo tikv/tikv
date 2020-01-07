@@ -33,6 +33,7 @@ use protobuf::Message;
 use rand;
 use rand::rngs::ThreadRng;
 
+pub mod buffer_vec;
 pub mod codec;
 pub mod collections;
 pub mod config;
@@ -551,7 +552,7 @@ pub fn is_zero_duration(d: &Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protobuf::Message;
+
     use raft::eraftpb::Entry;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -649,7 +650,7 @@ mod tests {
             (vec![e.clone(); 10], 2 * size, 2),
             (vec![e.clone(); 10], 10 * size - 1, 9),
             (vec![e.clone(); 10], 10 * size, 10),
-            (vec![e.clone(); 10], 10 * size + 1, 10),
+            (vec![e; 10], 10 * size + 1, 10),
         ];
 
         for (mut entries, max, len) in tbls {

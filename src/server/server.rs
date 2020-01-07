@@ -7,16 +7,20 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use futures::{Future, Stream};
-use grpcio::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
+use grpcio::{
+    ChannelBuilder, EnvBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
+};
 use kvproto::tikvpb::*;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::SnapManager;
-use crate::server::gc_worker::GCWorker;
-use crate::storage::lock_manager::LockMgr;
+use crate::server::gc_worker::GcWorker;
+use crate::storage::lock_manager::LockManager;
 use crate::storage::{Engine, Storage};
+use engine_rocks::RocksEngine;
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::worker::Worker;
@@ -27,7 +31,7 @@ use super::raft_client::RaftClient;
 use super::resolve::StoreAddrResolver;
 use super::service::*;
 use super::snap::{Runner as SnapHandler, Task as SnapTask};
-use super::transport::{RaftStoreRouter, ServerTransport};
+use super::transport::ServerTransport;
 use super::{Config, Result};
 
 const LOAD_STATISTICS_SLOTS: usize = 4;
@@ -51,7 +55,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     trans: ServerTransport<T, S>,
     raft_router: T,
     // For sending/receiving snapshots.
-    snap_mgr: SnapManager,
+    snap_mgr: SnapManager<RocksEngine>,
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
@@ -64,15 +68,15 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
     #[allow(clippy::too_many_arguments)]
-    pub fn new<E: Engine, L: LockMgr>(
+    pub fn new<E: Engine, L: LockManager>(
         cfg: &Arc<Config>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L>,
         cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
-        snap_mgr: SnapManager,
-        gc_worker: GCWorker<E>,
+        snap_mgr: SnapManager<RocksEngine>,
+        gc_worker: GcWorker<E>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = ThreadPoolBuilder::new()
@@ -110,12 +114,17 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
         let addr = SocketAddr::from_str(&cfg.addr)?;
         let ip = format!("{}", addr.ip());
+        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
+            .resize_memory(cfg.grpc_memory_pool_quota.0 as usize);
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(-1)
+            .set_resource_quota(mem_quota)
             .max_send_message_len(-1)
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
+            .keepalive_time(cfg.grpc_keepalive_time.into())
+            .keepalive_timeout(cfg.grpc_keepalive_timeout.into())
             .build_args();
         let builder = {
             let mut sb = ServerBuilder::new(Arc::clone(&env))
@@ -264,7 +273,6 @@ mod tests {
     use super::*;
 
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use super::super::transport::RaftStoreRouter;
     use super::super::{Config, Result};
     use crate::config::CoprReadPoolConfig;
     use crate::coprocessor::{self, readpool_impl};
@@ -273,6 +281,7 @@ mod tests {
     use crate::raftstore::Result as RaftStoreResult;
     use crate::storage::TestStorageBuilder;
 
+    use engine_rocks::RocksEngine;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use tikv_util::security::SecurityConfig;
@@ -309,7 +318,7 @@ mod tests {
             Ok(())
         }
 
-        fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
+        fn send_command(&self, _: RaftCmdRequest, _: Callback<RocksEngine>) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
@@ -343,7 +352,8 @@ mod tests {
         cfg.addr = "127.0.0.1:0".to_owned();
 
         let storage = TestStorageBuilder::new().build().unwrap();
-        let mut gc_worker = GCWorker::new(storage.get_engine(), None, None, Default::default());
+        let mut gc_worker =
+            GcWorker::new(storage.get_engine(), None, None, None, Default::default());
         gc_worker.start().unwrap();
 
         let (tx, rx) = mpsc::channel();
@@ -403,7 +413,7 @@ mod tests {
         msg.mut_to_peer().set_store_id(2);
         msg.set_region_id(2);
         quick_fail.store(true, Ordering::SeqCst);
-        trans.send(msg.clone()).unwrap();
+        trans.send(msg).unwrap();
         trans.flush();
         resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 2, 0), "{:?}", resp);

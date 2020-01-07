@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing to TiKV! This document outlines some of the conventions on building, running, and testing TiKV, the development workflow, commit message formatting, contact points and other resources.
 
-If you need any help or mentoring getting started, understanding the codebase, or making a PR (or anything else really), please ask on [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LTgzZDQ3NzZlNDkzMGIyYjU1MTA0NzIwMjFjODFiZjA0YjFmYmQyOTZiNzNkNzg1N2U1MDdlZTIxNTU5NWNhNjk), [Discourse](https://forum.tikv.org/c/tikv), or [WeChat](./README.md#WeChat).
+If you need any help or mentoring getting started, understanding the codebase, or making a PR (or anything else really), please ask on [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LTgzZDQ3NzZlNDkzMGIyYjU1MTA0NzIwMjFjODFiZjA0YjFmYmQyOTZiNzNkNzg1N2U1MDdlZTIxNTU5NWNhNjk), or [WeChat](./README.md#WeChat).
 
 
 ## Building and setting up a development workspace
@@ -127,7 +127,12 @@ This is a rough outline of what a contributor's workflow looks like:
 - Run tests and make sure all tests pass.
 - Push your changes to a branch in your fork of the repository and submit a pull request.
 - Your PR will be reviewed by two maintainers, who may request some changes.
-- Our CI systems automatically test all the pull requests.
+  * Once you've made changes, your PR must be re-reviewed and approved.
+  * If the PR becomes out of date, you can use GitHub's 'update branch' button.
+  * If there are conflicts, you can rebase (or merge) and resolve them locally. Then force push to your PR branch.
+    You do not need to get re-review just for resolving conflicts, but you should request re-review if there are significant changes.
+- Our CI system automatically tests all pull requests.
+- Our bot will merge your PR. It can be summoned by commenting `/merge` or adding the `S: CanMerge` label (requires tests to pass and two approvals. You might have to ask your reviewer to do this).
 
 Thanks for your contributions!
 
