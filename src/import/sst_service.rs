@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
 use engine::rocks::DB;
-use engine::CF_DEFAULT;
+use engine::{name_to_cf, CF_DEFAULT};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -17,7 +17,7 @@ use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::Callback;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use engine_rocks::{RocksEngine, RocksIOLimiter};
-use engine_traits::IOLimiter;
+use engine_traits::{IOLimiter, SstExt, SstWriterBuilder};
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
@@ -25,7 +25,7 @@ use tikv_util::time::Instant;
 use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
 use sst_importer::service::*;
-use sst_importer::{Config, Error, SSTImporter};
+use sst_importer::{error_inc, Config, Error, SSTImporter};
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
@@ -164,6 +164,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
+        let engine = Arc::clone(&self.engine);
+        let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
+            .set_db(RocksEngine::from_ref(&engine))
+            .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
+            .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
+            .unwrap();
 
         ctx.spawn(self.threads.spawn_fn(move || {
             let res = importer.download::<RocksEngine>(
@@ -172,6 +178,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 req.get_name(),
                 req.get_rewrite_rule(),
                 limiter,
+                sst_writer,
             );
 
             future::result(res)
@@ -323,7 +330,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         }
 
         ctx.spawn(
-            future::ok::<_, ()>(SetDownloadSpeedLimitResponse::default())
+            future::ok::<_, Error>(SetDownloadSpeedLimitResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }

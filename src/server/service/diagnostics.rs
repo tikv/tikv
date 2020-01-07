@@ -2,14 +2,14 @@
 
 use std::time::{Duration, Instant};
 
-use futures::{Future, Sink};
+use futures::{Future, Sink, Stream};
 use futures_cpupool::CpuPool;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags};
 use kvproto::diagnosticspb::{
     Diagnostics, SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse,
     ServerInfoType,
 };
-use tokio_timer::Delay;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 
 use crate::server::{Error, Result};
 
@@ -34,22 +34,33 @@ impl Diagnostics for Service {
         sink: ServerStreamingSink<SearchLogResponse>,
     ) {
         let log_file = self.log_file.to_owned();
-        let f = self
+        let stream = self
             .pool
             .spawn_fn(move || log::search(log_file, req))
-            .then(|r| match r {
-                Ok(resp) => Ok((resp, WriteFlags::default().buffer_hint(true))),
-                Err(e) => {
-                    error!("search log error"; "error" => ?e);
-                    Err(grpcio::Error::RpcFailure(RpcStatus::new(
-                        RpcStatusCode::UNKNOWN,
-                        Some(format!("{:?}", e)),
-                    )))
-                }
+            .map(|stream| {
+                stream
+                    .map(|resp| (resp, WriteFlags::default().buffer_hint(true)))
+                    .map_err(|e| {
+                        grpcio::Error::RpcFailure(RpcStatus::new(
+                            RpcStatusCode::UNKNOWN,
+                            Some(format!("{:?}", e)),
+                        ))
+                    })
+            })
+            .map_err(|e| {
+                grpcio::Error::RpcFailure(RpcStatus::new(
+                    RpcStatusCode::UNKNOWN,
+                    Some(format!("{:?}", e)),
+                ))
             });
-        let future = sink.send_all(f.into_stream()).map(|_s| ()).map_err(|e| {
-            error!("search log RPC error"; "error" => ?e);
-        });
+        let future = self.pool.spawn(
+            stream
+                .and_then(|stream| sink.send_all(stream))
+                .map(|_| ())
+                .map_err(|e| {
+                    error!("search log RPC error"; "error" => ?e);
+                }),
+        );
         ctx.spawn(future);
     }
 
@@ -59,18 +70,24 @@ impl Diagnostics for Service {
         req: ServerInfoRequest,
         sink: UnarySink<ServerInfoResponse>,
     ) {
-        let (load, when) = match req.get_tp() {
-            ServerInfoType::LoadInfo | ServerInfoType::All => {
-                let load = (sysinfo::NICLoad::snapshot(), sysinfo::IOLoad::snapshot());
-                let when = Instant::now() + Duration::from_millis(500);
-                (Some(load), when)
-            }
-            _ => (None, Instant::now()),
-        };
-
-        let collect = Delay::new(when)
-            .and_then(move |_| Ok(load))
-            .map_err(|e| box_err!("Unexpected delay error: {:?}", e))
+        let tp = req.get_tp();
+        let collect = self
+            .pool
+            .spawn_fn(move || {
+                let s = match tp {
+                    ServerInfoType::LoadInfo | ServerInfoType::All => {
+                        let load = (sysinfo::NICLoad::snapshot(), sysinfo::IOLoad::snapshot());
+                        let when = Instant::now() + Duration::from_millis(100);
+                        (Some(load), when)
+                    }
+                    _ => (None, Instant::now()),
+                };
+                Ok(s)
+            })
+            .and_then(|(load, when)| {
+                let timer = GLOBAL_TIMER_HANDLE.clone();
+                timer.delay(when).then(|_| Ok(load))
+            })
             .and_then(move |load| -> Result<ServerInfoResponse> {
                 let mut server_infos = Vec::new();
                 match req.get_tp() {
@@ -173,7 +190,7 @@ mod sys {
                     let mut pairs = vec![];
                     for (val, name) in parts.zip(&names) {
                         let mut pair = ServerInfoPair::default();
-                        pair.set_key(name.to_string());
+                        pair.set_key((*name).to_string());
                         pair.set_value(val.to_string());
                         pairs.push(pair);
                     }
@@ -754,15 +771,14 @@ mod log {
     use std::path::Path;
 
     use chrono::DateTime;
+    use futures::stream::{iter_ok, Stream};
+    use itertools::Itertools;
+    use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
     use nom::bytes::complete::{tag, take};
     use nom::character::complete::{alpha1, space0, space1};
     use nom::sequence::tuple;
     use nom::*;
     use rev_lines;
-
-    use futures::future::{err, ok};
-    use futures::Future;
-    use kvproto::diagnosticspb::{LogLevel, LogMessage, SearchLogRequest, SearchLogResponse};
 
     const INVALID_TIMESTAMP: i64 = -1;
     const TIMESTAMP_LENGTH: usize = 30;
@@ -1004,38 +1020,41 @@ mod log {
         Ok((file_start_time, file_end_time))
     }
 
+    // Batch size of the log streaming
+    const LOG_ITEM_BATCH_SIZE: usize = 256;
+
+    fn bacth_log_item(item: LogIterator) -> impl Stream<Item = SearchLogResponse, Error = ()> {
+        iter_ok(item.batching(|iter| {
+            let batch = iter.take(LOG_ITEM_BATCH_SIZE).collect_vec();
+            if batch.is_empty() {
+                None
+            } else {
+                let mut resp = SearchLogResponse::default();
+                resp.set_messages(batch.into());
+                Some(resp)
+            }
+        }))
+    }
+
     pub fn search<P: AsRef<Path>>(
         log_file: P,
         mut req: SearchLogRequest,
-    ) -> impl Future<Item = SearchLogResponse, Error = Error> {
+    ) -> Result<impl Stream<Item = SearchLogResponse, Error = ()>, Error> {
         let begin_time = req.get_start_time();
         let end_time = req.get_end_time();
         let levels = req.take_levels();
         let mut patterns = vec![];
         for pattern in req.take_patterns().iter() {
-            let r = match regex::Regex::new(pattern) {
-                Ok(r) => r,
-                Err(e) => {
-                    return err(Error::InvalidRequest(format!(
-                        "illegal regular expression: {:?}",
-                        e
-                    )))
-                }
-            };
-            patterns.push(r);
+            let pattern = regex::Regex::new(pattern).map_err(|e| {
+                Error::InvalidRequest(format!("illegal regular expression: {:?}", e))
+            })?;
+            patterns.push(pattern);
         }
-
         let level_flag = levels
             .into_iter()
             .fold(0, |acc, x| acc | (1 << (x as usize)));
-        let iter = match LogIterator::new(log_file, begin_time, end_time, level_flag, patterns) {
-            Ok(iter) => iter,
-            Err(e) => return err(e),
-        };
-
-        let mut resp = SearchLogResponse::default();
-        resp.set_messages(iter.collect::<Vec<LogMessage>>().into());
-        ok(resp)
+        let item = LogIterator::new(log_file, begin_time, end_time, level_flag, patterns)?;
+        Ok(bacth_log_item(item))
     }
 
     #[cfg(test)]
@@ -1407,11 +1426,15 @@ mod log {
                 .collect::<Vec<i64>>();
             assert_eq!(
                 search(log_file, req)
-                    .wait()
                     .unwrap()
-                    .take_messages()
-                    .iter()
-                    .map(|m| m.get_time())
+                    .wait()
+                    .map(|x| x.unwrap())
+                    .collect::<Vec<SearchLogResponse>>()
+                    .into_iter()
+                    .map(|mut resp| resp.take_messages().into_iter())
+                    .into_iter()
+                    .flatten()
+                    .map(|msg| msg.get_time())
                     .collect::<Vec<i64>>(),
                 expected
             );

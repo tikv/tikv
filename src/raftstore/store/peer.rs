@@ -358,7 +358,7 @@ impl Peer {
 
         let tag = format!("[region {}] {}", region.get_id(), peer.get_id());
 
-        let ps = PeerStorage::new(engines.clone(), region, sched, peer.get_id(), tag.clone())?;
+        let ps = PeerStorage::new(engines, region, sched, peer.get_id(), tag.clone())?;
 
         let applied_index = ps.applied_index();
 
@@ -826,7 +826,11 @@ impl Peer {
         // Here we hold up MsgReadIndex. If current peer has valid lease, then we could handle the
         // request directly, rather than send a heartbeat to check quorum.
         let msg_type = m.get_msg_type();
-        if msg_type == MessageType::MsgReadIndex {
+        let committed = self.raft_group.raft.raft_log.committed;
+        let expected_term = self.raft_group.raft.raft_log.term(committed).unwrap_or(0);
+        if msg_type == MessageType::MsgReadIndex && expected_term == self.raft_group.raft.term {
+            // If the leader hasn't committed any entries in its term, it can't response read only
+            // requests. Please also take a look at raft-rs.
             if let LeaseState::Valid = self.inspect_lease() {
                 let mut resp = eraftpb::Message::default();
                 resp.set_msg_type(MessageType::MsgReadIndexResp);
@@ -1239,6 +1243,13 @@ impl Peer {
             .raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
+            // Generating snapshot task won't set ready for raft group.
+            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+                self.pending_request_snapshot_count
+                    .fetch_add(1, Ordering::SeqCst);
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+            }
             return None;
         }
 
@@ -1860,7 +1871,9 @@ impl Peer {
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
             }
-            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => unimplemented!(),
+            ConfChangeType::BeginMembershipChange | ConfChangeType::FinalizeMembershipChange => {
+                unimplemented!()
+            }
         }
         let healthy = self.count_healthy_node(progress.voters());
         let quorum_after_change = raft::majority(progress.voter_ids().len());
@@ -2613,7 +2626,7 @@ impl RequestInspector for Peer {
 pub struct ReadExecutor<E: KvEngine> {
     check_epoch: bool,
     engine: E,
-    snapshot: Option<<E::Snapshot as Snapshot>::SyncSnapshot>,
+    snapshot: Option<<E::Snapshot as Snapshot<E>>::SyncSnapshot>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
 }
@@ -3004,7 +3017,7 @@ mod tests {
         let mut put = raft_cmdpb::Request::default();
         put.set_cmd_type(CmdType::Put);
         req.set_requests(vec![snap, put].into());
-        err_table.push(req.clone());
+        err_table.push(req);
 
         for req in err_table {
             let mut inspector = DummyInspector {

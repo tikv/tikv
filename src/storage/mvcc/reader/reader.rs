@@ -3,8 +3,8 @@
 use crate::raftstore::coprocessor::properties::MvccProperties;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use engine::IterOption;
-use engine::{CF_LOCK, CF_WRITE};
+use engine::rocks::TablePropertiesCollection;
+use engine::{IterOption, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, Value, Write, WriteRef, WriteType};
 
@@ -366,63 +366,75 @@ impl<S: Snapshot> MvccReader<S> {
         Ok(v)
     }
 
-    // Returns true if it needs gc.
-    // This is for optimization purpose, does not mean to be accurate.
     pub fn need_gc(&self, safe_point: TimeStamp, ratio_threshold: f64) -> bool {
-        // Always GC.
-        if ratio_threshold < 1.0 {
-            return true;
-        }
-
-        let props = match self.get_mvcc_properties(safe_point) {
-            Some(v) => v,
-            None => return true,
+        let prop = match self.snapshot.get_properties_cf(CF_WRITE) {
+            Ok(v) => v,
+            Err(_) => return true,
         };
 
-        // No data older than safe_point to GC.
-        if props.min_ts > safe_point {
-            return false;
-        }
+        check_need_gc(safe_point, ratio_threshold, prop)
+    }
+}
 
-        // Note: Since the properties are file-based, it can be false positive.
-        // For example, multiple files can have a different version of the same row.
-
-        // A lot of MVCC versions to GC.
-        if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
-            return true;
-        }
-        // A lot of non-effective MVCC versions to GC.
-        if props.num_versions as f64 > props.num_puts as f64 * ratio_threshold {
-            return true;
-        }
-
-        // A lot of MVCC versions of a single row to GC.
-        props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
+// Returns true if it needs gc.
+// This is for optimization purpose, does not mean to be accurate.
+pub fn check_need_gc(
+    safe_point: TimeStamp,
+    ratio_threshold: f64,
+    write_properties: TablePropertiesCollection,
+) -> bool {
+    // Always GC.
+    if ratio_threshold < 1.0 {
+        return true;
     }
 
-    fn get_mvcc_properties(&self, safe_point: TimeStamp) -> Option<MvccProperties> {
-        let collection = match self.snapshot.get_properties_cf(CF_WRITE) {
+    let props = match get_mvcc_properties(safe_point, write_properties) {
+        Some(v) => v,
+        None => return true,
+    };
+
+    // No data older than safe_point to GC.
+    if props.min_ts > safe_point {
+        return false;
+    }
+
+    // Note: Since the properties are file-based, it can be false positive.
+    // For example, multiple files can have a different version of the same row.
+
+    // A lot of MVCC versions to GC.
+    if props.num_versions as f64 > props.num_rows as f64 * ratio_threshold {
+        return true;
+    }
+    // A lot of non-effective MVCC versions to GC.
+    if props.num_versions as f64 > props.num_puts as f64 * ratio_threshold {
+        return true;
+    }
+
+    // A lot of MVCC versions of a single row to GC.
+    props.max_row_versions > GC_MAX_ROW_VERSIONS_THRESHOLD
+}
+
+fn get_mvcc_properties(
+    safe_point: TimeStamp,
+    collection: TablePropertiesCollection,
+) -> Option<MvccProperties> {
+    if collection.is_empty() {
+        return None;
+    }
+    // Aggregate MVCC properties.
+    let mut props = MvccProperties::new();
+    for (_, v) in &*collection {
+        let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
             Ok(v) => v,
             Err(_) => return None,
         };
-        if collection.is_empty() {
-            return None;
+        // Filter out properties after safe_point.
+        if mvcc.min_ts > safe_point {
+            continue;
         }
-        // Aggregate MVCC properties.
-        let mut props = MvccProperties::new();
-        for (_, v) in &*collection {
-            let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
-                Ok(v) => v,
-                Err(_) => return None,
-            };
-            // Filter out properties after safe_point.
-            if mvcc.min_ts > safe_point {
-                continue;
-            }
-            props.add(&mvcc);
-        }
-        Some(props)
+        props.add(&mvcc);
     }
+    Some(props)
 }
 
 #[cfg(test)]
@@ -433,7 +445,6 @@ mod tests {
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use crate::storage::Options;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
     use engine::rocks::{Writable, WriteBatch, DB};
@@ -499,7 +510,8 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            txn.prewrite(m, pk, &Options::default()).unwrap();
+            txn.prewrite(m, pk, false, 0, 0, TimeStamp::default())
+                .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -512,8 +524,16 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            let options = Options::default();
-            txn.pessimistic_prewrite(m, pk, true, &options).unwrap();
+            txn.pessimistic_prewrite(
+                m,
+                pk,
+                true,
+                0,
+                TimeStamp::default(),
+                0,
+                TimeStamp::default(),
+            )
+            .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -527,9 +547,7 @@ mod tests {
             let snap =
                 RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts.into(), true);
-            let mut options = Options::default();
-            options.for_update_ts = for_update_ts.into();
-            txn.acquire_pessimistic_lock(k, pk, false, &options)
+            txn.acquire_pessimistic_lock(k, pk, false, 0, for_update_ts.into())
                 .unwrap();
             self.write(txn.into_modifies());
         }
@@ -650,11 +668,14 @@ mod tests {
         safe_point: impl Into<TimeStamp>,
         need_gc: bool,
     ) -> Option<MvccProperties> {
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
         let reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let safe_point = safe_point.into();
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
-        reader.get_mvcc_properties(safe_point)
+        get_mvcc_properties(
+            safe_point,
+            reader.snapshot.get_properties_cf(CF_WRITE).unwrap(),
+        )
     }
 
     #[test]
@@ -705,7 +726,7 @@ mod tests {
         engine.put(&[12], 11, 12);
         engine.flush();
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
 
         let tests = vec![
             // set nothing.
@@ -736,16 +757,16 @@ mod tests {
 
             for (i, expect_ts) in res.iter().enumerate() {
                 if i == 0 {
-                    assert_eq!(iter.seek_to_first(), true);
+                    assert_eq!(iter.seek_to_first().unwrap(), true);
                 } else {
-                    assert_eq!(iter.next(), true);
+                    assert_eq!(iter.next().unwrap(), true);
                 }
 
                 let ts = Key::decode_ts_from(iter.key()).unwrap();
                 assert_eq!(ts.into_inner(), *expect_ts);
             }
 
-            assert_eq!(iter.next(), false);
+            assert_eq!(iter.next().unwrap(), false);
         }
     }
 
@@ -855,7 +876,7 @@ mod tests {
         engine.prewrite_pessimistic_lock(m, k, 45);
         engine.commit(k, 45, 50);
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         // Let's assume `50_45 PUT` means a commit version with start ts is 45 and commit ts
@@ -933,7 +954,7 @@ mod tests {
         engine.prewrite_pessimistic_lock(m, k, 1);
         engine.commit(k, 1, 4);
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 2.into()).unwrap().unwrap();
         assert_eq!(commit_ts, 3.into());
@@ -1096,7 +1117,7 @@ mod tests {
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.prewrite(m, k, 24);
 
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
@@ -1192,7 +1213,7 @@ mod tests {
 
         // Pessimistic locks
         engine.acquire_pessimistic_lock(Key::from_raw(k4), k4, 9, 9);
-        let snap = RegionSnapshot::<RocksEngine>::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, region);
         let mut reader = MvccReader::new(snap, None, false, IsolationLevel::Si);
         // Pessimistic locks don't block any read operation
         assert!(reader.check_lock(&Key::from_raw(k4), 10.into()).is_ok());
