@@ -50,16 +50,16 @@ use crate::raftstore::store::peer::{
 };
 use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::raftstore::store::transport::Transport;
-use crate::raftstore::store::util::KeysInfoFormatter;
+use crate::raftstore::store::util::{KeysInfoFormatter, LeaseState};
 use crate::raftstore::store::worker::{
     CleanupSSTTask, CleanupTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask,
     SplitCheckTask,
 };
-use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
+use crate::raftstore::store::{PdTask, RequestInspector};
 use keys::{self, enc_end_key, enc_start_key};
 
 pub struct DestroyPeerJob {
@@ -797,8 +797,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.fsm.has_ready = true;
         }
 
-        // Send a read index to renew heartbeat
-        if self.fsm.peer.is_leader() {
+        // If lease expired, we will send a noop read index to renew lease.
+        if self.fsm.peer.is_leader() && LeaseState::Expired == self.fsm.peer.inspect_lease() {
             let last_pending_read_count = self.fsm.peer.raft_group.raft.pending_read_count();
             let last_ready_read_count = self.fsm.peer.raft_group.raft.ready_read_count();
 
@@ -814,7 +814,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 if self.ctx.current_time.is_none() {
                     self.ctx.current_time = Some(monotonic_raw_now());
                 }
-                let read_proposal = ReadIndexRequest::heartbeat(id, self.ctx.current_time.unwrap());
+                let read_proposal = ReadIndexRequest::noop(id, self.ctx.current_time.unwrap());
                 self.fsm.peer.pending_reads.reads.push_back(read_proposal);
             }
         }

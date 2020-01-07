@@ -92,11 +92,11 @@ impl ReadIndexRequest {
         }
     }
 
-    pub fn heartbeat(id: Uuid, renew_lease_time: Timespec) -> Self {
+    pub fn noop(id: Uuid, renew_lease_time: Timespec) -> Self {
         RAFT_READ_INDEX_PENDING_COUNT.inc();
         ReadIndexRequest {
             id,
-            cmds: MustConsumeVec::with_capacity("heartbeat_read_index", 1),
+            cmds: MustConsumeVec::new("noop"),
             renew_lease_time,
             read_index: None,
         }
