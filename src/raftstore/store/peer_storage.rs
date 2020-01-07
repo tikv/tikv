@@ -1972,6 +1972,7 @@ mod tests {
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
+        let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
             s.engines.clone(),
             mgr,
@@ -1979,6 +1980,7 @@ mod tests {
             true,
             Duration::from_secs(0),
             Arc::new(CoprocessorHost::default()),
+            router,
         );
         worker.start(runner).unwrap();
         let snap = s.snapshot(0);
@@ -2296,6 +2298,7 @@ mod tests {
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
+        let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
             s1.engines.clone(),
             mgr,
@@ -2303,6 +2306,7 @@ mod tests {
             true,
             Duration::from_secs(0),
             Arc::new(CoprocessorHost::default()),
+            router,
         );
         worker.start(runner).unwrap();
         assert!(s1.snapshot(0).is_err());
