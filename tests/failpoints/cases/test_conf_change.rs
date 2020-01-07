@@ -1,12 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+
 use fail;
 use futures::Future;
 use pd_client::PdClient;
-use raft::eraftpb::ConfChangeType;
-use std::thread;
-use std::time::Duration;
+use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
+use tikv_util::config::ReadableDuration;
 use tikv_util::HandyRwLock;
 
 #[test]
@@ -203,4 +206,59 @@ fn test_stale_peer_cache() {
     cluster.must_transfer_leader(1, new_peer(1, 1));
     fail::cfg("stale_peer_cache_2", "return").unwrap();
     cluster.must_put(b"k2", b"v2");
+}
+
+// The test is for this situation:
+// suppose there are 3 peers (1, 2, and 3) in a Raft group, and then
+// 1. propose to add peer 4 on the current leader 1;
+// 2. leader 1 thinks 3 is pending, and prepares a snapshot to peer 3;
+// 3. leadership is transfered to peer 2, and peer 2 sends append entries to 3;
+// 4. the snapshot reaches peer 3, and peer 3 restores it;
+// 5. peer 3 handles apply entries result, could find a redundant confchange.
+#[test]
+fn test_redundant_conf_change_by_snapshot() {
+    let _guard = crate::setup();
+
+    let mut cluster = new_node_cluster(0, 4);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
+    cluster.cfg.raft_store.merge_max_log_gap = 4;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    // cluster.cfg.raft_store.hibernate_regions = false;
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    // Add voter 2 and learner 3.
+    cluster.run_conf_change();
+    pd_client.must_add_peer(1, new_peer(2, 2));
+    pd_client.must_add_peer(1, new_learner_peer(3, 3));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    fail::cfg("apply_on_conf_change_3_1", "pause").unwrap();
+    cluster.pd_client.must_add_peer(1, new_peer(4, 4));
+
+    let filter = Box::new(
+        RegionPacketFilter::new(1, 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    );
+    cluster.sim.wl().add_recv_filter(3, filter);
+
+    // Transfer leader to peer 2, and append more entries to compact raft logs.
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+    sleep_ms(50);
+
+    // Clear filters on peer 3, so it can receive and apply a snapshot.
+    cluster.sim.wl().clear_recv_filters(3);
+
+    // Unpause the fail point, so peer 3 can apply the redundant conf change result.
+    sleep_ms(100);
+    fail::cfg("apply_on_conf_change_3_1", "off").unwrap();
+
+    // Wait for any panics.
+    sleep_ms(100);
+    fail::remove("apply_on_conf_change_3_1");
 }

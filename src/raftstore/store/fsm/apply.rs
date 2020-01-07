@@ -141,6 +141,7 @@ impl PendingCmdQueue {
 
 #[derive(Default, Debug)]
 pub struct ChangePeer {
+    pub index: u64,
     pub conf_change: ConfChange,
     pub peer: PeerMeta,
     pub region: Region,
@@ -928,7 +929,7 @@ impl ApplyDelegate {
 
         ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.kv_kv_wb_mut().set_save_point();
-        let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
+        let (resp, exec_result) = match self.exec_raft_cmd(ctx, req, index) {
             Ok(a) => {
                 ctx.kv_kv_wb_mut().pop_save_point().unwrap();
                 a
@@ -1029,13 +1030,14 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         req: RaftCmdRequest,
+        index: u64,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         // Include region for epoch not match after merge may cause key not in range.
         let include_region =
             req.get_header().get_region_epoch().get_version() >= self.last_merge_version;
         check_region_epoch(&req, &self.region, include_region)?;
         if req.has_admin_request() {
-            self.exec_admin_cmd(ctx, &req)
+            self.exec_admin_cmd(ctx, &req, index)
         } else {
             self.exec_write_cmd(ctx, &req)
         }
@@ -1045,6 +1047,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         req: &RaftCmdRequest,
+        index: u64,
     ) -> Result<(RaftCmdResponse, ApplyResult)> {
         let request = req.get_admin_request();
         let cmd_type = request.get_cmd_type();
@@ -1060,7 +1063,7 @@ impl ApplyDelegate {
         }
 
         let (mut response, exec_result) = match cmd_type {
-            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request),
+            AdminCmdType::ChangePeer => self.exec_change_peer(ctx, request, index),
             AdminCmdType::Split => self.exec_split(ctx, request),
             AdminCmdType::BatchSplit => self.exec_batch_split(ctx, request),
             AdminCmdType::CompactLog => self.exec_compact_log(ctx, request),
@@ -1364,6 +1367,7 @@ impl ApplyDelegate {
         &mut self,
         ctx: &mut ApplyContext,
         request: &AdminRequest,
+        index: u64,
     ) -> Result<(AdminResponse, ApplyResult)> {
         let request = request.get_change_peer();
         let peer = request.get_peer();
@@ -1374,6 +1378,11 @@ impl ApplyDelegate {
         fail_point!(
             "apply_on_conf_change_1_3_1",
             (self.id == 1 || self.id == 3) && self.region_id() == 1,
+            |_| panic!("should not use return")
+        );
+        fail_point!(
+            "apply_on_conf_change_3_1",
+            self.id == 3 && self.region_id() == 1,
             |_| panic!("should not use return")
         );
         fail_point!(
@@ -1550,6 +1559,7 @@ impl ApplyDelegate {
         Ok((
             resp,
             ApplyResult::Res(ExecResult::ChangePeer(ChangePeer {
+                index,
                 conf_change: Default::default(),
                 peer: peer.clone(),
                 region,

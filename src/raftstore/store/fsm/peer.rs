@@ -1443,12 +1443,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
+        if cp.index < self.fsm.peer.raft_group.raft.raft_log.first_index() {
+            // Please take a look at test case test_redundant_conf_change_by_snapshot.
+            return;
+        }
+
         let change_type = cp.conf_change.get_change_type();
-        if let Err(e) = self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
-            panic!(
+        match self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change) {
+            Ok(_) => {}
+            Err(raft::Error::NotExists(_, _)) | Err(raft::Error::Exists(_, _)) => {}
+            Err(e) => panic!(
                 "{} apply conf change {:?} fails: {:?}",
                 self.fsm.peer.tag, cp, e
-            );
+            ),
         }
         if cp.conf_change.get_node_id() == raft::INVALID_ID {
             // Apply failed, skip.
