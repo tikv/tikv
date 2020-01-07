@@ -26,6 +26,7 @@ use engine::rocks;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use keys;
 use kvproto::debugpb::{Db as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
@@ -35,11 +36,14 @@ use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use tikv::config::TiKvConfig;
-use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER};
+use tikv::raftstore::router::ServerRaftStoreRouter;
+use tikv::raftstore::store::INIT_EPOCH_CONF_VER;
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv::storage::Key;
+use tikv::server::RaftKv;
+use tikv::storage::kv::Engine;
 use tikv_util::security::{SecurityConfig, SecurityManager};
 use tikv_util::{escape, unescape};
+use txn_types::Key;
 
 const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
@@ -87,11 +91,10 @@ fn new_debug_executor(
             let raft_db =
                 rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
-            Box::new(Debugger::new(Engines::new(
-                Arc::new(kv_db),
-                Arc::new(raft_db),
-                cache.is_some(),
-            ))) as Box<dyn DebugExecutor>
+            Box::new(Debugger::<RaftKv<ServerRaftStoreRouter>>::new(
+                Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),
+                None,
+            )) as Box<dyn DebugExecutor>
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
         _ => unreachable!(),
@@ -102,7 +105,9 @@ fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient {
     let env = Arc::new(Environment::new(1));
     let cb = ChannelBuilder::new(env)
         .max_receive_message_len(1 << 30) // 1G.
-        .max_send_message_len(1 << 30);
+        .max_send_message_len(1 << 30)
+        .keepalive_time(Duration::from_secs(10))
+        .keepalive_timeout(Duration::from_secs(3));
 
     let channel = mgr.connect(cb, host);
     DebugClient::new(channel)
@@ -765,7 +770,7 @@ impl DebugExecutor for DebugClient {
     }
 }
 
-impl DebugExecutor for Debugger {
+impl<E: Engine> DebugExecutor for Debugger<E> {
     fn check_local_mode(&self) {}
 
     fn get_all_meta_regions(&self) -> Vec<u64> {
@@ -2190,7 +2195,7 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
     req.mut_context().set_region_id(region_id);
     req.mut_context()
         .set_region_epoch(region.get_region_epoch().clone());
-    req.set_split_key(key.clone());
+    req.set_split_key(key);
 
     let resp = tikv_client
         .split_region(&req)
@@ -2229,7 +2234,7 @@ fn compact_whole_cluster(
         let mgr = Arc::clone(&mgr);
         let addr = s.address.clone();
         let (from, to) = (from.clone(), to.clone());
-        let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string().clone()).collect();
+        let cfs: Vec<String> = cfs.iter().map(|cf| (*cf).to_string()).collect();
         let h = thread::spawn(move || {
             let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
             for cf in cfs {

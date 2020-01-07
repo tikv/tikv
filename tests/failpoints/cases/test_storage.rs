@@ -11,8 +11,12 @@ use kvproto::tikvpb::TikvClient;
 
 use test_raftstore::{must_get_equal, must_get_none, new_server_cluster};
 use tikv::storage;
+use tikv::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
+use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::*;
 use tikv_util::HandyRwLock;
+use txn_types::Key;
+use txn_types::*;
 
 #[test]
 fn test_scheduler_leader_change_twice() {
@@ -35,12 +39,15 @@ fn test_scheduler_leader_change_twice() {
     let (prewrite_tx, prewrite_rx) = channel();
     fail::cfg(snapshot_fp, "pause").unwrap();
     storage0
-        .async_prewrite(
+        .prewrite(
             ctx0,
             vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
             b"k".to_vec(),
-            10,
-            Options::default(),
+            10.into(),
+            0,
+            false,
+            0,
+            TimeStamp::default(),
             Box::new(move |res: storage::Result<_>| {
                 prewrite_tx.send(res).unwrap();
             }),
@@ -54,8 +61,10 @@ fn test_scheduler_leader_change_twice() {
     fail::remove(snapshot_fp);
 
     match prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
-        Err(storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e))))
-        | Err(storage::Error::Engine(kv::Error::Request(ref e))) => {
+        Err(Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Engine(KvError(
+            box KvErrorInner::Request(ref e),
+        ))))))
+        | Err(Error(box ErrorInner::Engine(KvError(box KvErrorInner::Request(ref e))))) => {
             assert!(e.has_stale_command(), "{:?}", e);
         }
         res => {

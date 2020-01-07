@@ -58,7 +58,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn locate_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn locate_2_args_utf8(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         Ok(Self::find_str(&s.to_lowercase(), &substr.to_lowercase())
@@ -67,7 +67,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn locate_3_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn locate_3_args_utf8(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         let pos = try_opt!(self.children[2].eval_int(ctx, row));
@@ -87,11 +87,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn locate_binary_2_args(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-    ) -> Result<Option<i64>> {
+    pub fn locate_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
         Ok(twoway::find_bytes(&s, &substr)
@@ -100,11 +96,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn locate_binary_3_args(
-        &self,
-        ctx: &mut EvalContext,
-        row: &[Datum],
-    ) -> Result<Option<i64>> {
+    pub fn locate_3_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
         let pos = try_opt!(self.children[2].eval_int(ctx, row));
@@ -134,13 +126,15 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn char_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        if self.children[0].field_type().is_binary_string_like() {
-            let input = try_opt!(self.children[0].eval_string(ctx, row));
-            return Ok(Some(input.len() as i64));
-        }
+    pub fn char_length_utf8(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         Ok(Some(input.chars().count() as i64))
+    }
+
+    #[inline]
+    pub fn char_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        Ok(Some(input.len() as i64))
     }
 
     #[inline]
@@ -151,6 +145,16 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let i = try_opt!(self.children[0].eval_int(ctx, row));
         Ok(Some(Cow::Owned(format!("{:b}", i).into_bytes())))
+    }
+
+    #[inline]
+    pub fn oct_int<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let i = try_opt!(self.children[0].eval_int(ctx, row));
+        Ok(Some(Cow::Owned(format!("{:o}", i).into_bytes())))
     }
 
     #[inline]
@@ -173,19 +177,25 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let mut output_sep: Vec<u8> = Vec::new();
-        let mut output: Vec<u8> = Vec::new();
-        for (index, expr) in self.children.iter().enumerate() {
-            let input = try_opt!(expr.eval_string(ctx, row));
-            match index {
-                0 => output_sep = input.to_vec(),
-                1 => output = input.to_vec(),
-                _ => {
-                    output.extend_from_slice(&output_sep);
-                    output.extend_from_slice(&input);
+        use crate::expr::Expression;
+        fn collect_valid_strs<'a, 'b: 'a>(
+            exps: &'b [Expression],
+            ctx: &mut EvalContext,
+            row: &'a [Datum],
+        ) -> Result<Vec<Cow<'a, [u8]>>> {
+            let mut result = Vec::new();
+            for exp in exps {
+                let x = exp.eval_string(ctx, row)?;
+                if let Some(s) = x {
+                    result.push(s);
                 }
             }
+            Ok(result)
         }
+
+        let sep = try_opt!(self.children[0].eval_string(ctx, row));
+        let strs = collect_valid_strs(&self.children[1..], ctx, row)?;
+        let output = strs.as_slice().join(sep.as_ref());
         Ok(Some(Cow::Owned(output)))
     }
 
@@ -244,7 +254,7 @@ impl ScalarFunc {
         )))
     }
 
-    pub fn left<'a, 'b: 'a>(
+    pub fn left_utf8<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -263,7 +273,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn reverse<'a, 'b: 'a>(
+    pub fn reverse_utf8<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -275,7 +285,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn reverse_binary<'a, 'b: 'a>(
+    pub fn reverse<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -285,7 +295,7 @@ impl ScalarFunc {
         Ok(Some(s))
     }
 
-    pub fn right<'a, 'b: 'a>(
+    pub fn right_utf8<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -546,7 +556,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn substring_2_args<'a, 'b: 'a>(
+    pub fn substring_2_args_utf8<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -582,7 +592,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn substring_3_args<'a, 'b: 'a>(
+    pub fn substring_3_args_utf8<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -639,25 +649,25 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn substring_binary_2_args<'a, 'b: 'a>(
+    pub fn substring_2_args<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        self.substring_binary(ctx, row, false)
+        self.substring(ctx, row, false)
     }
 
     #[inline]
-    pub fn substring_binary_3_args<'a, 'b: 'a>(
+    pub fn substring_3_args<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        self.substring_binary(ctx, row, true)
+        self.substring(ctx, row, true)
     }
 
     #[inline]
-    fn substring_binary<'a, 'b: 'a>(
+    fn substring<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -724,7 +734,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn rpad<'a, 'b: 'a>(
+    pub fn rpad_utf8<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -755,7 +765,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn rpad_binary<'a, 'b: 'a>(
+    pub fn rpad<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -786,7 +796,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn lpad<'a, 'b: 'a>(
+    pub fn lpad_utf8<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -821,7 +831,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn lpad_binary<'a, 'b: 'a>(
+    pub fn lpad<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -856,7 +866,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn left_binary<'a, 'b: 'a>(
+    pub fn left<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -873,7 +883,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn right_binary<'a, 'b: 'a>(
+    pub fn right<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -890,7 +900,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn instr<'a, 'b: 'a>(
+    pub fn instr_utf8<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -903,7 +913,7 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn instr_binary<'a, 'b: 'a>(
+    pub fn instr<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
@@ -913,6 +923,56 @@ impl ScalarFunc {
         Ok(twoway::find_bytes(&s, &substr)
             .map(|i| 1 + i as i64)
             .or(Some(0)))
+    }
+
+    // See https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_quote
+    pub fn quote<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt_or!(
+            self.children[0].eval_string(ctx, row),
+            Some(Cow::Borrowed(b"NULL"))
+        );
+        let mut result = Vec::<u8>::with_capacity(s.len() * 2 + 2);
+        result.push(b'\'');
+        for byte in s.iter() {
+            if *byte == b'\'' || *byte == b'\\' {
+                result.push(b'\\');
+                result.push(*byte)
+            } else if *byte == b'\0' {
+                result.push(b'\\');
+                result.push(b'0')
+            } else if *byte == 26u8 {
+                result.push(b'\\');
+                result.push(b'Z');
+            } else {
+                result.push(*byte)
+            }
+        }
+        result.push(b'\'');
+        Ok(Some(Cow::Owned(result)))
+    }
+
+    // see https://dev.mysql.com/doc/refman/5.7/en/string-functions.html#function_ord
+    #[inline]
+    pub fn ord<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let size = bstr::decode_utf8(&s).1;
+        let bytes = &s[..size];
+
+        let mut result = 0;
+        let mut factor = 1;
+        for b in bytes.iter().rev() {
+            result += i64::from(*b) * factor;
+            factor *= 256;
+        }
+        Ok(Some(result))
     }
 }
 
@@ -1062,7 +1122,7 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 mod tests {
     use super::{encoded_size, TrimDirection};
     use crate::codec::mysql::charset::CHARSET_BIN;
-    use std::{f64, i64};
+    use std::{f64, i64, str};
     use tidb_query_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use tipb::{Expr, ScalarFuncSig};
 
@@ -1088,7 +1148,7 @@ mod tests {
         for (input_str, exp) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::Length, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "length('{:?}')", input_str);
@@ -1097,14 +1157,14 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::Length, &[input]);
-        let op = Expression::build(&ctx, op).unwrap();
+        let op = Expression::build(&mut ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "length(NULL)");
     }
 
     #[test]
-    fn test_locate_2_args() {
+    fn test_locate_2_args_utf8() {
         let cases = vec![
             ("bar", "foobarbar", 4i64),
             ("xbar", "foobar", 0i64),
@@ -1120,7 +1180,7 @@ mod tests {
         for (substr, s, exp) in cases {
             let substr = Datum::Bytes(substr.as_bytes().to_vec());
             let s = Datum::Bytes(s.as_bytes().to_vec());
-            let got = eval_func(ScalarFuncSig::Locate2Args, &[substr, s]).unwrap();
+            let got = eval_func(ScalarFuncSig::Locate2ArgsUtf8, &[substr, s]).unwrap();
             assert_eq!(got, Datum::I64(exp));
         }
 
@@ -1132,13 +1192,13 @@ mod tests {
             (Datum::Null, Datum::Null, Datum::Null),
         ];
         for (substr, s, exp) in null_cases {
-            let got = eval_func(ScalarFuncSig::Locate2Args, &[substr, s]).unwrap();
+            let got = eval_func(ScalarFuncSig::Locate2ArgsUtf8, &[substr, s]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_locate_binary_2_args() {
+    fn test_locate_2_args() {
         let cases = vec![
             ("", "foobArbar", 1),
             ("", "", 1),
@@ -1155,7 +1215,7 @@ mod tests {
         for (substr, s, exp) in cases {
             let substr = Datum::Bytes(substr.as_bytes().to_vec());
             let s = Datum::Bytes(s.as_bytes().to_vec());
-            let got = eval_func(ScalarFuncSig::LocateBinary2Args, &[substr, s]).unwrap();
+            let got = eval_func(ScalarFuncSig::Locate2Args, &[substr, s]).unwrap();
             assert_eq!(got, Datum::I64(exp))
         }
 
@@ -1166,13 +1226,13 @@ mod tests {
         ];
 
         for (substr, s, exp) in null_cases {
-            let got = eval_func(ScalarFuncSig::LocateBinary2Args, &[substr, s]).unwrap();
+            let got = eval_func(ScalarFuncSig::Locate2Args, &[substr, s]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_locate_3_args() {
+    fn test_locate_3_args_utf8() {
         let cases = vec![
             ("bar", "foobarbar", 5, 7),
             ("xbar", "foobar", 1, 0),
@@ -1194,7 +1254,7 @@ mod tests {
             let substr = Datum::Bytes(substr.as_bytes().to_vec());
             let s = Datum::Bytes(s.as_bytes().to_vec());
             let pos = Datum::I64(pos);
-            let got = eval_func(ScalarFuncSig::Locate3Args, &[substr, s, pos]).unwrap();
+            let got = eval_func(ScalarFuncSig::Locate3ArgsUtf8, &[substr, s, pos]).unwrap();
             assert_eq!(got, Datum::I64(exp));
         }
 
@@ -1227,13 +1287,13 @@ mod tests {
         ];
 
         for (substr, s, pos, exp) in null_cases {
-            let got = eval_func(ScalarFuncSig::Locate3Args, &[substr, s, pos]).unwrap();
+            let got = eval_func(ScalarFuncSig::Locate3ArgsUtf8, &[substr, s, pos]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_locate_binary_3_args() {
+    fn test_locate_3_args() {
         let cases = vec![
             ("", "foobArbar", 0, 0),
             ("", "foobArbar", 1, 1),
@@ -1256,7 +1316,7 @@ mod tests {
             let substr = Datum::Bytes(substr.as_bytes().to_vec());
             let s = Datum::Bytes(s.as_bytes().to_vec());
             let pos = Datum::I64(pos);
-            let got = eval_func(ScalarFuncSig::LocateBinary3Args, &[substr, s, pos]).unwrap();
+            let got = eval_func(ScalarFuncSig::Locate3Args, &[substr, s, pos]).unwrap();
             assert_eq!(got, Datum::I64(exp))
         }
 
@@ -1277,7 +1337,7 @@ mod tests {
         ];
 
         for (substr, s, pos, exp) in null_cases {
-            let got = eval_func(ScalarFuncSig::LocateBinary3Args, &[substr, s, pos]).unwrap();
+            let got = eval_func(ScalarFuncSig::Locate3Args, &[substr, s, pos]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -1298,7 +1358,7 @@ mod tests {
         for (input_str, exp) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::BitLength, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "bit_length('{:?}')", input_str);
@@ -1307,7 +1367,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::BitLength, &[input]);
-        let op = Expression::build(&ctx, op).unwrap();
+        let op = Expression::build(&mut ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "bit_length(NULL)");
@@ -1352,7 +1412,43 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Bin, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_oct_int() {
+        let cases = vec![
+            (
+                Datum::I64(-1),
+                Datum::Bytes(b"1777777777777777777777".to_vec()),
+            ),
+            (Datum::I64(0), Datum::Bytes(b"0".to_vec())),
+            (Datum::I64(1), Datum::Bytes(b"1".to_vec())),
+            (Datum::I64(8), Datum::Bytes(b"10".to_vec())),
+            (Datum::I64(12), Datum::Bytes(b"14".to_vec())),
+            (Datum::I64(20), Datum::Bytes(b"24".to_vec())),
+            (Datum::I64(100), Datum::Bytes(b"144".to_vec())),
+            (Datum::I64(1024), Datum::Bytes(b"2000".to_vec())),
+            (Datum::I64(2048), Datum::Bytes(b"4000".to_vec())),
+            (
+                Datum::I64(i64::MAX),
+                Datum::Bytes(b"777777777777777777777".to_vec()),
+            ),
+            (
+                Datum::I64(i64::MIN),
+                Datum::Bytes(b"1000000000000000000000".to_vec()),
+            ),
+            (Datum::Null, Datum::Null),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::OctInt, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1380,7 +1476,7 @@ mod tests {
         for (input_str, exp) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::LTrim, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp.as_bytes().to_vec());
             assert_eq!(got, exp, "ltrim('{:?}')", input_str);
@@ -1389,7 +1485,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::LTrim, &[input]);
-        let op = Expression::build(&ctx, op).unwrap();
+        let op = Expression::build(&mut ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "ltrim(NULL)");
@@ -1417,7 +1513,7 @@ mod tests {
         for (input_str, exp) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::RTrim, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp.as_bytes().to_vec());
             assert_eq!(got, exp, "rtrim('{:?}')", input_str);
@@ -1426,14 +1522,14 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::RTrim, &[input]);
-        let op = Expression::build(&ctx, op).unwrap();
+        let op = Expression::build(&mut ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "rtrim(NULL)");
     }
 
     #[test]
-    fn test_reverse() {
+    fn test_reverse_utf8() {
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),
@@ -1464,15 +1560,15 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
-            let op = scalar_func_expr(ScalarFuncSig::Reverse, &[datum_expr(arg)]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = scalar_func_expr(ScalarFuncSig::ReverseUtf8, &[datum_expr(arg)]);
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_reverse_binary() {
+    fn test_reverse() {
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),
@@ -1495,15 +1591,15 @@ mod tests {
                 CHARSET_BIN.to_owned(),
                 Collation::Binary,
             );
-            let op = scalar_func_expr(ScalarFuncSig::ReverseBinary, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = scalar_func_expr(ScalarFuncSig::Reverse, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_left() {
+    fn test_left_utf8() {
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),
@@ -1548,15 +1644,15 @@ mod tests {
         for (arg1, arg2, exp) in cases {
             let arg1 = datum_expr(arg1);
             let arg2 = datum_expr(arg2);
-            let op = scalar_func_expr(ScalarFuncSig::Left, &[arg1, arg2]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = scalar_func_expr(ScalarFuncSig::LeftUtf8, &[arg1, arg2]);
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_right() {
+    fn test_right_utf8() {
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),
@@ -1600,8 +1696,8 @@ mod tests {
         for (arg1, arg2, exp) in cases {
             let arg1 = datum_expr(arg1);
             let arg2 = datum_expr(arg2);
-            let op = scalar_func_expr(ScalarFuncSig::Right, &[arg1, arg2]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = scalar_func_expr(ScalarFuncSig::RightUtf8, &[arg1, arg2]);
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1630,7 +1726,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Ascii, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1668,7 +1764,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Upper, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1710,7 +1806,7 @@ mod tests {
                 Collation::Binary,
             );
             let op = scalar_func_expr(ScalarFuncSig::Upper, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1748,7 +1844,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::Lower, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1789,7 +1885,7 @@ mod tests {
                 Collation::Binary,
             );
             let op = scalar_func_expr(ScalarFuncSig::Lower, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -1841,7 +1937,7 @@ mod tests {
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
             let expr = scalar_func_expr(ScalarFuncSig::Concat, &children);
-            let e = Expression::build(&ctx, expr).unwrap();
+            let e = Expression::build(&mut ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -1889,15 +1985,67 @@ mod tests {
                     Datum::Null,
                     Datum::Bytes(b"defg".to_vec()),
                 ],
+                Datum::Bytes(b"abc,defg".to_vec()),
+            ),
+            (
+                vec![Datum::Null, Datum::Bytes(b"abc".to_vec())],
                 Datum::Null,
             ),
-            (vec![Datum::Null], Datum::Null),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Null,
+                    Datum::Bytes(b"abc".to_vec()),
+                ],
+                Datum::Bytes(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Null,
+                ],
+                Datum::Bytes(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Bytes(b"".to_vec()),
+                    Datum::Bytes(b"abc".to_vec()),
+                ],
+                Datum::Bytes(b",abc".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b",".to_vec()),
+                    Datum::Null,
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Null,
+                    Datum::Null,
+                    Datum::Bytes(b"defg".to_vec()),
+                    Datum::Null,
+                ],
+                Datum::Bytes(b"abc,defg".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes("忠犬ハチ公".as_bytes().to_vec()),
+                    Datum::Bytes("CAFÉ".as_bytes().to_vec()),
+                    Datum::Bytes("数据库".as_bytes().to_vec()),
+                    Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+                ],
+                Datum::Bytes(
+                    "CAFÉ忠犬ハチ公数据库忠犬ハチ公قاعدة البيانات"
+                        .as_bytes()
+                        .to_vec(),
+                ),
+            ),
         ];
         let mut ctx = EvalContext::default();
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
             let expr = scalar_func_expr(ScalarFuncSig::ConcatWs, &children);
-            let e = Expression::build(&ctx, expr).unwrap();
+            let e = Expression::build(&mut ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
@@ -1983,15 +2131,14 @@ mod tests {
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
             let expr = scalar_func_expr(ScalarFuncSig::Replace, &children);
-            let e = Expression::build(&ctx, expr).unwrap();
+            let e = Expression::build(&mut ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
     }
 
     #[test]
-    fn test_char_length() {
-        // Test non-binary string case
+    fn test_char_length_utf8() {
         let cases = vec![
             (Datum::Bytes(b"HELLO".to_vec()), Datum::I64(5)),
             (Datum::Bytes(b"123".to_vec()), Datum::I64(3)),
@@ -2012,13 +2159,15 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (input, exp) in cases {
             let input = datum_expr(input);
-            let op = scalar_func_expr(ScalarFuncSig::CharLength, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = scalar_func_expr(ScalarFuncSig::CharLengthUtf8, &[input]);
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
+    }
 
-        // Test binary string case
+    #[test]
+    fn test_char_length() {
         let cases = vec![
             (Datum::Bytes(b"HELLO".to_vec()), Datum::I64(5)),
             (Datum::Bytes(b"123".to_vec()), Datum::I64(3)),
@@ -2046,7 +2195,7 @@ mod tests {
                 Collation::Binary,
             );
             let op = scalar_func_expr(ScalarFuncSig::CharLength, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -2067,7 +2216,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::HexIntArg, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -2091,7 +2240,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::HexStrArg, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -2122,7 +2271,7 @@ mod tests {
         for (input, exp) in cases {
             let input = datum_expr(input);
             let op = scalar_func_expr(ScalarFuncSig::UnHex, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
@@ -2206,7 +2355,7 @@ mod tests {
         for (args, exp) in cases {
             let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
             let op = scalar_func_expr(ScalarFuncSig::Elt, &children);
-            let e = Expression::build(&ctx, op).unwrap();
+            let e = Expression::build(&mut ctx, op).unwrap();
             let res = e.eval(&mut ctx, &args).unwrap();
             assert_eq!(res, exp);
         }
@@ -2244,7 +2393,7 @@ mod tests {
         for (args, exp) in cases {
             let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
             let op = scalar_func_expr(ScalarFuncSig::FieldInt, &children);
-            let e = Expression::build(&ctx, op).unwrap();
+            let e = Expression::build(&mut ctx, op).unwrap();
             let res = e.eval(&mut ctx, &args).unwrap();
             assert_eq!(res, exp);
         }
@@ -2290,7 +2439,7 @@ mod tests {
         for (args, exp) in cases {
             let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
             let op = scalar_func_expr(ScalarFuncSig::FieldReal, &children);
-            let e = Expression::build(&ctx, op).unwrap();
+            let e = Expression::build(&mut ctx, op).unwrap();
             let res = e.eval(&mut ctx, &args).unwrap();
             assert_eq!(res, exp);
         }
@@ -2361,7 +2510,7 @@ mod tests {
         for (args, exp) in cases {
             let children: Vec<Expr> = (0..args.len()).map(|id| col_expr(id as i64)).collect();
             let op = scalar_func_expr(ScalarFuncSig::FieldString, &children);
-            let e = Expression::build(&ctx, op).unwrap();
+            let e = Expression::build(&mut ctx, op).unwrap();
             let res = e.eval(&mut ctx, &args).unwrap();
             assert_eq!(res, exp);
         }
@@ -2641,7 +2790,7 @@ mod tests {
     }
 
     #[test]
-    fn test_substring_2_args() {
+    fn test_substring_2_args_utf8() {
         let tests = vec![
             ("中文a测试bb", 1, "中文a测试bb"),
             ("中文a测试bb", 2, "文a测试bb"),
@@ -2666,18 +2815,18 @@ mod tests {
         for (s, pos, exp) in tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
             let pos = Datum::I64(pos);
-            let got = eval_func(ScalarFuncSig::Substring2Args, &[s, pos]).unwrap();
+            let got = eval_func(ScalarFuncSig::Substring2ArgsUtf8, &[s, pos]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
         }
 
         let s = Datum::Bytes(b"Sakila".to_vec());
         let pos = Datum::U64(u64::max_value());
-        let got = eval_func(ScalarFuncSig::Substring2Args, &[s, pos]).unwrap();
+        let got = eval_func(ScalarFuncSig::Substring2ArgsUtf8, &[s, pos]).unwrap();
         assert_eq!(got, Datum::Bytes(b"".to_vec()));
     }
 
     #[test]
-    fn test_substring_3_args() {
+    fn test_substring_3_args_utf8() {
         let tests = vec![
             ("Quadratically", 5, 6, "ratica"),
             ("Sakila", -5, 3, "aki"),
@@ -2699,7 +2848,7 @@ mod tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
             let pos = Datum::I64(pos);
             let len = Datum::I64(len);
-            let got = eval_func(ScalarFuncSig::Substring3Args, &[s, pos, len]).unwrap();
+            let got = eval_func(ScalarFuncSig::Substring3ArgsUtf8, &[s, pos, len]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
         }
 
@@ -2725,13 +2874,13 @@ mod tests {
         ];
         for (s, pos, len, exp) in tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
-            let got = eval_func(ScalarFuncSig::Substring3Args, &[s, pos, len]).unwrap();
+            let got = eval_func(ScalarFuncSig::Substring3ArgsUtf8, &[s, pos, len]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
         }
     }
 
     #[test]
-    fn test_substring_binary_2_args() {
+    fn test_substring_2_args() {
         let tests = vec![
             ("中文a测试bb", 1, "中文a测试bb"),
             ("中文a测试", -3, "试"),
@@ -2751,7 +2900,7 @@ mod tests {
         for (s, pos, exp) in tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
             let pos = Datum::I64(pos);
-            let got = eval_func(ScalarFuncSig::SubstringBinary2Args, &[s, pos]).unwrap();
+            let got = eval_func(ScalarFuncSig::Substring2Args, &[s, pos]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
         }
 
@@ -2762,13 +2911,13 @@ mod tests {
         ];
         for (s, pos, exp) in corner_case_tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
-            let got = eval_func(ScalarFuncSig::SubstringBinary2Args, &[s, pos]).unwrap();
+            let got = eval_func(ScalarFuncSig::Substring2Args, &[s, pos]).unwrap();
             assert_eq!(got, Datum::Bytes(exp));
         }
     }
 
     #[test]
-    fn test_substring_binary_3_args() {
+    fn test_substring_3_args() {
         let tests = vec![
             ("Quadratically", 5, 6, "ratica"),
             ("Sakila", -5, 3, "aki"),
@@ -2791,7 +2940,7 @@ mod tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
             let pos = Datum::I64(pos);
             let len = Datum::I64(len);
-            let got = eval_func(ScalarFuncSig::SubstringBinary3Args, &[s, pos, len]).unwrap();
+            let got = eval_func(ScalarFuncSig::Substring3Args, &[s, pos, len]).unwrap();
             assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()));
         }
 
@@ -2813,7 +2962,7 @@ mod tests {
         ];
         for (s, pos, len, exp) in corner_case_tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
-            let got = eval_func(ScalarFuncSig::SubstringBinary3Args, &[s, pos, len]).unwrap();
+            let got = eval_func(ScalarFuncSig::Substring3Args, &[s, pos, len]).unwrap();
             assert_eq!(got, Datum::Bytes(exp));
         }
     }
@@ -2984,7 +3133,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rpad() {
+    fn test_rpad_utf8() {
         let mut cases = vec![
             (
                 Datum::Bytes("a多字节".as_bytes().to_vec()),
@@ -3026,13 +3175,13 @@ mod tests {
         cases.append(&mut common_rpad_cases());
 
         for (s, len, pad, exp) in cases {
-            let got = eval_func(ScalarFuncSig::Rpad, &[s, len, pad]).unwrap();
+            let got = eval_func(ScalarFuncSig::RpadUtf8, &[s, len, pad]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_rpad_binary() {
+    fn test_rpad() {
         let mut cases = vec![
             (
                 Datum::Bytes(b"\x61\x76\x5e".to_vec()),
@@ -3062,7 +3211,7 @@ mod tests {
         cases.append(&mut common_rpad_cases());
 
         for (s, len, pad, exp) in cases {
-            let got = eval_func(ScalarFuncSig::RpadBinary, &[s, len, pad]).unwrap();
+            let got = eval_func(ScalarFuncSig::Rpad, &[s, len, pad]).unwrap();
             assert_eq!(got, exp);
         }
     }
@@ -3121,7 +3270,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lpad() {
+    fn test_lpad_utf8() {
         let mut cases = vec![
             (
                 Datum::Bytes("a多字节".as_bytes().to_vec()),
@@ -3163,13 +3312,13 @@ mod tests {
         cases.append(&mut common_lpad_cases());
 
         for (s, len, pad, exp) in cases {
-            let got = eval_func(ScalarFuncSig::Lpad, &[s, len, pad]).unwrap();
+            let got = eval_func(ScalarFuncSig::LpadUtf8, &[s, len, pad]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_lpad_binary() {
+    fn test_lpad() {
         let mut cases = vec![
             (
                 Datum::Bytes(b"\x61\x76\x5e".to_vec()),
@@ -3199,13 +3348,13 @@ mod tests {
         cases.append(&mut common_lpad_cases());
 
         for (s, len, pad, exp) in cases {
-            let got = eval_func(ScalarFuncSig::LpadBinary, &[s, len, pad]).unwrap();
+            let got = eval_func(ScalarFuncSig::Lpad, &[s, len, pad]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_left_binary() {
+    fn test_left() {
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),
@@ -3245,13 +3394,13 @@ mod tests {
         ];
 
         for (input, length, exp) in cases {
-            let got = eval_func(ScalarFuncSig::LeftBinary, &[input, length]).unwrap();
+            let got = eval_func(ScalarFuncSig::Left, &[input, length]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_right_binary() {
+    fn test_right() {
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),
@@ -3291,13 +3440,13 @@ mod tests {
         ];
 
         for (input, length, exp) in cases {
-            let got = eval_func(ScalarFuncSig::RightBinary, &[input, length]).unwrap();
+            let got = eval_func(ScalarFuncSig::Right, &[input, length]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_instr() {
+    fn test_instr_utf8() {
         let cases: Vec<(&str, &str, i64)> = vec![
             ("a", "abcdefg", 1),
             ("0", "abcdefg", 0),
@@ -3321,7 +3470,7 @@ mod tests {
         for (substr, s, exp) in cases {
             let substr = Datum::Bytes(substr.as_bytes().to_vec());
             let s = Datum::Bytes(s.as_bytes().to_vec());
-            let got = eval_func(ScalarFuncSig::Instr, &[s, substr]).unwrap();
+            let got = eval_func(ScalarFuncSig::InstrUtf8, &[s, substr]).unwrap();
             assert_eq!(got, Datum::I64(exp))
         }
 
@@ -3333,13 +3482,13 @@ mod tests {
             (Datum::Null, Datum::Null, Datum::Null),
         ];
         for (substr, s, exp) in null_cases {
-            let got = eval_func(ScalarFuncSig::Instr, &[substr, s]).unwrap();
+            let got = eval_func(ScalarFuncSig::InstrUtf8, &[substr, s]).unwrap();
             assert_eq!(got, exp);
         }
     }
 
     #[test]
-    fn test_instr_binary() {
+    fn test_instr() {
         let cases: Vec<(&str, &str, i64)> = vec![
             ("a", "abcdefg", 1),
             ("0", "abcdefg", 0),
@@ -3370,7 +3519,7 @@ mod tests {
         for (substr, s, exp) in cases {
             let substr = Datum::Bytes(substr.as_bytes().to_vec());
             let s = Datum::Bytes(s.as_bytes().to_vec());
-            let got = eval_func(ScalarFuncSig::InstrBinary, &[s, substr]).unwrap();
+            let got = eval_func(ScalarFuncSig::Instr, &[s, substr]).unwrap();
             assert_eq!(got, Datum::I64(exp))
         }
 
@@ -3382,8 +3531,57 @@ mod tests {
             (Datum::Null, Datum::Null, Datum::Null),
         ];
         for (substr, s, exp) in null_cases {
-            let got = eval_func(ScalarFuncSig::InstrBinary, &[substr, s]).unwrap();
+            let got = eval_func(ScalarFuncSig::Instr, &[substr, s]).unwrap();
             assert_eq!(got, exp);
         }
+    }
+
+    #[test]
+    fn test_quote() {
+        let cases: Vec<(&str, &str)> = vec![
+            (r"Don\'t!", r"'Don\\\'t!'"),
+            (r"Don't", r"'Don\'t'"),
+            (r"\'", r"'\\\''"),
+            (r#"\""#, r#"'\\"'"#),
+            (r"萌萌哒(๑•ᴗ•๑)😊", r"'萌萌哒(๑•ᴗ•๑)😊'"),
+            (r"㍿㌍㍑㌫", r"'㍿㌍㍑㌫'"),
+            (str::from_utf8(&[26, 0]).unwrap(), r"'\Z\0'"),
+        ];
+
+        for (input, expect) in cases {
+            let input = Datum::Bytes(input.as_bytes().to_vec());
+            let expect_vec = Datum::Bytes(expect.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::Quote, &[input]).unwrap();
+            assert_eq!(got, expect_vec)
+        }
+
+        //check for null
+        let got = eval_func(ScalarFuncSig::Quote, &[Datum::Null]).unwrap();
+        assert_eq!(got, Datum::Bytes(b"NULL".to_vec()))
+    }
+
+    #[test]
+    fn test_ord() {
+        let cases = vec![
+            ("2", 50),
+            ("23", 50),
+            ("2.3", 50),
+            ("", 0),
+            ("你好", 14990752),
+            ("にほん", 14909867),
+            ("한국", 15570332),
+            ("👍", 4036989325),
+            ("א", 55184),
+        ];
+
+        for (input, expect) in cases {
+            let input = Datum::Bytes(input.as_bytes().to_vec());
+            let expect = Datum::I64(expect);
+            let got = eval_func(ScalarFuncSig::Ord, &[input]).unwrap();
+            assert_eq!(got, expect);
+        }
+
+        let got = eval_func(ScalarFuncSig::Ord, &[Datum::Null]).unwrap();
+        assert_eq!(got, Datum::Null);
     }
 }

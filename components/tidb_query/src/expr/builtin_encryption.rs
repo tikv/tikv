@@ -1,14 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
+use std::io::Read;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
 use crate::codec::Datum;
+use crate::expr_util::rand::{gen_random_bytes, MAX_RAND_BYTES_LENGTH};
 use flate2::read::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex;
 use openssl::hash::{self, MessageDigest};
-use std::io::prelude::*;
 
 const SHA0: i64 = 0;
 const SHA224: i64 = 224;
@@ -137,6 +138,19 @@ impl ScalarFunc {
         }
         Ok(Some(i64::from(LittleEndian::read_u32(&input[0..4]))))
     }
+
+    #[inline]
+    pub fn random_bytes<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let length = try_opt!(self.children[0].eval_int(ctx, row));
+        if length < 1 || length > MAX_RAND_BYTES_LENGTH {
+            return Err(Error::overflow("length", "random_bytes"));
+        }
+        Ok(Some(Cow::Owned(gen_random_bytes(length as usize))))
+    }
 }
 
 #[inline]
@@ -149,7 +163,7 @@ fn hex_digest(hashtype: MessageDigest, input: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use crate::codec::Datum;
-    use crate::expr::tests::{datum_expr, eval_func, scalar_func_expr};
+    use crate::expr::tests::{check_overflow, datum_expr, eval_func, scalar_func_expr};
     use crate::expr::{EvalContext, Expression};
     use hex;
     use tipb::ScalarFuncSig;
@@ -168,7 +182,7 @@ mod tests {
         for (input_str, exp_str) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::Md5, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "md5('{:?}')", input_str);
@@ -177,7 +191,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::Md5, &[input]);
-        let op = Expression::build(&ctx, op).unwrap();
+        let op = Expression::build(&mut ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "md5(NULL)");
@@ -197,7 +211,7 @@ mod tests {
         for (input_str, exp_str) in cases {
             let input = datum_expr(Datum::Bytes(input_str.as_bytes().to_vec()));
             let op = scalar_func_expr(ScalarFuncSig::Sha1, &[input]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "sha1('{:?}')", input_str);
@@ -206,7 +220,7 @@ mod tests {
         // test NULL case
         let input = datum_expr(Datum::Null);
         let op = scalar_func_expr(ScalarFuncSig::Sha1, &[input]);
-        let op = Expression::build(&ctx, op).unwrap();
+        let op = Expression::build(&mut ctx, op).unwrap();
         let got = op.eval(&mut ctx, &[]).unwrap();
         let exp = Datum::Null;
         assert_eq!(got, exp, "sha1(NULL)");
@@ -234,7 +248,7 @@ mod tests {
             let hash_length = datum_expr(Datum::I64(hash_length_i64));
 
             let op = scalar_func_expr(ScalarFuncSig::Sha2, &[input, hash_length]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::Bytes(exp_str.as_bytes().to_vec());
             assert_eq!(got, exp, "sha2('{:?}', {:?})", input_str, hash_length_i64);
@@ -256,7 +270,7 @@ mod tests {
                 ScalarFuncSig::Sha2,
                 &[datum_expr(input.clone()), datum_expr(hash_length.clone())],
             );
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp, "sha2('{:?}', {:?})", input, hash_length);
         }
@@ -338,5 +352,36 @@ mod tests {
             let got = eval_func(ScalarFuncSig::UncompressedLength, &[s]).unwrap();
             assert_eq!(got, Datum::I64(exp));
         }
+    }
+
+    #[test]
+    fn test_random_bytes() {
+        let cases = vec![1, 32, 233, 1024];
+
+        for len in cases {
+            let got = eval_func(ScalarFuncSig::RandomBytes, &[Datum::I64(len)])
+                .ok()
+                .unwrap();
+            if let Datum::Bytes(bs) = got {
+                assert_eq!(bs.len() as i64, len);
+            } else {
+                panic!("Generate random bytes failed");
+            }
+        }
+
+        let overflow_tests = vec![Datum::I64(-32), Datum::I64(1025), Datum::I64(0)];
+
+        for len in overflow_tests {
+            let got = eval_func(ScalarFuncSig::RandomBytes, &[len]).unwrap_err();
+            assert!(check_overflow(got).is_ok());
+        }
+
+        //test NULL case
+        assert_eq!(
+            eval_func(ScalarFuncSig::RandomBytes, &[Datum::Null])
+                .ok()
+                .unwrap(),
+            Datum::Null
+        );
     }
 }

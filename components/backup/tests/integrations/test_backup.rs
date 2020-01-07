@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::path::Path;
 use std::sync::*;
 use std::thread;
 use std::time::Duration;
@@ -17,7 +18,7 @@ use kvproto::backup::*;
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request};
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 use tempfile::Builder;
 use test_raftstore::*;
 use tidb_query::storage::scanner::{RangesScanner, RangesScannerOptions};
@@ -30,13 +31,14 @@ use tikv_util::collections::HashMap;
 use tikv_util::file::calc_crc32_bytes;
 use tikv_util::worker::Worker;
 use tikv_util::HandyRwLock;
+use txn_types::TimeStamp;
 
 struct TestSuite {
     cluster: Cluster<ServerCluster>,
     endpoints: HashMap<u64, Worker<Task>>,
     tikv_cli: TikvClient,
     context: Context,
-    ts: u64,
+    ts: TimeStamp,
 
     _env: Arc<Environment>,
 }
@@ -47,7 +49,7 @@ macro_rules! retry_req {
         let start = Instant::now();
         let timeout = Duration::from_millis($timeout);
         let mut tried_times = 0;
-        while tried_times < $retry && start.elapsed() < timeout {
+        while tried_times < $retry || start.elapsed() < timeout {
             if $check_resp {
                 break;
             } else {
@@ -64,6 +66,8 @@ impl TestSuite {
     fn new(count: usize) -> TestSuite {
         super::init();
         let mut cluster = new_server_cluster(1, count);
+        // Increase the Raft tick interval to make this test case running reliably.
+        configure_for_lease_read(&mut cluster, Some(100), None);
         cluster.run();
 
         let mut endpoints = HashMap::default();
@@ -81,6 +85,8 @@ impl TestSuite {
             endpoints.insert(*id, worker);
         }
 
+        // Make sure there is a leader.
+        cluster.must_put(b"foo", b"foo");
         let region_id = 1;
         let leader = cluster.leader_of_region(region_id).unwrap();
         let leader_addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
@@ -100,14 +106,13 @@ impl TestSuite {
             endpoints,
             tikv_cli,
             context,
-            ts: 0,
+            ts: TimeStamp::zero(),
             _env: env,
         }
     }
 
-    fn alloc_ts(&mut self) -> u64 {
-        self.ts += 1;
-        self.ts
+    fn alloc_ts(&mut self) -> TimeStamp {
+        *self.ts.incr()
     }
 
     fn stop(mut self) {
@@ -117,12 +122,12 @@ impl TestSuite {
         self.cluster.shutdown();
     }
 
-    fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+    fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: TimeStamp) {
         let mut prewrite_req = PrewriteRequest::default();
         prewrite_req.set_context(self.context.clone());
         prewrite_req.set_mutations(muts.into_iter().collect());
         prewrite_req.primary_lock = pk;
-        prewrite_req.start_version = ts;
+        prewrite_req.start_version = ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
         let mut prewrite_resp = self.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
         retry_req!(
@@ -130,7 +135,7 @@ impl TestSuite {
             !prewrite_resp.has_region_error() && prewrite_resp.errors.is_empty(),
             prewrite_resp,
             5,    // retry 5 times
-            5000  // 100ms timeout
+            5000  // 5s timeout
         );
         assert!(
             !prewrite_resp.has_region_error(),
@@ -144,19 +149,19 @@ impl TestSuite {
         );
     }
 
-    fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
+    fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
         let mut commit_req = CommitRequest::default();
         commit_req.set_context(self.context.clone());
-        commit_req.start_version = start_ts;
+        commit_req.start_version = start_ts.into_inner();
         commit_req.set_keys(keys.into_iter().collect());
-        commit_req.commit_version = commit_ts;
+        commit_req.commit_version = commit_ts.into_inner();
         let mut commit_resp = self.tikv_cli.kv_commit(&commit_req).unwrap();
         retry_req!(
             self.tikv_cli.kv_commit(&commit_req).unwrap(),
             !commit_resp.has_region_error() && !commit_resp.has_error(),
             commit_resp,
             5,    // retry 5 times
-            5000  // 100ms timeout
+            5000  // 5s timeout
         );
         assert!(
             !commit_resp.has_region_error(),
@@ -170,15 +175,16 @@ impl TestSuite {
         &self,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
-        backup_ts: u64,
-        path: String,
+        begin_ts: TimeStamp,
+        backup_ts: TimeStamp,
+        path: &Path,
     ) -> future_mpsc::UnboundedReceiver<BackupResponse> {
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(start_key);
         req.set_end_key(end_key);
-        req.start_version = backup_ts;
-        req.end_version = backup_ts;
-        req.set_path(path);
+        req.start_version = begin_ts.into_inner();
+        req.end_version = backup_ts.into_inner();
+        req.set_storage_backend(make_local_backend(path));
         let (tx, rx) = future_mpsc::unbounded();
         for end in self.endpoints.values() {
             let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
@@ -187,14 +193,20 @@ impl TestSuite {
         rx
     }
 
-    fn admin_checksum(&self, backup_ts: u64, start: String, end: String) -> (u64, u64, u64) {
+    fn admin_checksum(&self, backup_ts: TimeStamp, start: String, end: String) -> (u64, u64, u64) {
         let mut checksum = 0;
         let mut total_kvs = 0;
         let mut total_bytes = 0;
         let sim = self.cluster.sim.rl();
         let engine = sim.storages[&self.context.get_peer().get_store_id()].clone();
         let snapshot = engine.snapshot(&self.context.clone()).unwrap();
-        let snap_store = SnapshotStore::new(snapshot, backup_ts, IsolationLevel::Si, false);
+        let snap_store = SnapshotStore::new(
+            snapshot,
+            backup_ts,
+            IsolationLevel::Si,
+            false,
+            Default::default(),
+        );
         let mut scanner = RangesScanner::new(RangesScannerOptions {
             storage: TiKVStorage::from(snap_store),
             ranges: vec![Range::Interval(IntervalRange::from((start, end)))],
@@ -202,8 +214,9 @@ impl TestSuite {
             is_key_only: false,
             is_scanned_range_aware: false,
         });
+        let digest = crc64fast::Digest::new();
         while let Some((k, v)) = scanner.next().unwrap() {
-            checksum = checksum_crc64_xor(checksum, &[], &k, &v);
+            checksum = checksum_crc64_xor(checksum, digest.clone(), &k, &v);
             total_kvs += 1;
             total_bytes += (k.len() + v.len()) as u64;
         }
@@ -234,7 +247,7 @@ fn test_backup_and_import() {
             // Prewrite
             let start_ts = suite.alloc_ts();
             let mut mutation = Mutation::default();
-            mutation.op = Op::Put;
+            mutation.set_op(Op::Put);
             mutation.key = k.clone().into_bytes();
             mutation.value = v.clone().into_bytes();
             suite.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
@@ -247,15 +260,13 @@ fn test_backup_and_import() {
     // Push down backup request.
     let tmp = Builder::new().tempdir().unwrap();
     let backup_ts = suite.alloc_ts();
-    let storage_path = format!(
-        "local://{}",
-        tmp.path().join(format!("{}", backup_ts)).display()
-    );
+    let storage_path = tmp.path().join(format!("{}", backup_ts));
     let rx = suite.backup(
-        vec![], // start
-        vec![], // end
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
         backup_ts,
-        storage_path.clone(),
+        &storage_path,
     );
     let resps1 = rx.collect().wait().unwrap();
     // Only leader can handle backup.
@@ -270,21 +281,20 @@ fn test_backup_and_import() {
     // Backup file should have same contents.
     // backup ts + 1 avoid file already exist.
     let rx = suite.backup(
-        vec![], // start
-        vec![], // end
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
         backup_ts,
-        format!(
-            "local://{}",
-            tmp.path().join(format!("{}", backup_ts + 1)).display()
-        ),
+        &tmp.path().join(format!("{}", backup_ts.next())),
     );
     let resps2 = rx.collect().wait().unwrap();
     assert!(resps2[0].get_files().is_empty(), "{:?}", resps2);
 
     // Use importer to restore backup files.
-    let storage = create_storage(&storage_path).unwrap();
+    let backend = make_local_backend(&storage_path);
+    let storage = create_storage(&backend).unwrap();
     let region = suite.cluster.get_region(b"");
-    let mut sst_meta = SstMeta::new();
+    let mut sst_meta = SstMeta::default();
     sst_meta.region_id = region.get_id();
     sst_meta.set_region_epoch(region.get_region_epoch().clone());
     sst_meta.set_uuid(uuid::Uuid::new_v4().as_bytes().to_vec());
@@ -329,13 +339,11 @@ fn test_backup_and_import() {
     // Backup file should have same contents.
     // backup ts + 2 avoid file already exist.
     let rx = suite.backup(
-        vec![], // start
-        vec![], // end
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
         backup_ts,
-        format!(
-            "local://{}",
-            tmp.path().join(format!("{}", backup_ts + 2)).display()
-        ),
+        &tmp.path().join(format!("{}", backup_ts.next().next())),
     );
     let resps3 = rx.collect().wait().unwrap();
     assert_eq!(files1, resps3[0].files);
@@ -355,7 +363,7 @@ fn test_backup_meta() {
             // Prewrite
             let start_ts = suite.alloc_ts();
             let mut mutation = Mutation::default();
-            mutation.op = Op::Put;
+            mutation.set_op(Op::Put);
             mutation.key = k.clone().into_bytes();
             mutation.value = v.clone().into_bytes();
             suite.must_kv_prewrite(vec![mutation], k.clone().into_bytes(), start_ts);
@@ -371,15 +379,13 @@ fn test_backup_meta() {
 
     // Push down backup request.
     let tmp = Builder::new().tempdir().unwrap();
-    let storage_path = format!(
-        "local://{}",
-        tmp.path().join(format!("{}", backup_ts)).display()
-    );
+    let storage_path = tmp.path().join(format!("{}", backup_ts));
     let rx = suite.backup(
-        vec![], // start
-        vec![], // end
+        vec![],   // start
+        vec![],   // end
+        0.into(), // begin_ts
         backup_ts,
-        storage_path.clone(),
+        &storage_path,
     );
     let resps1 = rx.collect().wait().unwrap();
     // Only leader can handle backup.
@@ -399,4 +405,6 @@ fn test_backup_meta() {
     assert_eq!(total_kvs, admin_total_kvs);
     assert_eq!(total_bytes, admin_total_bytes);
     assert_eq!(checksum, admin_checksum);
+
+    suite.stop();
 }

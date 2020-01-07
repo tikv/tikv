@@ -13,6 +13,7 @@ mod test_prevote;
 mod test_region_change_observer;
 mod test_region_heartbeat;
 mod test_region_info_accessor;
+mod test_replica_read;
 mod test_service;
 mod test_single;
 mod test_snap;

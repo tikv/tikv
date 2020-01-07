@@ -2,6 +2,8 @@
 
 //! Key rewriting
 
+use std::ops::Bound::{self, *};
+
 /// An error indicating the key cannot be rewritten because it does not start
 /// with the given prefix.
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -37,11 +39,55 @@ pub fn rewrite_prefix_of_end_key(
     }
 
     if super::next_key_no_alloc(old_prefix) != src.split_last().map(|(&e, s)| (s, e)) {
-        // src is not the sucessor of old_prefix
+        // src is not the successor of old_prefix
         return Err(WrongPrefix);
     }
 
     Ok(super::next_key(new_prefix))
+}
+
+pub fn rewrite_prefix_of_start_bound(
+    old_prefix: &[u8],
+    new_prefix: &[u8],
+    start: Bound<&[u8]>,
+) -> Result<Bound<Vec<u8>>, WrongPrefix> {
+    Ok(match start {
+        Unbounded => {
+            if old_prefix.is_empty() {
+                Included(new_prefix.to_vec())
+            } else {
+                Unbounded
+            }
+        }
+        Included(s) => Included(rewrite_prefix(old_prefix, new_prefix, s)?),
+        Excluded(s) => Excluded(rewrite_prefix(old_prefix, new_prefix, s)?),
+    })
+}
+
+pub fn rewrite_prefix_of_end_bound(
+    old_prefix: &[u8],
+    new_prefix: &[u8],
+    end: Bound<&[u8]>,
+) -> Result<Bound<Vec<u8>>, WrongPrefix> {
+    fn end_key_to_bound(end_key: Vec<u8>) -> Bound<Vec<u8>> {
+        if end_key.is_empty() {
+            Bound::Unbounded
+        } else {
+            Bound::Excluded(end_key)
+        }
+    }
+
+    Ok(match end {
+        Unbounded => {
+            if old_prefix.is_empty() {
+                end_key_to_bound(super::next_key(new_prefix))
+            } else {
+                Unbounded
+            }
+        }
+        Included(e) => Included(rewrite_prefix(old_prefix, new_prefix, e)?),
+        Excluded(e) => end_key_to_bound(rewrite_prefix_of_end_key(old_prefix, new_prefix, e)?),
+    })
 }
 
 #[cfg(test)]
@@ -98,6 +144,93 @@ mod tests {
         assert_eq!(
             rewrite_prefix_of_end_key(b"\xff\xfe", b"\xff\xff", b"\xff\xff"),
             Ok(b"".to_vec()),
+        );
+    }
+
+    #[test]
+    fn test_rewrite_prefix_of_range() {
+        use std::ops::Bound::*;
+
+        let rewrite_prefix_of_range =
+            |old_prefix: &[u8], new_prefix: &[u8], start: Bound<&[u8]>, end: Bound<&[u8]>| {
+                Ok((
+                    rewrite_prefix_of_start_bound(old_prefix, new_prefix, start)?,
+                    rewrite_prefix_of_end_bound(old_prefix, new_prefix, end)?,
+                ))
+            };
+
+        assert_eq!(
+            rewrite_prefix_of_range(b"t123", b"t456", Included(b"t123456"), Included(b"t123789")),
+            Ok((Included(b"t456456".to_vec()), Included(b"t456789".to_vec()))),
+        );
+        assert_eq!(
+            rewrite_prefix_of_range(b"t123", b"t456", Included(b"t123456"), Excluded(b"t123789")),
+            Ok((Included(b"t456456".to_vec()), Excluded(b"t456789".to_vec()))),
+        );
+        assert_eq!(
+            rewrite_prefix_of_range(b"t123", b"t456", Excluded(b"t123456"), Excluded(b"t123789")),
+            Ok((Excluded(b"t456456".to_vec()), Excluded(b"t456789".to_vec()))),
+        );
+        assert_eq!(
+            rewrite_prefix_of_range(b"t123", b"t456", Excluded(b"t123456"), Included(b"t123789")),
+            Ok((Excluded(b"t456456".to_vec()), Included(b"t456789".to_vec()))),
+        );
+        assert_eq!(
+            rewrite_prefix_of_range(b"t123", b"t456", Included(b"t123789"), Unbounded),
+            Ok((Included(b"t456789".to_vec()), Unbounded)),
+        );
+        assert_eq!(
+            rewrite_prefix_of_range(b"t123", b"t456", Unbounded, Unbounded),
+            Ok((Unbounded, Unbounded)),
+        );
+
+        assert_eq!(
+            rewrite_prefix_of_range(b"", b"t654", Included(b"321"), Included(b"987")),
+            Ok((Included(b"t654321".to_vec()), Included(b"t654987".to_vec()))),
+        );
+        assert_eq!(
+            rewrite_prefix_of_range(b"", b"t654", Included(b"321"), Excluded(b"987")),
+            Ok((Included(b"t654321".to_vec()), Excluded(b"t654987".to_vec()))),
+        );
+        assert_eq!(
+            rewrite_prefix_of_range(b"", b"t654", Included(b"321"), Unbounded),
+            Ok((Included(b"t654321".to_vec()), Excluded(b"t655".to_vec()))),
+        );
+        assert_eq!(
+            rewrite_prefix_of_range(b"", b"t654", Unbounded, Included(b"987")),
+            Ok((Included(b"t654".to_vec()), Included(b"t654987".to_vec()))),
+        );
+        assert_eq!(
+            rewrite_prefix_of_range(b"", b"t654", Unbounded, Unbounded),
+            Ok((Included(b"t654".to_vec()), Excluded(b"t655".to_vec()))),
+        );
+
+        assert_eq!(
+            rewrite_prefix_of_range(
+                b"\xff\xfe",
+                b"\xff\xff",
+                Included(b"\xff\xfe"),
+                Excluded(b"\xff\xff")
+            ),
+            Ok((Included(b"\xff\xff".to_vec()), Unbounded)),
+        );
+        assert_eq!(
+            rewrite_prefix_of_range(
+                b"\xff\xfe",
+                b"\xff\xff",
+                Excluded(b"\xff\xfe"),
+                Excluded(b"\xff\xff")
+            ),
+            Ok((Excluded(b"\xff\xff".to_vec()), Unbounded)),
+        );
+        assert_eq!(
+            rewrite_prefix_of_range(
+                b"\xff\xfe",
+                b"\xff\xff",
+                Included(b"\xff\xfe"),
+                Included(b"\xff\xff")
+            ),
+            Err(WrongPrefix),
         );
     }
 }

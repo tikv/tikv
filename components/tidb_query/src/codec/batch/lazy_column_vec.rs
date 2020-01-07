@@ -6,8 +6,8 @@ use tipb::FieldType;
 use super::LazyBatchColumn;
 use crate::codec::chunk::{Chunk, ChunkEncoder};
 use crate::codec::data_type::VectorValue;
-use crate::codec::mysql::Tz;
 use crate::codec::Result;
+use crate::expr::EvalContext;
 
 use std::convert::TryFrom;
 
@@ -115,9 +115,9 @@ impl LazyBatchColumnVec {
         Ok(size)
     }
 
-    /// Returns maximum encoded size in arrow format.
+    /// Returns maximum encoded size in chunk format.
     // TODO: Move to other place.
-    pub fn maximum_encoded_size_arrow(
+    pub fn maximum_encoded_size_chunk(
         &self,
         logical_rows: impl AsRef<[usize]>,
         output_offsets: impl AsRef<[u32]>,
@@ -125,7 +125,7 @@ impl LazyBatchColumnVec {
         let logical_rows = logical_rows.as_ref();
         let mut size = 0;
         for offset in output_offsets.as_ref() {
-            size += self.columns[(*offset) as usize].maximum_encoded_size_arrow(logical_rows)?;
+            size += self.columns[(*offset) as usize].maximum_encoded_size_chunk(logical_rows)?;
         }
         Ok(size)
     }
@@ -138,6 +138,7 @@ impl LazyBatchColumnVec {
         output_offsets: impl AsRef<[u32]>,
         schema: impl AsRef<[FieldType]>,
         output: &mut Vec<u8>,
+        ctx: &mut EvalContext,
     ) -> Result<()> {
         let schema = schema.as_ref();
         let output_offsets = output_offsets.as_ref();
@@ -145,20 +146,20 @@ impl LazyBatchColumnVec {
             for offset in output_offsets {
                 let offset = *offset as usize;
                 let col = &self.columns[offset];
-                col.encode(*idx, &schema[offset], output)?;
+                col.encode(*idx, &schema[offset], ctx, output)?;
             }
         }
         Ok(())
     }
 
-    /// Encode into arrow format.
-    pub fn encode_arrow(
+    /// Encode into chunk format.
+    pub fn encode_chunk(
         &mut self,
         logical_rows: impl AsRef<[usize]>,
         output_offsets: impl AsRef<[u32]>,
         schema: impl AsRef<[FieldType]>,
         output: &mut Vec<u8>,
-        time_zone: &Tz,
+        ctx: &mut EvalContext,
     ) -> Result<()> {
         // Step 1 : Decode all data.
         let schema = schema.as_ref();
@@ -166,7 +167,7 @@ impl LazyBatchColumnVec {
         for offset in output_offsets {
             let offset = *offset as usize;
             let col = &mut self.columns[offset];
-            col.ensure_decoded(time_zone, &schema[offset], logical_rows.as_ref())?;
+            col.ensure_decoded(ctx, &schema[offset], logical_rows.as_ref())?;
         }
 
         // Step 2 : Make the chunk and append data.

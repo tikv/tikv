@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,15 +12,17 @@ use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
 use tokio_timer::timer::Handle;
 
+use kvproto::configpb;
 use kvproto::metapb::{self, Region};
 use kvproto::pdpb;
 use raft::eraftpb;
 
-use pd_client::{Error, Key, PdClient, PdFuture, RegionStat, Result};
-use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
+use keys::{self, data_key, enc_end_key, enc_start_key};
+use pd_client::{Error, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result};
 use tikv::raftstore::store::util::check_key_in_region;
 use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
+use tikv_util::time::UnixSecs;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{Either, HandyRwLock};
 
@@ -128,11 +131,7 @@ impl Operator {
                 if target_region_id == region_id {
                     pdpb::RegionHeartbeatResponse::default()
                 } else {
-                    let region = cluster
-                        .get_region_by_id(target_region_id)
-                        .unwrap()
-                        .unwrap()
-                        .clone();
+                    let region = cluster.get_region_by_id(target_region_id).unwrap().unwrap();
                     new_pd_merge_region(region)
                 }
             }
@@ -211,7 +210,7 @@ struct Cluster {
     region_id_keys: HashMap<u64, Key>,
     region_approximate_size: HashMap<u64, u64>,
     region_approximate_keys: HashMap<u64, u64>,
-    region_last_report_ts: HashMap<u64, u64>,
+    region_last_report_ts: HashMap<u64, UnixSecs>,
     region_last_report_term: HashMap<u64, u64>,
     base_id: AtomicUsize,
 
@@ -323,7 +322,7 @@ impl Cluster {
         self.region_approximate_keys.get(&region_id).cloned()
     }
 
-    fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
+    fn get_region_last_report_ts(&self, region_id: u64) -> Option<UnixSecs> {
         self.region_last_report_ts.get(&region_id).cloned()
     }
 
@@ -347,7 +346,7 @@ impl Cluster {
             .is_none());
         assert!(self
             .region_id_keys
-            .insert(region.get_id(), end_key.clone())
+            .insert(region.get_id(), end_key)
             .is_none());
     }
 
@@ -430,40 +429,37 @@ impl Cluster {
         let cur_region_peer_len = cur_region.get_peers().len();
 
         if conf_ver > cur_conf_ver {
-            if region_peer_len == cur_region_peer_len {
-                // For promote learner to voter.
-                let get_learners =
-                    |r: &Region| r.get_peers().iter().filter(|p| p.get_is_learner()).count();
-                let region_learner_len = get_learners(&region);
-                let cur_region_learner_len = get_learners(&cur_region);
-                assert_eq!(cur_region_learner_len, region_learner_len + 1);
-            } else if cur_region_peer_len > region_peer_len {
-                // If ConfVer changed, TiKV has added/removed one peer already.
-                // So pd and TiKV can't have same peer count and can only have
-                // only one different peer.
-                // E.g, we can't meet following cases:
-                // 1) pd is (1, 2, 3), TiKV is (1)
-                // 2) pd is (1), TiKV is (1, 2, 3)
-                // 3) pd is (1, 2), TiKV is (3)
-                // 4) pd id (1), TiKV is (2, 3)
-                // must pd is (1, 2), TiKV is (1)
-                assert_eq!(cur_region_peer_len - region_peer_len, 1);
-                let peers = setdiff_peers(&cur_region, &region);
-                assert_eq!(peers.len(), 1);
-                assert!(setdiff_peers(&region, &cur_region).is_empty());
-            } else if cur_region_peer_len < region_peer_len {
-                // must pd is (1), TiKV is (1, 2)
-                assert_eq!(region_peer_len - cur_region_peer_len, 1);
-                let peers = setdiff_peers(&region, &cur_region);
-                assert_eq!(peers.len(), 1);
-                assert!(setdiff_peers(&cur_region, &region).is_empty());
-            } else {
-                must_same_peers(&cur_region, &region);
-                assert_eq!(cur_conf_ver + 1, conf_ver);
-                assert_eq!(
-                    cur_region.get_region_epoch().get_version() + 1,
-                    region.get_region_epoch().get_version()
-                );
+            match cur_region_peer_len.cmp(&region_peer_len) {
+                cmp::Ordering::Equal => {
+                    // For promote learner to voter.
+                    let get_learners =
+                        |r: &Region| r.get_peers().iter().filter(|p| p.get_is_learner()).count();
+                    let region_learner_len = get_learners(&region);
+                    let cur_region_learner_len = get_learners(&cur_region);
+                    assert_eq!(cur_region_learner_len, region_learner_len + 1);
+                }
+                cmp::Ordering::Greater => {
+                    // If ConfVer changed, TiKV has added/removed one peer already.
+                    // So pd and TiKV can't have same peer count and can only have
+                    // only one different peer.
+                    // E.g, we can't meet following cases:
+                    // 1) pd is (1, 2, 3), TiKV is (1)
+                    // 2) pd is (1), TiKV is (1, 2, 3)
+                    // 3) pd is (1, 2), TiKV is (3)
+                    // 4) pd id (1), TiKV is (2, 3)
+                    // must pd is (1, 2), TiKV is (1)
+                    assert_eq!(cur_region_peer_len - region_peer_len, 1);
+                    let peers = setdiff_peers(&cur_region, &region);
+                    assert_eq!(peers.len(), 1);
+                    assert!(setdiff_peers(&region, &cur_region).is_empty());
+                }
+                cmp::Ordering::Less => {
+                    // must pd is (1), TiKV is (1, 2)
+                    assert_eq!(region_peer_len - cur_region_peer_len, 1);
+                    let peers = setdiff_peers(&region, &cur_region);
+                    assert_eq!(peers.len(), 1);
+                    assert!(setdiff_peers(&cur_region, &region).is_empty());
+                }
             }
 
             // update the region.
@@ -492,29 +488,33 @@ impl Cluster {
     ) -> Option<Operator> {
         let max_peer_count = self.meta.get_max_peer_count() as usize;
         let peer_count = region.get_peers().len();
-        if peer_count < max_peer_count {
-            // find the first store which the region has not covered.
-            for store_id in self.stores.keys() {
-                if region
-                    .get_peers()
-                    .iter()
-                    .all(|x| x.get_store_id() != *store_id)
-                {
-                    let peer = Either::Left(new_peer(*store_id, self.alloc_id().unwrap()));
-                    let policy = SchedulePolicy::Repeat(1);
-                    return Some(Operator::AddPeer { peer, policy });
+        match peer_count.cmp(&max_peer_count) {
+            cmp::Ordering::Less => {
+                // find the first store which the region has not covered.
+                for store_id in self.stores.keys() {
+                    if region
+                        .get_peers()
+                        .iter()
+                        .all(|x| x.get_store_id() != *store_id)
+                    {
+                        let peer = Either::Left(new_peer(*store_id, self.alloc_id().unwrap()));
+                        let policy = SchedulePolicy::Repeat(1);
+                        return Some(Operator::AddPeer { peer, policy });
+                    }
                 }
             }
-        } else if peer_count > max_peer_count {
-            // find the first peer which not leader.
-            let pos = region
-                .get_peers()
-                .iter()
-                .position(|x| x.get_store_id() != leader.get_store_id())
-                .unwrap();
-            let peer = region.get_peers()[pos].clone();
-            let policy = SchedulePolicy::Repeat(1);
-            return Some(Operator::RemovePeer { peer, policy });
+            cmp::Ordering::Greater => {
+                // find the first peer which not leader.
+                let pos = region
+                    .get_peers()
+                    .iter()
+                    .position(|x| x.get_store_id() != leader.get_store_id())
+                    .unwrap();
+                let peer = region.get_peers()[pos].clone();
+                let policy = SchedulePolicy::Repeat(1);
+                return Some(Operator::RemovePeer { peer, policy });
+            }
+            _ => {}
         }
 
         None
@@ -657,7 +657,7 @@ pub fn bootstrap_with_first_region(pd_client: Arc<TestPdClient>) -> Result<()> {
     region.mut_region_epoch().set_version(INIT_EPOCH_VER);
     region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
     let peer = new_peer(1, 1);
-    region.mut_peers().push(peer.clone());
+    region.mut_peers().push(peer);
     pd_client.add_region(&region);
     pd_client.set_bootstrap(true);
     Ok(())
@@ -847,7 +847,7 @@ impl TestPdClient {
 
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.add_peer(region_id, peer.clone());
-        self.must_have_peer(region_id, peer.clone());
+        self.must_have_peer(region_id, peer);
     }
 
     pub fn must_remove_peer(&self, region_id: u64, peer: metapb::Peer) {
@@ -955,7 +955,7 @@ impl TestPdClient {
         self.cluster.rl().get_region_approximate_keys(region_id)
     }
 
-    pub fn get_region_last_report_ts(&self, region_id: u64) -> Option<u64> {
+    pub fn get_region_last_report_ts(&self, region_id: u64) -> Option<UnixSecs> {
         self.cluster.rl().get_region_last_report_ts(region_id)
     }
 
@@ -1016,6 +1016,12 @@ impl PdClient for TestPdClient {
         ))
     }
 
+    fn get_region_info(&self, key: &[u8]) -> Result<RegionInfo> {
+        let region = self.get_region(key)?;
+        let leader = self.cluster.rl().leaders.get(&region.get_id()).cloned();
+        Ok(RegionInfo::new(region, leader))
+    }
+
     fn get_region_by_id(&self, region_id: u64) -> PdFuture<Option<metapb::Region>> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
@@ -1059,6 +1065,7 @@ impl PdClient for TestPdClient {
 
     fn handle_region_heartbeat_response<F>(&self, store_id: u64, f: F) -> PdFuture<()>
     where
+        Self: Sized,
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
     {
         use futures::stream;
@@ -1198,6 +1205,44 @@ impl PdClient for TestPdClient {
         let mut resp = pdpb::GetOperatorResponse::default();
         resp.set_header(header);
         resp.set_region_id(region_id);
+        Ok(resp)
+    }
+
+    fn register_config(
+        &self,
+        _id: String,
+        version: configpb::Version,
+        cfg: String,
+    ) -> Result<configpb::CreateResponse> {
+        let mut status = configpb::Status::default();
+        status.set_code(configpb::StatusCode::Ok);
+        let mut resp = configpb::CreateResponse::default();
+        resp.set_status(status);
+        resp.set_config(cfg);
+        resp.set_version(version);
+        Ok(resp)
+    }
+
+    fn get_config(&self, _id: String, version: configpb::Version) -> Result<configpb::GetResponse> {
+        let mut status = configpb::Status::default();
+        status.set_code(configpb::StatusCode::NotChange);
+        let mut resp = configpb::GetResponse::default();
+        resp.set_version(version);
+        resp.set_status(status);
+        Ok(resp)
+    }
+
+    fn update_config(
+        &self,
+        _id: String,
+        version: configpb::Version,
+        _entries: Vec<configpb::ConfigEntry>,
+    ) -> Result<configpb::UpdateResponse> {
+        let mut status = configpb::Status::default();
+        status.set_code(configpb::StatusCode::Ok);
+        let mut resp = configpb::UpdateResponse::default();
+        resp.set_version(version);
+        resp.set_status(status);
         Ok(resp)
     }
 }

@@ -1,9 +1,11 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryFrom;
 use std::sync::{Arc, Mutex};
 
-use engine::rocks::util::compact_files_in_range;
+use engine::rocks::util::{compact_files_in_range, ingest_maybe_slowdown_writes};
 use engine::rocks::DB;
+use engine::{name_to_cf, CF_DEFAULT};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -11,10 +13,11 @@ use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
 use kvproto::raft_cmdpb::*;
 
+use crate::raftstore::router::RaftStoreRouter;
 use crate::raftstore::store::Callback;
-use crate::server::transport::RaftStoreRouter;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use engine_rocks::RocksEngine;
+use engine_rocks::{RocksEngine, RocksIOLimiter};
+use engine_traits::{IOLimiter, SstExt, SstWriterBuilder};
 use sst_importer::send_rpc_response;
 use tikv_util::future::paired_future_callback;
 use tikv_util::time::Instant;
@@ -22,7 +25,7 @@ use tikv_util::time::Instant;
 use sst_importer::import_mode::*;
 use sst_importer::metrics::*;
 use sst_importer::service::*;
-use sst_importer::{Config, Error, SSTImporter};
+use sst_importer::{error_inc, Config, Error, SSTImporter};
 
 /// ImportSSTService provides tikv-server with the ability to ingest SST files.
 ///
@@ -36,6 +39,7 @@ pub struct ImportSSTService<Router> {
     threads: CpuPool,
     importer: Arc<SSTImporter>,
     switcher: Arc<Mutex<ImportModeSwitcher>>,
+    limiter: Option<Arc<RocksIOLimiter>>,
 }
 
 impl<Router: RaftStoreRouter> ImportSSTService<Router> {
@@ -56,6 +60,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
             threads,
             importer,
             switcher: Arc::new(Mutex::new(ImportModeSwitcher::new())),
+            limiter: None,
         }
     }
 }
@@ -158,14 +163,22 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let label = "download";
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
+        let limiter = self.limiter.clone();
+        let engine = Arc::clone(&self.engine);
+        let sst_writer = <RocksEngine as SstExt>::SstWriterBuilder::new()
+            .set_db(RocksEngine::from_ref(&engine))
+            .set_cf(name_to_cf(req.get_sst().get_cf_name()).unwrap())
+            .build(self.importer.get_path(req.get_sst()).to_str().unwrap())
+            .unwrap();
 
         ctx.spawn(self.threads.spawn_fn(move || {
-            let res = importer.download(
+            let res = importer.download::<RocksEngine>(
                 req.get_sst(),
-                req.get_url(),
+                req.get_storage_backend(),
                 req.get_name(),
                 req.get_rewrite_rule(),
-                req.get_speed_limit(),
+                limiter,
+                sst_writer,
             );
 
             future::result(res)
@@ -197,6 +210,15 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let label = "ingest";
         let timer = Instant::now_coarse();
 
+        if self.switcher.lock().unwrap().get_mode() == SwitchMode::Normal
+            && ingest_maybe_slowdown_writes(&self.engine, CF_DEFAULT)
+        {
+            return send_rpc_error(
+                ctx,
+                sink,
+                Error::Engine(box_err!("too many sst files are ingesting.")),
+            );
+        }
         // Make ingest command.
         let mut ingest = Request::default();
         ingest.set_cmd_type(CmdType::IngestSst);
@@ -279,5 +301,37 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 .map(|_| CompactResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer))
         }))
+    }
+
+    fn set_download_speed_limit(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: SetDownloadSpeedLimitRequest,
+        sink: UnarySink<SetDownloadSpeedLimitResponse>,
+    ) {
+        let label = "set_download_speed_limit";
+        let timer = Instant::now_coarse();
+
+        let s = i64::try_from(req.get_speed_limit());
+        let s = if let Ok(s) = s {
+            s
+        } else {
+            warn!(
+                "SetDownloadSpeedLimitRequest out of range: {}. Using i64::max_value",
+                req.get_speed_limit()
+            );
+            i64::max_value()
+        };
+
+        match (s, &mut self.limiter) {
+            (0, limiter) => *limiter = None,
+            (s, Some(l)) => l.set_bytes_per_second(s),
+            (s, limiter) => *limiter = Some(Arc::new(RocksIOLimiter::new(s))),
+        }
+
+        ctx.spawn(
+            future::ok::<_, Error>(SetDownloadSpeedLimitResponse::default())
+                .then(move |res| send_rpc_response!(res, sink, label, timer)),
+        )
     }
 }

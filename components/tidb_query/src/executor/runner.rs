@@ -11,7 +11,7 @@ use tikv_util::deadline::Deadline;
 
 use super::Executor;
 use crate::execute_stats::*;
-use crate::expr::EvalConfig;
+use crate::expr::{EvalConfig, EvalContext};
 use crate::metrics::*;
 use crate::storage::{IntervalRange, Storage};
 use crate::Result;
@@ -22,6 +22,7 @@ pub struct ExecutorsRunner<SS> {
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
     collect_exec_summary: bool,
+    context: EvalContext,
     exec_stats: ExecuteStats,
 }
 
@@ -40,7 +41,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
         .next()
         .ok_or_else(|| other_err!("No executor specified"))?;
 
-    let mut src = build_first_executor::<_, C>(first, storage, ranges, is_streaming)?;
+    let mut src = build_first_executor::<_, C>(first, storage, ranges, ctx.clone(), is_streaming)?;
     let mut summary_slot_index = 0;
 
     for mut exec in exec_descriptors {
@@ -48,7 +49,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
 
         let curr: Box<dyn Executor<StorageStats = S::Statistics> + Send> = match exec.get_tp() {
             ExecType::TypeSelection => {
-                COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
+                EXECUTOR_COUNT_METRICS.with(|m| m.selection.inc());
 
                 Box::new(
                     super::SelectionExecutor::new(exec.take_selection(), Arc::clone(&ctx), src)?
@@ -56,7 +57,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 )
             }
             ExecType::TypeAggregation => {
-                COPR_EXECUTOR_COUNT.with_label_values(&["hash_aggr"]).inc();
+                EXECUTOR_COUNT_METRICS.with(|m| m.hash_aggr.inc());
 
                 Box::new(
                     super::HashAggExecutor::new(exec.take_aggregation(), Arc::clone(&ctx), src)?
@@ -64,9 +65,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 )
             }
             ExecType::TypeStreamAgg => {
-                COPR_EXECUTOR_COUNT
-                    .with_label_values(&["stream_aggr"])
-                    .inc();
+                EXECUTOR_COUNT_METRICS.with(|m| m.stream_aggr.inc());
 
                 Box::new(
                     super::StreamAggExecutor::new(Arc::clone(&ctx), src, exec.take_aggregation())?
@@ -74,7 +73,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 )
             }
             ExecType::TypeTopN => {
-                COPR_EXECUTOR_COUNT.with_label_values(&["top_n"]).inc();
+                EXECUTOR_COUNT_METRICS.with(|m| m.top_n.inc());
 
                 Box::new(
                     super::TopNExecutor::new(exec.take_top_n(), Arc::clone(&ctx), src)?
@@ -82,7 +81,7 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
                 )
             }
             ExecType::TypeLimit => {
-                COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
+                EXECUTOR_COUNT_METRICS.with(|m| m.limit.inc());
 
                 Box::new(
                     super::LimitExecutor::new(exec.take_limit(), src)
@@ -98,6 +97,9 @@ pub fn build_executors<S: Storage + 'static, C: ExecSummaryCollector + 'static>(
         };
         src = curr;
     }
+
+    EXECUTOR_COUNT_METRICS.with(|m| m.may_flush_all());
+
     Ok(src)
 }
 
@@ -109,15 +111,18 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
     mut first: tipb::Executor,
     storage: S,
     ranges: Vec<KeyRange>,
+    context: Arc<EvalConfig>,
     is_streaming: bool,
 ) -> Result<Box<dyn Executor<StorageStats = S::Statistics> + Send>> {
+    let context = EvalContext::new(context);
     match first.get_tp() {
         ExecType::TypeTableScan => {
-            COPR_EXECUTOR_COUNT.with_label_values(&["table_scan"]).inc();
+            EXECUTOR_COUNT_METRICS.with(|m| m.table_scan.inc());
 
             let ex = Box::new(
                 super::ScanExecutor::table_scan(
                     first.take_tbl_scan(),
+                    context,
                     ranges,
                     storage,
                     is_streaming,
@@ -127,12 +132,13 @@ fn build_first_executor<S: Storage + 'static, C: ExecSummaryCollector + 'static>
             Ok(ex)
         }
         ExecType::TypeIndexScan => {
-            COPR_EXECUTOR_COUNT.with_label_values(&["index_scan"]).inc();
+            EXECUTOR_COUNT_METRICS.with(|m| m.index_scan.inc());
 
             let unique = first.get_idx_scan().get_unique();
             let ex = Box::new(
                 super::ScanExecutor::index_scan(
                     first.take_idx_scan(),
+                    context,
                     ranges,
                     storage,
                     unique,
@@ -158,6 +164,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
         let executors_len = req.get_executors().len();
         let collect_exec_summary = req.get_collect_execution_summaries();
         let config = Arc::new(EvalConfig::from_request(&req)?);
+        let context = EvalContext::new(config.clone());
 
         let executor = if !(req.get_collect_execution_summaries()) {
             build_executors::<_, ExecSummaryCollectorDisabled>(
@@ -189,6 +196,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
             output_offsets: req.take_output_offsets(),
             batch_row_limit,
             collect_exec_summary,
+            context,
             exec_stats,
         })
     }
@@ -230,7 +238,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
                     let chunk = chunks.last_mut().unwrap();
                     record_cnt += 1;
                     // for default encode type
-                    let value = row.get_binary(&self.output_offsets)?;
+                    let value = row.get_binary(&mut self.context, &self.output_offsets)?;
                     chunk.mut_rows_data().extend_from_slice(&value);
                 }
                 None => {
@@ -287,7 +295,7 @@ impl<SS: 'static> ExecutorsRunner<SS> {
                 Some(row) => {
                     self.deadline.check()?;
                     record_cnt += 1;
-                    let value = row.get_binary(&self.output_offsets)?;
+                    let value = row.get_binary(&mut self.context, &self.output_offsets)?;
                     chunk.mut_rows_data().extend_from_slice(&value);
                 }
                 None => {

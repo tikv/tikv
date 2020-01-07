@@ -16,11 +16,11 @@ impl ScalarFunc {
         let pattern = try_opt!(self.children[1].eval_string(ctx, row));
         let escape = try_opt!(self.children[2].eval_int(ctx, row)) as u32;
         Ok(Some(
-            expr_util::like::like(&target, &pattern, escape, 0)? as i64
+            expr_util::like::like(&target, &pattern, escape)? as i64
         ))
     }
 
-    pub fn regexp(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn regexp_utf8(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let pattern = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         let pattern = format!("(?i){}", &pattern);
@@ -29,7 +29,7 @@ impl ScalarFunc {
         Ok(Some(Regex::new(&pattern)?.is_match(&target) as i64))
     }
 
-    pub fn regexp_binary(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn regexp(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let target = try_opt!(self.children[0].eval_string(ctx, row));
         let pattern = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
 
@@ -85,7 +85,7 @@ mod tests {
             let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
             let escape = datum_expr(Datum::I64(escape as i64));
             let op = scalar_func_expr(ScalarFuncSig::LikeSig, &[target, pattern, escape]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "{:?} like {:?}", target_str, pattern_str);
@@ -93,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn test_regexp() {
+    fn test_regexp_utf8() {
         let cases = vec![
             ("a", r"^$", false),
             ("a", r"a", true),
@@ -113,8 +113,8 @@ mod tests {
         for (target_str, pattern_str, exp) in cases {
             let target = datum_expr(Datum::Bytes(target_str.as_bytes().to_vec()));
             let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
-            let op = scalar_func_expr(ScalarFuncSig::RegexpSig, &[target, pattern]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = scalar_func_expr(ScalarFuncSig::RegexpUtf8Sig, &[target, pattern]);
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "{:?} rlike {:?}", target_str, pattern_str);
@@ -122,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn test_regexp_binary() {
+    fn test_regexp() {
         let cases = vec![
             ("a".to_owned().into_bytes(), r"^$", false),
             ("a".to_owned().into_bytes(), r"a", true),
@@ -150,8 +150,8 @@ mod tests {
         for (target_str, pattern_str, exp) in cases {
             let target = datum_expr(Datum::Bytes(target_str.clone()));
             let pattern = datum_expr(Datum::Bytes(pattern_str.as_bytes().to_vec()));
-            let op = scalar_func_expr(ScalarFuncSig::RegexpBinarySig, &[target, pattern]);
-            let op = Expression::build(&ctx, op).unwrap();
+            let op = scalar_func_expr(ScalarFuncSig::RegexpSig, &[target, pattern]);
+            let op = Expression::build(&mut ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(exp);
             assert_eq!(got, exp, "{:?} binary rlike {:?}", target_str, pattern_str);

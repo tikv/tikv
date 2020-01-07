@@ -9,11 +9,14 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine::rocks;
-use engine::rocks::{Cache, Snapshot as DbSnapshot, WriteBatch, DB};
+use engine::rocks::{Cache, WriteBatch, DB};
 use engine::rocks::{DBOptions, Writable};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
+use engine_rocks::RocksSnapshot;
+use engine_traits::{KvEngine, Peekable as PeekableTrait};
+use keys::{self, enc_end_key, enc_start_key};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -22,13 +25,13 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
+use crate::into_other::into_other;
 use crate::raftstore::store::fsm::GenSnapTask;
 use crate::raftstore::store::util::conf_state_from_region;
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
 use tikv_util::worker::Scheduler;
 
-use super::keys::{self, enc_end_key, enc_start_key};
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
@@ -681,8 +684,8 @@ impl PeerStorage {
         self.region = region;
     }
 
-    pub fn raw_snapshot(&self) -> DbSnapshot {
-        DbSnapshot::new(Arc::clone(&self.engines.kv))
+    pub fn raw_snapshot(&self) -> RocksSnapshot {
+        RocksSnapshot::new(Arc::clone(&self.engines.kv))
     }
 
     fn validate_snap(&self, snap: &Snapshot, request_index: u64) -> bool {
@@ -950,6 +953,8 @@ impl PeerStorage {
             "state" => ?ctx.apply_state,
         );
 
+        fail_point!("before_apply_snap_update_region", |_| { Ok(()) });
+
         ctx.snap_region = Some(region);
         Ok(())
     }
@@ -1203,7 +1208,7 @@ impl PeerStorage {
 
         self.schedule_applying_snapshot();
         let prev_region = self.region().clone();
-        self.region = snap_region;
+        self.set_region(snap_region);
 
         Some(ApplySnapResult {
             prev_region,
@@ -1339,33 +1344,41 @@ pub fn clear_meta(
     Ok(())
 }
 
-pub fn do_snapshot(
-    mgr: SnapManager,
-    raft_snap: DbSnapshot,
-    kv_snap: DbSnapshot,
+pub fn do_snapshot<E>(
+    mgr: SnapManager<E>,
+    raft_snap: E::Snapshot,
+    kv_snap: E::Snapshot,
     region_id: u64,
-) -> raft::Result<Snapshot> {
+) -> raft::Result<Snapshot>
+where
+    E: KvEngine,
+{
     debug!(
         "begin to generate a snapshot";
         "region_id" => region_id,
     );
 
-    let apply_state: RaftApplyState =
-        match kv_snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))? {
-            None => {
-                return Err(storage_error(format!(
-                    "could not load raft state of region {}",
-                    region_id
-                )));
-            }
-            Some(state) => state,
-        };
+    let msg = kv_snap
+        .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+        .map_err(into_other::<_, raft::Error>)?;
+    let apply_state: RaftApplyState = match msg {
+        None => {
+            return Err(storage_error(format!(
+                "could not load raft state of region {}",
+                region_id
+            )));
+        }
+        Some(state) => state,
+    };
 
     let idx = apply_state.get_applied_index();
     let term = if idx == apply_state.get_truncated_state().get_index() {
         apply_state.get_truncated_state().get_term()
     } else {
-        match raft_snap.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))? {
+        let msg = raft_snap
+            .get_msg::<Entry>(&keys::raft_log_key(region_id, idx))
+            .map_err(into_other::<_, raft::Error>)?;
+        match msg {
             None => {
                 return Err(storage_error(format!(
                     "entry {} of {} not found.",
@@ -1386,9 +1399,10 @@ pub fn do_snapshot(
     let state: RegionLocalState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
         .and_then(|res| match res {
-            None => Err(box_err!("could not find region info")),
+            None => Err(box_err!("region {} could not find region info", region_id)),
             Some(state) => Ok(state),
-        })?;
+        })
+        .map_err(into_other::<_, raft::Error>)?;
 
     if state.get_state() != PeerState::Normal {
         return Err(storage_error(format!(
@@ -1418,8 +1432,7 @@ pub fn do_snapshot(
         &mut stat,
         Box::new(mgr.clone()),
     )?;
-    let mut v = vec![];
-    snap_data.write_to_vec(&mut v)?;
+    let v = snap_data.write_to_bytes()?;
     snapshot.set_data(v);
 
     SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
@@ -1633,6 +1646,7 @@ pub fn maybe_upgrade_from_2_to_3(
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::coprocessor::CoprocessorHost;
     use crate::raftstore::store::fsm::apply::compact_raft_log;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
@@ -1958,7 +1972,14 @@ mod tests {
         let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
-        let runner = RegionRunner::new(s.engines.clone(), mgr, 0, true, Duration::from_secs(0));
+        let runner = RegionRunner::new(
+            s.engines.clone(),
+            mgr,
+            0,
+            true,
+            Duration::from_secs(0),
+            Arc::new(CoprocessorHost::default()),
+        );
         worker.start(runner).unwrap();
         let snap = s.snapshot(0);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
@@ -2034,7 +2055,7 @@ mod tests {
         s.apply_state = ctx.apply_state;
 
         let (tx, rx) = channel();
-        tx.send(snap.clone()).unwrap();
+        tx.send(snap).unwrap();
         s.set_snap_state(SnapState::Generating(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
@@ -2277,10 +2298,11 @@ mod tests {
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
         let runner = RegionRunner::new(
             s1.engines.clone(),
-            mgr.clone(),
+            mgr,
             0,
             true,
             Duration::from_secs(0),
+            Arc::new(CoprocessorHost::default()),
         );
         worker.start(runner).unwrap();
         assert!(s1.snapshot(0).is_err());

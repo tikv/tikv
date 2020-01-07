@@ -6,6 +6,8 @@ use std::net;
 use std::result;
 
 use crossbeam::TrySendError;
+#[cfg(feature = "prost-codec")]
+use prost::{DecodeError, EncodeError};
 use protobuf::ProtobufError;
 
 use kvproto::{errorpb, metapb};
@@ -79,11 +81,28 @@ quick_error! {
             description("Engine error")
             display("Engine {:?}", err)
         }
+        EngineTraits(err: engine_traits::Error) {
+            from()
+            description("Engine error")
+            display("Engine {:?}", err)
+        }
         Protobuf(err: ProtobufError) {
             from()
             cause(err)
             description(err.description())
             display("Protobuf {}", err)
+        }
+        #[cfg(feature = "prost-codec")]
+        ProstDecode(err: DecodeError) {
+            cause(err)
+            description(err.description())
+            display("DecodeError {}", err)
+        }
+        #[cfg(feature = "prost-codec")]
+        ProstEncode(err: EncodeError) {
+            cause(err)
+            description(err.description())
+            display("EncodeError {}", err)
         }
         Codec(err: codec::Error) {
             from()
@@ -219,5 +238,19 @@ impl<T> From<TrySendError<T>> for Error {
             TrySendError::Full(_) => Error::Transport(DiscardReason::Full),
             TrySendError::Disconnected(_) => Error::Transport(DiscardReason::Disconnected),
         }
+    }
+}
+
+#[cfg(feature = "prost-codec")]
+impl From<prost::EncodeError> for Error {
+    fn from(err: prost::EncodeError) -> Error {
+        Error::ProstEncode(err.into())
+    }
+}
+
+#[cfg(feature = "prost-codec")]
+impl From<prost::DecodeError> for Error {
+    fn from(err: prost::DecodeError) -> Error {
+        Error::ProstDecode(err.into())
     }
 }

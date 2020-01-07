@@ -7,8 +7,9 @@ use std::sync::atomic::*;
 use std::sync::*;
 use std::time::*;
 
-use engine::rocks::util::io_limiter::IOLimiter;
 use engine::DB;
+use engine_rocks::RocksIOLimiter;
+use engine_traits::IOLimiter;
 use external_storage::*;
 use futures::lazy;
 use futures::prelude::Future;
@@ -17,14 +18,14 @@ use kvproto::backup::*;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use kvproto::metapb::*;
 use raft::StateRole;
-use tidb_query::codec::table::decode_table_id;
 use tikv::raftstore::store::util::find_peer;
 use tikv::storage::kv::{Engine, RegionInfoProvider};
 use tikv::storage::txn::{EntryBatch, SnapshotStore, TxnEntryScanner, TxnEntryStore};
-use tikv::storage::{Key, Statistics};
+use tikv::storage::Statistics;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
+use txn_types::{Key, TimeStamp};
 
 use crate::metrics::*;
 use crate::*;
@@ -38,8 +39,8 @@ const IDLE_THREADPOOL_DURATION: u64 = 30 * 60 * 1000; // 30 mins
 pub struct Task {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
-    start_ts: u64,
-    end_ts: u64,
+    start_ts: TimeStamp,
+    end_ts: TimeStamp,
     storage: LimitedStorage,
     pub(crate) resp: UnboundedSender<BackupResponse>,
     concurrency: u32,
@@ -64,7 +65,7 @@ impl fmt::Debug for Task {
 
 #[derive(Clone)]
 struct LimitedStorage {
-    limiter: Option<Arc<IOLimiter>>,
+    limiter: Option<Arc<RocksIOLimiter>>,
     storage: Arc<dyn ExternalStorage>,
 }
 
@@ -77,12 +78,12 @@ impl Task {
         let cancel = Arc::new(AtomicBool::new(false));
 
         let limiter = if req.get_rate_limit() != 0 {
-            Some(Arc::new(IOLimiter::new(req.get_rate_limit() as _)))
+            Some(Arc::new(RocksIOLimiter::new(req.get_rate_limit() as _)))
         } else {
             None
         };
         let storage = LimitedStorage {
-            storage: create_storage(req.get_path())?,
+            storage: create_storage(req.get_storage_backend())?,
             limiter,
         };
 
@@ -90,8 +91,8 @@ impl Task {
             Task {
                 start_key: req.get_start_key().to_owned(),
                 end_key: req.get_end_key().to_owned(),
-                start_ts: req.get_start_version(),
-                end_ts: req.get_end_version(),
+                start_ts: req.get_start_version().into(),
+                end_ts: req.get_end_version().into(),
                 resp,
                 storage,
                 concurrency: req.get_concurrency(),
@@ -121,9 +122,10 @@ impl BackupRange {
         &self,
         writer: &mut BackupWriter,
         engine: &E,
-        backup_ts: u64,
+        backup_ts: TimeStamp,
+        begin_ts: TimeStamp,
     ) -> Result<Statistics> {
-        let mut ctx = Context::new();
+        let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
         ctx.set_peer(self.leader.clone());
@@ -139,10 +141,15 @@ impl BackupRange {
             backup_ts,
             IsolationLevel::Si,
             false, /* fill_cache */
+            Default::default(),
         );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
-        let mut scanner = snap_store.entry_scanner(start_key, end_key).unwrap();
+        // Incremental backup needs to output delete records.
+        let incremental = !begin_ts.is_zero();
+        let mut scanner = snap_store
+            .entry_scanner(start_key, end_key, begin_ts, incremental)
+            .unwrap();
 
         let start = Instant::now();
         let mut batch = EntryBatch::with_capacity(1024);
@@ -351,15 +358,12 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
     fn spawn_backup_worker(
         &self,
         prs: Arc<Mutex<Progress<R>>>,
-        start_ts: u64,
-        end_ts: u64,
+        start_ts: TimeStamp,
+        end_ts: TimeStamp,
         storage: LimitedStorage,
         tx: mpsc::Sender<(BackupRange, Result<BackupRes>)>,
         cancel: Arc<AtomicBool>,
     ) {
-        // TODO: support incremental backup
-        let _ = start_ts;
-
         let backup_ts = end_ts;
         let engine = self.engine.clone();
         let db = self.db.clone();
@@ -375,11 +379,15 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     warn!("backup task has canceled"; "range" => ?brange);
                     return Ok(());
                 }
-                let table_id = brange
-                    .start_key
-                    .clone()
-                    .and_then(|k| decode_table_id(&k.into_raw().unwrap()).ok());
-                let name = backup_file_name(store_id, &brange.region, table_id);
+                // TODO: make file_name unique and short
+                let key = brange.start_key.clone().and_then(|k| {
+                    // use start_key sha256 instead of start_key to avoid file name too long os error
+                    tikv_util::file::sha256(&k.into_raw().unwrap())
+                        .ok()
+                        .map(|b| hex::encode(b))
+                });
+
+                let name = backup_file_name(store_id, &brange.region, key);
                 let mut writer = match BackupWriter::new(db.clone(), &name, storage.limiter.clone())
                 {
                     Ok(w) => w,
@@ -388,7 +396,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                         return tx.send((brange, Err(e))).map_err(|_| ());
                     }
                 };
-                let stat = match brange.backup(&mut writer, &engine, backup_ts) {
+                let stat = match brange.backup(&mut writer, &engine, backup_ts, start_ts) {
                     Ok(s) => s,
                     Err(e) => return tx.send((brange, Err(e))).map_err(|_| ()),
                 };
@@ -449,7 +457,7 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
             let end_key = brange
                 .end_key
                 .map_or_else(|| vec![], |k| k.into_raw().unwrap());
-            let mut response = BackupResponse::new();
+            let mut response = BackupResponse::default();
             match res {
                 Ok((mut files, stat)) => {
                     debug!("backup region finish";
@@ -462,8 +470,8 @@ impl<E: Engine, R: RegionInfoProvider> Endpoint<E, R> {
                     for file in files.iter_mut() {
                         file.set_start_key(start_key.clone());
                         file.set_end_key(end_key.clone());
-                        file.set_start_version(task.start_ts);
-                        file.set_end_version(task.end_ts);
+                        file.set_start_version(task.start_ts.into_inner());
+                        file.set_end_version(task.end_ts.into_inner());
                     }
                     response.set_files(files.into());
                 }
@@ -498,16 +506,8 @@ impl<E: Engine, R: RegionInfoProvider> Runnable<Task> for Endpoint<E, R> {
             return;
         }
         info!("run backup task"; "task" => %task);
-        if task.start_ts == task.end_ts {
-            self.handle_backup_task(task);
-            self.pool.borrow_mut().heartbeat();
-        } else {
-            // TODO: support incremental backup
-            BACKUP_RANGE_ERROR_VEC
-                .with_label_values(&["incremental"])
-                .inc();
-            error!("incremental backup is not supported yet");
-        }
+        self.handle_backup_task(task);
+        self.pool.borrow_mut().heartbeat();
     }
 }
 
@@ -563,14 +563,14 @@ fn get_max_start_key(start_key: Option<&Key>, region: &Region) -> Option<Key> {
 
 /// Construct an backup file name based on the given store id and region.
 /// A name consists with three parts: store id, region_id and a epoch version.
-fn backup_file_name(store_id: u64, region: &Region, table_id: Option<i64>) -> String {
-    match table_id {
-        Some(t_id) => format!(
+fn backup_file_name(store_id: u64, region: &Region, key: Option<String>) -> String {
+    match key {
+        Some(k) => format!(
             "{}_{}_{}_{}",
             store_id,
             region.get_id(),
             region.get_region_epoch().get_version(),
-            t_id
+            k
         ),
         None => format!(
             "{}_{}_{}",
@@ -584,7 +584,7 @@ fn backup_file_name(store_id: u64, region: &Region, table_id: Option<i64>) -> St
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use external_storage::LocalStorage;
+    use external_storage::{make_local_backend, make_noop_backend, LocalStorage};
     use futures::{self, Future, Stream};
     use kvproto::metapb;
     use rand;
@@ -595,9 +595,9 @@ pub mod tests {
     use tikv::raftstore::store::util::new_peer;
     use tikv::storage::kv::Result as EngineResult;
     use tikv::storage::mvcc::tests::*;
-    use tikv::storage::SHORT_VALUE_MAX_LEN;
     use tikv::storage::{RocksEngine, TestEngineBuilder};
     use tikv_util::time::Instant;
+    use txn_types::SHORT_VALUE_MAX_LEN;
 
     #[derive(Clone)]
     pub struct MockRegionInfoProvider {
@@ -745,8 +745,8 @@ pub mod tests {
                 let task = Task {
                     start_key: start_key.to_vec(),
                     end_key: end_key.to_vec(),
-                    start_ts: 1,
-                    end_ts: 1,
+                    start_ts: 1.into(),
+                    end_ts: 1.into(),
                     resp: tx,
                     storage,
                     concurrency: 4,
@@ -813,11 +813,8 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut ts = 1;
-        let mut alloc_ts = || {
-            ts += 1;
-            ts
-        };
+        let mut ts = TimeStamp::new(1);
+        let mut alloc_ts = || *ts.incr();
         let mut backup_tss = vec![];
         // Multi-versions for key 0..9.
         for len in &[SHORT_VALUE_MAX_LEN - 1, SHORT_VALUE_MAX_LEN * 2] {
@@ -838,23 +835,20 @@ pub mod tests {
         }
 
         // TODO: check key number for each snapshot.
-        let limiter = Arc::new(IOLimiter::new(10 * 1024 * 1024 /* 10 MB/s */));
+        let limiter = Arc::new(RocksIOLimiter::new(10 * 1024 * 1024 /* 10 MB/s */));
         for (ts, len) in backup_tss {
-            let mut req = BackupRequest::new();
+            let mut req = BackupRequest::default();
             req.set_start_key(vec![]);
             req.set_end_key(vec![b'5']);
-            req.set_start_version(ts);
-            req.set_end_version(ts);
+            req.set_start_version(0);
+            req.set_end_version(ts.into_inner());
             req.set_concurrency(4);
             let (tx, rx) = unbounded();
             // Empty path should return an error.
             Task::new(req.clone(), tx.clone()).unwrap_err();
 
             // Set an unique path to avoid AlreadyExists error.
-            req.set_path(format!(
-                "local://{}",
-                tmp.path().join(format!("{}", ts)).display()
-            ));
+            req.set_storage_backend(make_local_backend(&tmp.path().join(ts.to_string())));
             if len % 2 == 0 {
                 req.set_rate_limit(10 * 1024 * 1024);
             }
@@ -890,11 +884,8 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut ts = 1;
-        let mut alloc_ts = || {
-            ts += 1;
-            ts
-        };
+        let mut ts: TimeStamp = 1.into();
+        let mut alloc_ts = || *ts.incr();
         let start = alloc_ts();
         let key = format!("{}", start);
         must_prewrite_put(
@@ -906,17 +897,14 @@ pub mod tests {
         );
 
         let now = alloc_ts();
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![b'5']);
-        req.set_start_version(now);
-        req.set_end_version(now);
+        req.set_start_version(now.into_inner());
+        req.set_end_version(now.into_inner());
         req.set_concurrency(4);
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", now)).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
         let (tx, rx) = unbounded();
         let (task, _) = Task::new(req.clone(), tx).unwrap();
         endpoint.handle_backup_task(task);
@@ -934,15 +922,12 @@ pub mod tests {
         // Test whether it can correctly convert not leader to region error.
         engine.trigger_not_leader();
         let now = alloc_ts();
-        req.set_start_version(now);
-        req.set_end_version(now);
+        req.set_start_version(now.into_inner());
+        req.set_end_version(now.into_inner());
         // Set an unique path to avoid AlreadyExists error.
-        req.set_path(format!(
-            "local://{}",
-            tmp.path().join(format!("{}", now)).display()
-        ));
+        req.set_storage_backend(make_local_backend(&tmp.path().join(now.to_string())));
         let (tx, rx) = unbounded();
-        let (task, _) = Task::new(req.clone(), tx).unwrap();
+        let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         check_response(rx, |resp| {
             let resp = resp.unwrap();
@@ -964,11 +949,8 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut ts = 1;
-        let mut alloc_ts = || {
-            ts += 1;
-            ts
-        };
+        let mut ts: TimeStamp = 1.into();
+        let mut alloc_ts = || *ts.incr();
         let start = alloc_ts();
         let key = format!("{}", start);
         must_prewrite_put(
@@ -983,13 +965,13 @@ pub mod tests {
         must_commit(&engine, key.as_bytes(), start, commit);
 
         let now = alloc_ts();
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
-        req.set_start_version(now);
-        req.set_end_version(now);
+        req.set_start_version(now.into_inner());
+        req.set_end_version(now.into_inner());
         req.set_concurrency(4);
-        req.set_path(format!("local://{}", temp.path().display()));
+        req.set_storage_backend(make_local_backend(temp.path()));
 
         // Cancel the task before starting the task.
         let (tx, rx) = unbounded();
@@ -1003,7 +985,7 @@ pub mod tests {
 
         // Cancel the task during backup.
         let (tx, rx) = unbounded();
-        let (task, cancel) = Task::new(req.clone(), tx).unwrap();
+        let (task, cancel) = Task::new(req, tx).unwrap();
         endpoint.region_info.canecl_on_seek(cancel);
         endpoint.handle_backup_task(task);
         check_response(rx, |resp| {
@@ -1020,16 +1002,16 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"5".to_vec(), 1)]);
 
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
         req.set_start_version(1);
         req.set_end_version(1);
         req.set_concurrency(4);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, rx) = unbounded();
-        let (task, _) = Task::new(req.clone(), tx).unwrap();
+        let (task, _) = Task::new(req, tx).unwrap();
         // Pause the engine 6 seconds to trigger Timeout error.
         // The Timeout error is translated to server is busy.
         engine.pause(Duration::from_secs(6));
@@ -1052,12 +1034,12 @@ pub mod tests {
             .region_info
             .set_regions(vec![(b"".to_vec(), b"".to_vec(), 1)]);
 
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
         req.set_start_version(1);
         req.set_end_version(1);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, _) = unbounded();
 
@@ -1112,13 +1094,13 @@ pub mod tests {
             tx
         };
 
-        let mut req = BackupRequest::new();
+        let mut req = BackupRequest::default();
         req.set_start_key(vec![]);
         req.set_end_key(vec![]);
         req.set_start_version(1);
         req.set_end_version(1);
         req.set_concurrency(10);
-        req.set_path("noop://foo".to_owned());
+        req.set_storage_backend(make_noop_backend());
 
         let (tx, _) = futures::sync::mpsc::unbounded();
         let (task, _) = Task::new(req, tx).unwrap();

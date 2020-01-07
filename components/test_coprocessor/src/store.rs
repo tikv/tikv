@@ -8,10 +8,14 @@ use kvproto::kvrpcpb::{Context, IsolationLevel};
 
 use test_storage::{SyncTestStorage, SyncTestStorageBuilder};
 use tidb_query::codec::{datum, table, Datum};
+use tidb_query::expr::EvalContext;
 use tikv::storage::{
-    Engine, FixtureStore, Key, Mutation, RocksEngine, SnapshotStore, TestEngineBuilder,
+    kv::{Engine, RocksEngine, TestEngineBuilder},
+    txn::FixtureStore,
+    SnapshotStore,
 };
 use tikv_util::collections::HashMap;
+use txn_types::{Key, Mutation, TimeStamp};
 
 pub struct Insert<'a, E: Engine> {
     store: &'a mut Store<E>,
@@ -47,13 +51,13 @@ impl<'a, E: Engine> Insert<'a, E> {
         let key = table::encode_row_key(self.table.id, handle.i64());
         let ids: Vec<_> = self.values.keys().cloned().collect();
         let values: Vec<_> = self.values.values().cloned().collect();
-        let value = table::encode_row(values, &ids).unwrap();
+        let value = table::encode_row(&mut EvalContext::default(), values, &ids).unwrap();
         let mut kvs = vec![];
         kvs.push((key, value));
         for (&id, idxs) in &self.table.idxs {
             let mut v: Vec<_> = idxs.iter().map(|id| self.values[id].clone()).collect();
             v.push(handle.clone());
-            let encoded = datum::encode_key(&v).unwrap();
+            let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
             let idx_key = table::encode_index_seek_key(self.table.id, id, &encoded);
             kvs.push((idx_key, vec![0]));
         }
@@ -90,7 +94,7 @@ impl<'a, E: Engine> Delete<'a, E> {
         for (&idx_id, idx_cols) in &self.table.idxs {
             let mut v: Vec<_> = idx_cols.iter().map(|id| values[id].clone()).collect();
             v.push(Datum::I64(id));
-            let encoded = datum::encode_key(&v).unwrap();
+            let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
             let idx_key = table::encode_index_seek_key(self.table.id, idx_id, &encoded);
             keys.push(idx_key);
         }
@@ -101,8 +105,8 @@ impl<'a, E: Engine> Delete<'a, E> {
 /// A store that operates over MVCC and support transactions.
 pub struct Store<E: Engine> {
     store: SyncTestStorage<E>,
-    current_ts: u64,
-    last_committed_ts: u64,
+    current_ts: TimeStamp,
+    last_committed_ts: TimeStamp,
     handles: Vec<Vec<u8>>,
 }
 
@@ -116,14 +120,14 @@ impl<E: Engine> Store<E> {
     pub fn from_engine(engine: E) -> Self {
         Self {
             store: SyncTestStorageBuilder::from_engine(engine).build().unwrap(),
-            current_ts: 1,
-            last_committed_ts: 0,
+            current_ts: 1.into(),
+            last_committed_ts: TimeStamp::zero(),
             handles: vec![],
         }
     }
 
     pub fn begin(&mut self) {
-        self.current_ts = next_id() as u64;
+        self.current_ts = (next_id() as u64).into();
         self.handles.clear();
     }
 
@@ -158,7 +162,7 @@ impl<E: Engine> Store<E> {
     }
 
     pub fn commit_with_ctx(&mut self, ctx: Context) {
-        let commit_ts = next_id() as u64;
+        let commit_ts = (next_id() as u64).into();
         let handles: Vec<_> = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
         if !handles.is_empty() {
             self.store
@@ -200,7 +204,13 @@ impl<E: Engine> Store<E> {
     /// Directly creates a `SnapshotStore` over current committed data.
     pub fn to_snapshot_store(&self) -> SnapshotStore<E::Snap> {
         let snapshot = self.get_engine().snapshot(&Context::default()).unwrap();
-        SnapshotStore::new(snapshot, self.last_committed_ts, IsolationLevel::Si, true)
+        SnapshotStore::new(
+            snapshot,
+            self.last_committed_ts,
+            IsolationLevel::Si,
+            true,
+            Default::default(),
+        )
     }
 
     /// Strip off committed MVCC information to create a `FixtureStore`.

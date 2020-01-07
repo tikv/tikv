@@ -158,7 +158,7 @@ impl From<Error> for tipb::Error {
     fn from(error: Error) -> tipb::Error {
         let mut err = tipb::Error::default();
         err.set_code(error.code());
-        err.set_msg(format!("{:?}", error));
+        err.set_msg(error.to_string());
         err
     }
 }
@@ -201,9 +201,9 @@ impl From<RegexpError> for Error {
     }
 }
 
-impl From<Box<codec::Error>> for Error {
-    fn from(err: Box<codec::Error>) -> Error {
-        box_err!("codec:{:?}", err)
+impl From<codec::Error> for Error {
+    fn from(err: codec::Error) -> Error {
+        box_err!("Codec: {}", err)
     }
 }
 

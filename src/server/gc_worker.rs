@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::mpsc;
@@ -9,28 +10,39 @@ use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
 use engine::rocks::util::get_cf_handle;
-use engine::rocks::util::io_limiter::IOLimiter;
 use engine::rocks::DB;
 use engine::util::delete_all_in_range_cf;
 use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use futures::Future;
-use kvproto::kvrpcpb::Context;
+use engine_rocks::{RocksEngine, RocksIOLimiter};
+use engine_traits::IOLimiter;
+use futures::sink::Sink;
+use futures::sync::mpsc as future_mpsc;
+use futures::{future, Async, Future, Poll, Stream};
+use kvproto::kvrpcpb::{Context, IsolationLevel, LockInfo};
 use kvproto::metapb;
 use log_wrappers::DisplayValue;
 use raft::StateRole;
+use tokio_core::reactor::Handle;
 
-use crate::raftstore::store::keys;
+use crate::raftstore::coprocessor::RegionInfoAccessor;
+use crate::raftstore::router::ServerRaftStoreRouter;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
-use crate::server::transport::ServerRaftStoreRouter;
-use crate::storage::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, Statistics};
-use crate::storage::metrics::*;
-use crate::storage::mvcc::{MvccReader, MvccTxn};
-use crate::storage::{Callback, Error, Key, Result};
+use crate::raftstore::store::RegionSnapshot;
+use crate::server::metrics::*;
+use crate::storage::kv::{
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, RegionInfoProvider, ScanMode,
+    Snapshot, Statistics,
+};
+use crate::storage::mvcc::{check_need_gc, Error as MvccError, MvccReader, MvccTxn};
+use crate::storage::{Callback, Error, ErrorInner, Result};
 use pd_client::PdClient;
 use tikv_util::config::ReadableSize;
 use tikv_util::time::{duration_to_sec, SlowTimer};
-use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
+use tikv_util::worker::{
+    FutureRunnable, FutureScheduler, FutureWorker, Stopped as FutureWorkerStopped,
+};
+use txn_types::{Key, TimeStamp};
 
 /// After the GC scan of a key, output a message to the log if there are at least this many
 /// versions of the key.
@@ -40,7 +52,7 @@ const GC_LOG_FOUND_VERSION_THRESHOLD: usize = 30;
 /// versions are deleted.
 const GC_LOG_DELETED_VERSION_THRESHOLD: usize = 30;
 
-pub const GC_MAX_PENDING_TASKS: usize = 2;
+pub const GC_MAX_EXECUTING_TASKS: usize = 10;
 const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
 
@@ -56,19 +68,22 @@ pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
 // No limit
 const DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC: u64 = 0;
 
+const FUTURE_STREAM_BUFFER_SIZE: usize = 8;
+const SCAN_LOCK_BATCH_SIZE: usize = 128;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
-pub struct GCConfig {
+pub struct GcConfig {
     pub ratio_threshold: f64,
     pub batch_keys: usize,
     pub max_write_bytes_per_sec: ReadableSize,
 }
 
-impl Default for GCConfig {
-    fn default() -> GCConfig {
-        GCConfig {
+impl Default for GcConfig {
+    fn default() -> GcConfig {
+        GcConfig {
             ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             batch_keys: DEFAULT_GC_BATCH_KEYS,
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
@@ -76,7 +91,7 @@ impl Default for GCConfig {
     }
 }
 
-impl GCConfig {
+impl GcConfig {
     pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if self.batch_keys == 0 {
             return Err(("gc.batch_keys should not be 0.").into());
@@ -87,23 +102,24 @@ impl GCConfig {
 
 /// Provides safe point.
 /// TODO: Give it a better name?
-pub trait GCSafePointProvider: Send + 'static {
-    fn get_safe_point(&self) -> Result<u64>;
+pub trait GcSafePointProvider: Send + 'static {
+    fn get_safe_point(&self) -> Result<TimeStamp>;
 }
 
-impl<T: PdClient + 'static> GCSafePointProvider for Arc<T> {
-    fn get_safe_point(&self) -> Result<u64> {
+impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
+    fn get_safe_point(&self) -> Result<TimeStamp> {
         let future = self.get_gc_safe_point();
         future
             .wait()
+            .map(Into::into)
             .map_err(|e| box_err!("failed to get safe point from PD: {:?}", e))
     }
 }
 
-enum GCTask {
-    GC {
+enum GcTask {
+    Gc {
         ctx: Context,
-        safe_point: u64,
+        safe_point: TimeStamp,
         callback: Callback<()>,
     },
     UnsafeDestroyRange {
@@ -112,33 +128,27 @@ enum GCTask {
         end_key: Key,
         callback: Callback<()>,
     },
+    PhysicalScanLock {
+        ctx: Context,
+        max_ts: TimeStamp,
+        sender: future_mpsc::Sender<Result<Vec<LockInfo>>>,
+    },
 }
 
-impl GCTask {
-    pub fn take_callback(&mut self) -> Callback<()> {
-        let callback = match self {
-            GCTask::GC {
-                ref mut callback, ..
-            } => callback,
-            GCTask::UnsafeDestroyRange {
-                ref mut callback, ..
-            } => callback,
-        };
-        mem::replace(callback, Box::new(|_| {}))
-    }
-
+impl GcTask {
     pub fn get_label(&self) -> &'static str {
         match self {
-            GCTask::GC { .. } => "gc",
-            GCTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
+            GcTask::Gc { .. } => "gc",
+            GcTask::UnsafeDestroyRange { .. } => "unsafe_destroy_range",
+            GcTask::PhysicalScanLock { .. } => "physical_scan_lock",
         }
     }
 }
 
-impl Display for GCTask {
+impl Display for GcTask {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            GCTask::GC {
+            GcTask::Gc {
                 ctx, safe_point, ..
             } => {
                 let epoch = format!("{:?}", ctx.region_epoch.as_ref());
@@ -148,47 +158,138 @@ impl Display for GCTask {
                     .field("safe_point", safe_point)
                     .finish()
             }
-            GCTask::UnsafeDestroyRange {
+            GcTask::UnsafeDestroyRange {
                 start_key, end_key, ..
             } => f
                 .debug_struct("UnsafeDestroyRange")
                 .field("start_key", &format!("{}", start_key))
                 .field("end_key", &format!("{}", end_key))
                 .finish(),
+            GcTask::PhysicalScanLock { max_ts, .. } => f
+                .debug_struct("PhysicalScanLock")
+                .field("max_ts", max_ts)
+                .finish(),
         }
     }
 }
 
+struct LockScanner<S: Snapshot> {
+    reader: MvccReader<S>,
+    max_ts: TimeStamp,
+    next_key: Option<Key>,
+    batch_size: usize,
+    is_finished: bool,
+}
+
+impl<S: Snapshot> LockScanner<S> {
+    pub fn new(snapshot: S, max_ts: TimeStamp) -> Self {
+        let reader = MvccReader::new(snapshot, Some(ScanMode::Forward), false, IsolationLevel::Si);
+        Self {
+            reader,
+            max_ts,
+            next_key: None,
+            batch_size: SCAN_LOCK_BATCH_SIZE,
+            is_finished: false,
+        }
+    }
+
+    fn poll_impl(&mut self) -> Poll<Option<Vec<LockInfo>>, Error> {
+        if self.is_finished {
+            return Ok(Async::Ready(None));
+        }
+        let max_ts = self.max_ts;
+
+        let scan_lock_res =
+            self.reader
+                .scan_locks(self.next_key.as_ref(), |l| l.ts <= max_ts, self.batch_size);
+        let (locks, is_remain) = match scan_lock_res {
+            Ok(res) => res,
+            Err(e) => {
+                // Do not scan more elements once error happens.
+                self.is_finished = true;
+                return Err(e.into());
+            }
+        };
+
+        if is_remain {
+            let mut next_key = locks.last().unwrap().0.clone().into_encoded();
+            // Move to the next key
+            next_key.push(0);
+            self.next_key = Some(Key::from_encoded(next_key));
+        } else {
+            self.is_finished = true;
+        }
+
+        let mut lock_infos = Vec::with_capacity(locks.len());
+
+        for (key, lock) in locks {
+            let raw_key = match key.into_raw() {
+                Ok(k) => k,
+                Err(e) => {
+                    self.is_finished = true;
+                    let e = Error::from(MvccError::from(e));
+                    return Err(e);
+                }
+            };
+            lock_infos.push(lock.into_lock_info(raw_key))
+        }
+
+        Ok(Async::Ready(Some(lock_infos)))
+    }
+
+    fn update_statistics_metrics(&mut self) {
+        let mut stats = Statistics::default();
+        self.reader.collect_statistics_into(&mut stats);
+        for (cf, details) in stats.details().iter() {
+            for (tag, count) in details.iter() {
+                GC_PHYSICAL_SCAN_LOCK_COUNTER_VEC
+                    .with_label_values(&[cf, *tag])
+                    .inc_by(*count as i64);
+            }
+        }
+    }
+}
+
+impl<S: Snapshot> Stream for LockScanner<S> {
+    type Item = Vec<LockInfo>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        let result = self.poll_impl();
+        self.update_statistics_metrics();
+        result
+    }
+}
+
 /// Used to perform GC operations on the engine.
-struct GCRunner<E: Engine> {
+struct GcRunner<E: Engine> {
     engine: E,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
+    region_info_accessor: Option<RegionInfoAccessor>,
 
     /// Used to limit the write flow of GC.
-    limiter: Option<IOLimiter>,
+    limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
 
-    cfg: GCConfig,
+    cfg: GcConfig,
 
     stats: Statistics,
 }
 
-impl<E: Engine> GCRunner<E> {
+impl<E: Engine> GcRunner<E> {
     pub fn new(
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        cfg: GCConfig,
+        region_info_accessor: Option<RegionInfoAccessor>,
+        limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
+        cfg: GcConfig,
     ) -> Self {
-        let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
-            Some(IOLimiter::new(cfg.max_write_bytes_per_sec.0))
-        } else {
-            None
-        };
         Self {
             engine,
             local_storage,
             raft_store_router,
+            region_info_accessor,
             limiter,
             cfg,
             stats: Statistics::default(),
@@ -205,16 +306,90 @@ impl<E: Engine> GCRunner<E> {
                 Ok(snapshot)
             }
             Some((_, Err(e))) => Err(e),
-            None => Err(EngineError::Timeout(timeout)),
+            None => Err(EngineError::from(EngineErrorInner::Timeout(timeout))),
         }
         .map_err(Error::from)
+    }
+
+    /// Check need gc without getting snapshot.
+    /// If this is not supported or any error happens, returns true to do further check after
+    /// getting snapshot.
+    fn need_gc(&self, ctx: &Context, safe_point: TimeStamp) -> bool {
+        let region_info_accessor = match &self.region_info_accessor {
+            Some(r) => r,
+            None => {
+                info!(
+                    "region_info_accessor not set. cannot check need_gc without getting snapshot"
+                );
+                return true;
+            }
+        };
+
+        let db = match &self.local_storage {
+            Some(db) => db,
+            None => {
+                info!("local_storage not set. cannot check need_gc without getting snapshot");
+                return true;
+            }
+        };
+
+        let (tx, rx) = mpsc::channel();
+        if let Err(e) = region_info_accessor.find_region_by_id(
+            ctx.get_region_id(),
+            Box::new(move |region| match tx.send(region) {
+                Ok(()) => (),
+                Err(e) => error!(
+                    "find_region_by_id failed to send result";
+                    "err" => ?e
+                ),
+            }),
+        ) {
+            error!(
+                "failed to find_region_by_id from region_info_accessor";
+                "region_id" => ctx.get_region_id(),
+                "err" => ?e
+            );
+            return true;
+        }
+
+        let region_info = match rx.recv() {
+            Ok(None) => return true,
+            Ok(Some(r)) => r,
+            Err(e) => {
+                error!(
+                    "failed to find_region_by_id from region_info_accessor";
+                    "region_id" => ctx.get_region_id(),
+                    "err" => ?e
+                );
+                return true;
+            }
+        };
+
+        let start_key = keys::data_key(region_info.region.get_start_key());
+        let end_key = keys::data_end_key(region_info.region.get_end_key());
+
+        let collection =
+            match engine::util::get_range_properties_cf(&db, CF_WRITE, &start_key, &end_key) {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(
+                        "failed to get range properties from write cf";
+                        "region_id" => ctx.get_region_id(),
+                        "start_key" => hex::encode_upper(&start_key),
+                        "end_key" => hex::encode_upper(&end_key),
+                        "err" => ?e,
+                    );
+                    return true;
+                }
+            };
+        check_need_gc(safe_point, self.cfg.ratio_threshold, collection)
     }
 
     /// Scans keys in the region. Returns scanned keys if any, and a key indicating scan progress
     fn scan_keys(
         &mut self,
         ctx: &mut Context,
-        safe_point: u64,
+        safe_point: TimeStamp,
         from: Option<Key>,
         limit: usize,
     ) -> Result<(Vec<Key>, Option<Key>)> {
@@ -232,7 +407,7 @@ impl<E: Engine> GCRunner<E> {
         // skip gc before scanning all data.
         let skip_gc = is_range_start && !reader.need_gc(safe_point, self.cfg.ratio_threshold);
         let res = if skip_gc {
-            KV_GC_SKIPPED_COUNTER.inc();
+            GC_SKIPPED_COUNTER.inc();
             Ok((vec![], None))
         } else {
             reader
@@ -242,7 +417,7 @@ impl<E: Engine> GCRunner<E> {
                     if keys.is_empty() {
                         assert!(next.is_none());
                         if is_range_start {
-                            KV_GC_EMPTY_RANGE_COUNTER.inc();
+                            GC_EMPTY_RANGE_COUNTER.inc();
                         }
                     }
                     Ok((keys, next))
@@ -256,12 +431,17 @@ impl<E: Engine> GCRunner<E> {
     fn gc_keys(
         &mut self,
         ctx: &mut Context,
-        safe_point: u64,
+        safe_point: TimeStamp,
         keys: Vec<Key>,
         mut next_scan_key: Option<Key>,
     ) -> Result<Option<Key>> {
         let snapshot = self.get_snapshot(ctx)?;
-        let mut txn = MvccTxn::new(snapshot, 0, !ctx.get_not_fill_cache()).unwrap();
+        let mut txn = MvccTxn::for_scan(
+            snapshot,
+            Some(ScanMode::Forward),
+            TimeStamp::zero(),
+            !ctx.get_not_fill_cache(),
+        );
         for k in keys {
             let gc_info = txn.gc(k.clone(), safe_point)?;
 
@@ -294,7 +474,7 @@ impl<E: Engine> GCRunner<E> {
         let write_size = txn.write_size();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
-            if let Some(limiter) = &self.limiter {
+            if let Some(limiter) = &*self.limiter.lock().unwrap() {
                 limiter.request(write_size as i64);
             }
             self.engine.write(ctx, modifies)?;
@@ -302,16 +482,21 @@ impl<E: Engine> GCRunner<E> {
         Ok(next_scan_key)
     }
 
-    fn gc(&mut self, ctx: &mut Context, safe_point: u64) -> Result<()> {
+    fn gc(&mut self, ctx: &mut Context, safe_point: TimeStamp) -> Result<()> {
         debug!(
             "start doing GC";
             "region_id" => ctx.get_region_id(),
             "safe_point" => safe_point
         );
 
+        if !self.need_gc(ctx, safe_point) {
+            GC_SKIPPED_COUNTER.inc();
+            return Ok(());
+        }
+
         let mut next_key = None;
         loop {
-            // Scans at most `GCConfig.batch_keys` keys
+            // Scans at most `GcConfig.batch_keys` keys
             let (keys, next) = self
                 .scan_keys(ctx, safe_point, next_key, self.cfg.batch_keys)
                 .map_err(|e| {
@@ -422,52 +607,48 @@ impl<E: Engine> GCRunner<E> {
         Ok(())
     }
 
-    fn handle_gc_worker_task(&mut self, mut task: GCTask) {
-        let label = task.get_label();
-        GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
-
-        let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
-
-        let result = match &mut task {
-            GCTask::GC {
-                ctx, safe_point, ..
-            } => self.gc(ctx, *safe_point),
-            GCTask::UnsafeDestroyRange {
-                ctx,
-                start_key,
-                end_key,
-                ..
-            } => self.unsafe_destroy_range(ctx, start_key, end_key),
+    fn handle_physical_scan_lock(
+        &self,
+        handle: &Handle,
+        _: &Context,
+        max_ts: TimeStamp,
+        sender: future_mpsc::Sender<Result<Vec<LockInfo>>>,
+    ) {
+        let db = match &self.local_storage {
+            Some(db) => Arc::clone(&db),
+            None => {
+                let e = box_err!("local storage not set, physical scan lock not supported");
+                handle.spawn(sender.send(Err(e)).map(|_| ()).map_err(|e| {
+                    error!("send physical scan lock result from GCRunner failed"; "err" => ?e);
+                }));
+                return;
+            }
         };
 
-        GC_TASK_DURATION_HISTOGRAM_VEC
-            .with_label_values(&[label])
-            .observe(duration_to_sec(timer.elapsed()));
-        slow_log!(timer, "{}", task);
+        info!("physical scan lock started"; "max_ts" => %max_ts);
 
-        if result.is_err() {
-            GC_GCTASK_FAIL_COUNTER_VEC.with_label_values(&[label]).inc();
-        }
-        (task.take_callback())(result);
-    }
-}
+        // Create a `RegionSnapshot`, which can converts the 'z'-prefixed keys into normal keys
+        // internally. A fake region meta is given to make the snapshot's range unbounded.
+        // TODO: Should we implement a special snapshot and iterator types for this?
+        let mut fake_region = metapb::Region::default();
+        // Add a peer to pass initialized check.
+        fake_region.mut_peers().push(metapb::Peer::default());
+        let snap = RegionSnapshot::<RocksEngine>::from_raw(db, fake_region);
+        let lock_scanner = LockScanner::new(snap, max_ts);
 
-impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
-    #[inline]
-    fn run(&mut self, task: GCTask) {
-        self.handle_gc_worker_task(task);
-    }
+        let future = sender
+            .send_all(lock_scanner.then(|res| Ok(res)))
+            .map_err(|e| {
+                error!("send physical scan lock result from GCRunner failed"; "err" => ?e);
+            })
+            .map(move |_| {
+                info!("physical scan lock finished"; "max_ts" => %max_ts);
+            });
 
-    // The default implementation of `run_batch` prints a warning to log when it takes over 1 second
-    // to handle a task. It's not proper here, so override it to remove the log.
-    #[inline]
-    fn run_batch(&mut self, tasks: &mut Vec<GCTask>) {
-        for task in tasks.drain(..) {
-            self.run(task);
-        }
+        handle.spawn(future);
     }
 
-    fn on_tick(&mut self) {
+    fn update_statistics_metrics(&mut self) {
         let stats = mem::replace(&mut self.stats, Statistics::default());
         for (cf, details) in stats.details().iter() {
             for (tag, count) in details.iter() {
@@ -479,27 +660,81 @@ impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
     }
 }
 
-/// When we failed to schedule a `GCTask` to `GCRunner`, use this to handle the `ScheduleError`.
-fn handle_gc_task_schedule_error(e: ScheduleError<GCTask>) -> Result<()> {
-    match e {
-        ScheduleError::Full(mut task) => {
-            GC_TOO_BUSY_COUNTER.inc();
-            (task.take_callback())(Err(Error::GCWorkerTooBusy));
-            Ok(())
-        }
-        _ => Err(box_err!("failed to schedule gc task: {:?}", e)),
+impl<E: Engine> FutureRunnable<GcTask> for GcRunner<E> {
+    #[inline]
+    fn run(&mut self, task: GcTask, handle: &Handle) {
+        let label = task.get_label();
+        GC_GCTASK_COUNTER_VEC.with_label_values(&[label]).inc();
+
+        let timer = SlowTimer::from_secs(GC_TASK_SLOW_SECONDS);
+        let update_metrics = |is_err| {
+            GC_TASK_DURATION_HISTOGRAM_VEC
+                .with_label_values(&[label])
+                .observe(duration_to_sec(timer.elapsed()));
+
+            if is_err {
+                GC_GCTASK_FAIL_COUNTER_VEC.with_label_values(&[label]).inc();
+            }
+        };
+
+        match task {
+            GcTask::Gc {
+                mut ctx,
+                safe_point,
+                callback,
+            } => {
+                let res = self.gc(&mut ctx, safe_point);
+                update_metrics(res.is_err());
+                callback(res);
+                self.update_statistics_metrics();
+                slow_log!(
+                    timer,
+                    "GC on region {}, epoch {:?}, safe_point {}",
+                    ctx.get_region_id(),
+                    ctx.get_region_epoch(),
+                    safe_point
+                );
+            }
+            GcTask::UnsafeDestroyRange {
+                ctx,
+                start_key,
+                end_key,
+                callback,
+            } => {
+                let res = self.unsafe_destroy_range(&ctx, &start_key, &end_key);
+                update_metrics(res.is_err());
+                callback(res);
+                slow_log!(
+                    timer,
+                    "UnsafeDestroyRange start_key {:?}, end_key {:?}",
+                    start_key,
+                    end_key
+                );
+            }
+            GcTask::PhysicalScanLock {
+                ctx,
+                max_ts,
+                sender,
+            } => self.handle_physical_scan_lock(handle, &ctx, max_ts, sender),
+        };
     }
 }
 
-/// Schedules a `GCTask` to the `GCRunner`.
+/// When we failed to schedule a `GcTask` to `GcRunner`, use this to handle the `ScheduleError`.
+fn handle_gc_task_schedule_error(e: FutureWorkerStopped<GcTask>) -> Result<()> {
+    error!("failed to schedule gc task: {:?}", e);
+    Err(box_err!("failed to schedule gc task: {:?}", e))
+}
+
+/// Schedules a `GcTask` to the `GcRunner`.
 fn schedule_gc(
-    scheduler: &worker::Scheduler<GCTask>,
+    scheduler: &FutureScheduler<GcTask>,
     ctx: Context,
-    safe_point: u64,
+    safe_point: TimeStamp,
     callback: Callback<()>,
 ) -> Result<()> {
     scheduler
-        .schedule(GCTask::GC {
+        .schedule(GcTask::Gc {
             ctx,
             safe_point,
             callback,
@@ -508,7 +743,7 @@ fn schedule_gc(
 }
 
 /// Does GC synchronously.
-fn gc(scheduler: &worker::Scheduler<GCTask>, ctx: Context, safe_point: u64) -> Result<()> {
+fn gc(scheduler: &FutureScheduler<GcTask>, ctx: Context, safe_point: TimeStamp) -> Result<()> {
     wait_op!(|callback| schedule_gc(scheduler, ctx, safe_point, callback)).unwrap_or_else(|| {
         error!("failed to receive result of gc");
         Err(box_err!("gc_worker: failed to receive result of gc"))
@@ -516,7 +751,7 @@ fn gc(scheduler: &worker::Scheduler<GCTask>, ctx: Context, safe_point: u64) -> R
 }
 
 /// The configurations of automatic GC.
-pub struct AutoGCConfig<S: GCSafePointProvider, R: RegionInfoProvider> {
+pub struct AutoGcConfig<S: GcSafePointProvider, R: RegionInfoProvider> {
     pub safe_point_provider: S,
     pub region_info_provider: R,
 
@@ -535,7 +770,7 @@ pub struct AutoGCConfig<S: GCSafePointProvider, R: RegionInfoProvider> {
     pub post_a_round_of_gc: Option<Box<dyn Fn() + Send>>,
 }
 
-impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
+impl<S: GcSafePointProvider, R: RegionInfoProvider> AutoGcConfig<S, R> {
     /// Creates a new config.
     pub fn new(safe_point_provider: S, region_info_provider: R, self_store_id: u64) -> Self {
         Self {
@@ -566,28 +801,28 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
     }
 }
 
-/// The only error that will break `GCManager`'s process is that the `GCManager` is interrupted by
+/// The only error that will break `GcManager`'s process is that the `GcManager` is interrupted by
 /// others, maybe due to TiKV shutting down.
 #[derive(Debug)]
-enum GCManagerError {
+enum GcManagerError {
     Stopped,
 }
 
-type GCManagerResult<T> = std::result::Result<T, GCManagerError>;
+type GcManagerResult<T> = std::result::Result<T, GcManagerError>;
 
-/// Used to check if `GCManager` should be stopped.
+/// Used to check if `GcManager` should be stopped.
 ///
-/// When `GCManager` is running, it might take very long time to GC a round. It should be able to
+/// When `GcManager` is running, it might take very long time to GC a round. It should be able to
 /// break at any time so that we can shut down TiKV in time.
-struct GCManagerContext {
-    /// Used to receive stop signal. The sender side is hold in `GCManagerHandler`.
-    /// If this field is `None`, the `GCManagerContext` will never stop.
+struct GcManagerContext {
+    /// Used to receive stop signal. The sender side is hold in `GcManagerHandler`.
+    /// If this field is `None`, the `GcManagerContext` will never stop.
     stop_signal_receiver: Option<mpsc::Receiver<()>>,
     /// Whether an stop signal is received.
     is_stopped: bool,
 }
 
-impl GCManagerContext {
+impl GcManagerContext {
     pub fn new() -> Self {
         Self {
             stop_signal_receiver: None,
@@ -595,23 +830,23 @@ impl GCManagerContext {
         }
     }
 
-    /// Sets the receiver that used to receive the stop signal. `GCManagerContext` will be
+    /// Sets the receiver that used to receive the stop signal. `GcManagerContext` will be
     /// considered to be stopped as soon as a message is received from the receiver.
     pub fn set_stop_signal_receiver(&mut self, rx: mpsc::Receiver<()>) {
         self.stop_signal_receiver = Some(rx);
     }
 
     /// Sleeps for a while. if a stop message is received, returns immediately with
-    /// `GCManagerError::Stopped`.
-    fn sleep_or_stop(&mut self, timeout: Duration) -> GCManagerResult<()> {
+    /// `GcManagerError::Stopped`.
+    fn sleep_or_stop(&mut self, timeout: Duration) -> GcManagerResult<()> {
         if self.is_stopped {
-            return Err(GCManagerError::Stopped);
+            return Err(GcManagerError::Stopped);
         }
         match self.stop_signal_receiver.as_ref() {
             Some(rx) => match rx.recv_timeout(timeout) {
                 Ok(_) => {
                     self.is_stopped = true;
-                    Err(GCManagerError::Stopped)
+                    Err(GcManagerError::Stopped)
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -625,22 +860,22 @@ impl GCManagerContext {
         }
     }
 
-    /// Checks if a stop message has been fired. Returns `GCManagerError::Stopped` if there's such
+    /// Checks if a stop message has been fired. Returns `GcManagerError::Stopped` if there's such
     /// a message.
-    fn check_stopped(&mut self) -> GCManagerResult<()> {
+    fn check_stopped(&mut self) -> GcManagerResult<()> {
         if self.is_stopped {
-            return Err(GCManagerError::Stopped);
+            return Err(GcManagerError::Stopped);
         }
         match self.stop_signal_receiver.as_ref() {
             Some(rx) => match rx.try_recv() {
                 Ok(_) => {
                     self.is_stopped = true;
-                    Err(GCManagerError::Stopped)
+                    Err(GcManagerError::Stopped)
                 }
                 Err(mpsc::TryRecvError::Empty) => Ok(()),
                 Err(mpsc::TryRecvError::Disconnected) => {
                     error!("stop_signal_receiver unexpectedly disconnected, gc_manager will stop");
-                    Err(GCManagerError::Stopped)
+                    Err(GcManagerError::Stopped)
                 }
             },
             None => Ok(()),
@@ -658,32 +893,32 @@ fn make_context(mut region: metapb::Region, peer: metapb::Peer) -> Context {
     ctx
 }
 
-/// Used to represent the state of `GCManager`.
+/// Used to represent the state of `GcManager`.
 #[derive(PartialEq)]
-enum GCManagerState {
+enum GcManagerState {
     None,
     Init,
     Idle,
     Working,
 }
 
-impl GCManagerState {
+impl GcManagerState {
     pub fn tag(&self) -> &str {
         match self {
-            GCManagerState::None => "",
-            GCManagerState::Init => "initializing",
-            GCManagerState::Idle => "idle",
-            GCManagerState::Working => "working",
+            GcManagerState::None => "",
+            GcManagerState::Init => "initializing",
+            GcManagerState::Idle => "idle",
+            GcManagerState::Working => "working",
         }
     }
 }
 
 #[inline]
-fn set_status_metrics(state: GCManagerState) {
+fn set_status_metrics(state: GcManagerState) {
     for s in &[
-        GCManagerState::Init,
-        GCManagerState::Idle,
-        GCManagerState::Working,
+        GcManagerState::Init,
+        GcManagerState::Idle,
+        GcManagerState::Working,
     ] {
         AUTO_GC_STATUS_GAUGE_VEC
             .with_label_values(&[s.tag()])
@@ -691,14 +926,14 @@ fn set_status_metrics(state: GCManagerState) {
     }
 }
 
-/// Wraps `JoinHandle` of `GCManager` and helps to stop the `GCManager` synchronously.
-struct GCManagerHandle {
+/// Wraps `JoinHandle` of `GcManager` and helps to stop the `GcManager` synchronously.
+struct GcManagerHandle {
     join_handle: JoinHandle<()>,
     stop_signal_sender: mpsc::Sender<()>,
 }
 
-impl GCManagerHandle {
-    /// Stops the `GCManager`.
+impl GcManagerHandle {
+    /// Stops the `GcManager`.
     pub fn stop(self) -> Result<()> {
         let res: Result<()> = self
             .stop_signal_sender
@@ -714,42 +949,42 @@ impl GCManagerHandle {
 }
 
 /// Controls how GC runs automatically on the TiKV.
-/// It polls safe point periodically, and when the safe point is updated, `GCManager` will start to
+/// It polls safe point periodically, and when the safe point is updated, `GcManager` will start to
 /// scan all regions (whose leader is on this TiKV), and does GC on all those regions.
-struct GCManager<S: GCSafePointProvider, R: RegionInfoProvider> {
-    cfg: AutoGCConfig<S, R>,
+struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider> {
+    cfg: AutoGcConfig<S, R>,
 
-    /// The current safe point. `GCManager` will try to update it periodically. When `safe_point` is
+    /// The current safe point. `GcManager` will try to update it periodically. When `safe_point` is
     /// updated, `GCManager` will start to do GC on all regions.
-    safe_point: u64,
+    safe_point: TimeStamp,
 
     safe_point_last_check_time: Instant,
 
-    /// Used to schedule `GCTask`s.
-    worker_scheduler: worker::Scheduler<GCTask>,
+    /// Used to schedule `GcTask`s.
+    worker_scheduler: FutureScheduler<GcTask>,
 
-    /// Holds the running status. It will tell us if `GCManager` should stop working and exit.
-    gc_manager_ctx: GCManagerContext,
+    /// Holds the running status. It will tell us if `GcManager` should stop working and exit.
+    gc_manager_ctx: GcManagerContext,
 }
 
-impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
+impl<S: GcSafePointProvider, R: RegionInfoProvider> GcManager<S, R> {
     pub fn new(
-        cfg: AutoGCConfig<S, R>,
-        worker_scheduler: worker::Scheduler<GCTask>,
-    ) -> GCManager<S, R> {
-        GCManager {
+        cfg: AutoGcConfig<S, R>,
+        worker_scheduler: FutureScheduler<GcTask>,
+    ) -> GcManager<S, R> {
+        GcManager {
             cfg,
-            safe_point: 0,
+            safe_point: TimeStamp::zero(),
             safe_point_last_check_time: Instant::now(),
             worker_scheduler,
-            gc_manager_ctx: GCManagerContext::new(),
+            gc_manager_ctx: GcManagerContext::new(),
         }
     }
 
-    /// Starts working in another thread. This function moves the `GCManager` and returns a handler
+    /// Starts working in another thread. This function moves the `GcManager` and returns a handler
     /// of it.
-    fn start(mut self) -> Result<GCManagerHandle> {
-        set_status_metrics(GCManagerState::Init);
+    fn start(mut self) -> Result<GcManagerHandle> {
+        set_status_metrics(GcManagerState::Init);
         self.initialize();
 
         let (tx, rx) = mpsc::channel();
@@ -760,22 +995,22 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                 self.run();
             })
             .map_err(|e| box_err!("failed to start gc manager: {:?}", e));
-        res.map(|join_handle| GCManagerHandle {
+        res.map(|join_handle| GcManagerHandle {
             join_handle,
             stop_signal_sender: tx,
         })
     }
 
     /// Polls safe point and does GC in a loop, again and again, until interrupted by invoking
-    /// `GCManagerHandle::stop`.
+    /// `GcManagerHandle::stop`.
     fn run(&mut self) {
         debug!("gc-manager is started");
         self.run_impl().unwrap_err();
-        set_status_metrics(GCManagerState::None);
+        set_status_metrics(GcManagerState::None);
         debug!("gc-manager is stopped");
     }
 
-    fn run_impl(&mut self) -> GCManagerResult<()> {
+    fn run_impl(&mut self) -> GcManagerResult<()> {
         loop {
             AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
                 .with_label_values(&[PROCESS_TYPE_GC])
@@ -784,10 +1019,10 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                 .with_label_values(&[PROCESS_TYPE_SCAN])
                 .set(0);
 
-            set_status_metrics(GCManagerState::Idle);
+            set_status_metrics(GcManagerState::Idle);
             self.wait_for_next_safe_point()?;
 
-            set_status_metrics(GCManagerState::Working);
+            set_status_metrics(GcManagerState::Working);
             self.gc_a_round()?;
 
             if let Some(on_finished) = self.cfg.post_a_round_of_gc.as_ref() {
@@ -802,13 +1037,13 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// updated to a greater value than initial value.
     fn initialize(&mut self) {
         debug!("gc-manager is initializing");
-        self.safe_point = 0;
+        self.safe_point = TimeStamp::zero();
         self.try_update_safe_point();
         debug!("gc-manager started"; "safe_point" => self.safe_point);
     }
 
     /// Waits until the safe_point updates. Returns the new safe point.
-    fn wait_for_next_safe_point(&mut self) -> GCManagerResult<u64> {
+    fn wait_for_next_safe_point(&mut self) -> GcManagerResult<TimeStamp> {
         loop {
             if self.try_update_safe_point() {
                 return Ok(self.safe_point);
@@ -845,7 +1080,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             Ordering::Greater => {
                 debug!("gc_worker: update safe point"; "safe_point" => safe_point);
                 self.safe_point = safe_point;
-                AUTO_GC_SAFE_POINT_GAUGE.set(safe_point as i64);
+                AUTO_GC_SAFE_POINT_GAUGE.set(safe_point.into_inner() as i64);
                 true
             }
         }
@@ -893,7 +1128,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// If safe point updates again at some time, it will still try to GC all regions with the
     /// latest safe point. If safe point always updates before `gc_a_round` finishes, `gc_a_round`
     /// may never stop, but it doesn't matter.
-    fn gc_a_round(&mut self) -> GCManagerResult<()> {
+    fn gc_a_round(&mut self) -> GcManagerResult<()> {
         let mut need_rewind = false;
         // Represents where we should stop doing GC. `None` means the very end of the TiKV.
         let mut end = None;
@@ -1003,7 +1238,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         &mut self,
         from_key: Key,
         processed_regions: &mut usize,
-    ) -> GCManagerResult<Option<Key>> {
+    ) -> GcManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
         let (ctx, next_key) = self.get_next_gc_context(from_key);
         if ctx.is_none() {
@@ -1094,25 +1329,33 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 }
 
 /// Used to schedule GC operations.
-pub struct GCWorker<E: Engine> {
+pub struct GcWorker<E: Engine> {
     engine: E,
     /// `local_storage` represent the underlying RocksDB of the `engine`.
     local_storage: Option<Arc<DB>>,
     /// `raft_store_router` is useful to signal raftstore clean region size informations.
     raft_store_router: Option<ServerRaftStoreRouter>,
+    /// Access the region's meta before getting snapshot, which will wake hibernating regions up.
+    /// This is useful to do the `need_gc` check without waking hibernatin regions up.
+    /// This is not set for tests.
+    region_info_accessor: Option<RegionInfoAccessor>,
 
-    cfg: Option<GCConfig>,
+    cfg: Option<GcConfig>,
+    limiter: Arc<Mutex<Option<RocksIOLimiter>>>,
+
+    /// How many requests are scheduled from outside and unfinished.
+    scheduled_tasks: Arc<atomic::AtomicUsize>,
 
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<atomic::AtomicUsize>,
-    worker: Arc<Mutex<Worker<GCTask>>>,
-    worker_scheduler: worker::Scheduler<GCTask>,
+    worker: Arc<Mutex<FutureWorker<GcTask>>>,
+    worker_scheduler: FutureScheduler<GcTask>,
 
-    gc_manager_handle: Arc<Mutex<Option<GCManagerHandle>>>,
+    gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
 }
 
-impl<E: Engine> Clone for GCWorker<E> {
+impl<E: Engine> Clone for GcWorker<E> {
     #[inline]
     fn clone(&self) -> Self {
         self.refs.fetch_add(1, atomic::Ordering::SeqCst);
@@ -1121,7 +1364,10 @@ impl<E: Engine> Clone for GCWorker<E> {
             engine: self.engine.clone(),
             local_storage: self.local_storage.clone(),
             raft_store_router: self.raft_store_router.clone(),
+            region_info_accessor: self.region_info_accessor.clone(),
             cfg: self.cfg.clone(),
+            limiter: self.limiter.clone(),
+            scheduled_tasks: self.scheduled_tasks.clone(),
             refs: self.refs.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
@@ -1130,7 +1376,7 @@ impl<E: Engine> Clone for GCWorker<E> {
     }
 }
 
-impl<E: Engine> Drop for GCWorker<E> {
+impl<E: Engine> Drop for GcWorker<E> {
     #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
@@ -1146,24 +1392,31 @@ impl<E: Engine> Drop for GCWorker<E> {
     }
 }
 
-impl<E: Engine> GCWorker<E> {
+impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        cfg: GCConfig,
-    ) -> GCWorker<E> {
-        let worker = Arc::new(Mutex::new(
-            WorkerBuilder::new("gc-worker")
-                .pending_capacity(GC_MAX_PENDING_TASKS)
-                .create(),
-        ));
+        region_info_accessor: Option<RegionInfoAccessor>,
+        cfg: GcConfig,
+    ) -> GcWorker<E> {
+        let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
-        GCWorker {
+        let limiter = if cfg.max_write_bytes_per_sec.0 > 0 {
+            let bps = i64::try_from(cfg.max_write_bytes_per_sec.0)
+                .expect("snap_max_write_bytes_per_sec > i64::max_value");
+            Some(IOLimiter::new(bps))
+        } else {
+            None
+        };
+        GcWorker {
             engine,
             local_storage,
             raft_store_router,
+            region_info_accessor,
             cfg: Some(cfg),
+            limiter: Arc::new(Mutex::new(limiter)),
+            scheduled_tasks: Arc::new(atomic::AtomicUsize::new(0)),
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             worker,
             worker_scheduler,
@@ -1171,22 +1424,24 @@ impl<E: Engine> GCWorker<E> {
         }
     }
 
-    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider>(
         &self,
-        cfg: AutoGCConfig<S, R>,
+        cfg: AutoGcConfig<S, R>,
     ) -> Result<()> {
         let mut handle = self.gc_manager_handle.lock().unwrap();
         assert!(handle.is_none());
-        let new_handle = GCManager::new(cfg, self.worker_scheduler.clone()).start()?;
+        let new_handle = GcManager::new(cfg, self.worker_scheduler.clone()).start()?;
         *handle = Some(new_handle);
         Ok(())
     }
 
     pub fn start(&mut self) -> Result<()> {
-        let runner = GCRunner::new(
+        let runner = GcRunner::new(
             self.engine.clone(),
             self.local_storage.take(),
             self.raft_store_router.take(),
+            self.region_info_accessor.take(),
+            self.limiter.clone(),
             self.cfg.take().unwrap(),
         );
         self.worker
@@ -1197,28 +1452,46 @@ impl<E: Engine> GCWorker<E> {
     }
 
     pub fn stop(&self) -> Result<()> {
-        // Stop GCManager.
+        // Stop GcManager.
         if let Some(h) = self.gc_manager_handle.lock().unwrap().take() {
             h.stop()?;
         }
         // Stop self.
-        let h = self.worker.lock().unwrap().stop().unwrap();
-        if let Err(e) = h.join() {
-            Err(box_err!("failed to join gc_worker handle, err: {:?}", e))
-        } else {
-            Ok(())
+        if let Some(h) = self.worker.lock().unwrap().stop() {
+            if let Err(e) = h.join() {
+                return Err(box_err!("failed to join gc_worker handle, err: {:?}", e));
+            }
         }
+        Ok(())
     }
 
-    pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
-        KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
-        self.worker_scheduler
-            .schedule(GCTask::GC {
-                ctx,
-                safe_point,
-                callback,
-            })
-            .or_else(handle_gc_task_schedule_error)
+    /// Check whether GCWorker is busy. If busy, callback will be invoked with an error that
+    /// indicates GCWorker is busy; otherwise, return a new callback that invokes the original
+    /// callback as well as decrease the scheduled task counter.
+    fn check_is_busy<T: 'static>(&self, callback: Callback<T>) -> Option<Callback<T>> {
+        if self.scheduled_tasks.fetch_add(1, atomic::Ordering::SeqCst) >= GC_MAX_EXECUTING_TASKS {
+            self.scheduled_tasks.fetch_sub(1, atomic::Ordering::SeqCst);
+            callback(Err(Error::from(ErrorInner::GcWorkerTooBusy)));
+            return None;
+        }
+        let scheduled_tasks = Arc::clone(&self.scheduled_tasks);
+        Some(Box::new(move |r| {
+            scheduled_tasks.fetch_sub(1, atomic::Ordering::SeqCst);
+            callback(r);
+        }))
+    }
+
+    pub fn gc(&self, ctx: Context, safe_point: TimeStamp, callback: Callback<()>) -> Result<()> {
+        GC_COMMAND_COUNTER_VEC_STATIC.gc.inc();
+        self.check_is_busy(callback).map_or(Ok(()), |callback| {
+            self.worker_scheduler
+                .schedule(GcTask::Gc {
+                    ctx,
+                    safe_point,
+                    callback,
+                })
+                .or_else(handle_gc_task_schedule_error)
+        })
     }
 
     /// Cleans up all keys in a range and quickly free the disk space. The range might span over
@@ -1226,22 +1499,70 @@ impl<E: Engine> GCWorker<E> {
     /// on RocksDB, bypassing the Raft layer. User must promise that, after calling `destroy_range`,
     /// the range will never be accessed any more. However, `destroy_range` is allowed to be called
     /// multiple times on an single range.
-    pub fn async_unsafe_destroy_range(
+    pub fn unsafe_destroy_range(
         &self,
         ctx: Context,
         start_key: Key,
         end_key: Key,
         callback: Callback<()>,
     ) -> Result<()> {
-        KV_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
-        self.worker_scheduler
-            .schedule(GCTask::UnsafeDestroyRange {
+        GC_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
+        self.check_is_busy(callback).map_or(Ok(()), |callback| {
+            self.worker_scheduler
+                .schedule(GcTask::UnsafeDestroyRange {
+                    ctx,
+                    start_key,
+                    end_key,
+                    callback,
+                })
+                .or_else(handle_gc_task_schedule_error)
+        })
+    }
+
+    pub fn physical_scan_lock(
+        &self,
+        ctx: Context,
+        max_ts: TimeStamp,
+    ) -> impl Stream<Item = Vec<LockInfo>, Error = Error> {
+        // TODO: Metrics
+        let (tx, rx) = future_mpsc::channel(FUTURE_STREAM_BUFFER_SIZE);
+        let res = self
+            .worker_scheduler
+            .schedule(GcTask::PhysicalScanLock {
                 ctx,
-                start_key,
-                end_key,
-                callback,
+                max_ts,
+                sender: tx,
             })
-            .or_else(handle_gc_task_schedule_error)
+            .or_else(handle_gc_task_schedule_error);
+
+        future::result(res)
+            .and_then(move |_| {
+                let stream = rx
+                    .map_err(move |_| {
+                        error!(
+                            "failed to receive physical scan lock results from GCRunner";
+                            "max_ts" => %max_ts
+                        );
+                        box_err!("failed to receive physical scan lock results from GCRunner")
+                    })
+                    .and_then(|res| res);
+                Ok(stream)
+            })
+            .into_stream()
+            .flatten()
+    }
+
+    pub fn change_io_limit(&self, limit: i64) -> Result<()> {
+        let mut limiter = self.limiter.lock().unwrap();
+        if limit == 0 {
+            limiter.take();
+        } else {
+            limiter
+                .get_or_insert_with(|| RocksIOLimiter::new(limit))
+                .set_bytes_per_second(limit as i64);
+        }
+        info!("GC io limit changed"; "max_write_bytes_per_sec" => limit);
+        Ok(())
     }
 }
 
@@ -1250,21 +1571,40 @@ mod tests {
     use super::*;
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
-    use crate::storage::kv::Result as EngineResult;
-    use crate::storage::lock_manager::DummyLockMgr;
-    use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
+    use crate::storage::kv::{
+        self, Callback as EngineCallback, Modify, Result as EngineResult, TestEngineBuilder,
+    };
+    use crate::storage::lock_manager::DummyLockManager;
+    use crate::storage::{Storage, TestStorageBuilder};
     use futures::Future;
+    use kvproto::kvrpcpb::Op;
     use kvproto::metapb;
     use std::collections::BTreeMap;
+    use std::mem;
     use std::sync::mpsc::{channel, Receiver, Sender};
+    use tikv_util::codec::number::NumberEncoder;
+    use txn_types::Mutation;
 
-    struct MockSafePointProvider {
-        rx: Receiver<u64>,
+    fn take_callback(t: &mut GcTask) -> Callback<()> {
+        let callback = match t {
+            GcTask::Gc {
+                ref mut callback, ..
+            } => callback,
+            GcTask::UnsafeDestroyRange {
+                ref mut callback, ..
+            } => callback,
+            GcTask::PhysicalScanLock { .. } => unreachable!(),
+        };
+        mem::replace(callback, Box::new(|_| {}))
     }
 
-    impl GCSafePointProvider for MockSafePointProvider {
-        fn get_safe_point(&self) -> Result<u64> {
-            // Error will be ignored by `GCManager`, which is equivalent to that the safe_point
+    struct MockSafePointProvider {
+        rx: Receiver<TimeStamp>,
+    }
+
+    impl GcSafePointProvider for MockSafePointProvider {
+        fn get_safe_point(&self) -> Result<TimeStamp> {
+            // Error will be ignored by `GcManager`, which is equivalent to that the safe_point
             // is not updated.
             self.rx.try_recv().map_err(|e| box_err!(e))
         }
@@ -1284,36 +1624,36 @@ mod tests {
         }
     }
 
-    struct MockGCRunner {
-        tx: Sender<GCTask>,
+    struct MockGcRunner {
+        tx: Sender<GcTask>,
     }
 
-    impl Runnable<GCTask> for MockGCRunner {
-        fn run(&mut self, mut t: GCTask) {
-            let cb = t.take_callback();
+    impl FutureRunnable<GcTask> for MockGcRunner {
+        fn run(&mut self, mut t: GcTask, _handle: &Handle) {
+            let cb = take_callback(&mut t);
             self.tx.send(t).unwrap();
             cb(Ok(()));
         }
     }
 
-    /// A set of utilities that helps testing `GCManager`.
+    /// A set of utilities that helps testing `GcManager`.
     /// The safe_point polling interval is set to 100 ms.
-    struct GCManagerTestUtil {
-        gc_manager: Option<GCManager<MockSafePointProvider, MockRegionInfoProvider>>,
-        worker: Worker<GCTask>,
-        safe_point_sender: Sender<u64>,
-        gc_task_receiver: Receiver<GCTask>,
+    struct GcManagerTestUtil {
+        gc_manager: Option<GcManager<MockSafePointProvider, MockRegionInfoProvider>>,
+        worker: FutureWorker<GcTask>,
+        safe_point_sender: Sender<TimeStamp>,
+        gc_task_receiver: Receiver<GcTask>,
     }
 
-    impl GCManagerTestUtil {
+    impl GcManagerTestUtil {
         pub fn new(regions: BTreeMap<Vec<u8>, RegionInfo>) -> Self {
-            let mut worker = WorkerBuilder::new("test-gc-worker").create();
+            let mut worker = FutureWorker::new("test-gc-worker");
             let (gc_task_sender, gc_task_receiver) = channel();
-            worker.start(MockGCRunner { tx: gc_task_sender }).unwrap();
+            worker.start(MockGcRunner { tx: gc_task_sender }).unwrap();
 
             let (safe_point_sender, safe_point_receiver) = channel();
 
-            let mut cfg = AutoGCConfig::new(
+            let mut cfg = AutoGcConfig::new(
                 MockSafePointProvider {
                     rx: safe_point_receiver,
                 },
@@ -1323,7 +1663,7 @@ mod tests {
             cfg.poll_safe_point_interval = Duration::from_millis(100);
             cfg.always_check_safe_point = true;
 
-            let gc_manager = GCManager::new(cfg, worker.scheduler());
+            let gc_manager = GcManager::new(cfg, worker.scheduler());
             Self {
                 gc_manager: Some(gc_manager),
                 worker,
@@ -1332,13 +1672,13 @@ mod tests {
             }
         }
 
-        /// Collect `GCTask`s that `GCManager` tried to execute.
-        pub fn collect_scheduled_tasks(&self) -> Vec<GCTask> {
+        /// Collect `GcTask`s that `GcManager` tried to execute.
+        pub fn collect_scheduled_tasks(&self) -> Vec<GcTask> {
             self.gc_task_receiver.try_iter().collect()
         }
 
-        pub fn add_next_safe_point(&self, safe_point: u64) {
-            self.safe_point_sender.send(safe_point).unwrap();
+        pub fn add_next_safe_point(&self, safe_point: impl Into<TimeStamp>) {
+            self.safe_point_sender.send(safe_point.into()).unwrap();
         }
 
         pub fn stop(&mut self) {
@@ -1346,19 +1686,73 @@ mod tests {
         }
     }
 
+    /// A wrapper of engine that adds the 'z' prefix to keys internally.
+    /// For test engines, they writes keys into db directly, but in production a 'z' prefix will be
+    /// added to keys by raftstore layer before writing to db. Some functionalities of `GCWorker`
+    /// bypasses Raft layer, so they needs to know how data is actually represented in db. This
+    /// wrapper allows test engines write 'z'-prefixed keys to db.
+    #[derive(Clone)]
+    struct PrefixedEngine(kv::RocksEngine);
+
+    impl Engine for PrefixedEngine {
+        // Use RegionSnapshot which can remove the z prefix internally.
+        type Snap = RegionSnapshot<RocksEngine>;
+
+        fn async_write(
+            &self,
+            ctx: &Context,
+            mut batch: Vec<Modify>,
+            callback: EngineCallback<()>,
+        ) -> EngineResult<()> {
+            batch.iter_mut().for_each(|modify| match modify {
+                Modify::Delete(_, ref mut key) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::Put(_, ref mut key, _) => {
+                    *key = Key::from_encoded(keys::data_key(key.as_encoded()));
+                }
+                Modify::DeleteRange(_, ref mut start_key, ref mut end_key, _) => {
+                    *start_key = Key::from_encoded(keys::data_key(start_key.as_encoded()));
+                    *end_key = Key::from_encoded(keys::data_key(end_key.as_encoded()));
+                }
+            });
+            self.0.async_write(ctx, batch, callback)
+        }
+        fn async_snapshot(
+            &self,
+            ctx: &Context,
+            callback: EngineCallback<Self::Snap>,
+        ) -> EngineResult<()> {
+            self.0.async_snapshot(
+                ctx,
+                Box::new(move |(cb_ctx, r)| {
+                    callback((
+                        cb_ctx,
+                        r.map(|snap| {
+                            let mut fake_region = metapb::Region::default();
+                            // Add a peer to pass initialized check.
+                            fake_region.mut_peers().push(metapb::Peer::default());
+                            RegionSnapshot::from_snapshot(snap, fake_region)
+                        }),
+                    ))
+                }),
+            )
+        }
+    }
+
     /// Run a round of auto GC and check if it correctly GC regions as expected.
     ///
     /// Param `regions` is a `Vec` of tuples which is `(start_key, end_key, region_id)`
     ///
-    /// The first value in param `safe_points` will be used to initialize the GCManager, and the remaining
+    /// The first value in param `safe_points` will be used to initialize the GcManager, and the remaining
     /// values will be checked before every time GC-ing a region. If the length of `safe_points` is
     /// less than executed GC tasks, the last value will be used for extra GC tasks.
     ///
     /// Param `expected_gc_tasks` is a `Vec` of tuples which is `(region_id, safe_point)`.
     fn test_auto_gc(
         regions: Vec<(Vec<u8>, Vec<u8>, u64)>,
-        safe_points: Vec<u64>,
-        expected_gc_tasks: Vec<(u64, u64)>,
+        safe_points: Vec<impl Into<TimeStamp> + Copy>,
+        expected_gc_tasks: Vec<(u64, impl Into<TimeStamp>)>,
     ) {
         let regions: BTreeMap<_, _> = regions
             .into_iter()
@@ -1373,7 +1767,7 @@ mod tests {
             })
             .collect();
 
-        let mut test_util = GCManagerTestUtil::new(regions);
+        let mut test_util = GcManagerTestUtil::new(regions);
 
         for safe_point in &safe_points {
             test_util.add_next_safe_point(*safe_point);
@@ -1387,7 +1781,7 @@ mod tests {
             .collect_scheduled_tasks()
             .iter()
             .map(|task| match task {
-                GCTask::GC {
+                GcTask::Gc {
                     ctx, safe_point, ..
                 } => (ctx.get_region_id(), *safe_point),
                 _ => unreachable!(),
@@ -1398,7 +1792,7 @@ mod tests {
         assert_eq!(gc_tasks.len(), expected_gc_tasks.len());
         let all_passed = gc_tasks.into_iter().zip(expected_gc_tasks.into_iter()).all(
             |((region, safe_point), (expect_region, expect_safe_point))| {
-                region == expect_region && safe_point == expect_safe_point
+                region == expect_region && safe_point == expect_safe_point.into()
             },
         );
         assert!(all_passed);
@@ -1425,12 +1819,12 @@ mod tests {
 
     #[test]
     fn test_update_safe_point() {
-        let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
+        let mut test_util = GcManagerTestUtil::new(BTreeMap::new());
         let mut gc_manager = test_util.gc_manager.take().unwrap();
-        assert_eq!(gc_manager.safe_point, 0);
+        assert_eq!(gc_manager.safe_point, TimeStamp::zero());
         test_util.add_next_safe_point(233);
         assert!(gc_manager.try_update_safe_point());
-        assert_eq!(gc_manager.safe_point, 233);
+        assert_eq!(gc_manager.safe_point, 233.into());
 
         let (tx, rx) = channel();
         ThreadBuilder::new()
@@ -1442,22 +1836,22 @@ mod tests {
         test_util.add_next_safe_point(233);
         test_util.add_next_safe_point(233);
         test_util.add_next_safe_point(234);
-        assert_eq!(rx.recv().unwrap(), 234);
+        assert_eq!(rx.recv().unwrap(), 234.into());
 
         test_util.stop();
     }
 
     #[test]
     fn test_gc_manager_initialize() {
-        let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
+        let mut test_util = GcManagerTestUtil::new(BTreeMap::new());
         let mut gc_manager = test_util.gc_manager.take().unwrap();
-        assert_eq!(gc_manager.safe_point, 0);
+        assert_eq!(gc_manager.safe_point, TimeStamp::zero());
         test_util.add_next_safe_point(0);
         test_util.add_next_safe_point(5);
         gc_manager.initialize();
-        assert_eq!(gc_manager.safe_point, 0);
+        assert_eq!(gc_manager.safe_point, TimeStamp::zero());
         assert!(gc_manager.try_update_safe_point());
-        assert_eq!(gc_manager.safe_point, 5);
+        assert_eq!(gc_manager.safe_point, 5.into());
     }
 
     #[test]
@@ -1571,17 +1965,18 @@ mod tests {
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
     fn check_data<E: Engine>(
-        storage: &Storage<E, DummyLockMgr>,
+        storage: &Storage<E, DummyLockManager>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = storage
-            .async_scan(
+            .scan(
                 Context::default(),
                 Key::from_encoded_slice(b""),
                 None,
                 expected_data.len() + 1,
-                1,
-                Options::default(),
+                1.into(),
+                false,
+                false,
             )
             .wait()
             .unwrap();
@@ -1596,8 +1991,8 @@ mod tests {
 
     fn test_destroy_range_impl(
         init_keys: &[Vec<u8>],
-        start_ts: u64,
-        commit_ts: u64,
+        start_ts: impl Into<TimeStamp>,
+        commit_ts: impl Into<TimeStamp>,
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<()> {
@@ -1608,7 +2003,7 @@ mod tests {
             .build()
             .unwrap();
         let db = engine.get_rocksdb();
-        let mut gc_worker = GCWorker::new(engine, Some(db), None, GCConfig::default());
+        let mut gc_worker = GcWorker::new(engine, Some(db), None, None, GcConfig::default());
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
@@ -1631,13 +2026,18 @@ mod tests {
             .collect();
         let primary = init_keys[0].clone();
 
+        let start_ts = start_ts.into();
+
         // Write these data to the storage.
-        wait_op!(|cb| storage.async_prewrite(
+        wait_op!(|cb| storage.prewrite(
             Context::default(),
             mutations,
             primary,
             start_ts,
-            Options::default(),
+            0,
+            false,
+            0,
+            TimeStamp::default(),
             cb
         ))
         .unwrap()
@@ -1645,7 +2045,7 @@ mod tests {
 
         // Commit.
         let keys: Vec<_> = init_keys.iter().map(|k| Key::from_raw(k)).collect();
-        wait_op!(|cb| storage.async_commit(Context::default(), keys, start_ts, commit_ts, cb))
+        wait_op!(|cb| storage.commit(Context::default(), keys, start_ts, commit_ts.into(), cb))
             .unwrap()
             .unwrap();
 
@@ -1662,14 +2062,9 @@ mod tests {
             .collect();
 
         // Invoke unsafe destroy range.
-        wait_op!(|cb| gc_worker.async_unsafe_destroy_range(
-            Context::default(),
-            start_key,
-            end_key,
-            cb
-        ))
-        .unwrap()
-        .unwrap();
+        wait_op!(|cb| gc_worker.unsafe_destroy_range(Context::default(), start_key, end_key, cb))
+            .unwrap()
+            .unwrap();
 
         // Check remaining data is as expected.
         check_data(&storage, &data);
@@ -1764,11 +2159,113 @@ mod tests {
 
     #[test]
     fn test_gc_config_validate() {
-        let cfg = GCConfig::default();
+        let cfg = GcConfig::default();
         cfg.validate().unwrap();
 
-        let mut invalid_cfg = GCConfig::default();
+        let mut invalid_cfg = GcConfig::default();
         invalid_cfg.batch_keys = 0;
         assert!(invalid_cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_change_io_limit() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut gc_worker = GcWorker::new(engine, None, None, None, GcConfig::default());
+        gc_worker.start().unwrap();
+        assert!(gc_worker.limiter.lock().unwrap().is_none());
+
+        // Enable io iolimit
+        gc_worker.change_io_limit(1024).unwrap();
+        assert_eq!(
+            gc_worker
+                .limiter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .get_bytes_per_second(),
+            1024
+        );
+
+        // Change io limit
+        gc_worker.change_io_limit(2048).unwrap();
+        assert_eq!(
+            gc_worker
+                .limiter
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .get_bytes_per_second(),
+            2048,
+        );
+
+        // Disable io limit
+        gc_worker.change_io_limit(0).unwrap();
+        assert!(gc_worker.limiter.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_physical_scan_lock() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let db = engine.get_rocksdb();
+        let prefixed_engine = PrefixedEngine(engine);
+        let storage = TestStorageBuilder::from_engine(prefixed_engine.clone())
+            .build()
+            .unwrap();
+        let mut gc_worker =
+            GcWorker::new(prefixed_engine, Some(db), None, None, GcConfig::default());
+        gc_worker.start().unwrap();
+
+        let mut expected_lock_info = Vec::new();
+
+        // Put locks into the storage.
+        for i in 0..(SCAN_LOCK_BATCH_SIZE as u64 * 3) {
+            let mut k = vec![];
+            k.encode_u64(i).unwrap();
+            let v = k.clone();
+
+            let mutation = Mutation::Put((Key::from_raw(&k), v));
+
+            let lock_ts = 10 + i % 3;
+
+            // Collect all locks with ts < 11 to check the result of physical_scan_lock.
+            if lock_ts <= 11 {
+                let mut info = LockInfo::default();
+                info.set_primary_lock(k.clone());
+                info.set_lock_version(lock_ts);
+                info.set_key(k.clone());
+                info.set_lock_type(Op::Put);
+                expected_lock_info.push(info)
+            }
+
+            let (tx, rx) = channel();
+            storage
+                .prewrite(
+                    Context::default(),
+                    vec![mutation],
+                    k,
+                    lock_ts.into(),
+                    0,
+                    false,
+                    0,
+                    TimeStamp::default(),
+                    Box::new(move |res| tx.send(res).unwrap()),
+                )
+                .unwrap();
+            rx.recv()
+                .unwrap()
+                .unwrap()
+                .into_iter()
+                .for_each(|r| r.unwrap());
+        }
+
+        let res: Vec<_> = gc_worker
+            .physical_scan_lock(Context::default(), 11.into())
+            .wait()
+            .map(|r| r.unwrap())
+            .flatten()
+            .collect();
+        assert_eq!(res, expected_lock_info);
     }
 }

@@ -9,8 +9,8 @@ use tipb::{Expr, ExprType, FieldType};
 use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
 use crate::codec::data_type::*;
-use crate::codec::mysql::{JsonDecoder, Tz, MAX_FSP};
-use crate::codec::{datum, Datum};
+use crate::codec::mysql::{JsonDecoder, MAX_FSP};
+use crate::expr::EvalContext;
 use crate::Result;
 
 /// Helper to build an `RpnExpression`.
@@ -72,14 +72,14 @@ impl RpnExpressionBuilder {
     /// Builds the RPN expression node list from an expression definition tree.
     pub fn build_from_expr_tree(
         tree_node: Expr,
-        time_zone: &Tz,
+        ctx: &mut EvalContext,
         max_columns: usize,
     ) -> Result<RpnExpression> {
         let mut expr_nodes = Vec::new();
         append_rpn_nodes_recursively(
             tree_node,
             &mut expr_nodes,
-            time_zone,
+            ctx,
             super::super::map_expr_node_to_rpn_func,
             max_columns,
         )?;
@@ -100,7 +100,7 @@ impl RpnExpressionBuilder {
         append_rpn_nodes_recursively(
             tree_node,
             &mut expr_nodes,
-            &Tz::utc(),
+            &mut EvalContext::default(),
             fn_mapper,
             max_columns,
         )?;
@@ -127,25 +127,25 @@ impl RpnExpressionBuilder {
             func_meta,
             args_len,
             field_type: return_field_type.into(),
-            implicit_args: vec![],
+            metadata: Box::new(()),
         };
         self.0.push(node);
         self
     }
 
     #[cfg(test)]
-    pub fn push_fn_call_with_implicit_args(
+    pub fn push_fn_call_with_metadata(
         mut self,
         func_meta: RpnFnMeta,
         args_len: usize,
         return_field_type: impl Into<FieldType>,
-        implicit_args: Vec<ScalarValue>,
+        metadata: Box<dyn std::any::Any + Send>,
     ) -> Self {
         let node = RpnExpressionNode::FnCall {
             func_meta,
             args_len,
             field_type: return_field_type.into(),
-            implicit_args,
+            metadata,
         };
         self.0.push(node);
         self
@@ -240,7 +240,7 @@ impl AsRef<[RpnExpressionNode]> for RpnExpressionBuilder {
 fn append_rpn_nodes_recursively<F>(
     tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
-    time_zone: &Tz,
+    ctx: &mut EvalContext,
     fn_mapper: F,
     max_columns: usize,
     // TODO: Passing `max_columns` is only a workaround solution that works when we only check
@@ -252,10 +252,10 @@ where
 {
     match tree_node.get_tp() {
         ExprType::ScalarFunc => {
-            handle_node_fn_call(tree_node, rpn_nodes, time_zone, fn_mapper, max_columns)
+            handle_node_fn_call(tree_node, rpn_nodes, ctx, fn_mapper, max_columns)
         }
         ExprType::ColumnRef => handle_node_column_ref(tree_node, rpn_nodes, max_columns),
-        _ => handle_node_constant(tree_node, rpn_nodes, time_zone),
+        _ => handle_node_constant(tree_node, rpn_nodes, ctx),
     }
 }
 
@@ -285,7 +285,7 @@ fn handle_node_column_ref(
 fn handle_node_fn_call<F>(
     mut tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
-    time_zone: &Tz,
+    ctx: &mut EvalContext,
     fn_mapper: F,
     max_columns: usize,
 ) -> Result<()>
@@ -305,35 +305,19 @@ where
         )
     })?;
 
+    let metadata = (func_meta.metadata_expr_ptr)(&mut tree_node)?;
     let args: Vec<_> = tree_node.take_children().into();
     let args_len = args.len();
 
-    // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
-    let datums = datum::decode(&mut tree_node.get_val())?;
-    let mut implicit_args = Vec::with_capacity(datums.len());
-    for d in datums {
-        let arg = match d {
-            Datum::I64(n) => ScalarValue::Int(Some(n)),
-            Datum::U64(n) => ScalarValue::Int(Some(n as i64)),
-            Datum::F64(n) => ScalarValue::Real(Real::new(n).ok()),
-            Datum::Dur(dur) => ScalarValue::Duration(Some(dur)),
-            Datum::Bytes(bytes) => ScalarValue::Bytes(Some(bytes)),
-            Datum::Dec(dec) => ScalarValue::Decimal(Some(dec)),
-            Datum::Json(json) => ScalarValue::Json(Some(json)),
-            _ => return Err(other_err!("Unsupported push down datum {}", d)),
-        };
-        implicit_args.push(arg);
-    }
-
     // Visit children first, then push current node, so that it is a post-order traversal.
     for arg in args {
-        append_rpn_nodes_recursively(arg, rpn_nodes, time_zone, fn_mapper, max_columns)?;
+        append_rpn_nodes_recursively(arg, rpn_nodes, ctx, fn_mapper, max_columns)?;
     }
     rpn_nodes.push(RpnExpressionNode::FnCall {
         func_meta,
         args_len,
         field_type: tree_node.take_field_type(),
-        implicit_args,
+        metadata,
     });
     Ok(())
 }
@@ -342,7 +326,7 @@ where
 fn handle_node_constant(
     mut tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
-    time_zone: &Tz,
+    ctx: &mut EvalContext,
 ) -> Result<()> {
     let eval_type = box_try!(EvalType::try_from(
         tree_node.get_field_type().as_accessor().tp()
@@ -362,11 +346,9 @@ fn handle_node_constant(
         ExprType::Float32 | ExprType::Float64 if eval_type == EvalType::Real => {
             extract_scalar_value_float(tree_node.take_val())?
         }
-        ExprType::MysqlTime if eval_type == EvalType::DateTime => extract_scalar_value_date_time(
-            tree_node.take_val(),
-            tree_node.get_field_type(),
-            time_zone,
-        )?,
+        ExprType::MysqlTime if eval_type == EvalType::DateTime => {
+            extract_scalar_value_date_time(tree_node.take_val(), tree_node.get_field_type(), ctx)?
+        }
         ExprType::MysqlDuration if eval_type == EvalType::Duration => {
             extract_scalar_value_duration(tree_node.take_val())?
         }
@@ -436,16 +418,15 @@ fn extract_scalar_value_float(val: Vec<u8>) -> Result<ScalarValue> {
 fn extract_scalar_value_date_time(
     val: Vec<u8>,
     field_type: &FieldType,
-    time_zone: &Tz,
+    ctx: &mut EvalContext,
 ) -> Result<ScalarValue> {
     let v = val
         .as_slice()
         .read_u64()
         .map_err(|_| other_err!("Unable to decode date time from the request"))?;
     let fsp = field_type.decimal() as i8;
-    let value =
-        DateTime::from_packed_u64(v, field_type.as_accessor().tp().try_into()?, fsp, time_zone)
-            .map_err(|_| other_err!("Unable to decode date time from the request"))?;
+    let value = DateTime::from_packed_u64(ctx, v, field_type.as_accessor().tp().try_into()?, fsp)
+        .map_err(|_| other_err!("Unable to decode date time from the request"))?;
     Ok(ScalarValue::DateTime(Some(value)))
 }
 
@@ -488,7 +469,6 @@ mod tests {
     use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
 
-    use crate::codec::datum::{self, Datum};
     use crate::Result;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
@@ -890,130 +870,6 @@ mod tests {
                 i
             )
             .is_ok());
-        }
-    }
-
-    #[test]
-    #[allow(clippy::iter_skip_next)]
-    fn test_expr_with_val() {
-        fn build_expr() -> Expr {
-            ExprDefBuilder::scalar_func(ScalarFuncSig::CastIntAsReal, FieldTypeTp::LongLong)
-                .push_child(ExprDefBuilder::constant_real(7.0))
-                .push_child(ExprDefBuilder::constant_real(3.0))
-                .build()
-        }
-
-        // Simple cases
-        // bytes generated from TiDB
-        // datum(0)
-        let mut expr = build_expr();
-        expr.mut_val().extend(&vec![8, 0]);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, &fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(0))]);
-            }
-            _ => unreachable!(),
-        }
-
-        // datum(1)
-        let mut expr = build_expr();
-        expr.mut_val().extend(&vec![8, 2]);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(1))]);
-            }
-            _ => unreachable!(),
-        }
-
-        // bytes generated from TiKV
-        // datum(0)
-        let bytes = datum::encode_value(&[Datum::I64(0)]).unwrap();
-        let mut expr = build_expr();
-        expr.set_val(bytes);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(0))]);
-            }
-            _ => unreachable!(),
-        }
-
-        // datum(1)
-        let bytes = datum::encode_value(&[Datum::I64(1)]).unwrap();
-        let mut expr = build_expr();
-        expr.set_val(bytes);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, vec![ScalarValue::Int(Some(1))]);
-            }
-            _ => unreachable!(),
-        }
-
-        // Combine various datums
-        // bytes generated from TiDB
-        // Int/Real/Duration/Decimal/Bytes/Json
-        let mut expr = build_expr();
-        expr.mut_val().extend(&vec![
-            8, 0, 5, 191, 241, 153, 153, 153, 153, 153, 154, 2, 18, 102, 114, 111, 109, 32, 84,
-            105, 68, 66, 6, 2, 1, 129, 5, 10, 4, 2, 7, 128, 0, 0, 0, 0, 0, 39, 16,
-        ]);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        let args = vec![
-            ScalarValue::Int(Some(0)),
-            ScalarValue::Real(Some(Real::new(1.1).unwrap())),
-            ScalarValue::Bytes(Some(b"from TiDB".to_vec())),
-            ScalarValue::Decimal(Some(Decimal::from_bytes(b"1.5").unwrap().unwrap())),
-            ScalarValue::Json(Some(Json::Boolean(false))),
-            ScalarValue::Duration(Some(Duration::from_micros(10, 6).unwrap())),
-        ];
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, args);
-            }
-            _ => unreachable!(),
-        }
-
-        // bytes generated from TiKV
-        let datums = vec![
-            Datum::I64(0),
-            Datum::F64(1.1),
-            Datum::Bytes(b"from TiKV".to_vec()),
-            Datum::Dec(Decimal::from_bytes(b"1.5").unwrap().unwrap()),
-            Datum::Json(Json::Boolean(false)),
-            Datum::Dur(Duration::from_nanos(10000, 3).unwrap()),
-        ];
-        let bytes = datum::encode_value(&datums).unwrap();
-        let mut expr = build_expr();
-        expr.set_val(bytes);
-        let vec = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(expr, fn_mapper, 0)
-            .unwrap()
-            .into_inner();
-        let args = vec![
-            ScalarValue::Int(Some(0)),
-            ScalarValue::Real(Some(Real::new(1.1).unwrap())),
-            ScalarValue::Bytes(Some(b"from TiKV".to_vec())),
-            ScalarValue::Decimal(Some(Decimal::from_bytes(b"1.5").unwrap().unwrap())),
-            ScalarValue::Json(Some(Json::Boolean(false))),
-            ScalarValue::Duration(Some(Duration::from_nanos(10000, 3).unwrap())),
-        ];
-        match vec.into_iter().skip(2).next().unwrap() {
-            RpnExpressionNode::FnCall { implicit_args, .. } => {
-                assert_eq!(implicit_args, args);
-            }
-            _ => unreachable!(),
         }
     }
 }

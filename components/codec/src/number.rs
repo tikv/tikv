@@ -5,7 +5,7 @@ use std::intrinsics::{likely, unlikely};
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
 use crate::buffer::{BufferReader, BufferWriter};
-use crate::{Error, Result};
+use crate::{ErrorInner, Result};
 
 pub const MAX_VARINT64_LENGTH: usize = 10;
 pub const U64_SIZE: usize = std::mem::size_of::<u64>();
@@ -434,7 +434,6 @@ impl NumberCodec {
     /// # Errors
     ///
     /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
-    #[inline]
     pub fn try_decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
         #[allow(clippy::cast_lossless)]
         unsafe {
@@ -468,7 +467,7 @@ impl NumberCodec {
                     ptr = ptr.add(1);
                 }
                 if unlikely(ptr == ptr_end) {
-                    return Err(Error::eof());
+                    return Err(ErrorInner::eof().into());
                 }
                 val |= (*ptr as u64) << shift;
                 Ok((val, ptr.offset_from(buf.as_ptr()) as usize + 1))
@@ -487,7 +486,7 @@ impl NumberCodec {
     #[inline]
     pub fn encode_var_i64(buf: &mut [u8], v: i64) -> usize {
         let mut uv = (v as u64) << 1;
-        if unsafe { unlikely(v < 0) } {
+        if unlikely(v < 0) {
             uv = !uv;
         }
         Self::encode_var_u64(buf, uv)
@@ -517,7 +516,6 @@ impl NumberCodec {
     /// complete, the length of buffer will be returned.
     ///
     /// This function is more efficient when `buf.len() >= 10`.
-    #[inline]
     pub fn get_first_encoded_var_int_len(buf: &[u8]) -> usize {
         unsafe {
             let mut ptr = buf.as_ptr();
@@ -556,8 +554,8 @@ macro_rules! read {
     ($s:expr, $size:expr, $f:ident) => {{
         let ret = {
             let buf = $s.bytes();
-            if unsafe { unlikely(buf.len() < $size) } {
-                return Err(Error::eof());
+            if unlikely(buf.len() < $size) {
+                return Err(ErrorInner::eof().into());
             }
             NumberCodec::$f(buf)
         };
@@ -798,8 +796,8 @@ macro_rules! write {
     ($s:expr, $v:expr, $size:expr, $f:ident) => {{
         {
             let buf = unsafe { $s.bytes_mut($size) };
-            if unsafe { unlikely(buf.len() < $size) } {
-                return Err(Error::eof());
+            if unlikely(buf.len() < $size) {
+                return Err(ErrorInner::eof().into());
             }
             NumberCodec::$f(buf, $v);
         }
@@ -1011,8 +1009,8 @@ pub trait NumberEncoder: BufferWriter {
     fn write_var_u64(&mut self, v: u64) -> Result<usize> {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
-            if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
-                return Err(Error::eof());
+            if unlikely(buf.len() < MAX_VARINT64_LENGTH) {
+                return Err(ErrorInner::eof().into());
             }
             NumberCodec::encode_var_u64(buf, v)
         };
@@ -1035,8 +1033,8 @@ pub trait NumberEncoder: BufferWriter {
     fn write_var_i64(&mut self, v: i64) -> Result<usize> {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
-            if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
-                return Err(Error::eof());
+            if unlikely(buf.len() < MAX_VARINT64_LENGTH) {
+                return Err(ErrorInner::eof().into());
             }
             NumberCodec::encode_var_i64(buf, v)
         };
@@ -1801,7 +1799,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use crate::Error;
+    use crate::ErrorInner;
 
     use byteorder;
     use protobuf::CodedOutputStream;
@@ -1919,7 +1917,7 @@ mod benches {
             *data = &data[size..];
             return Ok(f(buf));
         }
-        Err(Error::eof())
+        Err(ErrorInner::eof().into())
     }
 
     /// The original implementation in TiKV
@@ -2123,7 +2121,7 @@ mod benches {
                     *data = unsafe { data.get_unchecked(10..) };
                     return Ok(res);
                 }
-                return Err(Error::eof());
+                return Err(ErrorInner::eof().into());
             }
         }
 
@@ -2137,7 +2135,7 @@ mod benches {
                 return Ok(res);
             }
         }
-        Err(Error::eof())
+        Err(ErrorInner::eof().into())
     }
 
     /// Decode u64 < 128 in VarInt using original TiKV implementation.

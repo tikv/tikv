@@ -6,7 +6,6 @@ use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
-use crate::raftstore::store::keys;
 use tikv_util::config::ReadableSize;
 
 use super::super::error::Result;
@@ -69,24 +68,7 @@ impl SplitChecker for Checker {
     }
 }
 
-pub struct HalfCheckObserver {
-    half_split_bucket_size: u64,
-}
-
-impl HalfCheckObserver {
-    pub fn new(region_size_limit: u64) -> HalfCheckObserver {
-        let mut half_split_bucket_size = region_size_limit / BUCKET_NUMBER_LIMIT as u64;
-        let bucket_size_limit = ReadableSize::mb(BUCKET_SIZE_LIMIT_MB).0;
-        if half_split_bucket_size == 0 {
-            half_split_bucket_size = 1;
-        } else if half_split_bucket_size > bucket_size_limit {
-            half_split_bucket_size = bucket_size_limit;
-        }
-        HalfCheckObserver {
-            half_split_bucket_size,
-        }
-    }
-}
+pub struct HalfCheckObserver;
 
 impl Coprocessor for HalfCheckObserver {}
 
@@ -101,8 +83,22 @@ impl SplitCheckObserver for HalfCheckObserver {
         if host.auto_split() {
             return;
         }
-        host.add_checker(Box::new(Checker::new(self.half_split_bucket_size, policy)))
+        host.add_checker(Box::new(Checker::new(
+            half_split_bucket_size(host.cfg.region_max_size.0),
+            policy,
+        )))
     }
+}
+
+fn half_split_bucket_size(region_max_size: u64) -> u64 {
+    let mut half_split_bucket_size = region_max_size / BUCKET_NUMBER_LIMIT as u64;
+    let bucket_size_limit = ReadableSize::mb(BUCKET_SIZE_LIMIT_MB).0;
+    if half_split_bucket_size == 0 {
+        half_split_bucket_size = 1;
+    } else if half_split_bucket_size > bucket_size_limit {
+        half_split_bucket_size = bucket_size_limit;
+    }
+    half_split_bucket_size
 }
 
 /// Get region approximate middle key based on default and write cf size.
@@ -175,11 +171,11 @@ mod tests {
     use tempfile::Builder;
 
     use crate::raftstore::coprocessor::properties::RangePropertiesCollectorFactory;
-    use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::Key;
+    use crate::raftstore::store::{SplitCheckRunner, SplitCheckTask};
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;
     use tikv_util::worker::Runnable;
+    use txn_types::Key;
 
     use super::super::size::tests::must_split_at;
     use super::*;
@@ -213,7 +209,8 @@ mod tests {
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
             tx.clone(),
-            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
+            Arc::new(CoprocessorHost::new(tx)),
+            cfg,
         );
 
         // so split key will be z0005
@@ -225,14 +222,14 @@ mod tests {
             // Flush for every key so that we can know the exact middle key.
             engine.flush_cf(cf_handle, true).unwrap();
         }
-        runnable.run(SplitCheckTask::new(
+        runnable.run(SplitCheckTask::split_check(
             region.clone(),
             false,
             CheckPolicy::Scan,
         ));
         let split_key = Key::from_raw(b"0005");
         must_split_at(&rx, &region, vec![split_key.clone().into_encoded()]);
-        runnable.run(SplitCheckTask::new(
+        runnable.run(SplitCheckTask::split_check(
             region.clone(),
             false,
             CheckPolicy::Approximate,
