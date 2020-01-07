@@ -44,7 +44,7 @@ impl Column {
             FieldTypeTp::Float => Column::new_fixed_len(4, init_cap),
 
             FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
-                Column::new_fixed_len(20, init_cap)
+                Column::new_fixed_len(8, init_cap)
             }
             FieldTypeTp::NewDecimal => Column::new_fixed_len(DECIMAL_STRUCT_SIZE, init_cap),
             _ => Column::new_var_len_column(init_cap),
