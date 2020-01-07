@@ -1,5 +1,5 @@
 use futures::sync::oneshot;
-use futures::Future;
+use futures::{future, Future};
 use futures03::prelude::*;
 use kvproto::kvrpcpb::CommandPri;
 use std::future::Future as StdFuture;
@@ -54,26 +54,29 @@ impl ReadPool {
         Ok(())
     }
 
-    pub fn spawn_handle<F, T, E>(
+    pub fn spawn_handle<F, T>(
         &self,
         f: F,
         priority: CommandPri,
         task_id: u64,
-    ) -> Result<impl Future<Item = T, Error = E>, ReadPoolError>
+    ) -> impl Future<Item = T, Error = ReadPoolError>
     where
-        F: StdFuture<Output = Result<T, E>> + Send + 'static,
+        F: StdFuture<Output = T> + Send + 'static,
         T: Send + 'static,
-        E: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel::<Result<T, E>>();
-        self.spawn(
+        let (tx, rx) = oneshot::channel::<T>();
+        let spawn_res = self.spawn(
             async move {
                 let _ = tx.send(f.await);
             },
             priority,
             task_id,
-        )?;
-        Ok(rx.then(|res| res.expect("tx is dropped by the thread pool")))
+        );
+        if let Err(e) = spawn_res {
+            future::Either::A(future::err(e))
+        } else {
+            future::Either::B(rx.map_err(ReadPoolError::from))
+        }
     }
 }
 
@@ -142,6 +145,11 @@ quick_error! {
     #[derive(Debug)]
     pub enum ReadPoolError {
         FuturePoolFull(err: future_pool::Full) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Canceled(err: oneshot::Canceled) {
             from()
             cause(err)
             description(err.description())

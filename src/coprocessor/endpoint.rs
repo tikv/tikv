@@ -360,7 +360,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<impl Future<Item = coppb::Response, Error = Error>> {
+    ) -> impl Future<Item = coppb::Response, Error = Error> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx
             .txn_start_ts
@@ -375,6 +375,7 @@ impl<E: Engine> Endpoint<E> {
                 task_id,
             )
             .map_err(|_| Error::MaxPendingTasksExceeded)
+            .flatten()
     }
 
     /// Parses and handles a unary request. Returns a future that will never fail. If there are
@@ -386,11 +387,9 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let result_of_future =
-            self.parse_request(req, peer, false)
-                .and_then(|(handler_builder, req_ctx)| {
-                    self.handle_unary_request(req_ctx, handler_builder)
-                });
+        let result_of_future = self
+            .parse_request(req, peer, false)
+            .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         future::result(result_of_future)
             .flatten()
@@ -711,7 +710,6 @@ mod tests {
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
             .wait()
             .unwrap();
         assert!(resp.get_other_error().is_empty());
@@ -731,7 +729,6 @@ mod tests {
         );
         assert!(cop
             .handle_unary_request(outdated_req_ctx, handler_builder)
-            .unwrap()
             .wait()
             .is_err());
     }
@@ -843,19 +840,11 @@ mod tests {
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(Ok(response), 1000).into_boxed())
             });
-            let result_of_future =
-                cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
-            match result_of_future {
-                Err(full_error) => {
-                    tx.send(Err(full_error)).unwrap();
-                }
-                Ok(future) => {
-                    let tx = tx.clone();
-                    thread::spawn(move || {
-                        tx.send(future.wait()).unwrap();
-                    });
-                }
-            }
+            let future = cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
+            let tx = tx.clone();
+            thread::spawn(move || {
+                tx.send(future.wait()).unwrap();
+            });
             thread::sleep(Duration::from_millis(100));
         }
 
@@ -880,7 +869,6 @@ mod tests {
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
             .wait()
             .unwrap();
         assert_eq!(resp.get_data().len(), 0);
@@ -1121,9 +1109,8 @@ mod tests {
                 )
                 .into_boxed())
             });
-            let resp_future_1 = cop
-                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
-                .unwrap();
+            let resp_future_1 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1136,9 +1123,8 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_2 = cop
-                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
-                .unwrap();
+            let resp_future_2 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_2.wait().unwrap()]).unwrap());
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
@@ -1196,9 +1182,8 @@ mod tests {
                 )
                 .into_boxed())
             });
-            let resp_future_1 = cop
-                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
-                .unwrap();
+            let resp_future_1 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
