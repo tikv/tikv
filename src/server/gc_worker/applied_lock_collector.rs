@@ -8,7 +8,7 @@ use txn_types::Key;
 
 use engine::{CfName, CF_LOCK};
 use kvproto::kvrpcpb::LockInfo;
-use kvproto::raft_cmdpb::Request as RaftRequest;
+use kvproto::raft_cmdpb::{CmdType, Request as RaftRequest};
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, ScheduleError, Scheduler, Worker};
 
 use crate::raftstore::coprocessor::{
@@ -21,11 +21,10 @@ use super::{Error, ErrorInner, Result};
 
 const MAX_COLLECT_SIZE: usize = 1024;
 
+/// The state of the observer. Shared between all clones.
 #[derive(Default)]
 struct LockObserverState {
     max_ts: AtomicU64,
-    // collected_locks: AtomicUsize,
-    // is_clean: AtomicBool,
 }
 
 #[derive(Debug)]
@@ -45,10 +44,10 @@ impl Display for LockObserverMsg {
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 enum LockCollectorTask {
-    // From observer
+    // Messages from observer
     ObserverMsg(LockObserverMsg),
 
-    // From client
+    // Messages client
     StartCollecting {
         max_ts: TimeStamp,
         callback: Callback<()>,
@@ -91,6 +90,9 @@ impl Display for LockCollectorTask {
     }
 }
 
+/// `LockObserver` observes apply events and apply snapshot events. If it happens in CF_LOCK, it
+/// checks the `start_ts`s of the locks being written. If a lock's `start_ts` <= specified `max_ts`
+/// in the `state`, it will send the lock to through the `sender`, so the receiver can collect it.
 #[derive(Clone)]
 struct LockObserver {
     state: Arc<LockObserverState>,
@@ -137,7 +139,11 @@ impl QueryObserver for LockObserver {
             return;
         }
 
+        // For each put in CF_LOCK, collect it if it's ts <= max_ts.
         for req in requests {
+            if req.get_cmd_type() != CmdType::Put {
+                continue;
+            }
             let put_request = req.get_put();
             if put_request.get_cf() != CF_LOCK {
                 continue;
@@ -189,6 +195,8 @@ impl ApplySnapshotObserver for LockObserver {
             })
             .filter(|result| result.is_err() || result.as_ref().unwrap().1.ts <= max_ts)
             .map(|result| {
+                // `pre_apply_plain_keys` will be invoked with the data_key in RocksDB layer. So we
+                // need to remove the `z` prefix.
                 result.map(|(key, lock)| (Key::from_encoded_slice(origin_key(key)), lock))
             })
             .collect();
@@ -213,7 +221,10 @@ struct LockCollectorRunner {
 
     collected_locks: Vec<(Key, Lock)>,
 
-    // TODO: when dirty, stop collecting.
+    /// `is_clean` is true, only it's sure that all applying of stale locks (locks with start_ts <=
+    /// specified max_ts) are monitored and collected. If there are too many stale locks or any
+    /// error happens, `is_clean` must be set to `false`.
+    /// TODO: when dirty, stop collecting.
     is_clean: bool,
 }
 
@@ -273,10 +284,10 @@ impl LockCollectorRunner {
 
         let locks: Result<_> = self
             .collected_locks
-            .drain(..)
+            .iter()
             .map(|(k, l)| {
-                k.into_raw()
-                    .map(|raw_key| l.into_lock_info(raw_key))
+                k.to_raw()
+                    .map(|raw_key| l.clone().into_lock_info(raw_key))
                     .map_err(|e| Error::from(MvccError::from(e)))
             })
             .collect();
@@ -358,12 +369,19 @@ impl AppliedLockCollector {
         Ok(())
     }
 
+    /// Starts collecting applied locks whose `start_ts` <= `max_ts`. Only one `max_ts` is valid
+    /// at one time.
     pub fn start_collecting(&self, max_ts: TimeStamp, callback: Callback<()>) -> Result<()> {
         self.scheduler
             .schedule(LockCollectorTask::StartCollecting { max_ts, callback })
             .map_err(|e| box_err!("failed to schedule task: {:?}", e))
     }
 
+    /// Get the collected locks after `start_collecting`. Only valid when `max_ts` matches the
+    /// `max_ts` provided to `start_collecting`.
+    /// Collects at most `MAX_COLLECT_SIZE` locks. If there are (even potentially) more locks than
+    /// `MAX_COLLECT_SIZE` or any error happens, the flag `is_clean` will be unset, which represents
+    /// `AppliedLockCollector` cannot collect all locks.
     pub fn fetch_result(
         &self,
         max_ts: TimeStamp,
@@ -374,6 +392,8 @@ impl AppliedLockCollector {
             .map_err(|e| box_err!("failed to schedule task: {:?}", e))
     }
 
+    /// Stop collecting locks. Only valid when `max_ts` matches the `max_ts` provided to
+    /// `start_collecting`.
     pub fn stop_collecting(&self, max_ts: TimeStamp, callback: Callback<()>) -> Result<()> {
         self.scheduler
             .schedule(LockCollectorTask::StopCollecting { max_ts, callback })
@@ -387,5 +407,320 @@ impl Drop for AppliedLockCollector {
         if let Err(e) = r {
             error!("Failed to stop applied_lock_collector"; "err" => ?e);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine::CF_DEFAULT;
+    use kvproto::kvrpcpb::Op;
+    use kvproto::metapb::Region;
+    use kvproto::raft_cmdpb::{PutRequest, RaftCmdRequest};
+    use std::sync::mpsc::channel;
+    use txn_types::LockType;
+
+    fn lock_info_to_kv(mut lock_info: LockInfo) -> (Vec<u8>, Vec<u8>) {
+        let key = Key::from_raw(lock_info.get_key()).into_encoded();
+        let lock = Lock::new(
+            match lock_info.get_lock_type() {
+                Op::Put => LockType::Put,
+                Op::Del => LockType::Delete,
+                Op::Lock => LockType::Lock,
+                Op::PessimisticLock => LockType::Pessimistic,
+                _ => unreachable!(),
+            },
+            lock_info.take_primary_lock(),
+            lock_info.get_lock_version().into(),
+            lock_info.get_lock_ttl(),
+            None,
+            0.into(),
+            lock_info.get_txn_size(),
+            0.into(),
+        );
+        let value = lock.to_bytes();
+        (key, value)
+    }
+
+    fn make_apply_request(
+        key: Vec<u8>,
+        value: Vec<u8>,
+        cf: &str,
+        cmd_type: CmdType,
+    ) -> RaftRequest {
+        let mut put_req = PutRequest::default();
+        put_req.set_cf(cf.to_owned());
+        put_req.set_key(key);
+        put_req.set_value(value);
+
+        let mut req = RaftRequest::default();
+        req.set_cmd_type(cmd_type);
+        req.set_put(put_req);
+        req
+    }
+
+    fn make_raft_cmd_req(requests: Vec<RaftRequest>) -> RaftCmdRequest {
+        let mut res = RaftCmdRequest::default();
+        res.set_requests(requests.into());
+        res
+    }
+
+    fn new_test_collector() -> (AppliedLockCollector, CoprocessorHost) {
+        let mut coprocessor_host = CoprocessorHost::default();
+        let collector = AppliedLockCollector::new(&mut coprocessor_host).unwrap();
+        (collector, coprocessor_host)
+    }
+
+    fn start_collecting(c: &AppliedLockCollector, max_ts: u64) -> Result<()> {
+        let (tx, rx) = channel();
+        c.start_collecting(max_ts.into(), Box::new(move |r| tx.send(r).unwrap()))
+            .unwrap();
+        rx.recv().unwrap()
+    }
+
+    fn fetch_result(c: &AppliedLockCollector, max_ts: u64) -> Result<(Vec<LockInfo>, bool)> {
+        let (tx, rx) = channel();
+        c.fetch_result(max_ts.into(), Box::new(move |r| tx.send(r).unwrap()))
+            .unwrap();
+        rx.recv().unwrap()
+    }
+
+    fn stop_collecting(c: &AppliedLockCollector, max_ts: u64) -> Result<()> {
+        let (tx, rx) = channel();
+        c.stop_collecting(max_ts.into(), Box::new(move |r| tx.send(r).unwrap()))
+            .unwrap();
+        rx.recv().unwrap()
+    }
+
+    #[test]
+    fn test_start_stop() {
+        let (c, _) = new_test_collector();
+        // Not started.
+        fetch_result(&c, 1).unwrap_err();
+        stop_collecting(&c, 1).unwrap_err();
+
+        // Started.
+        start_collecting(&c, 2).unwrap();
+        fetch_result(&c, 2).unwrap();
+        stop_collecting(&c, 2).unwrap();
+        // Stopped.
+        fetch_result(&c, 2).unwrap_err();
+        stop_collecting(&c, 2).unwrap_err();
+
+        // When start_collecting is invoked twice, the later one will ovewrite the previous one.
+        start_collecting(&c, 3).unwrap();
+        fetch_result(&c, 3).unwrap();
+        fetch_result(&c, 4).unwrap_err();
+        start_collecting(&c, 4).unwrap();
+        fetch_result(&c, 3).unwrap_err();
+        fetch_result(&c, 4).unwrap();
+        stop_collecting(&c, 4).unwrap();
+    }
+
+    #[test]
+    fn test_apply() {
+        let locks: Vec<_> = vec![
+            (b"k0", 10),
+            (b"k1", 110),
+            (b"k5", 100),
+            (b"k2", 101),
+            (b"k3", 90),
+            (b"k2", 99),
+        ]
+        .into_iter()
+        .map(|(k, ts)| {
+            let mut lock_info = LockInfo::default();
+            lock_info.set_key(k.to_vec());
+            lock_info.set_primary_lock(k.to_vec());
+            lock_info.set_lock_type(Op::Put);
+            lock_info.set_lock_version(ts);
+            lock_info
+        })
+        .collect();
+        let lock_kvs: Vec<_> = locks
+            .iter()
+            .map(|lock| lock_info_to_kv(lock.clone()))
+            .collect();
+
+        let (c, coprocessor_host) = new_test_collector();
+        let mut expected_result = vec![];
+
+        start_collecting(&c, 100).unwrap();
+        assert_eq!(fetch_result(&c, 100).unwrap(), (vec![], true));
+
+        // Only puts in lock cf will be monitered.
+        let req = vec![
+            make_apply_request(
+                lock_kvs[0].0.clone(),
+                lock_kvs[0].1.clone(),
+                CF_LOCK,
+                CmdType::Put,
+            ),
+            make_apply_request(b"1".to_vec(), b"1".to_vec(), CF_DEFAULT, CmdType::Put),
+            make_apply_request(b"2".to_vec(), b"2".to_vec(), CF_LOCK, CmdType::Delete),
+        ];
+        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req));
+        expected_result.push(locks[0].clone());
+        assert_eq!(
+            fetch_result(&c, 100).unwrap(),
+            (expected_result.clone(), true)
+        );
+
+        // Only locks with ts <= 100 will be collected.
+        let req: Vec<_> = lock_kvs
+            .iter()
+            .map(|(k, v)| make_apply_request(k.clone(), v.clone(), CF_LOCK, CmdType::Put))
+            .collect();
+        expected_result.extend(
+            locks
+                .iter()
+                .filter(|l| l.get_lock_version() <= 100)
+                .cloned(),
+        );
+        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req.clone()));
+        assert_eq!(fetch_result(&c, 100).unwrap(), (expected_result, true));
+
+        // When start_collecting is double-invoked again on another ts, the previous results are
+        // dropped.
+        start_collecting(&c, 110).unwrap();
+        assert_eq!(fetch_result(&c, 110).unwrap(), (vec![], true));
+        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(req));
+        assert_eq!(fetch_result(&c, 110).unwrap(), (locks, true));
+    }
+
+    #[test]
+    fn test_apply_snapshot() {
+        let locks: Vec<_> = vec![
+            (b"k0", 10),
+            (b"k1", 110),
+            (b"k5", 100),
+            (b"k2", 101),
+            (b"k3", 90),
+            (b"k2", 99),
+        ]
+        .into_iter()
+        .map(|(k, ts)| {
+            let mut lock_info = LockInfo::default();
+            lock_info.set_key(k.to_vec());
+            lock_info.set_primary_lock(k.to_vec());
+            lock_info.set_lock_type(Op::Put);
+            lock_info.set_lock_version(ts);
+            lock_info
+        })
+        .collect();
+        let lock_kvs: Vec<_> = locks
+            .iter()
+            .map(|lock| lock_info_to_kv(lock.clone()))
+            .map(|(k, v)| (keys::data_key(&k), v))
+            .collect();
+
+        let (c, coprocessor_host) = new_test_collector();
+        start_collecting(&c, 100).unwrap();
+
+        // Apply plain file to other CFs. Nothing happens.
+        coprocessor_host.pre_apply_plain_kvs_from_snapshot(
+            &Region::default(),
+            CF_DEFAULT,
+            &lock_kvs,
+        );
+        assert_eq!(fetch_result(&c, 100).unwrap(), (vec![], true));
+
+        // Apply plain file to lock cf. Locks with ts before 100 will be collected.
+        let expected_locks: Vec<_> = locks
+            .iter()
+            .filter(|l| l.get_lock_version() <= 100)
+            .cloned()
+            .collect();
+        coprocessor_host.pre_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
+        assert_eq!(
+            fetch_result(&c, 100).unwrap(),
+            (expected_locks.clone(), true)
+        );
+        // Fetch result twice gets the same result.
+        assert_eq!(fetch_result(&c, 100).unwrap(), (expected_locks, true));
+
+        // When start_collecting is double-invoked again on another ts, the previous results are
+        // dropped.
+        start_collecting(&c, 110).unwrap();
+        assert_eq!(fetch_result(&c, 110).unwrap(), (vec![], true));
+        coprocessor_host.pre_apply_plain_kvs_from_snapshot(&Region::default(), CF_LOCK, &lock_kvs);
+        assert_eq!(fetch_result(&c, 110).unwrap(), (locks.clone(), true));
+
+        // Apply SST file to other cfs. Nothing happens.
+        coprocessor_host.pre_apply_sst_from_snapshot(&Region::default(), CF_DEFAULT, "");
+        assert_eq!(fetch_result(&c, 110).unwrap(), (locks.clone(), true));
+
+        // Apply SST file to lock cf is not supported. This will cause error and therefore
+        // `is_clean` will be set to false.
+        coprocessor_host.pre_apply_sst_from_snapshot(&Region::default(), CF_LOCK, "");
+        assert_eq!(fetch_result(&c, 110).unwrap(), (locks, false));
+    }
+
+    #[test]
+    fn test_not_clean() {
+        let (c, coprocessor_host) = new_test_collector();
+        start_collecting(&c, 1).unwrap();
+        // When error happens, `is_clean` should be set to false.
+        // The value is not a valid lock.
+        let (k, v) = (Key::from_raw(b"k1").into_encoded(), b"v1".to_vec());
+        let req = make_apply_request(k.clone(), v.clone(), CF_LOCK, CmdType::Put);
+        coprocessor_host.pre_apply(&Region::default(), &make_raft_cmd_req(vec![req]));
+        assert_eq!(fetch_result(&c, 1).unwrap(), (vec![], false));
+
+        // `is_clean` should be reset after invoking `start_collecting`.
+        start_collecting(&c, 2).unwrap();
+        assert_eq!(fetch_result(&c, 2).unwrap(), (vec![], true));
+        coprocessor_host.pre_apply_plain_kvs_from_snapshot(
+            &Region::default(),
+            CF_LOCK,
+            &[(keys::data_key(&k), v.clone())],
+        );
+        assert_eq!(fetch_result(&c, 2).unwrap(), (vec![], false));
+
+        start_collecting(&c, 3).unwrap();
+        assert_eq!(fetch_result(&c, 3).unwrap(), (vec![], true));
+
+        // If there are too many locks, `is_clean` should be set to false.
+        let mut lock = LockInfo::default();
+        lock.set_key(b"k2".to_vec());
+        lock.set_primary_lock(b"k2".to_vec());
+        lock.set_lock_type(Op::Put);
+        lock.set_lock_version(1);
+
+        let batch_generate_locks = |count| {
+            let (k, v) = lock_info_to_kv(lock.clone());
+            let req = make_apply_request(k, v, CF_LOCK, CmdType::Put);
+            let raft_cmd_req = make_raft_cmd_req(vec![req; count]);
+            coprocessor_host.pre_apply(&Region::default(), &raft_cmd_req);
+        };
+
+        batch_generate_locks(MAX_COLLECT_SIZE - 1);
+        let (locks, is_clean) = fetch_result(&c, 3).unwrap();
+        assert_eq!(locks.len(), MAX_COLLECT_SIZE - 1);
+        assert!(is_clean);
+
+        batch_generate_locks(1);
+        let (locks, is_clean) = fetch_result(&c, 3).unwrap();
+        assert_eq!(locks.len(), MAX_COLLECT_SIZE);
+        assert!(is_clean);
+
+        batch_generate_locks(1);
+        // If there are more locks, they will be dropped.
+        let (locks, is_clean) = fetch_result(&c, 3).unwrap();
+        assert_eq!(locks.len(), MAX_COLLECT_SIZE);
+        assert!(!is_clean);
+
+        start_collecting(&c, 4).unwrap();
+        assert_eq!(fetch_result(&c, 4).unwrap(), (vec![], true));
+
+        batch_generate_locks(MAX_COLLECT_SIZE - 5);
+        let (locks, is_clean) = fetch_result(&c, 4).unwrap();
+        assert_eq!(locks.len(), MAX_COLLECT_SIZE - 5);
+        assert!(is_clean);
+
+        batch_generate_locks(10);
+        let (locks, is_clean) = fetch_result(&c, 4).unwrap();
+        assert_eq!(locks.len(), MAX_COLLECT_SIZE);
+        assert!(!is_clean);
     }
 }
