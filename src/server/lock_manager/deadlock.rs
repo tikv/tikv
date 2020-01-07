@@ -1145,8 +1145,7 @@ pub mod tests {
 
     #[test]
     fn test_role_change_notifier() {
-        let (tx, _rx) = std::sync::mpsc::sync_channel(100);
-        let mut host = CoprocessorHost::new(tx);
+        let mut host = CoprocessorHost::default();
         let (mut worker, scheduler) = start_deadlock_detector(&mut host);
 
         let mut region = new_region(1, b"", b"", true);
