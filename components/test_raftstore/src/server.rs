@@ -24,7 +24,7 @@ use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
-use tikv::server::lock_manager::{Config as PessimisticTxnConfig, LockManager};
+use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::service::DebugService;
 use tikv::server::Result as ServerResult;
@@ -250,6 +250,7 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
+        let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
         let cfg_controller = ConfigController::new(cfg, Default::default());
         node.start(
             engines,
@@ -276,7 +277,7 @@ impl Simulator for ServerCluster {
                 Arc::clone(&self.pd_client),
                 resolver,
                 Arc::clone(&security_mgr),
-                &PessimisticTxnConfig::default(),
+                &pessimistic_txn_cfg,
             )
             .unwrap();
 

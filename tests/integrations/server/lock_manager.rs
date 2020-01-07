@@ -57,7 +57,7 @@ fn must_deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) {
     thread::sleep(Duration::from_millis(500));
     let resp = acquire_pessimistic_lock(client, ctx, key2, ts);
     assert_eq!(resp.errors.len(), 1);
-    assert!(resp.errors[0].has_deadlock());
+    assert!(resp.errors[0].has_deadlock(), "{:?}", resp.errors);
     rx.recv().unwrap();
 }
 
