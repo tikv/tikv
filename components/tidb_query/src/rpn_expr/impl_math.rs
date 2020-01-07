@@ -35,7 +35,7 @@ pub fn log_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
 pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
     Ok(match (arg0, arg1) {
         (Some(base), Some(n)) => {
-            if **base <= 0f64 || **base == 1f64 || **n <= 0f64 {
+            if **base <= 0f64 || (**base - 1f64).abs() < std::f64::EPSILON || **n <= 0f64 {
                 None
             } else {
                 f64_to_real(n.log(**base))

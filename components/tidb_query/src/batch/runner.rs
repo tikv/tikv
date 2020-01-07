@@ -11,7 +11,6 @@ use tikv_util::deadline::Deadline;
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
 use crate::codec::batch::LazyBatchColumnVec;
-use crate::execute_stats::*;
 use crate::expr::{EvalConfig, EvalContext};
 use crate::metrics::*;
 use crate::storage::Storage;

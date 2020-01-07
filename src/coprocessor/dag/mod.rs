@@ -17,7 +17,6 @@ use crate::storage::{Statistics, Store};
 pub fn build_handler<S: Store + 'static>(
     req: DagRequest,
     ranges: Vec<KeyRange>,
-    start_ts: u64,
     store: S,
     data_version: Option<u64>,
     deadline: Deadline,
