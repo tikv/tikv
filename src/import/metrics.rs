@@ -88,7 +88,7 @@ lazy_static! {
             "Counter of wait store available",
             &["store_id"]
         )
-       .unwrap();
+        .unwrap();
     pub static ref IMPORTER_DOWNLOAD_DURATION: HistogramVec = register_histogram_vec!(
         "tikv_import_download_duration",
         "Bucketed histogram of importer download duration",
