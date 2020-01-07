@@ -1129,8 +1129,9 @@ impl RaftBatchSystem {
             cfg.use_delete_range,
             cfg.clean_stale_peer_delay.0,
             Arc::clone(&workers.coprocessor_host),
+            self.router(),
         );
-        let timer = RegionRunner::new_timer();
+        let timer = region_runner.new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
