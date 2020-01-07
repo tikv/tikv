@@ -16,6 +16,7 @@ use tikv::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
 use tikv::storage::*;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
+use txn_types::*;
 
 #[test]
 fn test_scheduler_leader_change_twice() {
@@ -38,12 +39,15 @@ fn test_scheduler_leader_change_twice() {
     let (prewrite_tx, prewrite_rx) = channel();
     fail::cfg(snapshot_fp, "pause").unwrap();
     storage0
-        .async_prewrite(
+        .prewrite(
             ctx0,
             vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
             b"k".to_vec(),
             10.into(),
-            Options::default(),
+            0,
+            false,
+            0,
+            TimeStamp::default(),
             Box::new(move |res: storage::Result<_>| {
                 prewrite_tx.send(res).unwrap();
             }),
