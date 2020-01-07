@@ -483,13 +483,13 @@ impl ScalarFunc {
         if self.field_type.get_flen() == -1
             || self.field_type.get_flen() > tidb_query_datatype::MAX_BLOB_WIDTH
         {
-            return Ok(Some(Cow::Owned(b"".to_vec())));
+            return Ok(None);
         }
 
-        if let Some(result) = expr_util::string::to_base64(&s.to_vec()) {
+        if let Some(result) = expr_util::string::to_base64(&s) {
             Ok(Some(Cow::Owned(result)))
         } else {
-            Ok(Some(Cow::Owned(b"".to_vec())))
+            Ok(None)
         }
     }
 
