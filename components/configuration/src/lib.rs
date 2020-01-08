@@ -1,13 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::HashMap;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 
 pub use configuration_derive::*;
 
 pub type ConfigChange = HashMap<String, ConfigValue>;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum ConfigValue {
     Duration(u64),
     Size(u64),
@@ -35,6 +35,12 @@ impl Display for ConfigValue {
             ConfigValue::String(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
         }
+    }
+}
+
+impl Debug for ConfigValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
     }
 }
 

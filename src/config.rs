@@ -1177,7 +1177,7 @@ fn config_to_slice(config_change: &[(String, String)]) -> Vec<(&str, &str)> {
         .collect()
 }
 
-// Convert `ConfigValue` to formated String that can pass to `DB::set_db_options`
+// Convert `ConfigValue` to formatted String that can pass to `DB::set_db_options`
 fn config_value_to_string(config_change: Vec<(String, ConfigValue)>) -> Vec<(String, String)> {
     config_change
         .into_iter()
