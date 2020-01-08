@@ -29,6 +29,7 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
+use tikv::config::ConfigHandler;
 use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::{
     config::{ConfigController, TiKvConfig},
@@ -90,6 +91,7 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 /// A complete TiKV server.
 struct TiKVServer {
     config: TiKvConfig,
+    cfg_controller: Option<ConfigController>,
     security_mgr: Arc<SecurityManager>,
     pd_client: Arc<RpcClient>,
     router: RaftRouter,
@@ -98,6 +100,8 @@ struct TiKVServer {
     store_path: PathBuf,
     engines: Option<Engines>,
     servers: Option<Servers>,
+    region_info_accessor: RegionInfoAccessor,
+    coprocessor_host: Option<CoprocessorHost>,
     to_stop: Vec<Box<dyn Stop>>,
 }
 
@@ -110,7 +114,6 @@ struct Engines {
 
 struct Servers {
     lock_mgr: Option<LockManager>,
-    region_info_accessor: RegionInfoAccessor,
     server: Server<ServerRaftStoreRouter, resolve::PdStoreAddrResolver>,
     node: Node<RpcClient>,
     importer: Arc<SSTImporter>,
@@ -118,23 +121,33 @@ struct Servers {
 
 impl TiKVServer {
     fn init(mut config: TiKvConfig) -> TiKVServer {
-        let store_path = Path::new(&config.storage.data_dir).to_owned();
-
+        // It is okay use pd config and security config before `init_config`,
+        // because these configs must be provided by command line, and only
+        // used during startup process.
         let security_mgr =
             Arc::new(SecurityManager::new(&config.security).unwrap_or_else(|e| {
                 fatal!("failed to create security manager: {}", e.description())
             }));
+        let pd_client = Self::connect_to_pd_cluster(&mut config, Arc::clone(&security_mgr));
 
-        let pd_client = Self::connect_to_pd_cluster(&mut config, security_mgr.clone());
+        // Initialize and check config
+        let cfg_controller = Self::init_config(config, Arc::clone(&pd_client));
+        let config = cfg_controller.get_current().clone();
+
+        let store_path = Path::new(&config.storage.data_dir).to_owned();
 
         let (resolve_worker, resolver) = resolve::new_resolver(Arc::clone(&pd_client))
             .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
 
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store);
+        let mut coprocessor_host = Some(CoprocessorHost::new(router.clone()));
+        let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
+        region_info_accessor.start();
 
         TiKVServer {
             config,
+            cfg_controller: Some(cfg_controller),
             security_mgr,
             pd_client,
             router,
@@ -143,8 +156,68 @@ impl TiKVServer {
             store_path,
             engines: None,
             servers: None,
+            region_info_accessor,
+            coprocessor_host,
             to_stop: vec![Box::new(resolve_worker)],
         }
+    }
+
+    /// Initialize and check the config
+    ///
+    /// Warnings are logged and fatal errors exist.
+    ///
+    /// #  Fatal errors
+    ///
+    /// - If `dynamic config` feature is enabled and failed to register config to PD
+    /// - If some critical configs (like data dir) are differrent from last run
+    /// - If the config can't pass `validate()`
+    /// - If the max open file descriptor limit is not high enough to support
+    ///   the main database and the raft database.
+    fn init_config(mut config: TiKvConfig, pd_client: Arc<RpcClient>) -> ConfigController {
+        let mut version = Default::default();
+        if config.dynamic_config {
+            // Advertise address and cluster id can not be changed
+            if config.server.advertise_addr.is_empty() {
+                config.server.advertise_addr = config.server.addr.clone();
+            }
+            let advertise_addr = config.server.advertise_addr.clone();
+            let cluster_id = config.server.cluster_id;
+            // Using the same file for initialize global logger
+            // and diagnostics service
+            let log_file = config.log_file.clone();
+
+            let (v, mut cfg) =
+                ConfigHandler::create(advertise_addr.clone(), Arc::clone(&pd_client), config)
+                    .unwrap_or_else(|e| fatal!("failed to register config from pd: {}", e));
+
+            cfg.server.advertise_addr = advertise_addr;
+            cfg.server.cluster_id = cluster_id;
+            cfg.log_file = log_file;
+            cfg.dynamic_config = true;
+            config = cfg;
+            version = v;
+        }
+
+        validate_and_persist_config(&mut config, true);
+        check_system_config(&config);
+
+        tikv_util::set_panic_hook(false, &config.storage.data_dir);
+
+        // Print version information.
+        tikv::log_tikv_info();
+        info!(
+            "using config";
+            "version" => ?version,
+            "config" => serde_json::to_string(&config).unwrap(),
+        );
+        if config.panic_when_unexpected_key_or_data {
+            info!("panic-when-unexpected-key-or-data is on");
+            tikv_util::set_panic_when_unexpected_key_or_data(true);
+        }
+
+        config.write_into_metrics();
+
+        ConfigController::new(config, version)
     }
 
     fn connect_to_pd_cluster(
@@ -197,8 +270,8 @@ impl TiKVServer {
         let raft_db_path = Path::new(&self.config.raft_store.raftdb_path);
         let mut raft_db_opts = self.config.raftdb.build_opt();
         // Create encrypted env from cipher file
-        let encrypted_env = if !self.config.security.cipher_file.is_empty() {
-            match encrypted_env_from_cipher_file(&self.config.security.cipher_file, None) {
+        let encrypted_env = if !self.security_mgr.cipher_file().is_empty() {
+            match encrypted_env_from_cipher_file(&self.security_mgr.cipher_file(), None) {
                 Err(e) => fatal!(
                     "failed to create encrypted env from cipher file, err {:?}",
                     e
@@ -259,6 +332,7 @@ impl TiKVServer {
             engines.engine.clone(),
             Some(engines.engines.kv.clone()),
             Some(engines.raft_router.clone()),
+            Some(self.region_info_accessor.clone()),
             self.config.gc.clone(),
         );
         gc_worker
@@ -272,9 +346,11 @@ impl TiKVServer {
         &mut self,
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
-        let mut cfg_controller = ConfigController::new(self.config.clone());
+        let mut cfg_controller = self.cfg_controller.take().unwrap();
+        cfg_controller.register("gc", Box::new(gc_worker.get_config_manager()));
+
         // Create CoprocessorHost.
-        let mut coprocessor_host = CoprocessorHost::new(self.router.clone());
+        let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
         let lock_mgr = if self.config.pessimistic_txn.enabled {
             let lock_mgr = LockManager::new();
@@ -317,10 +393,6 @@ impl TiKVServer {
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.config.server.snap_max_total_size.0)
             .build(snap_path, Some(self.router.clone()));
-
-        // Create region collection.
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
-        region_info_accessor.start();
 
         // Create coprocessor endpoint.
         let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
@@ -369,7 +441,7 @@ impl TiKVServer {
         // Start auto gc
         let auto_gc_config = AutoGcConfig::new(
             self.pd_client.clone(),
-            region_info_accessor.clone(),
+            self.region_info_accessor.clone(),
             node.id(),
         );
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config) {
@@ -378,7 +450,6 @@ impl TiKVServer {
 
         self.servers = Some(Servers {
             lock_mgr,
-            region_info_accessor,
             server,
             node,
             importer,
@@ -417,7 +488,8 @@ impl TiKVServer {
             engines.engines.clone(),
             pool.clone(),
             engines.raft_router.clone(),
-            gc_worker,
+            gc_worker.get_config_manager(),
+            self.config.dynamic_config,
         );
         if servers
             .server
@@ -473,7 +545,7 @@ impl TiKVServer {
         let backup_endpoint = backup::Endpoint::new(
             servers.node.id(),
             engines.engine.clone(),
-            servers.region_info_accessor.clone(),
+            self.region_info_accessor.clone(),
             engines.engines.kv.clone(),
         );
         let backup_timer = backup_endpoint.new_timer();
@@ -539,7 +611,7 @@ impl TiKVServer {
             .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
 
         servers.node.stop();
-        servers.region_info_accessor.stop();
+        self.region_info_accessor.stop();
         if let Some(lm) = servers.lock_mgr.as_mut() {
             lm.stop();
         }
@@ -550,7 +622,7 @@ impl TiKVServer {
 
 /// Various sanity-checks and logging before running a server.
 ///
-/// Warnings are logged and fatal errors exit.
+/// Warnings are logged.
 ///
 /// # Logs
 ///
@@ -567,33 +639,21 @@ impl TiKVServer {
 /// - if `vm.swappiness` is not 0
 /// - if data directories are not on SSDs
 /// - if the "TZ" environment variable is not set on unix
-///
-/// # Fatal errors
-///
-/// If the max open file descriptor limit is not high enough to support
-/// the main database and the raft database.
 fn pre_start(config: &TiKvConfig) {
     // Sets the global logger ASAP.
     // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
+    // TODO: currently the logger config has to be provided
+    // through command line. Consider remove this constraint.
     initial_logger(&config);
-    tikv_util::set_panic_hook(false, &config.storage.data_dir);
 
-    // Print version information.
-    tikv::log_tikv_info();
-    info!(
-        "using config";
-        "config" => serde_json::to_string(&config).unwrap(),
-    );
-
-    config.write_into_metrics();
-
-    check_system_config(&config);
     check_environment_variables();
 
-    if config.panic_when_unexpected_key_or_data {
-        info!("panic-when-unexpected-key-or-data is on");
-        tikv_util::set_panic_when_unexpected_key_or_data(true);
+    for e in tikv_util::config::check_kernel() {
+        warn!(
+            "check: kernel";
+            "err" => %e
+        );
     }
 }
 
@@ -610,13 +670,6 @@ fn check_system_config(config: &TiKvConfig) {
         RESERVED_OPEN_FDS + (rocksdb_max_open_files + config.raftdb.max_open_files) as u64,
     ) {
         fatal!("{}", e);
-    }
-
-    for e in tikv_util::config::check_kernel() {
-        warn!(
-            "check: kernel";
-            "err" => %e
-        );
     }
 
     // Check RocksDB data dir
