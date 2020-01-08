@@ -68,6 +68,9 @@ impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
     pub fn new(cfg: &Config, read_pool: ReadPool) -> Self {
+        // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
+        // using too much memory. However, if there are a number of large requests, small requests
+        // will still be blocked. This needs to be improved.
         let semaphore = match &read_pool {
             ReadPool::Yatp(_) => Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency))),
             _ => None,
