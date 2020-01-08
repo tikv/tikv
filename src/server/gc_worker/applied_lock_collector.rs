@@ -238,14 +238,16 @@ impl LockCollectorRunner {
     }
 
     fn handle_observer_msg(&mut self, msg: LockObserverMsg) {
-        if !self.is_clean {
+        if !self.collected_locks.len() >= MAX_COLLECT_SIZE {
             return;
         }
 
         match msg {
             LockObserverMsg::Err(e) => {
-                self.is_clean = false;
-                info!("lock collector marked dirty because received error"; "err" => ?e);
+                if self.is_clean {
+                    self.is_clean = false;
+                    info!("lock collector marked dirty because received error"; "err" => ?e);
+                }
             }
             LockObserverMsg::Locks(mut locks) => {
                 if locks.len() + self.collected_locks.len() > MAX_COLLECT_SIZE {
