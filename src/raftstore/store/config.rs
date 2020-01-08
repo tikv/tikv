@@ -1,12 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::error::Error;
-use std::sync::Arc;
 use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
-use crate::config::ConfigManager;
 use crate::raftstore::{coprocessor, Result};
 use configuration::{ConfigChange, ConfigValue, Configuration};
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};

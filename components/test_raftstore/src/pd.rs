@@ -1065,6 +1065,7 @@ impl PdClient for TestPdClient {
 
     fn handle_region_heartbeat_response<F>(&self, store_id: u64, f: F) -> PdFuture<()>
     where
+        Self: Sized,
         F: Fn(pdpb::RegionHeartbeatResponse) + Send + 'static,
     {
         use futures::stream;
