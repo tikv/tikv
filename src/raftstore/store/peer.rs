@@ -1396,24 +1396,7 @@ impl Peer {
                 self.pending_reads.push_front(read);
                 break;
             }
-            read.replica_retries -= 1;
-            return true;
         }
-        false
-    }
-
-    /// Responses to the ready read index request on the replica, the replica is not a leader.
-    fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
-        let mut handled = 0;
-        for _ in 0..self.pending_reads.ready_cnt {
-            let mut read = self.pending_reads.reads.pop_front().unwrap();
-            if !self.read_index_on_replica(ctx, &mut read) {
-                self.pending_reads.reads.push_front(read);
-                break;
-            }
-            handled += 1;
-        }
-        self.pending_reads.ready_cnt -= handled;
     }
 
     fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
@@ -1890,15 +1873,15 @@ impl Peer {
     /// `ReadIndex` requests could be lost in network, so on followers commands could queue in
     /// `pending_reads` forever. Sending a new `ReadIndex` periodically can resolve this.
     pub(super) fn retry_pending_reads(&mut self) {
-        if self.is_leader() || self.pending_reads.is_empty() || self.pre_read_index().is_err()
-        {
+        if self.is_leader() || self.pending_reads.is_empty() || self.pre_read_index().is_err() {
             return;
         }
 
-        let read = self.pending_reads.reads.back_mut().unwrap();
+        let read = self.pending_reads.back_mut().unwrap();
         if read.read_index.is_none() {
             self.raft_group.read_index(read.id.as_bytes().to_vec());
-            debug!("request to get a read index";
+            debug!(
+                "request to get a read index";
                 "request_id" => ?read.id,
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),

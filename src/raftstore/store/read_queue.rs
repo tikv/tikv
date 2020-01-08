@@ -73,6 +73,9 @@ pub struct ReadIndexQueue {
 }
 
 impl ReadIndexQueue {
+    pub fn is_empty(&self) -> bool {
+        self.reads.is_empty()
+    }
     pub fn notify_all_removed(&mut self, region_id: u64) {
         for mut read in self.reads.drain(..) {
             RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
