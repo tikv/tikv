@@ -1606,8 +1606,7 @@ mod tests {
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
     use crate::storage::kv::{
-        self, Callback as EngineCallback, Modify, Result as EngineResult, RocksEngine,
-        TestEngineBuilder,
+        self, Callback as EngineCallback, Modify, Result as EngineResult, TestEngineBuilder,
     };
     use crate::storage::lock_manager::DummyLockManager;
     use crate::storage::{Storage, TestStorageBuilder};
@@ -2203,7 +2202,7 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
     }
 
-    fn setup_cfg_controller(cfg: TiKvConfig) -> (GcWorker<RocksEngine>, ConfigController) {
+    fn setup_cfg_controller(cfg: TiKvConfig) -> (GcWorker<crate::storage::kv::RocksEngine>, ConfigController) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut gc_worker = GcWorker::new(engine, None, None, None, cfg.gc.clone());
         gc_worker.start().unwrap();
