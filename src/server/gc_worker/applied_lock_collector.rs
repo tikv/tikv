@@ -261,6 +261,10 @@ impl LockCollectorRunner {
     }
 
     fn start_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
+        if self.observer_state.max_ts.load(Ordering::Acquire) == max_ts {
+            // Repeated request. Ignore it.
+            return;
+        }
         info!("start collecting locks"; "max_ts" => max_ts);
         self.collected_locks.clear();
         self.is_clean = true;
@@ -642,6 +646,14 @@ mod tests {
             (expected_locks.clone(), true)
         );
         // Fetch result twice gets the same result.
+        assert_eq!(
+            get_collected_locks(&c, 100).unwrap(),
+            (expected_locks, true)
+        );
+
+        // When repeated start_collecting request arrives, the previous collected results shouldn't
+        // be dropped.
+        start_collecting(&c, 100).unwrap();
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_locks, true)
