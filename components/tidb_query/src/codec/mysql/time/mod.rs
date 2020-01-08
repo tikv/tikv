@@ -1553,11 +1553,11 @@ impl ConvertTo<Duration> for Time {
             return Ok(Duration::zero());
         }
         let seconds = i64::from(self.hour() * 3600 + self.minute() * 60 + self.second());
-        // `nanosecond` returns the number of nanoseconds since the whole non-leap second.
+        // `microsecond` returns the number of microseconds since the whole non-leap second.
         // Such as for 2019-09-22 07:21:22.670936103 UTC,
         // it will return 670936103.
-        let nanosecond = i64::from(self.micro());
-        Duration::from_micros(seconds * 1_000_000 + nanosecond, self.fsp() as i8)
+        let microsecond = i64::from(self.micro());
+        Duration::from_micros(seconds * 1_000_000 + microsecond, self.fsp() as i8)
     }
 }
 
