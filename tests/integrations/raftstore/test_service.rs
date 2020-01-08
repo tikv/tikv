@@ -18,7 +18,6 @@ use engine::*;
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
 use tempfile::Builder;
 use test_raftstore::*;
-use tikv::config::ConfigController;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -143,6 +142,24 @@ fn must_kv_commit(
     );
     assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
     assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
+}
+
+fn must_physical_scan_lock(client: &TikvClient, ctx: Context, max_ts: u64) -> Vec<LockInfo> {
+    let mut req = PhysicalScanLockRequest::default();
+    req.set_context(ctx);
+    req.set_max_ts(max_ts);
+    let rx = client.physical_scan_lock(&req).unwrap();
+    rx.map(|mut resp| {
+        assert!(resp.get_error().is_empty());
+        resp.take_locks()
+    })
+    .collect()
+    .wait()
+    .unwrap()
+    .into_iter()
+    .map(|v| v.into_iter())
+    .flatten()
+    .collect()
 }
 
 #[test]
@@ -476,6 +493,57 @@ fn test_coprocessor() {
     let mut req = Request::default();
     req.set_tp(REQ_TYPE_DAG);
     client.coprocessor(&req).unwrap();
+}
+
+#[test]
+fn test_physical_scan_lock() {
+    let (_cluster, client, ctx) = must_new_cluster_and_kv_client();
+
+    let kv: Vec<_> = (10..20)
+        .map(|i| (i, vec![b'k', i as u8], vec![b'v', i as u8]))
+        .collect();
+
+    for (ts, k, v) in &kv {
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.set_key(k.clone());
+        mutation.set_value(v.clone());
+        must_kv_prewrite(&client, ctx.clone(), vec![mutation], k.clone(), *ts);
+    }
+
+    let all_locks: Vec<_> = kv
+        .into_iter()
+        .map(|(ts, k, _)| {
+            // Create a LockInfo that matches the prewrite request in `must_kv_prewrite`.
+            let mut lock_info = LockInfo::default();
+            lock_info.set_primary_lock(k.clone());
+            lock_info.set_lock_version(ts);
+            lock_info.set_key(k);
+            lock_info.set_lock_ttl(ts + 1);
+            lock_info.set_lock_type(Op::Put);
+            lock_info
+        })
+        .collect();
+
+    let check_result = |got_locks: &[_], expected_locks: &[_]| {
+        for i in 0..std::cmp::max(got_locks.len(), expected_locks.len()) {
+            assert_eq!(got_locks[i], expected_locks[i], "lock {} mismatch", i);
+        }
+    };
+
+    check_result(
+        &must_physical_scan_lock(&client, ctx.clone(), 30),
+        &all_locks,
+    );
+    check_result(
+        &must_physical_scan_lock(&client, ctx.clone(), 15),
+        &all_locks[0..=5],
+    );
+    check_result(
+        &must_physical_scan_lock(&client, ctx.clone(), 10),
+        &all_locks[0..1],
+    );
+    check_result(&must_physical_scan_lock(&client, ctx, 9), &[]);
 }
 
 #[test]
@@ -841,7 +909,7 @@ fn test_double_run_node() {
     };
 
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(20)));
-    let cfg_controller = ConfigController::new(Default::default());
+    let cfg_controller = Default::default();
     let e = node
         .start(
             engines,
