@@ -218,6 +218,8 @@ pub enum CasualMessage {
     ClearRegionSize,
     /// Indicate a target region is overlapped.
     RegionOverlapped,
+    /// Notifies that a new snapshot has been generated.
+    SnapshotGenerated,
 
     /// A test only message, it is useful when we want to access
     /// peer's internal state.
@@ -263,6 +265,7 @@ impl fmt::Debug for CasualMessage {
                 "clear region size"
             },
             CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
+            CasualMessage::SnapshotGenerated => write!(fmt, "SnapshotGenerated"),
             CasualMessage::Test(_) => write!(fmt, "Test"),
         }
     }
