@@ -88,8 +88,6 @@ fn test_replica_read_not_applied() {
 
 #[test]
 fn test_replica_read_on_hibernate() {
-    test_util::setup_for_ci();
-
     let mut cluster = new_node_cluster(0, 3);
 
     configure_for_lease_read(&mut cluster, Some(50), Some(20));
