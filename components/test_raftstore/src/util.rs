@@ -156,7 +156,7 @@ pub fn new_server_config(cluster_id: u64) -> ServerConfig {
 pub fn new_readpool_cfg() -> ReadPoolConfig {
     ReadPoolConfig {
         unify_read_pool: false,
-        unified: YatpConfig {
+        unified: UnifiedReadPoolConfig {
             min_thread_count: 0,
             max_thread_count: 0,
         },

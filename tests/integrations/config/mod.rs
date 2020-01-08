@@ -87,7 +87,7 @@ fn test_serde_custom_tikv_config() {
     };
     value.readpool = ReadPoolConfig {
         unify_read_pool: true,
-        unified: YatpConfig {
+        unified: UnifiedReadPoolConfig {
             min_thread_count: 5,
             max_thread_count: 10,
         },

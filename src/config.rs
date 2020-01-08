@@ -1424,7 +1424,7 @@ mod readpool_tests {
     #[test]
     fn test_unified_disabled() {
         // Allow invalid yatp config when yatp is not used.
-        let unified = YatpConfig {
+        let unified = UnifiedReadPoolConfig {
             min_thread_count: 0,
             max_thread_count: 0,
         };
@@ -1442,7 +1442,7 @@ mod readpool_tests {
         assert!(cfg.validate().is_ok());
 
         // Storage and coprocessor config must be valid when yatp is not used.
-        let unified = YatpConfig::default();
+        let unified = UnifiedReadPoolConfig::default();
         assert!(unified.validate().is_ok());
         let storage = StorageReadPoolConfig {
             high_concurrency: 0,
@@ -1462,7 +1462,7 @@ mod readpool_tests {
     #[test]
     fn test_unified_enabled() {
         // Allow invalid storage and coprocessor config when yatp is used.
-        let unified = YatpConfig::default();
+        let unified = UnifiedReadPoolConfig::default();
         assert!(unified.validate().is_ok());
         let storage = StorageReadPoolConfig {
             high_concurrency: 0,
@@ -1483,7 +1483,7 @@ mod readpool_tests {
         assert!(cfg.validate().is_ok());
 
         // Yatp config must be valid when yatp is used.
-        let unified = YatpConfig {
+        let unified = UnifiedReadPoolConfig {
             min_thread_count: 0,
             max_thread_count: 0,
         };
