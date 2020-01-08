@@ -1147,6 +1147,13 @@ impl Peer {
             .raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
+            // Generating snapshot task won't set ready for raft group.
+            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+                self.pending_request_snapshot_count
+                    .fetch_add(1, Ordering::SeqCst);
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+            }
             return None;
         }
 
