@@ -16,7 +16,7 @@ use crate::raftstore::coprocessor::{
 };
 use crate::storage::mvcc::{Error as MvccError, Lock, TimeStamp};
 
-// TODO: Use new error type for GCWorker instead of storege::Error.
+// TODO: Use new error type for GCWorker instead of storage::Error.
 use super::{Error, ErrorInner, Result};
 
 const MAX_COLLECT_SIZE: usize = 1024;
@@ -47,7 +47,7 @@ enum LockCollectorTask {
     // Messages from observer
     ObserverMsg(LockObserverMsg),
 
-    // Messages client
+    // Messages from client
     StartCollecting {
         max_ts: TimeStamp,
         callback: Callback<()>,
