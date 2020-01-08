@@ -116,6 +116,7 @@ fn diff(fields: &Punctuated<Field, Comma>, creat_name: &Ident) -> Result<proc_ma
         diff_fields.push(f);
     }
     Ok(quote! {
+        #[allow(clippy::float_cmp)]
         fn diff(&self, mut #incoming: &Self) -> #creat_name::ConfigChange {
             let mut #diff_ident = std::collections::HashMap::default();
             #(#diff_fields)*

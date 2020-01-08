@@ -31,7 +31,7 @@ impl Service {
         }
     }
 
-    fn header() -> ResponseHeader {
+    pub fn header() -> ResponseHeader {
         let mut header = ResponseHeader::default();
         header.set_cluster_id(DEFAULT_CLUSTER_ID);
         header

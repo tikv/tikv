@@ -50,7 +50,7 @@ use engine::rocks::util::{
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, PdClient};
-use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack, GB, KB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
@@ -541,7 +541,7 @@ impl Default for LockCfConfig {
             block_based_bloom_filter: false,
             read_amp_bytes_per_bit: 0,
             compression_per_level: [DBCompressionType::No; 7],
-            write_buffer_size: ReadableSize::mb(128),
+            write_buffer_size: ReadableSize::mb(32),
             max_write_buffer_number: 5,
             min_write_buffer_number_to_merge: 1,
             max_bytes_for_level_base: ReadableSize::mb(128),
@@ -1374,7 +1374,7 @@ pub struct TiKvConfig {
     pub import: ImportConfig,
     #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub gc: GcConfig,
 }
 
@@ -1753,6 +1753,16 @@ type CfgResult<T> = Result<T, Box<dyn Error>>;
 
 pub trait ConfigManager: Send {
     fn dispatch(&mut self, _: ConfigChange) -> Result<(), Box<dyn Error>>;
+}
+
+impl<T> ConfigManager for Arc<VersionTrack<T>>
+where
+    T: Configuration + Sync + Send + 'static,
+{
+    fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
+        self.update(|cfg: &mut T| cfg.update(change));
+        Ok(())
+    }
 }
 
 #[derive(PartialEq, Eq, Hash)]
