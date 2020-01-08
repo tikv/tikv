@@ -12,6 +12,7 @@ mod local_metrics;
 mod metrics;
 mod peer;
 mod peer_storage;
+mod read_queue;
 mod region_snapshot;
 mod snap;
 mod worker;

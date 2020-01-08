@@ -10,6 +10,29 @@ use grpcio::Error as GrpcError;
 use tokio_sync::oneshot::error::RecvError;
 use uuid::{parser::ParseError, BytesError};
 
+use crate::metrics::*;
+
+pub fn error_inc(err: &Error) {
+    let label = match err {
+        Error::Io(..) => "io",
+        Error::Grpc(..) => "grpc",
+        Error::Uuid(..) => "uuid",
+        Error::UuidBytes(..) => "uuid_bytes",
+        Error::RocksDB(..) => "rocksdb",
+        Error::EngineTraits(..) => "engine_traits",
+        Error::ParseIntError(..) => "parse_int",
+        Error::FileExists(..) => "file_exists",
+        Error::FileCorrupted(..) => "file_corrupt",
+        Error::InvalidSSTPath(..) => "invalid_sst",
+        Error::Engine(..) => "engine",
+        Error::CannotReadExternalStorage(..) => "read_external_storage",
+        Error::WrongKeyPrefix(..) => "wrong_prefix",
+        Error::BadFormat(..) => "bad_format",
+        _ => return,
+    };
+    IMPORTER_ERROR_VEC.with_label_values(&[label]).inc();
+}
+
 quick_error! {
     #[derive(Debug)]
     pub enum Error {

@@ -24,7 +24,7 @@ use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
-use tikv::server::lock_manager::{Config as PessimisticTxnConfig, LockManager};
+use tikv::server::lock_manager::LockManager;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::service::DebugService;
 use tikv::server::Result as ServerResult;
@@ -152,8 +152,8 @@ impl Simulator for ServerCluster {
 
         let mut gc_worker = GcWorker::new(
             engine.clone(),
-            None,
-            None,
+            Some(engines.kv.clone()),
+            Some(raft_router.clone()),
             Some(region_info_accessor.clone()),
             cfg.gc.clone(),
         );
@@ -184,8 +184,14 @@ impl Simulator for ServerCluster {
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
             .create();
-        let debug_service =
-            DebugService::new(engines.clone(), pool, raft_router, gc_worker.clone());
+
+        let debug_service = DebugService::new(
+            engines.clone(),
+            pool,
+            raft_router,
+            gc_worker.get_config_manager(),
+            false,
+        );
 
         // Create deadlock service.
         let deadlock_service = lock_mgr.deadlock_service();
@@ -248,7 +254,8 @@ impl Simulator for ServerCluster {
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
 
-        let cfg_controller = ConfigController::new(cfg);
+        let pessimistic_txn_cfg = cfg.pessimistic_txn.clone();
+        let cfg_controller = ConfigController::new(cfg, Default::default());
         node.start(
             engines,
             simulate_trans.clone(),
@@ -274,7 +281,7 @@ impl Simulator for ServerCluster {
                 Arc::clone(&self.pd_client),
                 resolver,
                 Arc::clone(&security_mgr),
-                &PessimisticTxnConfig::default(),
+                &pessimistic_txn_cfg,
             )
             .unwrap();
 

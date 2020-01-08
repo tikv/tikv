@@ -25,8 +25,8 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
-    self, Progress, ProgressState, RawNode, ReadState, Ready, SnapshotStatus, StateRole,
-    INVALID_INDEX, NO_LIMIT,
+    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
+    NO_LIMIT,
 };
 use time::Timespec;
 use uuid::Uuid;
@@ -37,149 +37,24 @@ use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
 };
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::raftstore::store::PdTask;
-use crate::raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
+use crate::raftstore::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
 use keys::{enc_end_key, enc_start_key};
 use pd_client::INVALID_ID;
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
-use tikv_util::MustConsumeVec;
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
 use super::metrics::*;
 use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
+use super::read_queue::{ReadIndexQueue, ReadIndexRequest};
 use super::transport::Transport;
 use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
-
-struct ReadIndexRequest {
-    id: Uuid,
-    replica_retries: usize,
-    cmds: MustConsumeVec<(RaftCmdRequest, Callback<RocksEngine>)>,
-    renew_lease_time: Timespec,
-    read_index: Option<u64>,
-}
-
-impl ReadIndexRequest {
-    // Transmutes `self.id` to a 8 bytes slice, so that we can use the payload to do read index.
-    fn binary_id(&self) -> &[u8] {
-        self.id.as_bytes()
-    }
-
-    fn push_command(&mut self, req: RaftCmdRequest, cb: Callback<RocksEngine>) {
-        RAFT_READ_INDEX_PENDING_COUNT.inc();
-        self.cmds.push((req, cb));
-    }
-
-    fn with_command(
-        id: Uuid,
-        req: RaftCmdRequest,
-        cb: Callback<RocksEngine>,
-        renew_lease_time: Timespec,
-    ) -> Self {
-        RAFT_READ_INDEX_PENDING_COUNT.inc();
-        let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
-        cmds.push((req, cb));
-        ReadIndexRequest {
-            id,
-            replica_retries: 1,
-            cmds,
-            renew_lease_time,
-            read_index: None,
-        }
-    }
-}
-
-impl Drop for ReadIndexRequest {
-    fn drop(&mut self) {
-        let dur = (monotonic_raw_now() - self.renew_lease_time)
-            .to_std()
-            .unwrap();
-        RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
-    }
-}
-
-#[derive(Default)]
-pub struct ReadIndexQueue {
-    reads: VecDeque<ReadIndexRequest>,
-    ready_cnt: usize,
-    // map[uuid] -> offset in `reads`.
-    contexts: HashMap<Uuid, usize>,
-}
-
-impl ReadIndexQueue {
-    pub fn is_empty(&self) -> bool {
-        self.reads.is_empty()
-    }
-
-    fn clear_uncommitted(&mut self, term: u64) {
-        for mut read in self.reads.drain(self.ready_cnt..) {
-            self.contexts.remove(&read.id);
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-            for (_, cb) in read.cmds.drain(..) {
-                apply::notify_stale_req(term, cb);
-            }
-        }
-    }
-
-    /// update the read index of the requests that before the specified id.
-    fn advance_replica_reads(&mut self, states: &[ReadState]) {
-        if !states.is_empty() {
-            let (mut min_offset, mut max_offset) = (usize::MAX, 0);
-            for state in states {
-                let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
-                if let Some(offset) = self.contexts.remove(&uuid) {
-                    self.reads[offset].read_index = Some(state.index);
-                    min_offset = cmp::min(min_offset, offset);
-                    max_offset = cmp::max(max_offset, offset);
-                    continue;
-                }
-                error!(
-                    "cannot find corresponding read from pending reads";
-                    "uuid" => ?uuid, "read-index" => state.index,
-                );
-            }
-            if max_offset > 0 {
-                self.fold(min_offset, max_offset);
-            }
-        }
-    }
-
-    fn fold(&mut self, min_offset: usize, max_offset: usize) {
-        let mut r_offset = max_offset;
-        loop {
-            let r_idx = self.reads[r_offset].read_index.unwrap();
-            for l_offset in (0..r_offset).rev() {
-                let l_idx = self.reads[l_offset].read_index.get_or_insert(r_idx);
-                match (*l_idx).cmp(&r_idx) {
-                    cmp::Ordering::Greater => *l_idx = r_idx,
-                    cmp::Ordering::Equal => continue,
-                    cmp::Ordering::Less => {
-                        r_offset = l_offset;
-                        break;
-                    }
-                }
-            }
-            if r_offset < cmp::min(self.ready_cnt, min_offset + 1) {
-                break;
-            }
-        }
-        self.ready_cnt = cmp::max(self.ready_cnt, max_offset + 1);
-    }
-
-    fn gc(&mut self) {
-        if self.reads.capacity() > SHRINK_CACHE_CAPACITY && self.reads.len() < SHRINK_CACHE_CAPACITY
-        {
-            self.reads.shrink_to_fit();
-            self.contexts.shrink_to_fit();
-        }
-    }
-}
 
 /// The returned states of the peer after checking whether it is stale
 #[derive(Debug, PartialEq, Eq)]
@@ -619,12 +494,7 @@ impl Peer {
             }
         }
 
-        for mut read in self.pending_reads.reads.drain(..) {
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-            for (_, cb) in read.cmds.drain(..) {
-                apply::notify_req_region_removed(region.get_id(), cb);
-            }
-        }
+        self.pending_reads.notify_all_removed(region.get_id());
 
         for proposal in self.apply_proposals.drain(..) {
             apply::notify_req_region_removed(region.get_id(), proposal.cb);
@@ -1280,6 +1150,13 @@ impl Peer {
             .raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
+            // Generating snapshot task won't set ready for raft group.
+            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+                self.pending_request_snapshot_count
+                    .fetch_add(1, Ordering::SeqCst);
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+            }
             return None;
         }
 
@@ -1475,43 +1352,49 @@ impl Peer {
         self.proposals.gc();
     }
 
-    // Return the request is handled correctly or not.
-    fn read_index_on_replica<T, C>(
+    fn response_read<T, C>(
         &mut self,
+        mut read: ReadIndexRequest,
         ctx: &mut PollContext<T, C>,
-        read: &mut ReadIndexRequest,
-    ) -> bool {
+        replica_read: bool,
+    ) {
+        debug!(
+            "handle reads with a read index";
+            "request_id" => ?read.binary_id(),
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-        assert!(read.read_index.is_some());
-
-        let is_read_index_request = read.cmds.len() == 1
-            && read.cmds[0].0.get_requests().len() == 1
-            && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
-
-        if is_read_index_request {
-            debug!("handle reads with a read index";
-                "request_id" => ?read.binary_id(),
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            for (req, cb) in read.cmds.drain(..) {
+        for (req, cb) in read.cmds.drain(..) {
+            if !replica_read {
                 cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                continue;
             }
-            read.replica_retries -= 1;
-            return true;
-        } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
-            debug!("handle reads with a read index";
-                "request_id" => ?read.binary_id(),
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            for (req, cb) in read.cmds.drain(..) {
-                // We should check epoch since the range could be changed
-                if req.get_header().get_replica_read() {
-                    cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                } else {
-                    apply::notify_stale_req(self.term(), cb);
-                }
+            if req.get_header().get_replica_read() {
+                // We should check epoch since the range could be changed.
+                cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+            } else {
+                let term = self.term();
+                apply::notify_stale_req(term, cb);
+            }
+        }
+    }
+
+    /// Responses to the ready read index request on the replica, the replica is not a leader.
+    fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
+        while let Some(read) = self.pending_reads.pop_front() {
+            assert!(read.read_index.is_some());
+            let is_read_index_request = read.cmds.len() == 1
+                && read.cmds[0].0.get_requests().len() == 1
+                && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
+
+            if is_read_index_request {
+                self.response_read(read, ctx, false);
+            } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
+                self.response_read(read, ctx, true);
+            } else {
+                self.pending_reads.push_front(read);
+                break;
             }
             read.replica_retries -= 1;
             return true;
@@ -1535,38 +1418,26 @@ impl Peer {
 
     fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         let mut propose_time = None;
+        let states = ready.read_states().iter().map(|state| {
+            let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
+            (uuid, state.index)
+        });
+
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
         // update the `read_index` of read request that before this successful
         // `ready`.
         if !self.is_leader() {
-            // NOTE: there could still be some read requests following, which will be cleared in
-            // `clear_uncommitted` later.
-            self.pending_reads
-                .advance_replica_reads(ready.read_states());
+            // NOTE: there could still be some pending reads proposed by the peer when it was
+            // leader. They will be cleared in `clear_uncommitted` later in the function.
+            self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
-        } else if self.ready_to_handle_read() {
-            for state in ready.read_states() {
-                let mut read = self.pending_reads.reads.pop_front().unwrap();
-                assert_eq!(state.request_ctx.as_slice(), read.binary_id());
-                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-                debug!("handle reads with a read index";
-                    "request_id" => ?read.binary_id(),
-                    "region_id" => self.region_id,
-                    "peer_id" => self.peer.get_id(),
-                );
-                for (req, cb) in read.cmds.drain(..) {
-                    cb.invoke_read(self.handle_read(ctx, req, true, Some(state.index)));
-                }
-                propose_time = Some(read.renew_lease_time);
-            }
         } else {
-            for state in ready.read_states() {
-                let read = &mut self.pending_reads.reads[self.pending_reads.ready_cnt];
-                assert_eq!(state.request_ctx.as_slice(), read.binary_id());
-                self.pending_reads.ready_cnt += 1;
-                read.read_index = Some(state.index);
-                propose_time = Some(read.renew_lease_time);
+            propose_time = self.pending_reads.advance_leader_reads(states);
+            if self.ready_to_handle_read() {
+                while let Some(read) = self.pending_reads.pop_front() {
+                    self.response_read(read, ctx, false);
+                }
             }
         }
 
@@ -1619,21 +1490,9 @@ impl Peer {
         }
         if !self.is_leader() {
             self.post_pending_read_index_on_replica(ctx)
-        } else {
-            if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
-                for _ in 0..self.pending_reads.ready_cnt {
-                    let mut read = self.pending_reads.reads.pop_front().unwrap();
-                    debug!("handle reads with a read index";
-                        "request_id" => ?read.binary_id(),
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                    );
-                    RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-                    for (req, cb) in read.cmds.drain(..) {
-                        cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
-                    }
-                }
-                self.pending_reads.ready_cnt = 0;
+        } else if self.ready_to_handle_read() {
+            while let Some(read) = self.pending_reads.pop_front() {
+                self.response_read(read, ctx, false);
             }
         }
         self.pending_reads.gc();
@@ -2081,7 +1940,7 @@ impl Peer {
                 // before or after the previous read index, and the lease can be renewed when get
                 // heartbeat responses.
                 LeaseState::Valid | LeaseState::Expired => {
-                    if let Some(read) = self.pending_reads.reads.back_mut() {
+                    if let Some(read) = self.pending_reads.back_mut() {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
                         if read.renew_lease_time + max_lease > renew_lease_time {
                             read.push_command(req, cb);
@@ -2130,13 +1989,11 @@ impl Peer {
             return false;
         }
 
-        let read_proposal = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
-        self.pending_reads.reads.push_back(read_proposal);
-        if !self.is_leader() {
-            self.pending_reads.contexts.insert(id, self.pending_reads.reads.len() - 1);
-        }
+        let read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
+        self.pending_reads.push_back(read, self.is_leader());
 
-        debug!("request to get a read index";
+        debug!(
+            "request to get a read index";
             "request_id" => ?id,
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
@@ -2452,10 +2309,7 @@ impl Peer {
 
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
-        for mut read in self.pending_reads.reads.drain(..) {
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
-            read.cmds.clear();
-        }
+        self.pending_reads.notify_all_removed(self.region_id);
     }
 }
 

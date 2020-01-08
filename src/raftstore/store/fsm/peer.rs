@@ -361,6 +361,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.fsm.group_state = GroupState::Chaos;
                 self.register_raft_base_tick();
             }
+            CasualMessage::SnapshotGenerated => {
+                // Resume snapshot handling again to avoid waiting another heartbeat.
+                self.fsm.peer.ping();
+                self.fsm.has_ready = true;
+            }
             CasualMessage::Test(cb) => cb(self.fsm),
         }
     }
@@ -1479,6 +1484,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 let id = peer.get_id();
                 self.fsm.peer.peer_heartbeats.insert(id, now);
                 if self.fsm.peer.is_leader() {
+                    // Speed up snapshot instead of waiting another heartbeat.
+                    self.fsm.peer.ping();
+                    self.fsm.has_ready = true;
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
                 self.fsm.peer.recent_conf_change_time = now;
