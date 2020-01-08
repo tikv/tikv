@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::Configuration;
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
@@ -598,11 +597,6 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                 }
                 _ => {}
             }
-            info!(
-                "raftstore config updated";
-                "tag" => ?self.tag,
-                "change" => ?self.poll_ctx.cfg.diff(&incoming),
-            );
             self.poll_ctx.cfg = incoming.clone();
         }
     }

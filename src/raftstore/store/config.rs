@@ -1,9 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
 use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
+use crate::config::ConfigManager;
 use crate::raftstore::{coprocessor, Result};
 use configuration::{ConfigChange, ConfigValue, Configuration};
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
@@ -573,11 +575,18 @@ impl Config {
 pub type RaftstoreConfigManager = Arc<VersionTrack<Config>>;
 
 impl ConfigManager for RaftstoreConfigManager {
-    fn dispatch(&mut self, change: ConfigChange) -> std::result::Result<(), Box<dyn Error>> {
+    fn dispatch(
+        &mut self,
+        change: ConfigChange,
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
             self.update(move |cfg: &mut Config| cfg.update(change));
         }
+        info!(
+            "raftstore config changed";
+            "change" => ?change,
+        );
         Config::write_change_into_metrics(change);
         Ok(())
     }
