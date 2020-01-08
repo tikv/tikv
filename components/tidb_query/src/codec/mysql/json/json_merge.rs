@@ -20,6 +20,7 @@ impl Json {
                 if objects.len() == 1 {
                     result.append(&mut objects);
                 } else if objects.len() > 1 {
+                    // We have adjacent JSON objects, merge them into a single object
                     result.push(merge_binary_object(&mut objects));
                 }
                 result.push(j);

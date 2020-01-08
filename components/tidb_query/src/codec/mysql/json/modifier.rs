@@ -9,7 +9,7 @@ use codec::number::NumberCodec;
 use std::ptr;
 
 /// A helper struct that derives a new JSON by combining and manipulating
-/// the encoded bytes directly. Only used by `json_replace`, `json_set`, 
+/// the encoded bytes directly. Only used by `json_replace`, `json_set`,
 /// `json_insert` and `json_remove`
 pub struct BinaryModifier<'a> {
     // The target Json to be modified
@@ -33,7 +33,7 @@ impl<'a> BinaryModifier<'a> {
         }
     }
 
-    /// Replaces the existing value JSON and adds nonexisting value 
+    /// Replaces the existing value JSON and adds nonexisting value
     /// specified by the expression path with `new`
     pub fn set(mut self, path: &PathExpression, new: Json) -> Result<Json> {
         let result = extract_json(self.old.clone(), path.legs.as_slice());
@@ -201,7 +201,10 @@ impl<'a> BinaryModifier<'a> {
         Ok(Json::new(new_tp, buf))
     }
 
-    // Returns the old JSON's `JsonType` if the old is untouched and 
+    // Apply `new_value` as a modification to `old` by encoding the result into
+    // the given buffer
+    //
+    // Returns the old JSON's `JsonType` if the old is untouched or
     // returns the new appended JSON's `JsonType` if the old has been modified
     fn rebuild_to(&mut self, buf: &mut Vec<u8>) -> Result<JsonType> {
         if self.to_be_modified_ptr == self.old.as_ptr() {

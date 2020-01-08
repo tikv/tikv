@@ -15,7 +15,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
-        Ok(Some(j.depth()))
+        Ok(Some(j.as_ref().as_ref().depth()))
     }
 
     #[inline]
@@ -25,7 +25,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let j = try_opt!(self.children[0].eval_json(ctx, row));
-        Ok(Some(Cow::Borrowed(j.json_type())))
+        Ok(Some(Cow::Borrowed(j.as_ref().as_ref().json_type())))
     }
 
     #[inline]

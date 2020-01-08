@@ -59,6 +59,7 @@ impl<'a> JsonRef<'a> {
         match val_type {
             JsonType::Literal => {
                 let offset = val_entry_off + TYPE_LEN;
+                #[allow(clippy::range_plus_one)]
                 JsonRef::new(val_type, &self.value()[offset..offset + LITERAL_LEN])
             }
             JsonType::U64 | JsonType::I64 | JsonType::Double => {
@@ -81,13 +82,13 @@ impl<'a> JsonRef<'a> {
         }
     }
 
-    /// Returns a raw pointer to the underlying values buffer.
-    pub fn as_ptr(&self) -> *const u8 {
+    // Returns a raw pointer to the underlying values buffer.
+    pub(super) fn as_ptr(&self) -> *const u8 {
         self.value.as_ptr()
     }
 
-    /// Returns the literal value of JSON document
-    pub fn as_literal(&self) -> Result<u8> {
+    // Returns the literal value of JSON document
+    pub(super) fn as_literal(&self) -> Result<u8> {
         match self.get_type() {
             JsonType::Literal => Ok(self.value()[0]),
             _ => Err(invalid_type!(

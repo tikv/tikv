@@ -12,7 +12,7 @@ use crate::Result;
 #[rpn_fn]
 #[inline]
 fn json_depth(arg: &Option<Json>) -> Result<Option<i64>> {
-    Ok(arg.as_ref().map(|json_arg| json_arg.depth()))
+    Ok(arg.as_ref().map(|json_arg| json_arg.as_ref().depth()))
 }
 
 #[rpn_fn]
@@ -20,7 +20,7 @@ fn json_depth(arg: &Option<Json>) -> Result<Option<i64>> {
 fn json_type(arg: &Option<Json>) -> Result<Option<Bytes>> {
     Ok(arg
         .as_ref()
-        .map(|json_arg| Bytes::from(json_arg.json_type())))
+        .map(|json_arg| Bytes::from(json_arg.as_ref().json_type())))
 }
 
 #[rpn_fn(raw_varg, min_args = 2, extra_validator = json_modify_validator)]
