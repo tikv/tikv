@@ -491,7 +491,7 @@ impl Peer {
             }
         }
 
-        self.pending_reads.notify_all_removed(region.get_id());
+        self.pending_reads.clear_all(Some(region.get_id()));
 
         for proposal in self.apply_proposals.drain(..) {
             apply::notify_req_region_removed(region.get_id(), proposal.cb);
@@ -1371,6 +1371,8 @@ impl Peer {
                 // We should check epoch since the range could be changed.
                 cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
             } else {
+                // The request could be proposed when the peer was leader.
+                // TODO: figure out that it's necessary to notify stale or not.
                 let term = self.term();
                 apply::notify_stale_req(term, cb);
             }
@@ -1412,13 +1414,14 @@ impl Peer {
             // leader. They will be cleared in `clear_uncommitted` later in the function.
             self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
+        } else if self.ready_to_handle_read() {
+            for (uuid, index) in states {
+                let read = self.pending_reads.advance_and_pop(uuid, index);
+                propose_time = Some(read.renew_lease_time);
+                self.response_read(read, ctx, false);
+            }
         } else {
             propose_time = self.pending_reads.advance_leader_reads(states);
-            if self.ready_to_handle_read() {
-                while let Some(read) = self.pending_reads.pop_front() {
-                    self.response_read(read, ctx, false);
-                }
-            }
         }
 
         // Note that only after handle read_states can we identify what requests are
@@ -2270,7 +2273,7 @@ impl Peer {
 
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
-        self.pending_reads.notify_all_removed(self.region_id);
+        self.pending_reads.clear_all(None);
     }
 }
 
