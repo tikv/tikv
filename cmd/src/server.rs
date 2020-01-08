@@ -350,6 +350,8 @@ impl TiKVServer {
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
         let mut cfg_controller = self.cfg_controller.take().unwrap();
+        cfg_controller.register("gc", Box::new(gc_worker.get_config_manager()));
+
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
 
@@ -489,7 +491,7 @@ impl TiKVServer {
             engines.engines.clone(),
             pool.clone(),
             engines.raft_router.clone(),
-            gc_worker,
+            gc_worker.get_config_manager(),
             self.config.dynamic_config,
         );
         if servers
