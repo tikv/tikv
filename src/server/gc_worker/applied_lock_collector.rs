@@ -139,7 +139,7 @@ impl QueryObserver for LockObserver {
             return;
         }
 
-        // For each put in CF_LOCK, collect it if it's ts <= max_ts.
+        // For each put in CF_LOCK, collect it if its ts <= max_ts.
         for req in requests {
             if req.get_cmd_type() != CmdType::Put {
                 continue;
