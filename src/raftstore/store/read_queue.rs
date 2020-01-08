@@ -74,25 +74,29 @@ pub struct ReadIndexQueue {
 
 impl ReadIndexQueue {
     pub fn notify_all_removed(&mut self, region_id: u64) {
+        let mut removed = 0;
         for mut read in self.reads.drain(..) {
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+            removed += read.cmds.len();
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_req_region_removed(region_id, cb);
             }
         }
+        RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);
         self.contexts.clear();
         self.ready_cnt = 0;
         self.handled_cnt = 0;
     }
 
     pub fn clear_uncommitted(&mut self, term: u64) {
+        let mut removed = 0;
         for mut read in self.reads.drain(self.ready_cnt..) {
             self.contexts.remove(&read.id);
+            removed += read.cmds.len();
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
-            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
         }
+        RAFT_READ_INDEX_PENDING_COUNT.sub(removed as i64);
     }
 
     pub fn push_back(&mut self, read: ReadIndexRequest, is_leader: bool) {
