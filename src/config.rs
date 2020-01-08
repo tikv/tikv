@@ -1107,17 +1107,14 @@ pub mod log_level_serde {
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-pub struct YatpConfig {
+pub struct UnifiedReadPoolConfig {
     pub min_thread_count: usize,
     pub max_thread_count: usize,
     // FIXME: Add more configs when they are effective in yatp
 }
 
-impl YatpConfig {
+impl UnifiedReadPoolConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
-        // FIXME: Replace "readpool" prefix in error messages when it is used
-        // elsewhere.
-
         if self.min_thread_count == 0 {
             return Err("readpool.unified.min-thread-count should be > 0"
                 .to_string()
@@ -1134,15 +1131,14 @@ impl YatpConfig {
     }
 }
 
-const YATP_READPOOL_MIN_CONCURRENCY: usize = 4;
+const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
 
-// FIXME: Support other default configs if yatp is used elsewhere besides
-// readpool.
-impl Default for YatpConfig {
-    fn default() -> YatpConfig {
+// FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
+impl Default for UnifiedReadPoolConfig {
+    fn default() -> UnifiedReadPoolConfig {
         let cpu_num = sysinfo::get_logical_cores();
         let mut concurrency = (cpu_num as f64 * 0.8) as usize;
-        concurrency = cmp::max(YATP_READPOOL_MIN_CONCURRENCY, concurrency);
+        concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
         Self {
             min_thread_count: 1,
             max_thread_count: concurrency,
@@ -1151,24 +1147,24 @@ impl Default for YatpConfig {
 }
 
 #[cfg(test)]
-mod yatp_tests {
+mod unified_read_pool_tests {
     use super::*;
 
     #[test]
     fn test_validate() {
-        let cfg = YatpConfig {
+        let cfg = UnifiedReadPoolConfig {
             min_thread_count: 1,
             max_thread_count: 2,
         };
         assert!(cfg.validate().is_ok());
 
-        let invalid_cfg = YatpConfig {
+        let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 0,
             ..cfg
         };
         assert!(invalid_cfg.validate().is_err());
 
-        let invalid_cfg = YatpConfig {
+        let invalid_cfg = UnifiedReadPoolConfig {
             min_thread_count: 2,
             max_thread_count: 1,
         };
@@ -1392,7 +1388,7 @@ impl Default for CoprReadPoolConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
     pub unify_read_pool: bool,
-    pub unified: YatpConfig,
+    pub unified: UnifiedReadPoolConfig,
     pub storage: StorageReadPoolConfig,
     pub coprocessor: CoprReadPoolConfig,
 }
