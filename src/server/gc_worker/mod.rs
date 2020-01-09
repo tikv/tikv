@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod applied_lock_collector;
+
 use std::cmp::Ordering;
 use std::convert::TryFrom;
 use std::fmt::{self, Display, Formatter};
@@ -9,6 +11,7 @@ use std::sync::{atomic, Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
+use applied_lock_collector::{AppliedLockCollector, Callback as LockCollectorCallback};
 use configuration::Configuration;
 use engine::rocks::util::get_cf_handle;
 use engine::rocks::DB;
@@ -25,7 +28,7 @@ use log_wrappers::DisplayValue;
 use raft::StateRole;
 use tokio_core::reactor::Handle;
 
-use crate::raftstore::coprocessor::RegionInfoAccessor;
+use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use crate::raftstore::router::ServerRaftStoreRouter;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::find_peer;
@@ -1403,6 +1406,8 @@ pub struct GcWorker<E: Engine> {
     worker: Arc<Mutex<FutureWorker<GcTask>>>,
     worker_scheduler: FutureScheduler<GcTask>,
 
+    applied_lock_collector: Option<Arc<AppliedLockCollector>>,
+
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
 }
 
@@ -1421,6 +1426,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             refs: self.refs.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
+            applied_lock_collector: self.applied_lock_collector.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
         }
     }
@@ -1462,6 +1468,7 @@ impl<E: Engine> GcWorker<E> {
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             worker,
             worker_scheduler,
+            applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
         }
     }
@@ -1491,6 +1498,16 @@ impl<E: Engine> GcWorker<E> {
             .unwrap()
             .start(runner)
             .map_err(|e| box_err!("failed to start gc_worker, err: {:?}", e))
+    }
+
+    pub fn start_observe_lock_apply(
+        &mut self,
+        coprocessor_host: &mut CoprocessorHost,
+    ) -> Result<()> {
+        assert!(self.applied_lock_collector.is_none());
+        let collector = Arc::new(AppliedLockCollector::new(coprocessor_host)?);
+        self.applied_lock_collector = Some(collector);
+        Ok(())
     }
 
     pub fn stop(&self) -> Result<()> {
@@ -1596,6 +1613,39 @@ impl<E: Engine> GcWorker<E> {
             })
             .into_stream()
             .flatten()
+    }
+
+    pub fn start_collecting(
+        &self,
+        max_ts: TimeStamp,
+        callback: LockCollectorCallback<()>,
+    ) -> Result<()> {
+        self.applied_lock_collector
+            .as_ref()
+            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
+            .and_then(move |c| c.start_collecting(max_ts, callback))
+    }
+
+    pub fn get_collected_locks(
+        &self,
+        max_ts: TimeStamp,
+        callback: LockCollectorCallback<(Vec<LockInfo>, bool)>,
+    ) -> Result<()> {
+        self.applied_lock_collector
+            .as_ref()
+            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
+            .and_then(move |c| c.get_collected_locks(max_ts, callback))
+    }
+
+    pub fn stop_collecting(
+        &self,
+        max_ts: TimeStamp,
+        callback: LockCollectorCallback<()>,
+    ) -> Result<()> {
+        self.applied_lock_collector
+            .as_ref()
+            .ok_or_else(|| box_err!("applied_lock_collector not supported"))
+            .and_then(move |c| c.stop_collecting(max_ts, callback))
     }
 }
 
@@ -2202,7 +2252,9 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
     }
 
-    fn setup_cfg_controller(cfg: TiKvConfig) -> (GcWorker<crate::storage::kv::RocksEngine>, ConfigController) {
+    fn setup_cfg_controller(
+        cfg: TiKvConfig,
+    ) -> (GcWorker<crate::storage::kv::RocksEngine>, ConfigController) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut gc_worker = GcWorker::new(engine, None, None, None, cfg.gc.clone());
         gc_worker.start().unwrap();
