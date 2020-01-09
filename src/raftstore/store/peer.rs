@@ -191,7 +191,7 @@ pub struct Peer {
 
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
-    pub pending_reads: ReadIndexQueue,
+    pending_reads: ReadIndexQueue,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -1882,15 +1882,14 @@ impl Peer {
         }
 
         let read = self.pending_reads.back_mut().unwrap();
-        if read.read_index.is_none() {
-            self.raft_group.read_index(read.id.as_bytes().to_vec());
-            debug!(
-                "request to get a read index";
-                "request_id" => ?read.id,
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-        }
+        debug_assert!(read.read_index.is_none());
+        self.raft_group.read_index(read.id.as_bytes().to_vec());
+        debug!(
+            "request to get a read index";
+            "request_id" => ?read.id,
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+        );
     }
 
     // Returns a boolean to indicate whether the `read` is proposed or not.

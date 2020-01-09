@@ -77,8 +77,8 @@ pub struct ReadIndexQueue {
 impl ReadIndexQueue {
     /// Check it's necessary to retry pending read requests or not.
     /// Return true if all such conditions are satisfied:
-    /// 1. an election timeout elapsed from the last request push;
-    /// 2. an election timeout elapsed from the last retry;
+    /// 1. more than an election timeout elapsed from the last request push;
+    /// 2. more than an election timeout elapsed from the last retry;
     /// 3. there are still unresolved requests in the queue.
     pub fn check_needs_retry(&mut self, cfg: &Config) -> bool {
         if self.reads.len() == self.ready_cnt {
@@ -86,7 +86,7 @@ impl ReadIndexQueue {
         }
 
         if self.retry_countdown == usize::MAX {
-            self.retry_countdown = cfg.raft_election_timeout_ticks.checked_sub(1).unwrap();
+            self.retry_countdown = cfg.raft_election_timeout_ticks - 1;
             return false;
         }
 
