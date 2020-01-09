@@ -50,7 +50,7 @@ use engine::rocks::util::{
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, PdClient};
-use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack, GB, KB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
@@ -1104,6 +1104,74 @@ pub mod log_level_serde {
     }
 }
 
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct UnifiedReadPoolConfig {
+    pub min_thread_count: usize,
+    pub max_thread_count: usize,
+    // FIXME: Add more configs when they are effective in yatp
+}
+
+impl UnifiedReadPoolConfig {
+    fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.min_thread_count == 0 {
+            return Err("readpool.unified.min-thread-count should be > 0"
+                .to_string()
+                .into());
+        }
+        if self.max_thread_count < self.min_thread_count {
+            return Err(
+                "readpool.unified.max-thread-count should be >= readpool.unified.min-thread-count"
+                    .to_string()
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+const UNIFIED_READPOOL_MIN_CONCURRENCY: usize = 4;
+
+// FIXME: Use macros to generate it if yatp is used elsewhere besides readpool.
+impl Default for UnifiedReadPoolConfig {
+    fn default() -> UnifiedReadPoolConfig {
+        let cpu_num = sysinfo::get_logical_cores();
+        let mut concurrency = (cpu_num as f64 * 0.8) as usize;
+        concurrency = cmp::max(UNIFIED_READPOOL_MIN_CONCURRENCY, concurrency);
+        Self {
+            min_thread_count: 1,
+            max_thread_count: concurrency,
+        }
+    }
+}
+
+#[cfg(test)]
+mod unified_read_pool_tests {
+    use super::*;
+
+    #[test]
+    fn test_validate() {
+        let cfg = UnifiedReadPoolConfig {
+            min_thread_count: 1,
+            max_thread_count: 2,
+        };
+        assert!(cfg.validate().is_ok());
+
+        let invalid_cfg = UnifiedReadPoolConfig {
+            min_thread_count: 0,
+            ..cfg
+        };
+        assert!(invalid_cfg.validate().is_err());
+
+        let invalid_cfg = UnifiedReadPoolConfig {
+            min_thread_count: 2,
+            max_thread_count: 1,
+        };
+        assert!(invalid_cfg.validate().is_err());
+    }
+}
+
 macro_rules! readpool_config {
     ($struct_name:ident, $test_mod_name:ident, $display_name:expr) => {
         #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Debug)]
@@ -1315,19 +1383,121 @@ impl Default for CoprReadPoolConfig {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Default)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ReadPoolConfig {
+    pub unify_read_pool: bool,
+    pub unified: UnifiedReadPoolConfig,
     pub storage: StorageReadPoolConfig,
     pub coprocessor: CoprReadPoolConfig,
 }
 
 impl ReadPoolConfig {
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
-        self.storage.validate()?;
-        self.coprocessor.validate()?;
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.unify_read_pool {
+            self.unified.validate()?;
+        } else {
+            self.storage.validate()?;
+            self.coprocessor.validate()?;
+        }
         Ok(())
+    }
+}
+
+impl Default for ReadPoolConfig {
+    fn default() -> ReadPoolConfig {
+        ReadPoolConfig {
+            unify_read_pool: false,
+            unified: Default::default(),
+            storage: Default::default(),
+            coprocessor: Default::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod readpool_tests {
+    use super::*;
+
+    #[test]
+    fn test_unified_disabled() {
+        // Allow invalid yatp config when yatp is not used.
+        let unified = UnifiedReadPoolConfig {
+            min_thread_count: 0,
+            max_thread_count: 0,
+        };
+        assert!(unified.validate().is_err());
+        let storage = StorageReadPoolConfig::default();
+        assert!(storage.validate().is_ok());
+        let coprocessor = CoprReadPoolConfig::default();
+        assert!(coprocessor.validate().is_ok());
+        let cfg = ReadPoolConfig {
+            unify_read_pool: false,
+            unified,
+            storage,
+            coprocessor,
+        };
+        assert!(cfg.validate().is_ok());
+
+        // Storage and coprocessor config must be valid when yatp is not used.
+        let unified = UnifiedReadPoolConfig::default();
+        assert!(unified.validate().is_ok());
+        let storage = StorageReadPoolConfig {
+            high_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(storage.validate().is_err());
+        let coprocessor = CoprReadPoolConfig::default();
+        let invalid_cfg = ReadPoolConfig {
+            unify_read_pool: false,
+            unified,
+            storage,
+            coprocessor,
+        };
+        assert!(invalid_cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_unified_enabled() {
+        // Allow invalid storage and coprocessor config when yatp is used.
+        let unified = UnifiedReadPoolConfig::default();
+        assert!(unified.validate().is_ok());
+        let storage = StorageReadPoolConfig {
+            high_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(storage.validate().is_err());
+        let coprocessor = CoprReadPoolConfig {
+            high_concurrency: 0,
+            ..Default::default()
+        };
+        assert!(coprocessor.validate().is_err());
+        let cfg = ReadPoolConfig {
+            unify_read_pool: true,
+            unified,
+            storage,
+            coprocessor,
+        };
+        assert!(cfg.validate().is_ok());
+
+        // Yatp config must be valid when yatp is used.
+        let unified = UnifiedReadPoolConfig {
+            min_thread_count: 0,
+            max_thread_count: 0,
+        };
+        assert!(unified.validate().is_err());
+        let storage = StorageReadPoolConfig::default();
+        assert!(storage.validate().is_ok());
+        let coprocessor = CoprReadPoolConfig::default();
+        assert!(coprocessor.validate().is_ok());
+        let cfg = ReadPoolConfig {
+            unify_read_pool: true,
+            unified,
+            storage,
+            coprocessor,
+        };
+        assert!(cfg.validate().is_err());
     }
 }
 
@@ -1374,7 +1544,7 @@ pub struct TiKvConfig {
     pub import: ImportConfig,
     #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub gc: GcConfig,
 }
 
@@ -1753,6 +1923,16 @@ type CfgResult<T> = Result<T, Box<dyn Error>>;
 
 pub trait ConfigManager: Send {
     fn dispatch(&mut self, _: ConfigChange) -> Result<(), Box<dyn Error>>;
+}
+
+impl<T> ConfigManager for Arc<VersionTrack<T>>
+where
+    T: Configuration + Sync + Send + 'static,
+{
+    fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
+        self.update(|cfg: &mut T| cfg.update(change));
+        Ok(())
+    }
 }
 
 #[derive(PartialEq, Eq, Hash)]

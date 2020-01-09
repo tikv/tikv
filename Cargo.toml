@@ -29,6 +29,7 @@ prost-codec = [
   "tikv_util/prost-codec",
   "sst_importer/prost-codec",
   "pd_client/prost-codec",
+  "tidb_query/prost-codec",
 ]
 protobuf-codec = [
   "tipb/protobuf-codec",
@@ -37,6 +38,7 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "sst_importer/protobuf-codec",
   "pd_client/protobuf-codec",
+  "tidb_query/protobuf-codec",
 ]
 
 [lib]
@@ -58,7 +60,7 @@ crc64fast = "0.1"
 crossbeam = "0.7.2"
 derive-new = "0.5"
 derive_more = "0.15.0"
-engine = { path = "components/engine" }
+engine = { path = "components/engine", default-features = false }
 engine_rocks = { path = "components/engine_rocks" }
 engine_traits = { path = "components/engine_traits" }
 fail = "0.3"
@@ -83,11 +85,11 @@ mime = "0.3.13"
 more-asserts = "0.1"
 nix = "0.11"
 nom = "5.0.1"
-pd_client = { path = "components/pd_client" }
+pd_client = { path = "components/pd_client", default-features = false }
 prost = "0.5.0"
 protobuf = "2.8"
 quick-error = "1.2.2"
-raft = { version = "0.6.0-alpha" , default-features = false }
+raft = { version = "0.6.0-alpha", default-features = false }
 rand = "0.6.5"
 regex = "1.3"
 rev_lines = "0.2.1"
@@ -100,15 +102,16 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 slog-term = "2.4"
 slog_derive = "0.1"
 spin = "0.5"
-sst_importer = { path = "components/sst_importer" }
+sst_importer = { path = "components/sst_importer", default-features = false }
 sysinfo = { git = "https://github.com/tikv/sysinfo.git", branch = "tikv"}
 tempfile = "3.0"
 test_util = { path = "components/test_util" }
-tidb_query = { path = "components/tidb_query" }
+tidb_query = { path = "components/tidb_query", default-features = false }
 tikv_alloc = { path = "components/tikv_alloc", default-features = false }
-tikv_util = { path = "components/tikv_util" }
+tikv_util = { path = "components/tikv_util", default-features = false }
 time = "0.1"
 tipb = { git = "https://github.com/pingcap/tipb.git", default-features = false }
+tokio = { version = "0.2", features = ["sync"] }
 tokio-core = "0.1"
 tokio-executor = "0.1"
 tokio-fs = "0.1.6"
@@ -135,6 +138,10 @@ features = ["nightly", "push", "process"]
 git = "https://github.com/pingcap/rust-prometheus.git"
 rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 
+[dependencies.yatp]
+git = "https://github.com/tikv/yatp.git"
+rev = "4e3ac06b948f1c2dffe92986a760ef561d0bdbb9"
+
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
 test_sst_importer = { path = "components/test_sst_importer" }
@@ -146,6 +153,7 @@ test_sst_importer = { path = "components/test_sst_importer" }
 "protobuf:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "protobuf-codegen:2.8.0" = { git = "https://github.com/nrc/rust-protobuf", branch = "v2.8" }
 "prost:0.5.0" = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }
+"protobuf-build:0.10.0" = { git = "https://github.com/tikv/protobuf-build", rev="42e52b9311f7fb31bbbe089fef5a24ec0392f9ce" }
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
@@ -187,6 +195,7 @@ members = [
   "components/txn_types",
   "components/resolved_ts",
   "components/batch-system",
+  "components/cdc",
 ]
 default-members = ["cmd"]
 
