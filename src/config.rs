@@ -1507,43 +1507,62 @@ mod readpool_tests {
 pub struct TiKvConfig {
     #[config(skip)]
     pub dynamic_config: bool,
+
     #[config(skip)]
     #[serde(with = "log_level_serde")]
     pub log_level: slog::Level,
+
     #[config(skip)]
     pub log_file: String,
+
     #[config(skip)]
     pub log_rotation_timespan: ReadableDuration,
+
     #[config(skip)]
     pub log_rotation_size: ReadableSize,
-    #[config(skip)]
+
+    #[config(hidden)]
     pub panic_when_unexpected_key_or_data: bool,
+
     pub refresh_config_interval: ReadableDuration,
+
     #[config(skip)]
     pub readpool: ReadPoolConfig,
+
     #[config(skip)]
     pub server: ServerConfig,
+
     #[config(skip)]
     pub storage: StorageConfig,
+
     #[config(skip)]
     pub pd: PdConfig,
-    #[config(skip)]
+
+    #[config(hidden)]
     pub metric: MetricConfig,
+
     #[config(submodule)]
     #[serde(rename = "raftstore")]
     pub raft_store: RaftstoreConfig,
+
     #[config(submodule)]
     pub coprocessor: CopConfig,
+
     #[config(skip)]
     pub rocksdb: DbConfig,
+
     #[config(skip)]
     pub raftdb: RaftDbConfig,
+
     #[config(skip)]
     pub security: SecurityConfig,
+
     #[config(skip)]
     pub import: ImportConfig,
+
     #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
+
     #[config(submodule)]
     pub gc: GcConfig,
 }
@@ -1925,9 +1944,9 @@ pub trait ConfigManager: Send {
     fn dispatch(&mut self, _: ConfigChange) -> Result<(), Box<dyn Error>>;
 }
 
-impl<T> ConfigManager for Arc<VersionTrack<T>>
+impl<'a, T> ConfigManager for Arc<VersionTrack<T>>
 where
-    T: Configuration + Sync + Send + 'static,
+    T: Configuration<'a> + Sync + Send + 'static,
 {
     fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
         self.update(|cfg: &mut T| cfg.update(change));
@@ -2102,7 +2121,7 @@ impl ConfigHandler {
         pd_client: Arc<impl PdClient>,
         local_config: TiKvConfig,
     ) -> CfgResult<(configpb::Version, TiKvConfig)> {
-        let cfg = toml::to_string(&local_config)?;
+        let cfg = toml::to_string(&local_config.get_encoder())?;
         let version = configpb::Version::default();
         let mut resp = pd_client.register_config(id, version, cfg)?;
         match resp.get_status().get_code() {

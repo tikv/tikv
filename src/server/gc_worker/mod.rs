@@ -80,6 +80,7 @@ const SCAN_LOCK_BATCH_SIZE: usize = 128;
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct GcConfig {
+    #[config(hidden)]
     pub ratio_threshold: f64,
     pub batch_keys: usize,
     pub max_write_bytes_per_sec: ReadableSize,
