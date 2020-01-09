@@ -57,5 +57,9 @@ toml = "0.4"
 url = "2"
 vlog = "0.1.4"
 
+[dependencies.yatp]
+git = "https://github.com/tikv/yatp.git"
+rev = "4e3ac06b948f1c2dffe92986a760ef561d0bdbb9"
+
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
