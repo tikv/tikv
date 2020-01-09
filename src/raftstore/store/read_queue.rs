@@ -104,10 +104,6 @@ impl ReadIndexQueue {
         true
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.reads.is_empty()
-    }
-
     /// Clear all commands in the queue. if `notify_removed` contains an `region_id`,
     /// notify the request's callback that the region is removed.
     pub fn clear_all(&mut self, notify_removed: Option<u64>) {

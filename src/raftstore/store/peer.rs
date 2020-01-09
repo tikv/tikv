@@ -1874,7 +1874,7 @@ impl Peer {
     /// `ReadIndex` requests could be lost in network, so on followers commands could queue in
     /// `pending_reads` forever. Sending a new `ReadIndex` periodically can resolve this.
     pub(super) fn retry_pending_reads(&mut self) {
-        if self.is_leader() || self.pending_reads.is_empty() || self.pre_read_index().is_err() {
+        if self.is_leader() || self.pre_read_index().is_err() {
             return;
         }
 
