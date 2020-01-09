@@ -62,6 +62,7 @@ impl Drop for ReadIndexRequest {
     }
 }
 
+#[derive(Default)]
 pub struct ReadIndexQueue {
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
@@ -70,37 +71,35 @@ pub struct ReadIndexQueue {
     // map[uuid] -> offset in `reads`.
     contexts: HashMap<Uuid, usize>,
 
-    retry_timeout: usize,
-    retry_elapsed: usize,
+    retry_countdown: usize,
     last_retried: usize,
 }
 
 impl ReadIndexQueue {
-    pub fn new(cfg: &Config) -> Self {
-        ReadIndexQueue {
-            reads: VecDeque::default(),
-            ready_cnt: 0,
-            handled_cnt: 0,
-            contexts: HashMap::default(),
-            retry_timeout: cfg.raft_election_timeout_ticks,
-            retry_elapsed: 0,
-            last_retried: 0,
-        }
-    }
-
-    pub fn check_needs_retry(&mut self) -> bool {
-        self.retry_elapsed += 1;
-        if self.retry_elapsed < self.retry_timeout {
+    /// Check it's necessary to retry pending read requests or not.
+    /// Return true if all such conditions are satisfied:
+    /// 1. an election timeout elapsed from the last request push;
+    /// 2. an election timeout elapsed from the last retry;
+    /// 3. there are still unresolved requests in the queue.
+    pub fn check_needs_retry(&mut self, cfg: &Config) -> bool {
+        if self.reads.len() == self.ready_cnt {
             return false;
         }
 
-        self.retry_elapsed = 0;
-        let total = self.reads.len();
-        if total == self.ready_cnt || total + self.handled_cnt <= self.last_retried {
+        debug_assert!(self.reads.len() + self.handled_cnt >= self.last_retried);
+        if self.reads.len() + self.handled_cnt > self.last_retried {
+            self.retry_countdown = cfg.raft_election_timeout_ticks;
+            self.last_retried = self.reads.len() + self.handled_cnt;
             return false;
         }
 
-        self.last_retried = total + self.handled_cnt - 1;
+        if self.retry_countdown > 0 {
+            self.retry_countdown -= 1;
+            return false;
+        }
+        self.retry_countdown = cfg.raft_election_timeout_ticks;
+
+        self.last_retried = self.reads.len() + self.handled_cnt;
         true
     }
 
@@ -143,7 +142,6 @@ impl ReadIndexQueue {
             self.contexts.insert(read.id, offset);
         }
         self.reads.push_back(read);
-        self.retry_elapsed = 0;
     }
 
     pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest> {
@@ -258,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_read_queue_fold() {
-        let mut queue = ReadIndexQueue::new(&Config::default());
+        let mut queue = ReadIndexQueue::default();
         queue.handled_cnt = 125;
         for _ in 0..100 {
             let id = Uuid::new_v4();
