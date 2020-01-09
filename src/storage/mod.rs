@@ -1430,7 +1430,7 @@ mod tests {
 
     use crate::storage::txn::{Error as TxnError, ErrorInner as TxnErrorInner};
     use futures03::executor::block_on;
-    use kvproto::kvrpcpb::CommandPri;
+    use kvproto::kvrpcpb::{CommandPri, RawGetRequest};
     use std::{
         fmt::Debug,
         sync::mpsc::{channel, Sender},
@@ -2682,7 +2682,9 @@ mod tests {
         let cmds = test_data
             .iter()
             .map(|&(ref k, _)| {
-                PointGetCommand::from_key_ts(Key::from_encoded(k.clone()), Some(0.into()))
+                let mut req = RawGetRequest::default();
+                req.set_key(k.clone());
+                PointGetCommand::from_raw_get(&mut req)
             })
             .collect();
         let results: Vec<Option<Vec<u8>>> = test_data.into_iter().map(|(_, v)| Some(v)).collect();
