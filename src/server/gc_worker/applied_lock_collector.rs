@@ -32,23 +32,11 @@ struct LockObserverState {
     is_clean: AtomicBool,
 }
 
-#[derive(Debug)]
-enum LockObserverMsg {
-    // A lock is applied.
-    Locks(Vec<(Key, Lock)>),
-}
-
-impl Display for LockObserverMsg {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self, f)
-    }
-}
-
 pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 enum LockCollectorTask {
     // Messages from observer
-    ObserverMsg(LockObserverMsg),
+    ObservedLocks(Vec<(Key, Lock)>),
 
     // Messages from client
     StartCollecting {
@@ -68,9 +56,10 @@ enum LockCollectorTask {
 impl Debug for LockCollectorTask {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LockCollectorTask::ObserverMsg(msg) => {
-                f.debug_struct("ObserverMsg").field("msg", msg).finish()
-            }
+            LockCollectorTask::ObservedLocks(locks) => f
+                .debug_struct("ObservedLocks")
+                .field("locks", locks)
+                .finish(),
             LockCollectorTask::StartCollecting { max_ts, .. } => f
                 .debug_struct("StartCollecting")
                 .field("max_ts", max_ts)
@@ -116,15 +105,18 @@ impl LockObserver {
             .register_query_observer(1, Box::new(self));
     }
 
-    fn send(&self, msg: LockObserverMsg) {
-        match self.sender.schedule(LockCollectorTask::ObserverMsg(msg)) {
+    fn send(&self, locks: Vec<(Key, Lock)>) {
+        match self
+            .sender
+            .schedule(LockCollectorTask::ObservedLocks(locks))
+        {
             Ok(()) => (),
-            Err(ScheduleError::Stopped(m)) => {
-                error!("failed to send lock observer msg"; "msg" => ?m);
+            Err(ScheduleError::Stopped(_)) => {
+                error!("lock observer failed to send locks because collector is stopped");
             }
-            Err(ScheduleError::Full(m)) => {
+            Err(ScheduleError::Full(_)) => {
                 self.mark_dirty();
-                warn!("cannot collect all applied lock because channel is full"; "msg" => ?m);
+                warn!("cannot collect all applied lock because channel is full");
             }
         }
     }
@@ -185,7 +177,7 @@ impl QueryObserver for LockObserver {
             }
         }
         if !locks.is_empty() {
-            self.send(LockObserverMsg::Locks(locks));
+            self.send(locks);
         }
     }
 }
@@ -233,7 +225,7 @@ impl ApplySnapshotObserver for LockObserver {
                 );
                 self.mark_dirty()
             }
-            Ok(l) => self.send(LockObserverMsg::Locks(l)),
+            Ok(l) => self.send(l),
         }
     }
 
@@ -259,21 +251,17 @@ impl LockCollectorRunner {
         }
     }
 
-    fn handle_observer_msg(&mut self, msg: LockObserverMsg) {
+    fn handle_observed_locks(&mut self, mut locks: Vec<(Key, Lock)>) {
         if self.collected_locks.len() >= MAX_COLLECT_SIZE {
             return;
         }
 
-        match msg {
-            LockObserverMsg::Locks(mut locks) => {
-                if locks.len() + self.collected_locks.len() >= MAX_COLLECT_SIZE {
-                    self.observer_state.is_clean.store(false, Ordering::Release);
-                    info!("lock collector marked dirty because received too many locks");
-                    locks.truncate(MAX_COLLECT_SIZE - self.collected_locks.len());
-                }
-                self.collected_locks.extend(locks);
-            }
+        if locks.len() + self.collected_locks.len() >= MAX_COLLECT_SIZE {
+            self.observer_state.is_clean.store(false, Ordering::Release);
+            info!("lock collector marked dirty because received too many locks");
+            locks.truncate(MAX_COLLECT_SIZE - self.collected_locks.len());
         }
+        self.collected_locks.extend(locks);
     }
 
     fn start_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
@@ -346,7 +334,7 @@ impl LockCollectorRunner {
 impl Runnable<LockCollectorTask> for LockCollectorRunner {
     fn run(&mut self, task: LockCollectorTask) {
         match task {
-            LockCollectorTask::ObserverMsg(msg) => self.handle_observer_msg(msg),
+            LockCollectorTask::ObservedLocks(locks) => self.handle_observed_locks(locks),
             LockCollectorTask::StartCollecting { max_ts, callback } => {
                 callback(self.start_collecting(max_ts))
             }
