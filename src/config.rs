@@ -83,17 +83,25 @@ fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     size / MB as usize
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, Configuration)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TitanCfConfig {
+    #[config(skip)]
     pub min_blob_size: ReadableSize,
+    #[config(skip)]
     pub blob_file_compression: CompressionType,
+    #[config(skip)]
     pub blob_cache_size: ReadableSize,
+    #[config(skip)]
     pub min_gc_batch_size: ReadableSize,
+    #[config(skip)]
     pub max_gc_batch_size: ReadableSize,
+    #[config(skip)]
     pub discardable_ratio: f64,
+    #[config(skip)]
     pub sample_ratio: f64,
+    #[config(skip)]
     pub merge_small_file_threshold: ReadableSize,
     pub blob_run_mode: BlobRunMode,
 }
@@ -195,7 +203,7 @@ macro_rules! cf_config {
             pub prop_size_index_distance: u64,
             pub prop_keys_index_distance: u64,
             pub enable_doubly_skiplist: bool,
-            #[config(skip)]
+            #[config(submodule)]
             pub titan: TitanCfConfig,
         }
 
@@ -1153,14 +1161,23 @@ impl ConfigManager for DBConfigManger {
                     // currently we can't modify block_cache_size via set_options_cf
                     self.set_block_cache_size(&cf_name, v.into())?;
                 }
-                let cf_change = config_value_to_string(cf_change.into_iter().collect());
-                let cf_change_slice = config_to_slice(&cf_change);
-                self.set_cf_config(&cf_name, &cf_change_slice)?;
+                if let Some(ConfigValue::Module(titan_change)) = cf_change.remove("titan") {
+                    for (name, value) in titan_change {
+                        cf_change.insert(name, value);
+                    }
+                }
+                if !cf_change.is_empty() {
+                    let cf_change = config_value_to_string(cf_change.into_iter().collect());
+                    let cf_change_slice = config_to_slice(&cf_change);
+                    self.set_cf_config(&cf_name, &cf_change_slice)?;
+                }
             }
         }
-        let change = config_value_to_string(change);
-        let change_slice = config_to_slice(&change);
-        self.set_db_config(&change_slice)?;
+        if !change.is_empty() {
+            let change = config_value_to_string(change);
+            let change_slice = config_to_slice(&change);
+            self.set_db_config(&change_slice)?;
+        }
         info!(
             "rocksdb config changed";
             "db" => ?self.db_type,
@@ -2406,5 +2423,25 @@ mod tests {
         assert_eq!(cf_opts.get_disable_auto_compactions(), true);
         assert_eq!(cf_opts.get_target_file_size_base(), ReadableSize::mb(32).0);
         assert_eq!(cf_opts.get_block_cache_capacity(), ReadableSize::mb(256).0);
+    }
+
+    #[test]
+    fn test_dispatch_titan_blob_run_mode_config() {
+        let mut cfg = TiKvConfig::default();
+        let mut incoming = cfg.clone();
+        cfg.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
+        incoming.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Fallback;
+
+        let diff = cfg
+            .rocksdb
+            .defaultcf
+            .titan
+            .diff(&incoming.rocksdb.defaultcf.titan);
+        assert_eq!(diff.len(), 1);
+
+        let diff = config_value_to_string(diff.into_iter().collect());
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff[0].0.as_str(), "blob_run_mode");
+        assert_eq!(diff[0].1.as_str(), "kFallback");
     }
 }
