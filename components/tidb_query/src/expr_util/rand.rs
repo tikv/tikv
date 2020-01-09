@@ -1,3 +1,4 @@
+pub(crate) const MAX_RAND_BYTES_LENGTH: i64 = 1024;
 const MAX_RAND_VALUE: u32 = 0x3FFFFFFF;
 
 pub struct MySQLRng {
@@ -23,6 +24,11 @@ impl MySQLRng {
         self.seed2 = (self.seed1 + self.seed2 + 33) % MAX_RAND_VALUE;
         f64::from(self.seed1) / f64::from(MAX_RAND_VALUE)
     }
+}
+
+/// Generate random bytes.
+pub fn gen_random_bytes(len: usize) -> Vec<u8> {
+    (0..len).map(|_| rand::random::<u8>()).collect()
 }
 
 #[cfg(test)]
@@ -60,6 +66,14 @@ mod tests {
             assert_eq!(res1, exp1);
             let res2 = rand.gen();
             assert_eq!(res2, exp2);
+        }
+    }
+
+    #[test]
+    fn test_gen_random_bytes() {
+        let tests: Vec<usize> = vec![1, 256, 1024, 2333];
+        for len in tests {
+            assert_eq!(gen_random_bytes(len).len(), len)
         }
     }
 }
