@@ -4,8 +4,17 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
+<<<<<<< HEAD
 use futures::sync::mpsc;
 use futures::{future, stream, Future, Stream};
+=======
+use async_stream::try_stream;
+use futures::{future, Future, Stream};
+use futures03::channel::mpsc;
+use futures03::prelude::*;
+use rand::prelude::*;
+use tokio::sync::Semaphore;
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
@@ -15,12 +24,17 @@ use tipb::{AnalyzeReq, AnalyzeType};
 use tipb::{ChecksumRequest, ChecksumScanOn};
 use tipb::{DagRequest, ExecType};
 
+use crate::read_pool::ReadPool;
 use crate::server::Config;
 use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
+<<<<<<< HEAD
 use crate::storage::{self, AtomicTsCache, Engine, Snapshot, SnapshotStore, TsCache};
 use tikv_util::future_pool::FuturePool;
 use tikv_util::Either;
+=======
+use crate::storage::{self, Engine, Snapshot, SnapshotStore};
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
 use crate::coprocessor::cache::CachedRequestHandler;
 use crate::coprocessor::metrics::*;
@@ -30,9 +44,10 @@ use crate::coprocessor::*;
 /// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
-    read_pool_high: FuturePool,
-    read_pool_normal: FuturePool,
-    read_pool_low: FuturePool,
+    read_pool: ReadPool,
+
+    /// The concurrency limiter of the coprocessor.
+    semaphore: Option<Arc<Semaphore>>,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     ///
@@ -55,10 +70,15 @@ pub struct Endpoint<E: Engine> {
 impl<E: Engine> Clone for Endpoint<E> {
     fn clone(&self) -> Self {
         Self {
+<<<<<<< HEAD
             read_pool_high: self.read_pool_high.clone(),
             read_pool_normal: self.read_pool_normal.clone(),
             read_pool_low: self.read_pool_low.clone(),
             ts_cache: self.ts_cache.clone(),
+=======
+            read_pool: self.read_pool.clone(),
+            semaphore: self.semaphore.clone(),
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
             ..*self
         }
     }
@@ -67,15 +87,25 @@ impl<E: Engine> Clone for Endpoint<E> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
+<<<<<<< HEAD
     pub fn new(cfg: &Config, mut read_pool: Vec<FuturePool>, ts_cache: Arc<AtomicTsCache>) -> Self {
         let read_pool_high = read_pool.remove(2);
         let read_pool_normal = read_pool.remove(1);
         let read_pool_low = read_pool.remove(0);
 
+=======
+    pub fn new(cfg: &Config, read_pool: ReadPool) -> Self {
+        // FIXME: When yatp is used, we need to limit coprocessor requests in progress to avoid
+        // using too much memory. However, if there are a number of large requests, small requests
+        // will still be blocked. This needs to be improved.
+        let semaphore = match &read_pool {
+            ReadPool::Yatp(_) => Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency))),
+            _ => None,
+        };
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
         Self {
-            read_pool_high,
-            read_pool_normal,
-            read_pool_low,
+            read_pool,
+            semaphore,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             enable_batch_if_possible: cfg.end_point_enable_batch_if_possible,
@@ -84,14 +114,6 @@ impl<E: Engine> Endpoint<E> {
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
             ts_cache,
             _phantom: Default::default(),
-        }
-    }
-
-    fn get_read_pool(&self, priority: kvrpcpb::CommandPri) -> &FuturePool {
-        match priority {
-            kvrpcpb::CommandPri::High => &self.read_pool_high,
-            kvrpcpb::CommandPri::Normal => &self.read_pool_normal,
-            kvrpcpb::CommandPri::Low => &self.read_pool_low,
         }
     }
 
@@ -303,11 +325,25 @@ impl<E: Engine> Endpoint<E> {
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
     /// the given `handler_builder`. Finally, it calls the unary request interface of the
     /// `RequestHandler` to process the request and produce a result.
+<<<<<<< HEAD
     // TODO: Convert to use async / await.
     fn handle_unary_request_impl(
         tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
+=======
+    async fn handle_unary_request_impl(
+        semaphore: Option<Arc<Semaphore>>,
+        mut tracker: Box<Tracker>,
+        handler_builder: RequestHandlerBuilder<E::Snap>,
+    ) -> Result<coppb::Response> {
+        let _permit = if let Some(semaphore) = semaphore.as_ref() {
+            Some(semaphore.acquire().await)
+        } else {
+            None
+        };
+
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
@@ -371,6 +407,7 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
+<<<<<<< HEAD
     ) -> Result<impl Future<Item = coppb::Response, Error = Error>> {
         if let Some(ts) = req_ctx.txn_start_ts {
             self.ts_cache.update(ts.into());
@@ -382,7 +419,24 @@ impl<E: Engine> Endpoint<E> {
 
         read_pool
             .spawn_handle(move || Self::handle_unary_request_impl(tracker, handler_builder))
+=======
+    ) -> impl Future<Item = coppb::Response, Error = Error> {
+        let priority = req_ctx.context.get_priority();
+        let task_id = req_ctx
+            .txn_start_ts
+            .unwrap_or_else(|| thread_rng().next_u64());
+        // box the tracker so that moving it is cheap.
+        let tracker = Box::new(Tracker::new(req_ctx));
+
+        self.read_pool
+            .spawn_handle(
+                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder),
+                priority,
+                task_id,
+            )
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
             .map_err(|_| Error::MaxPendingTasksExceeded)
+            .flatten()
     }
 
     /// Parses and handles a unary request. Returns a future that will never fail. If there are
@@ -394,11 +448,9 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let result_of_future =
-            self.parse_request(req, peer, false)
-                .and_then(|(handler_builder, req_ctx)| {
-                    self.handle_unary_request(req_ctx, handler_builder)
-                });
+        let result_of_future = self
+            .parse_request(req, peer, false)
+            .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         future::result(result_of_future)
             .flatten()
@@ -412,11 +464,48 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` multiple times to process the request and produce multiple results.
     // TODO: Convert to use async / await.
     fn handle_stream_request_impl(
+<<<<<<< HEAD
         tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Stream<Item = coppb::Response, Error = Error> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
+=======
+        semaphore: Option<Arc<Semaphore>>,
+        mut tracker: Box<Tracker>,
+        handler_builder: RequestHandlerBuilder<E::Snap>,
+    ) -> impl futures03::stream::Stream<Item = Result<coppb::Response>> {
+        try_stream! {
+            let _permit = if let Some(semaphore) = semaphore.as_ref() {
+                Some(semaphore.acquire().await)
+            } else {
+                None
+            };
+
+            // When this function is being executed, it may be queued for a long time, so that
+            // deadline may exceed.
+            tracker.req_ctx.deadline.check()?;
+
+            // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
+            // exists.
+            let snapshot = unsafe {
+                with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
+            }
+            .await?;
+            // When snapshot is retrieved, deadline may exceed.
+            tracker.req_ctx.deadline.check()?;
+
+            let mut handler = handler_builder(snapshot, &tracker.req_ctx)?;
+
+            tracker.on_begin_all_items();
+
+            loop {
+                tracker.on_begin_item();
+
+                let result = handler.handle_streaming_request();
+                let mut storage_stats = Statistics::default();
+                handler.collect_scan_statistics(&mut storage_stats);
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
         let tracker_and_handler_future =
             future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
@@ -510,23 +599,42 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
+<<<<<<< HEAD
     ) -> Result<impl Stream<Item = coppb::Response, Error = Error>> {
         if let Some(ts) = req_ctx.txn_start_ts {
             self.ts_cache.update(ts.into());
         }
 
+=======
+    ) -> Result<impl futures03::stream::Stream<Item = Result<coppb::Response>>> {
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
-        let read_pool = self.get_read_pool(req_ctx.context.get_priority());
+        let priority = req_ctx.context.get_priority();
+        let task_id = req_ctx
+            .txn_start_ts
+            .unwrap_or_else(|| thread_rng().next_u64());
         let tracker = Box::new(Tracker::new(req_ctx));
 
+<<<<<<< HEAD
         read_pool
             .spawn(move || {
                 Self::handle_stream_request_impl(tracker, handler_builder) // Stream<Resp, Error>
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
+=======
+        self.read_pool
+            .spawn(
+                Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                    .then(futures03::future::ok::<_, mpsc::SendError>)
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
                     .forward(tx)
-            })
+                    .unwrap_or_else(|e| {
+                        warn!("coprocessor stream send error"; "error" => %e);
+                    }),
+                priority,
+                task_id,
+            )
             .map_err(|_| Error::MaxPendingTasksExceeded)?;
-        Ok(rx.then(|r| r.unwrap()))
+        Ok(rx)
     }
 
     /// Parses and handles a stream request. Returns a stream that produce each result in a
@@ -544,9 +652,10 @@ impl<E: Engine> Endpoint<E> {
                     self.handle_stream_request(req_ctx, handler_builder)
                 }); // Result<Stream<Resp, Error>, Error>
 
-        stream::once(result_of_stream) // Stream<Stream<Resp, Error>, Error>
-            .flatten() // Stream<Resp, Error>
-            .or_else(|e| Ok(make_error_response(e))) // Stream<Resp, ()>
+        futures03::stream::once(futures03::future::ready(result_of_stream)) // Stream<Stream<Resp, Error>, Error>
+            .try_flatten() // Stream<Resp, Error>
+            .or_else(|e| futures03::future::ok(make_error_response(e))) // Stream<Resp, ()>
+            .compat()
     }
 }
 
@@ -600,9 +709,11 @@ fn make_error_response(e: Error) -> coppb::Response {
 mod tests {
     use super::*;
 
-    use std::sync::{atomic, mpsc, Arc};
+    use std::sync::{atomic, mpsc};
     use std::thread;
     use std::vec;
+
+    use futures03::executor::block_on_stream;
 
     use tipb::Executor;
     use tipb::Expr;
@@ -735,18 +846,21 @@ mod tests {
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+<<<<<<< HEAD
         let cop = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool,
             Arc::new(AtomicTsCache::new()),
         );
+=======
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
         // a normal request
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
             .wait()
             .unwrap();
         assert!(resp.get_other_error().is_empty());
@@ -766,7 +880,6 @@ mod tests {
         );
         assert!(cop
             .handle_unary_request(outdated_req_ctx, handler_builder)
-            .unwrap()
             .wait()
             .is_err());
     }
@@ -775,11 +888,15 @@ mod tests {
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+<<<<<<< HEAD
         let mut cop = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool,
             Arc::new(AtomicTsCache::new()),
         );
+=======
+        let mut cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
         cop.recursion_limit = 100;
 
         let req = {
@@ -812,11 +929,15 @@ mod tests {
     fn test_invalid_req_type() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+<<<<<<< HEAD
         let cop = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool,
             Arc::new(AtomicTsCache::new()),
         );
+=======
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
         let mut req = coppb::Request::default();
         req.set_tp(9999);
@@ -832,11 +953,15 @@ mod tests {
     fn test_invalid_req_body() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+<<<<<<< HEAD
         let cop = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool,
             Arc::new(AtomicTsCache::new()),
         );
+=======
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
         let mut req = coppb::Request::default();
         req.set_tp(REQ_TYPE_DAG);
@@ -853,11 +978,11 @@ mod tests {
     fn test_full() {
         use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
         use std::sync::Mutex;
-        use tikv_util::future_pool::Builder;
+        use tikv_util::future_pool::{Builder, FuturePool};
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
-        let read_pool = CoprReadPoolConfig {
+        let read_pool: Vec<FuturePool> = CoprReadPoolConfig {
             normal_concurrency: 1,
             max_tasks_per_worker_normal: 2,
             ..CoprReadPoolConfig::default_for_test()
@@ -875,11 +1000,15 @@ mod tests {
         })
         .collect();
 
+<<<<<<< HEAD
         let cop = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool,
             Arc::new(AtomicTsCache::new()),
         );
+=======
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
         let (tx, rx) = mpsc::channel();
 
@@ -894,19 +1023,11 @@ mod tests {
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(Ok(response), 1000).into_boxed())
             });
-            let result_of_future =
-                cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
-            match result_of_future {
-                Err(full_error) => {
-                    tx.send(Err(full_error)).unwrap();
-                }
-                Ok(future) => {
-                    let tx = tx.clone();
-                    thread::spawn(move || {
-                        tx.send(future.wait()).unwrap();
-                    });
-                }
-            }
+            let future = cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
+            let tx = tx.clone();
+            thread::spawn(move || {
+                tx.send(future.wait()).unwrap();
+            });
             thread::sleep(Duration::from_millis(100));
         }
 
@@ -925,17 +1046,20 @@ mod tests {
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+<<<<<<< HEAD
         let cop = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool,
             Arc::new(AtomicTsCache::new()),
         );
+=======
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
         let handler_builder =
             Box::new(|_, _: &_| Ok(UnaryFixture::new(Err(box_err!("foo"))).into_boxed()));
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
             .wait()
             .unwrap();
         assert_eq!(resp.get_data().len(), 0);
@@ -946,21 +1070,25 @@ mod tests {
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+<<<<<<< HEAD
         let cop = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool,
             Arc::new(AtomicTsCache::new()),
         );
+=======
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
         // Fail immediately
         let handler_builder =
             Box::new(|_, _: &_| Ok(StreamFixture::new(vec![Err(box_err!("foo"))]).into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data().len(), 0);
         assert!(!resp_vec[0].get_other_error().is_empty());
@@ -975,12 +1103,12 @@ mod tests {
         responses.push(Err(box_err!("foo")));
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(responses).into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 6);
         for i in 0..5 {
             assert_eq!(resp_vec[i].get_data(), [1, 2, i as u8]);
@@ -993,19 +1121,23 @@ mod tests {
     fn test_empty_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+<<<<<<< HEAD
         let cop = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool,
             Arc::new(AtomicTsCache::new()),
         );
+=======
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 0);
     }
 
@@ -1015,11 +1147,15 @@ mod tests {
     fn test_special_streaming_handlers() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(&CoprReadPoolConfig::default_for_test(), engine);
+<<<<<<< HEAD
         let cop = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool,
             Arc::new(AtomicTsCache::new()),
         );
+=======
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
         // handler returns `finished == true` should not be called again.
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1037,12 +1173,12 @@ mod tests {
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 7]);
         assert_eq!(counter.load(atomic::Ordering::SeqCst), 0);
@@ -1063,12 +1199,12 @@ mod tests {
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 1);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 13]);
         assert_eq!(counter.load(atomic::Ordering::SeqCst), 0);
@@ -1089,12 +1225,12 @@ mod tests {
             }
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 2);
         assert_eq!(resp_vec[0].get_data(), [1, 2, 23]);
         assert!(!resp_vec[1].get_other_error().is_empty());
@@ -1110,8 +1246,12 @@ mod tests {
                 end_point_stream_channel_size: 3,
                 ..Config::default()
             },
+<<<<<<< HEAD
             read_pool,
             Arc::new(AtomicTsCache::new()),
+=======
+            read_pool.into(),
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
         );
 
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1124,13 +1264,13 @@ mod tests {
             Ok((Some(resp), false))
         });
         let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
-        let resp_vec = cop
-            .handle_stream_request(ReqContext::default_for_test(), handler_builder)
-            .unwrap()
-            .take(7)
-            .collect()
-            .wait()
-            .unwrap();
+        let resp_vec = block_on_stream(
+            cop.handle_stream_request(ReqContext::default_for_test(), handler_builder)
+                .unwrap(),
+        )
+        .take(7)
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
         assert_eq!(resp_vec.len(), 7);
         assert!(counter.load(atomic::Ordering::SeqCst) < 14);
     }
@@ -1170,7 +1310,11 @@ mod tests {
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
+<<<<<<< HEAD
         let cop = Endpoint::<RocksEngine>::new(&config, read_pool, Arc::new(AtomicTsCache::new()));
+=======
+        let cop = Endpoint::<RocksEngine>::new(&config, read_pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
         let (tx, rx) = std::sync::mpsc::channel();
 
@@ -1189,9 +1333,8 @@ mod tests {
                 )
                 .into_boxed())
             });
-            let resp_future_1 = cop
-                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
-                .unwrap();
+            let resp_future_1 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1204,9 +1347,8 @@ mod tests {
                         .into_boxed(),
                 )
             });
-            let resp_future_2 = cop
-                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
-                .unwrap();
+            let resp_future_2 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_2.wait().unwrap()]).unwrap());
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
@@ -1264,9 +1406,8 @@ mod tests {
                 )
                 .into_boxed())
             });
-            let resp_future_1 = cop
-                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
-                .unwrap();
+            let resp_future_1 =
+                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
@@ -1291,11 +1432,21 @@ mod tests {
             let resp_future_3 = cop
                 .handle_stream_request(req_with_exec_detail.clone(), handler_builder)
                 .unwrap();
+<<<<<<< HEAD
             let sender = tx.clone();
             thread::spawn(move || {
                 sender
                     .send(resp_future_3.collect().wait().unwrap())
                     .unwrap()
+=======
+            thread::spawn(move || {
+                tx.send(
+                    block_on_stream(resp_future_3)
+                        .collect::<Result<Vec<_>>>()
+                        .unwrap(),
+                )
+                .unwrap()
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
             });
 
             // Response 1

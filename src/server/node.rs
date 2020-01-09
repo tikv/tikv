@@ -15,6 +15,7 @@ use crate::raftstore::store::PdTask;
 use crate::raftstore::store::{
     self, initial_region, keys, Config as StoreConfig, SnapManager, Transport,
 };
+use crate::read_pool::ReadPool;
 use crate::server::lock_manager::LockManager;
 use crate::server::Config as ServerConfig;
 use crate::storage::{Config as StorageConfig, Storage};
@@ -23,7 +24,6 @@ use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use pd_client::{Error as PdError, PdClient, INVALID_ID};
-use tikv_util::future_pool::FuturePool;
 use tikv_util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -34,13 +34,13 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 pub fn create_raft_storage<S>(
     engine: RaftKv<S>,
     cfg: &StorageConfig,
-    read_pools: Vec<FuturePool>,
+    read_pool: ReadPool,
     lock_mgr: Option<LockManager>,
 ) -> Result<Storage<RaftKv<S>, LockManager>>
 where
     S: RaftStoreRouter + 'static,
 {
-    let store = Storage::from_engine(engine, cfg, read_pools, lock_mgr)?;
+    let store = Storage::from_engine(engine, cfg, read_pool, lock_mgr)?;
     Ok(store)
 }
 

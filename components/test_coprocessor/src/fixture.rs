@@ -85,7 +85,11 @@ pub fn init_data_with_details<E: Engine>(
         &CoprReadPoolConfig::default_for_test(),
         store.get_engine(),
     );
+<<<<<<< HEAD
     let cop = Endpoint::new(cfg, pool, Arc::new(AtomicTsCache::new()));
+=======
+    let cop = Endpoint::new(cfg, pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
     (store, cop)
 }
 

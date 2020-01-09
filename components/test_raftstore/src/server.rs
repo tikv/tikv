@@ -151,7 +151,7 @@ impl Simulator for ServerCluster {
         let store = create_raft_storage(
             engine,
             &cfg.storage,
-            storage_read_pool,
+            storage_read_pool.into(),
             Some(lock_mgr.clone()),
         )?;
         self.storages.insert(node_id, raft_engine);
@@ -191,7 +191,11 @@ impl Simulator for ServerCluster {
             &tikv::config::CoprReadPoolConfig::default_for_test(),
             store.get_engine(),
         );
+<<<<<<< HEAD
         let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool, store.get_ts_cache());
+=======
+        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool.into());
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
         let mut server = None;
         for _ in 0..100 {
             let mut svr = Server::new(
@@ -203,6 +207,7 @@ impl Simulator for ServerCluster {
                 resolver.clone(),
                 snap_mgr.clone(),
                 gc_worker.clone(),
+                None,
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));

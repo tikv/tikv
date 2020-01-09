@@ -14,6 +14,7 @@ use kvproto::debugpb::create_debug;
 use kvproto::diagnosticspb::create_diagnostics;
 use kvproto::import_sstpb::create_import_sst;
 use pd_client::{PdClient, RpcClient};
+<<<<<<< HEAD
 use std::convert::TryFrom;
 use std::fs::File;
 use std::path::Path;
@@ -40,6 +41,78 @@ use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
 use tikv_util::worker::FutureWorker;
+=======
+use std::{
+    convert::TryFrom,
+    fmt,
+    fs::File,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    thread::JoinHandle,
+    time::Duration,
+};
+use tikv::config::ConfigHandler;
+use tikv::raftstore::router::ServerRaftStoreRouter;
+use tikv::{
+    config::{ConfigController, TiKvConfig},
+    coprocessor,
+    import::{ImportSSTService, SSTImporter},
+    raftstore::{
+        coprocessor::{CoprocessorHost, RegionInfoAccessor},
+        store::{
+            fsm,
+            fsm::store::{RaftBatchSystem, RaftRouter, StoreMeta, PENDING_VOTES_CAP},
+            new_compaction_listener, LocalReader, SnapManagerBuilder,
+        },
+    },
+    read_pool::{ReadPool, ReadPoolRunner},
+    server::{
+        config::Config as ServerConfig,
+        create_raft_storage,
+        gc_worker::{AutoGcConfig, GcWorker},
+        lock_manager::LockManager,
+        resolve,
+        service::{DebugService, DiagnosticsService},
+        status_server::StatusServer,
+        Node, RaftKv, Server, DEFAULT_CLUSTER_ID,
+    },
+    storage,
+};
+use tikv_util::{
+    check_environment_variables,
+    security::SecurityManager,
+    time::Monitor,
+    worker::{FutureWorker, Worker},
+};
+use yatp::{
+    pool::CloneRunnerBuilder,
+    queue::{multilevel, QueueType},
+};
+
+/// Run a TiKV server. Returns when the server is shutdown by the user, in which
+/// case the server will be properly stopped.
+pub fn run_tikv(config: TiKvConfig) {
+    // Do some prepare works before start.
+    pre_start(&config);
+
+    let mut tikv = TiKVServer::init(config);
+
+    let _m = Monitor::default();
+
+    tikv.init_fs();
+    tikv.init_engines();
+    let gc_worker = tikv.init_gc_worker();
+    let server_config = tikv.init_servers(&gc_worker);
+    tikv.register_services(gc_worker);
+    tikv.init_metrics_flusher();
+
+    tikv.run_server(server_config);
+
+    signal_handler::wait_for_signal(Some(tikv.engines.take().unwrap().engines));
+
+    tikv.stop();
+}
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -155,6 +228,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         kv_db_opts.set_env(ec);
     }
 
+<<<<<<< HEAD
     // Before create kv engine we need to check whether it needs to upgrade from v2.x to v3.x.
     // if let Err(e) = tikv::raftstore::store::maybe_upgrade_from_2_to_3(
     //     &raft_engine,
@@ -219,6 +293,154 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             snap_path.as_path().to_str().unwrap().to_owned(),
             Some(router.clone()),
         );
+<<<<<<< HEAD
+=======
+=======
+    fn init_servers(
+        &mut self,
+        gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
+    ) -> Arc<ServerConfig> {
+        let mut cfg_controller = self.cfg_controller.take().unwrap();
+        cfg_controller.register("gc", Box::new(gc_worker.get_config_manager()));
+
+        // Create CoprocessorHost.
+        let mut coprocessor_host = self.coprocessor_host.take().unwrap();
+
+        let lock_mgr = if self.config.pessimistic_txn.enabled {
+            let lock_mgr = LockManager::new();
+            cfg_controller.register("pessimistic_txn", Box::new(lock_mgr.config_manager()));
+            lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
+            Some(lock_mgr)
+        } else {
+            None
+        };
+
+        let engines = self.engines.as_ref().unwrap();
+
+        let pd_worker = FutureWorker::new("pd-worker");
+        let pd_sender = pd_worker.scheduler();
+
+        let unified_read_pool = if self.config.readpool.unify_read_pool {
+            let unified_read_pool_cfg = &self.config.readpool.unified;
+            let mut builder = yatp::Builder::new("unified-read-pool");
+            builder
+                .min_thread_count(unified_read_pool_cfg.min_thread_count)
+                .max_thread_count(unified_read_pool_cfg.max_thread_count);
+            let multilevel_builder = multilevel::Builder::new(Default::default());
+            let read_pool_runner = ReadPoolRunner::new(engines.engine.clone(), Default::default());
+            let runner_builder =
+                multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
+            Some(builder.build_with_queue_and_runner(
+                QueueType::Multilevel(multilevel_builder),
+                runner_builder,
+            ))
+        } else {
+            None
+        };
+
+        let storage_read_pool = if self.config.readpool.unify_read_pool {
+            ReadPool::from(unified_read_pool.as_ref().unwrap().remote().clone())
+        } else {
+            let cop_read_pools = storage::build_read_pool(
+                &self.config.readpool.storage,
+                pd_sender.clone(),
+                engines.engine.clone(),
+            );
+            ReadPool::from(cop_read_pools)
+        };
+
+>>>>>>> 15d7a7fc... *: allow replacing all the readpools with yatp
+        let storage = create_raft_storage(
+            engines.engine.clone(),
+            &self.config.storage,
+            storage_read_pool,
+            lock_mgr.clone(),
+        )
+        .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
+
+        // Create snapshot manager, server.
+        let snap_path = self
+            .store_path
+            .join(Path::new("snap"))
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        let bps = i64::try_from(self.config.server.snap_max_write_bytes_per_sec.0)
+            .unwrap_or_else(|_| fatal!("snap_max_write_bytes_per_sec > i64::max_value"));
+
+        let snap_mgr = SnapManagerBuilder::default()
+            .max_write_bytes_per_sec(bps)
+            .max_total_size(self.config.server.snap_max_total_size.0)
+            .build(snap_path, Some(self.router.clone()));
+
+        // Create coprocessor endpoint.
+        let cop_read_pool = if self.config.readpool.unify_read_pool {
+            ReadPool::from(unified_read_pool.as_ref().unwrap().remote().clone())
+        } else {
+            let cop_read_pools = coprocessor::readpool_impl::build_read_pool(
+                &self.config.readpool.coprocessor,
+                pd_sender,
+                engines.engine.clone(),
+            );
+            ReadPool::from(cop_read_pools)
+        };
+
+        let server_config = Arc::new(self.config.server.clone());
+
+        // Create server
+        let server = Server::new(
+            &server_config,
+            &self.security_mgr,
+            storage,
+            coprocessor::Endpoint::new(&server_config, cop_read_pool),
+            engines.raft_router.clone(),
+            self.resolver.clone(),
+            snap_mgr.clone(),
+            gc_worker.clone(),
+            unified_read_pool,
+        )
+        .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
+
+        let import_path = self.store_path.join("import");
+        let importer = Arc::new(SSTImporter::new(import_path).unwrap());
+        let mut node = Node::new(
+            self.system.take().unwrap(),
+            &server_config,
+            &self.config.raft_store,
+            self.pd_client.clone(),
+        );
+        node.start(
+            engines.engines.clone(),
+            server.transport(),
+            snap_mgr,
+            pd_worker,
+            engines.store_meta.clone(),
+            coprocessor_host,
+            importer.clone(),
+            cfg_controller,
+        )
+        .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
+
+        initial_metric(&self.config.metric, Some(node.id()));
+
+        // Start auto gc
+        let auto_gc_config = AutoGcConfig::new(
+            self.pd_client.clone(),
+            self.region_info_accessor.clone(),
+            node.id(),
+        );
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config) {
+            fatal!("failed to start auto_gc on storage, error: {}", e);
+        }
+
+        self.servers = Some(Servers {
+            lock_mgr,
+            server,
+            node,
+            importer,
+        });
+>>>>>>> ea5d5cc0... *: allow coprocessor to use yatp (#6375)
 
     let server_cfg = Arc::new(cfg.server.clone());
 
