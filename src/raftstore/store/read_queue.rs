@@ -240,6 +240,9 @@ mod tests {
             queue.contexts.insert(id, offset);
         }
 
+        queue.advance_replica_reads(Vec::<(Uuid, u64)>::default());
+        assert_eq!(queue.ready_cnt, 0);
+
         queue.advance_replica_reads(vec![(queue.reads[0].id, 100)]);
         assert_eq!(queue.ready_cnt, 1);
 

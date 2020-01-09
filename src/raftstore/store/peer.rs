@@ -1392,6 +1392,7 @@ impl Peer {
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
                 self.response_read(&mut read, ctx, true);
             } else {
+                // TODO: `ReadIndex` requests could be blocked.
                 self.pending_reads.push_front(read);
                 break;
             }
