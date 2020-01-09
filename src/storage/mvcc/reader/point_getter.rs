@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::storage::kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::{default_not_found_error, Result};
-use crate::storage::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics, CF_LOCK};
-use crate::storage::{CF_DEFAULT, CF_WRITE};
+use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use txn_types::{Key, Lock, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
@@ -273,8 +273,8 @@ mod tests {
     use kvproto::kvrpcpb::Context;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
+    use crate::storage::kv::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
-    use crate::storage::{CfStatistics, Engine, RocksEngine, TestEngineBuilder};
 
     fn new_multi_point_getter<E: Engine>(engine: &E, ts: TimeStamp) -> PointGetter<E::Snap> {
         let snapshot = engine.snapshot(&Context::default()).unwrap();
@@ -640,7 +640,7 @@ mod tests {
         must_get_key(&mut getter, b"foo1");
         must_get_none(&mut getter, b"foo1");
 
-        let mut getter = new_omit_value_single_point_getter(snapshot.clone(), 4.into());
+        let mut getter = new_omit_value_single_point_getter(snapshot, 4.into());
         must_get_none(&mut getter, b"foo3");
         must_get_none(&mut getter, b"foo3");
     }

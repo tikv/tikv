@@ -432,6 +432,7 @@ impl ThreadInfoStatistics {
 mod tests {
     use std::env::temp_dir;
     use std::io::Write;
+    use std::time::Duration;
     use std::{fs, sync, thread};
 
     use libc;
@@ -440,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_thread_stat_io() {
-        let name = "theadnametest66";
+        let name = "testthreadio";
         let (tx, rx) = sync::mpsc::channel();
         let (tx1, rx1) = sync::mpsc::channel();
         let h = thread::Builder::new()
@@ -453,6 +454,7 @@ mod tests {
                 let mut f = fs::File::create(tmp.as_path()).unwrap();
                 f.write_all(name.as_bytes()).unwrap();
                 f.sync_all().unwrap();
+                std::thread::sleep(Duration::from_secs(1));
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
                 fs::remove_file(tmp).unwrap();
@@ -494,6 +496,8 @@ mod tests {
         thread::Builder::new()
             .name(str1.to_owned())
             .spawn(move || {
+                tx1.send(()).unwrap();
+
                 // Make `io::write_bytes` > 0
                 let mut tmp = temp_dir();
                 tmp.push(str1.clone());
@@ -501,18 +505,20 @@ mod tests {
                 let mut f = fs::File::create(tmp.as_path()).unwrap();
                 f.write_all(str1.as_bytes()).unwrap();
                 f.sync_all().unwrap();
+                std::thread::sleep(Duration::from_secs(1));
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
 
                 f.write_all(str2.as_bytes()).unwrap();
                 f.sync_all().unwrap();
+                std::thread::sleep(Duration::from_secs(1));
                 tx1.send(()).unwrap();
                 rx.recv().unwrap();
 
                 fs::remove_file(tmp).unwrap();
+                tx1.send(()).unwrap();
             })
             .unwrap();
-        rx1.recv().unwrap();
 
         (tx, rx1)
     }
@@ -525,7 +531,8 @@ mod tests {
         let s2 = "test45678";
 
         let (tx, rx1) = write_two_string(s1.to_owned(), s2.to_owned());
-        thread_info.record();
+        // Wait for thread creation
+        rx1.recv().unwrap();
 
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) as u64 };
         let pid = unsafe { libc::getpid() };
@@ -533,29 +540,32 @@ mod tests {
         for tid in tids {
             if let Ok(stat) = pid::stat_task(pid, tid) {
                 if stat.command.starts_with(s1) {
+                    rx1.recv().unwrap();
+                    thread_info.record();
                     {
                         let write_io = thread_info
                             .metrics_total
                             .write_ios
                             .entry(tid)
                             .or_insert(0.0);
-                        assert!(*write_io as u64 == page_size);
+                        assert_eq!(*write_io as u64, page_size);
+                    }
+
+                    tx.send(()).unwrap();
+
+                    rx1.recv().unwrap();
+                    thread_info.record();
+                    {
+                        let write_io = thread_info
+                            .metrics_total
+                            .write_ios
+                            .entry(tid)
+                            .or_insert(0.0);
+                        assert_eq!(*write_io as u64, page_size * 2);
                     }
 
                     tx.send(()).unwrap();
                     rx1.recv().unwrap();
-                    thread_info.record();
-
-                    {
-                        let write_io = thread_info
-                            .metrics_total
-                            .write_ios
-                            .entry(tid)
-                            .or_insert(0.0);
-                        assert!(*write_io as u64 == page_size * 2);
-                    }
-
-                    tx.send(()).unwrap();
                     return;
                 }
             }

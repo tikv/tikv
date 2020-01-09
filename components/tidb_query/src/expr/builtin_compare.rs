@@ -534,7 +534,7 @@ mod tests {
             ),
             (
                 ScalarFuncSig::CoalesceDecimal,
-                vec![Datum::Null, Datum::Dec(dec.clone())],
+                vec![Datum::Null, Datum::Dec(dec)],
                 Datum::Dec(dec),
             ),
             (
@@ -623,16 +623,12 @@ mod tests {
             ),
             (
                 ScalarFuncSig::InDecimal,
-                vec![Datum::Dec(dec1.clone()), Datum::Dec(dec2.clone())],
+                vec![Datum::Dec(dec1), Datum::Dec(dec2)],
                 Datum::I64(0),
             ),
             (
                 ScalarFuncSig::InDecimal,
-                vec![
-                    Datum::Dec(dec1.clone()),
-                    Datum::Dec(dec2.clone()),
-                    Datum::Dec(dec1.clone()),
-                ],
+                vec![Datum::Dec(dec1), Datum::Dec(dec2), Datum::Dec(dec1)],
                 Datum::I64(1),
             ),
             (
@@ -654,8 +650,8 @@ mod tests {
                 ScalarFuncSig::InJson,
                 vec![
                     Datum::Json(json1.clone()),
-                    Datum::Json(json2.clone()),
-                    Datum::Json(json1.clone()),
+                    Datum::Json(json2),
+                    Datum::Json(json1),
                 ],
                 Datum::I64(1),
             ),
@@ -666,11 +662,7 @@ mod tests {
             ),
             (
                 ScalarFuncSig::InString,
-                vec![
-                    Datum::Bytes(s1.clone()),
-                    Datum::Bytes(s2.clone()),
-                    Datum::Bytes(s1.clone()),
-                ],
+                vec![Datum::Bytes(s1.clone()), Datum::Bytes(s2), Datum::Bytes(s1)],
                 Datum::I64(1),
             ),
             (
@@ -812,7 +804,7 @@ mod tests {
             ),
             (
                 vec![
-                    Datum::Bytes(s1.clone()),
+                    Datum::Bytes(s1),
                     Datum::Bytes(s2.clone()),
                     Datum::Bytes(s3.clone()),
                 ],
@@ -856,9 +848,9 @@ mod tests {
                     Datum::Bytes(t1.clone()),
                     Datum::Bytes(t2.clone()),
                     Datum::Bytes(t3.clone()),
-                    Datum::Bytes(t5.clone()),
-                    Datum::Bytes(t6.clone()),
-                    Datum::Bytes(t7.clone()),
+                    Datum::Bytes(t5),
+                    Datum::Bytes(t6),
+                    Datum::Bytes(t7),
                 ],
                 Datum::Bytes(b"2018-04-03 00:00:00.000000".to_vec()),
                 Datum::Bytes(b"2012-12-12 12:00:38.120038".to_vec()),
@@ -930,10 +922,10 @@ mod tests {
                 .set_sql_mode(SqlMode::STRICT_ALL_TABLES);
             let mut ctx = EvalContext::new(Arc::new(eval_config));
             let row = vec![
-                Datum::Bytes(t1.clone()),
-                Datum::Bytes(t2.clone()),
-                Datum::Bytes(t3.clone()),
-                Datum::Bytes(t4.clone()),
+                Datum::Bytes(t1),
+                Datum::Bytes(t2),
+                Datum::Bytes(t3),
+                Datum::Bytes(t4),
             ];
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
             let mut expr = Expr::default();
@@ -943,6 +935,169 @@ mod tests {
             let e = Expression::build(&mut ctx, expr).unwrap();
             let err = e.eval(&mut ctx, &[]).unwrap_err();
             assert_eq!(err.code(), ERR_TRUNCATE_WRONG_VALUE);
+        }
+    }
+
+    #[test]
+    fn test_interval() {
+        let cases = vec![
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::Null, Datum::Null],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::Null, Datum::I64(3)],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(3), Datum::Null],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(1), Datum::I64(2), Datum::I64(3)],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(2), Datum::I64(1), Datum::I64(3)],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![Datum::I64(3), Datum::I64(1), Datum::I64(2)],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(23),
+                    Datum::I64(1),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(30),
+                    Datum::I64(44),
+                    Datum::I64(200),
+                ],
+                Datum::I64(4),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(200),
+                    Datum::I64(1),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(23),
+                    Datum::I64(30),
+                    Datum::I64(44),
+                    Datum::I64(200),
+                ],
+                Datum::I64(7),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(i64::MAX),
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MAX),
+                ],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MAX),
+                ],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalInt,
+                vec![
+                    Datum::I64(i64::MAX),
+                    Datum::I64(i64::MIN),
+                    Datum::I64(i64::MAX),
+                ],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::Null, Datum::Null],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::Null, Datum::F64(3.0)],
+                Datum::I64(-1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(3.0), Datum::Null],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(1.0), Datum::F64(2.0), Datum::F64(3.0)],
+                Datum::I64(0),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(2.0), Datum::F64(1.0), Datum::F64(3.0)],
+                Datum::I64(1),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![Datum::F64(3.0), Datum::F64(1.0), Datum::F64(2.0)],
+                Datum::I64(2),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![
+                    Datum::F64(23.0),
+                    Datum::F64(1.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(30.0),
+                    Datum::F64(44.0),
+                    Datum::F64(200.0),
+                ],
+                Datum::I64(4),
+            ),
+            (
+                ScalarFuncSig::IntervalReal,
+                vec![
+                    Datum::F64(200.0),
+                    Datum::F64(1.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(23.0),
+                    Datum::F64(30.0),
+                    Datum::F64(44.0),
+                    Datum::F64(200.0),
+                ],
+                Datum::I64(7),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+
+        for (sig, row, exp) in cases {
+            let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
+            let mut expr = Expr::default();
+            expr.set_tp(ExprType::ScalarFunc);
+            expr.set_sig(sig);
+
+            expr.set_children(children.into());
+            let e = Expression::build(&mut ctx, expr).unwrap();
+            let res = e.eval(&mut ctx, &row).unwrap();
+            assert_eq!(res, exp);
         }
     }
 }

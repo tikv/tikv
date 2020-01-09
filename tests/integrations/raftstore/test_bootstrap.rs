@@ -78,14 +78,14 @@ fn test_node_bootstrap_with_prepared_data() {
         .is_some());
 
     // Create coprocessor.
-    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_router());
+    let coprocessor_host = CoprocessorHost::new(node.get_router());
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
         Arc::new(SSTImporter::new(dir).unwrap())
     };
 
-    let cfg_controller = ConfigController::new(cfg);
+    let cfg_controller = ConfigController::new(cfg, Default::default());
 
     // try to restart this node, will clear the prepare data
     node.start(

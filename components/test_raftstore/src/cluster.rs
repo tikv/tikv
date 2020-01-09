@@ -419,7 +419,7 @@ impl<T: Simulator> Cluster<T> {
         region.mut_region_epoch().set_version(INIT_EPOCH_VER);
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         let peer = new_peer(peer_id, peer_id);
-        region.mut_peers().push(peer.clone());
+        region.mut_peers().push(peer);
         self.pd_client.add_region(&region);
         Ok(())
     }
@@ -856,7 +856,7 @@ impl<T: Simulator> Cluster<T> {
                 region.get_id(),
                 PeerMsg::CasualMessage(CasualMessage::SplitRegion {
                     region_epoch: region.get_region_epoch().clone(),
-                    split_keys: vec![split_key.clone()],
+                    split_keys: vec![split_key],
                     callback: cb,
                 }),
             )

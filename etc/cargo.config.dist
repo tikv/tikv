@@ -9,6 +9,6 @@ rpath = false
 lto = true
 debug-assertions = false
 codegen-units = 1
-panic = "abort"
+panic = "unwind"
 incremental = false
 overflow-checks = false

@@ -4,13 +4,13 @@ use std::cmp::Ordering;
 
 use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
-use txn_types::{Key, TimeStamp, Value, WriteRef, WriteType};
-
-use crate::storage::kv::SEEK_BOUND;
-use crate::storage::mvcc::Result;
-use crate::storage::{Cursor, Lock, Snapshot, Statistics};
+use txn_types::{Key, Lock, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
+use crate::storage::kv::SEEK_BOUND;
+use crate::storage::mvcc::Result;
+use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
+use crate::storage::{Cursor, Snapshot, Statistics};
 
 /// Defines the behavior of the scanner.
 pub trait ScanPolicy<S: Snapshot> {
@@ -122,12 +122,13 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         cfg: ScannerConfig<S>,
         lock_cursor: Cursor<S::Iter>,
         write_cursor: Cursor<S::Iter>,
+        default_cursor: Option<Cursor<S::Iter>>,
         scan_policy: P,
     ) -> ForwardScanner<S, P> {
         let cursors = Cursors {
             lock: lock_cursor,
             write: write_cursor,
-            default: None,
+            default: default_cursor,
         };
         ForwardScanner {
             cfg,
@@ -333,27 +334,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
-        let result = match cfg.isolation_level {
-            IsolationLevel::Si => {
-                // Only needs to check lock in SI
-                let lock = {
-                    let lock_value = cursors.lock.value(&mut statistics.lock);
-                    Lock::parse(lock_value)?
-                };
-                lock.check_ts_conflict(&current_user_key, cfg.ts, &cfg.bypass_locks)
-                    .map(|_| ())
-            }
-            IsolationLevel::Rc => Ok(()),
-        };
-        cursors.lock.next(&mut statistics.lock);
-        // Even if there is a lock error, we still need to step the cursor for future
-        // calls.
-        if result.is_err() {
-            cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
-        }
-        result
-            .map(|_| HandleRes::Skip(current_user_key))
-            .map_err(Into::into)
+        scan_latest_handle_lock(current_user_key, cfg, cursors, statistics)
     }
 
     fn handle_write(
@@ -417,6 +398,138 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     }
 }
 
+/// The ScanPolicy for outputting `TxnEntry`.
+///
+/// The `ForwardScanner` with this policy only outputs records whose commit_ts
+/// is greater than `after_ts`. It also supports outputting delete records
+/// if `output_delete` is set to `true`.
+pub struct LatestEntryPolicy {
+    after_ts: TimeStamp,
+    output_delete: bool,
+}
+
+impl LatestEntryPolicy {
+    pub fn new(after_ts: TimeStamp, output_delete: bool) -> Self {
+        LatestEntryPolicy {
+            after_ts,
+            output_delete,
+        }
+    }
+}
+
+impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
+    type Output = TxnEntry;
+
+    fn handle_lock(
+        &mut self,
+        current_user_key: Key,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        scan_latest_handle_lock(current_user_key, cfg, cursors, statistics)
+    }
+
+    fn handle_write(
+        &mut self,
+        current_user_key: Key,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        // Now we must have reached the first key >= `${user_key}_${ts}`. However, we may
+        // meet `Lock` or `Rollback`. In this case, more versions needs to be looked up.
+        let mut write_key = cursors.write.key(&mut statistics.write);
+        let entry: Option<TxnEntry> = loop {
+            if Key::decode_ts_from(write_key)? <= self.after_ts {
+                // There are no newer records of this key since `after_ts`.
+                break None;
+            }
+            let write_value = cursors.write.value(&mut statistics.write);
+            let write = WriteRef::parse(write_value)?;
+            statistics.write.processed += 1;
+
+            match write.write_type {
+                WriteType::Put => {
+                    let entry_write = (write_key.to_vec(), write_value.to_vec());
+                    let entry_default = if write.short_value.is_none() {
+                        let start_ts = write.start_ts;
+                        cursors.ensure_default_cursor(cfg)?;
+                        let default_cursor = cursors.default.as_mut().unwrap();
+                        let default_value = super::near_load_data_by_write(
+                            default_cursor,
+                            &current_user_key,
+                            start_ts,
+                            statistics,
+                        )?;
+                        let default_key = default_cursor.key(&mut statistics.data).to_vec();
+                        (default_key, default_value)
+                    } else {
+                        (Vec::new(), Vec::new())
+                    };
+                    break Some(TxnEntry::Commit {
+                        default: entry_default,
+                        write: entry_write,
+                    });
+                }
+                WriteType::Delete if self.output_delete => {
+                    break Some(TxnEntry::Commit {
+                        default: (Vec::new(), Vec::new()),
+                        write: (write_key.to_vec(), write_value.to_vec()),
+                    });
+                }
+                _ => {}
+            }
+
+            cursors.write.next(&mut statistics.write);
+
+            if !cursors.write.valid()? {
+                // Key space ended. Needn't move write cursor to next key.
+                return Ok(HandleRes::Skip(current_user_key));
+            }
+            write_key = cursors.write.key(&mut statistics.write);
+            if !Key::is_user_key_eq(write_key, current_user_key.as_encoded().as_slice()) {
+                // Meet another key. Needn't move write cursor to next key.
+                return Ok(HandleRes::Skip(current_user_key));
+            }
+        };
+        cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+        Ok(match entry {
+            Some(entry) => HandleRes::Return(entry),
+            _ => HandleRes::Skip(current_user_key),
+        })
+    }
+}
+
+fn scan_latest_handle_lock<S: Snapshot, T>(
+    current_user_key: Key,
+    cfg: &mut ScannerConfig<S>,
+    cursors: &mut Cursors<S>,
+    statistics: &mut Statistics,
+) -> Result<HandleRes<T>> {
+    let result = match cfg.isolation_level {
+        IsolationLevel::Si => {
+            // Only needs to check lock in SI
+            let lock = {
+                let lock_value = cursors.lock.value(&mut statistics.lock);
+                Lock::parse(lock_value)?
+            };
+            lock.check_ts_conflict(&current_user_key, cfg.ts, &cfg.bypass_locks)
+                .map(|_| ())
+        }
+        IsolationLevel::Rc => Ok(()),
+    };
+    cursors.lock.next(&mut statistics.lock);
+    // Even if there is a lock error, we still need to step the cursor for future
+    // calls.
+    if result.is_err() {
+        cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+    }
+    result
+        .map(|_| HandleRes::Skip(current_user_key))
+        .map_err(Into::into)
+}
+
 /// This type can be used to scan keys starting from the given user key (greater than or equal).
 ///
 /// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
@@ -425,13 +538,25 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
 /// Use `ScannerBuilder` to build `ForwardKvScanner`.
 pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
 
+/// This scanner is like `ForwardKvScanner` but outputs `TxnEntry`.
+pub type EntryScanner<S> = ForwardScanner<S, LatestEntryPolicy>;
+
+impl<S: Snapshot> TxnEntryScanner for EntryScanner<S> {
+    fn next_entry(&mut self) -> TxnResult<Option<TxnEntry>> {
+        Ok(self.read_next()?)
+    }
+    fn take_statistics(&mut self) -> Statistics {
+        std::mem::replace(&mut self.statistics, Statistics::default())
+    }
+}
+
 #[cfg(test)]
-mod tests {
+mod latest_kv_tests {
     use super::super::ScannerBuilder;
     use super::*;
+    use crate::storage::kv::{Engine, TestEngineBuilder};
     use crate::storage::mvcc::tests::*;
     use crate::storage::Scanner;
-    use crate::storage::{Engine, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 
@@ -681,7 +806,7 @@ mod tests {
         assert_eq!(scanner.next().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
             .range(None, None)
             .build()
             .unwrap();
@@ -710,5 +835,408 @@ mod tests {
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
         assert_eq!(scanner.next().unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod latest_entry_tests {
+    use super::super::ScannerBuilder;
+    use super::*;
+    use crate::storage::mvcc::tests::*;
+    use crate::storage::mvcc::Write;
+    use crate::storage::{Engine, TestEngineBuilder};
+
+    use kvproto::kvrpcpb::Context;
+
+    #[derive(Default)]
+    struct EntryBuilder {
+        key: Vec<u8>,
+        value: Vec<u8>,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+    }
+
+    impl EntryBuilder {
+        fn key(&mut self, key: &[u8]) -> &mut Self {
+            self.key = key.to_owned();
+            self
+        }
+        fn value(&mut self, val: &[u8]) -> &mut Self {
+            self.value = val.to_owned();
+            self
+        }
+        fn start_ts(&mut self, start_ts: TimeStamp) -> &mut Self {
+            self.start_ts = start_ts;
+            self
+        }
+        fn commit_ts(&mut self, commit_ts: TimeStamp) -> &mut Self {
+            self.commit_ts = commit_ts;
+            self
+        }
+        fn build_commit(&self, wt: WriteType, is_short_value: bool) -> TxnEntry {
+            let write_key = Key::from_raw(&self.key).append_ts(self.commit_ts);
+            let (key, value, short) = if is_short_value {
+                let short = if wt == WriteType::Put {
+                    Some(self.value.clone())
+                } else {
+                    None
+                };
+                (vec![], vec![], short)
+            } else {
+                (
+                    Key::from_raw(&self.key)
+                        .append_ts(self.start_ts)
+                        .into_encoded(),
+                    self.value.clone(),
+                    None,
+                )
+            };
+            let write_value = Write::new(wt, self.start_ts, short);
+            TxnEntry::Commit {
+                default: (key, value),
+                write: (write_key.into_encoded(), write_value.as_ref().to_bytes()),
+            }
+        }
+    }
+
+    /// Check whether everything works as usual when `EntryScanner::get()` goes out of bound.
+    #[test]
+    fn test_get_out_of_bound() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate 1 put for [a].
+        must_prewrite_put(&engine, b"a", b"value", b"a", 7);
+        must_commit(&engine, b"a", 7, 7);
+
+        // Generate 5 rollback for [b].
+        for ts in 0..5 {
+            must_rollback(&engine, b"b", ts);
+        }
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+            .range(None, None)
+            .build_entry_scanner(0.into(), false)
+            .unwrap();
+
+        // Initial position: 1 seek_to_first:
+        //   a_7 b_4 b_3 b_2 b_1 b_0
+        //   ^cursor
+        // After get the value, use 1 next to reach next user key:
+        //   a_7 b_4 b_3 b_2 b_1 b_0
+        //       ^cursor
+
+        let mut builder: EntryBuilder = EntryBuilder::default();
+        let entry = builder
+            .key(b"a")
+            .value(b"value")
+            .start_ts(7.into())
+            .commit_ts(7.into())
+            .build_commit(WriteType::Put, true);
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 1);
+
+        // Use 5 next and reach out of bound:
+        //   a_7 b_4 b_3 b_2 b_1 b_0
+        //                           ^cursor
+        assert_eq!(scanner.next_entry().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 5);
+
+        // Cursor remains invalid, so nothing should happen.
+        assert_eq!(scanner.next_entry().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+    }
+
+    /// Check whether everything works as usual when
+    /// `EntryScanner::move_write_cursor_to_next_user_key()` goes out of bound.
+    ///
+    /// Case 1. next() out of bound
+    #[test]
+    fn test_move_next_user_key_out_of_bound_1() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate 1 put for [a].
+        must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
+        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+
+        // Generate SEEK_BOUND / 2 rollback and 1 put for [b] .
+        for ts in 0..SEEK_BOUND / 2 {
+            must_rollback(&engine, b"b", ts as u64);
+        }
+        must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND / 2);
+        must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
+            .range(None, None)
+            .build_entry_scanner(0.into(), false)
+            .unwrap();
+
+        // The following illustration comments assume that SEEK_BOUND = 4.
+
+        // Initial position: 1 seek_to_first:
+        //   a_8 b_2 b_1 b_0
+        //   ^cursor
+        // After get the value, use 1 next to reach next user key:
+        //   a_8 b_2 b_1 b_0
+        //       ^cursor
+        let entry = EntryBuilder::default()
+            .key(b"a")
+            .value(b"a_value")
+            .start_ts(16.into())
+            .commit_ts(16.into())
+            .build_commit(WriteType::Put, true);
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 1);
+
+        // Before:
+        //   a_8 b_2 b_1 b_0
+        //       ^cursor
+        // We should be able to get wanted value without any operation.
+        // After get the value, use SEEK_BOUND / 2 + 1 next to reach next user key and stop:
+        //   a_8 b_2 b_1 b_0
+        //                   ^cursor
+        let entry = EntryBuilder::default()
+            .key(b"b")
+            .value(b"b_value")
+            .start_ts(4.into())
+            .commit_ts(4.into())
+            .build_commit(WriteType::Put, true);
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, (SEEK_BOUND / 2 + 1) as usize);
+
+        // Next we should get nothing.
+        assert_eq!(scanner.next_entry().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+    }
+
+    /// Check whether everything works as usual when
+    /// `EntryScanner::move_write_cursor_to_next_user_key()` goes out of bound.
+    ///
+    /// Case 2. seek() out of bound
+    #[test]
+    fn test_move_next_user_key_out_of_bound_2() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate 1 put for [a].
+        must_prewrite_put(&engine, b"a", b"a_value", b"a", SEEK_BOUND * 2);
+        must_commit(&engine, b"a", SEEK_BOUND * 2, SEEK_BOUND * 2);
+
+        // Generate SEEK_BOUND-1 rollback and 1 put for [b] .
+        for ts in 1..SEEK_BOUND {
+            must_rollback(&engine, b"b", ts as u64);
+        }
+        must_prewrite_put(&engine, b"b", b"b_value", b"a", SEEK_BOUND);
+        must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, (SEEK_BOUND * 2).into(), false)
+            .range(None, None)
+            .build_entry_scanner(0.into(), false)
+            .unwrap();
+
+        // The following illustration comments assume that SEEK_BOUND = 4.
+
+        // Initial position: 1 seek_to_first:
+        //   a_8 b_4 b_3 b_2 b_1
+        //   ^cursor
+        // After get the value, use 1 next to reach next user key:
+        //   a_8 b_4 b_3 b_2 b_1
+        //       ^cursor
+        let entry = EntryBuilder::default()
+            .key(b"a")
+            .value(b"a_value")
+            .start_ts(16.into())
+            .commit_ts(16.into())
+            .build_commit(WriteType::Put, true);
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry));
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, 1);
+
+        // Before:
+        //   a_8 b_4 b_3 b_2 b_1
+        //       ^cursor
+        // We should be able to get wanted value without any operation.
+        // After get the value, use SEEK_BOUND-1 next: (TODO: fix it to SEEK_BOUND)
+        //   a_8 b_4 b_3 b_2 b_1
+        //                   ^cursor
+        // We still pointing at current user key, so a seek:
+        //   a_8 b_4 b_3 b_2 b_1
+        //                       ^cursor
+        let entry = EntryBuilder::default()
+            .key(b"b")
+            .value(b"b_value")
+            .start_ts(8.into())
+            .commit_ts(8.into())
+            .build_commit(WriteType::Put, true);
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry),);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 1);
+        assert_eq!(statistics.write.next, (SEEK_BOUND - 1) as usize);
+
+        // Next we should get nothing.
+        assert_eq!(scanner.next_entry().unwrap(), None);
+        let statistics = scanner.take_statistics();
+        assert_eq!(statistics.write.seek, 0);
+        assert_eq!(statistics.write.next, 0);
+    }
+
+    /// Range is left open right closed.
+    #[test]
+    fn test_range() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate 1 put for [1], [2] ... [6].
+        for i in 1..7 {
+            // ts = 1: value = []
+            must_prewrite_put(&engine, &[i], &[], &[i], 1);
+            must_commit(&engine, &[i], 1, 1);
+
+            // ts = 7: value = [ts]
+            must_prewrite_put(&engine, &[i], &[i], &[i], 7);
+            must_commit(&engine, &[i], 7, 7);
+
+            // ts = 14: value = []
+            must_prewrite_put(&engine, &[i], &[], &[i], 14);
+            must_commit(&engine, &[i], 14, 14);
+        }
+
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
+
+        // Test both bound specified.
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+            .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
+            .build_entry_scanner(0.into(), false)
+            .unwrap();
+
+        let entry = |key, ts| {
+            EntryBuilder::default()
+                .key(key)
+                .value(key)
+                .start_ts(ts)
+                .commit_ts(ts)
+                .build_commit(WriteType::Put, true)
+        };
+
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[3u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[4u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), None);
+
+        // Test left bound not specified.
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+            .range(None, Some(Key::from_raw(&[3u8])))
+            .build_entry_scanner(0.into(), false)
+            .unwrap();
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), None);
+
+        // Test right bound not specified.
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10.into(), false)
+            .range(Some(Key::from_raw(&[5u8])), None)
+            .build_entry_scanner(0.into(), false)
+            .unwrap();
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), None);
+
+        // Test both bound not specified.
+        let mut scanner = ScannerBuilder::new(snapshot, 10.into(), false)
+            .range(None, None)
+            .build_entry_scanner(0.into(), false)
+            .unwrap();
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[1u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[2u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[3u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[4u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[5u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), Some(entry(&[6u8], 7.into())));
+        assert_eq!(scanner.next_entry().unwrap(), None);
+    }
+
+    #[test]
+    fn test_output_delete_and_after_ts() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        // Generate put for [a] at 3.
+        must_prewrite_put(&engine, b"a", b"a_3", b"a", 3);
+        must_commit(&engine, b"a", 3, 3);
+
+        // Generate put for [a] at 7.
+        must_prewrite_put(&engine, b"a", b"a_7", b"a", 7);
+        must_commit(&engine, b"a", 7, 7);
+
+        // Generate put for [b] at 1.
+        must_prewrite_put(&engine, b"b", b"b_1", b"b", 1);
+        must_commit(&engine, b"b", 1, 1);
+
+        // Generate rollbacks for [b] at 2, 3, 4.
+        for ts in 2..5 {
+            must_rollback(&engine, b"b", ts);
+        }
+
+        // Generate delete for [b] at 10.
+        must_prewrite_delete(&engine, b"b", b"b", 10);
+        must_commit(&engine, b"b", 10, 10);
+
+        let entry_a_3 = EntryBuilder::default()
+            .key(b"a")
+            .value(b"a_3")
+            .start_ts(3.into())
+            .commit_ts(3.into())
+            .build_commit(WriteType::Put, true);
+        let entry_a_7 = EntryBuilder::default()
+            .key(b"a")
+            .value(b"a_7")
+            .start_ts(7.into())
+            .commit_ts(7.into())
+            .build_commit(WriteType::Put, true);
+        let entry_b_1 = EntryBuilder::default()
+            .key(b"b")
+            .value(b"b_1")
+            .start_ts(1.into())
+            .commit_ts(1.into())
+            .build_commit(WriteType::Put, true);
+        let entry_b_10 = EntryBuilder::default()
+            .key(b"b")
+            .start_ts(10.into())
+            .commit_ts(10.into())
+            .build_commit(WriteType::Delete, true);
+
+        let check = |ts: u64, after_ts: u64, output_delete, expected: Vec<&TxnEntry>| {
+            let snapshot = engine.snapshot(&Context::default()).unwrap();
+            let mut scanner = ScannerBuilder::new(snapshot, ts.into(), false)
+                .range(None, None)
+                .build_entry_scanner(after_ts.into(), output_delete)
+                .unwrap();
+            for entry in expected {
+                assert_eq!(scanner.next_entry().unwrap().as_ref(), Some(entry));
+            }
+            assert!(scanner.next_entry().unwrap().is_none());
+        };
+
+        // Scanning entries in (10, 15] should get None
+        check(15, 10, true, vec![]);
+        // Scanning entries without delete in (7, 10]  should get None
+        check(10, 7, false, vec![]);
+        // Scanning entries include delete in (7, 10]  should get entry_b_10
+        check(10, 7, true, vec![&entry_b_10]);
+        // Scanning entries include delete in (3, 10] should get a_7 and b_10
+        check(10, 3, true, vec![&entry_a_7, &entry_b_10]);
+        // Scanning entries in (0, 5] should get a_3 and b_1
+        check(5, 0, true, vec![&entry_a_3, &entry_b_1]);
     }
 }

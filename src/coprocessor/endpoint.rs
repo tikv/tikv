@@ -3,8 +3,10 @@
 use std::marker::PhantomData;
 use std::time::Duration;
 
+use async_stream::try_stream;
 use futures::sync::mpsc;
 use futures::{future, stream, Future, Stream};
+use futures03::prelude::*;
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
 #[cfg(feature = "protobuf-codec")]
@@ -19,7 +21,6 @@ use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{Error as KvError, ErrorInner as KvErrorInner};
 use crate::storage::{self, Engine, Snapshot, SnapshotStore};
 use tikv_util::future_pool::FuturePool;
-use tikv_util::Either;
 
 use crate::coprocessor::cache::CachedRequestHandler;
 use crate::coprocessor::metrics::*;
@@ -281,16 +282,18 @@ impl<E: Engine> Endpoint<E> {
     fn async_snapshot(
         engine: &E,
         ctx: &kvrpcpb::Context,
-    ) -> impl Future<Item = E::Snap, Error = Error> {
-        let (callback, future) = tikv_util::future::paired_future_callback();
+    ) -> impl std::future::Future<Output = Result<E::Snap>> {
+        let (callback, future) = tikv_util::future::paired_std_future_callback();
         let val = engine.async_snapshot(ctx, callback);
-        future::result(val)
-            .and_then(|_| {
-                future.map_err(|cancel| KvError::from(KvErrorInner::Other(box_err!(cancel))))
-            })
-            .and_then(|(_ctx, result)| result)
-            // map engine::Error -> coprocessor::Error
-            .map_err(Error::from)
+        // make engine not cross yield point
+        async move {
+            val?; // propagate error
+            let (_ctx, result) = future
+                .map_err(|cancel| KvError::from(KvErrorInner::Other(box_err!(cancel))))
+                .await?;
+            // map storage::kv::Error -> storage::txn::Error -> storage::Error
+            result.map_err(Error::from)
+        }
     }
 
     /// The real implementation of handling a unary request.
@@ -298,64 +301,54 @@ impl<E: Engine> Endpoint<E> {
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
     /// the given `handler_builder`. Finally, it calls the unary request interface of the
     /// `RequestHandler` to process the request and produce a result.
-    // TODO: Convert to use async / await.
-    fn handle_unary_request_impl(
-        tracker: Box<Tracker>,
+    async fn handle_unary_request_impl(
+        mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Future<Item = coppb::Response, Error = Error> {
+    ) -> Result<coppb::Response> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
-        future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
-            // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
-            // exists.
-            .and_then(move |_| unsafe {
-                with_tls_engine(|engine| {
-                    Self::async_snapshot(engine, &tracker.req_ctx.context)
-                        .map(|snapshot| (tracker, snapshot))
-                })
-            })
-            .and_then(move |(tracker, snapshot)| {
-                // When snapshot is retrieved, deadline may exceed.
-                future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
-                    .map(|_| (tracker, snapshot))
-            })
-            .and_then(move |(tracker, snapshot)| {
-                let builder = if tracker.req_ctx.cache_match_version.is_some()
-                    && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
-                {
-                    // Build a cached request handler instead if cache version is matching.
-                    CachedRequestHandler::builder()
-                } else {
-                    handler_builder
-                };
+        tracker.req_ctx.deadline.check()?;
 
-                future::result(builder(snapshot, &tracker.req_ctx))
-                    .map(|handler| (tracker, handler))
-            })
-            .and_then(|(mut tracker, mut handler)| {
-                tracker.on_begin_all_items();
-                tracker.on_begin_item();
+        // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
+        // exists.
+        let snapshot = unsafe {
+            with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
+        }
+        .await?;
+        // When snapshot is retrieved, deadline may exceed.
+        tracker.req_ctx.deadline.check()?;
 
-                // There might be errors when handling requests. In this case, we still need its
-                // execution metrics.
-                let result = handler.handle_request();
+        let mut handler = if tracker.req_ctx.cache_match_version.is_some()
+            && tracker.req_ctx.cache_match_version == snapshot.get_data_version()
+        {
+            // Build a cached request handler instead if cache version is matching.
+            CachedRequestHandler::builder()(snapshot, &tracker.req_ctx)?
+        } else {
+            handler_builder(snapshot, &tracker.req_ctx)?
+        };
 
-                let mut storage_stats = Statistics::default();
-                handler.collect_scan_statistics(&mut storage_stats);
+        tracker.on_begin_all_items();
+        tracker.on_begin_item();
+        // There might be errors when handling requests. In this case, we still need its
+        // execution metrics.
+        let result = handler.handle_request().await;
 
-                tracker.on_finish_item(Some(storage_stats));
-                let exec_details = tracker.get_item_exec_details();
+        let mut storage_stats = Statistics::default();
+        handler.collect_scan_statistics(&mut storage_stats);
 
-                tracker.on_finish_all_items();
+        tracker.on_finish_item(Some(storage_stats));
+        let exec_details = tracker.get_item_exec_details();
 
-                future::result(result)
-                    .or_else(|e| Ok::<_, Error>(make_error_response(e)))
-                    .map(|mut resp| {
-                        COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
-                        resp.set_exec_details(exec_details);
-                        resp
-                    })
-            })
+        tracker.on_finish_all_items();
+        let mut resp = match result {
+            Ok(resp) => {
+                COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
+                resp
+            }
+            Err(e) => make_error_response(e),
+        };
+        resp.set_exec_details(exec_details);
+        Ok(resp)
     }
 
     /// Handle a unary request and run on the read pool.
@@ -372,7 +365,12 @@ impl<E: Engine> Endpoint<E> {
         let tracker = Box::new(Tracker::new(req_ctx));
 
         read_pool
-            .spawn_handle(move || Self::handle_unary_request_impl(tracker, handler_builder))
+            .spawn_handle(move || {
+                // FIXME: This is an unnecessary box just in order to satisfy the Unpin
+                // requirement of compat. Remove it after using a thread pool accepting
+                // !Unpin std Futures.
+                Box::pin(Self::handle_unary_request_impl(tracker, handler_builder)).compat()
+            })
             .map_err(|_| Error::MaxPendingTasksExceeded)
     }
 
@@ -401,96 +399,58 @@ impl<E: Engine> Endpoint<E> {
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the snapshot and
     /// the given `handler_builder`. Finally, it calls the stream request interface of the
     /// `RequestHandler` multiple times to process the request and produce multiple results.
-    // TODO: Convert to use async / await.
     fn handle_stream_request_impl(
-        tracker: Box<Tracker>,
+        mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Stream<Item = coppb::Response, Error = Error> {
-        // When this function is being executed, it may be queued for a long time, so that
-        // deadline may exceed.
+    ) -> impl futures03::stream::Stream<Item = Result<coppb::Response>> {
+        try_stream! {
+            // When this function is being executed, it may be queued for a long time, so that
+            // deadline may exceed.
+            tracker.req_ctx.deadline.check()?;
 
-        let tracker_and_handler_future =
-            future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
-                .and_then(move |_| {
-                    // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
-                    // exists.
-                    unsafe {
-                        with_tls_engine(|engine| {
-                            Self::async_snapshot(engine, &tracker.req_ctx.context)
-                                .map(|snapshot| (tracker, snapshot))
-                        })
-                    }
-                })
-                .and_then(move |(tracker, snapshot)| {
-                    // When snapshot is retrieved, deadline may exceed.
-                    future::result(tracker.req_ctx.deadline.check().map_err(Error::from))
-                        .map(|_| (tracker, snapshot))
-                })
-                .and_then(move |(tracker, snapshot)| {
-                    future::result(handler_builder(snapshot, &tracker.req_ctx))
-                        .map(|handler| (tracker, handler))
-                });
+            // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
+            // exists.
+            let snapshot = unsafe {
+                with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx.context))
+            }
+            .await?;
+            // When snapshot is retrieved, deadline may exceed.
+            tracker.req_ctx.deadline.check()?;
 
-        tracker_and_handler_future
-            .map(|(mut tracker, handler)| {
-                tracker.on_begin_all_items();
+            let mut handler = handler_builder(snapshot, &tracker.req_ctx)?;
 
-                // The state is `Option<(tracker, handler, finished)>`, `None` indicates finished.
-                // For every stream item except the last one, the type is `Either::Left(Response)`.
-                // For last stream item, the type is `Either::Right(Tracker)` so that we can do
-                // more things for tracker later.
-                let initial_state = Some((tracker, handler, false));
-                stream::unfold(initial_state, |state| {
-                    match state {
-                        Some((mut tracker, mut handler, finished)) => {
-                            if finished {
-                                // Emit tracker as the last item.
-                                let yielded = Either::Right(tracker);
-                                let next_state = None;
-                                return Some(Ok((yielded, next_state)));
-                            }
+            tracker.on_begin_all_items();
 
-                            // There are future items
-                            tracker.on_begin_item();
+            loop {
+                tracker.on_begin_item();
 
-                            let result = handler.handle_streaming_request();
-                            let mut storage_stats = Statistics::default();
-                            handler.collect_scan_statistics(&mut storage_stats);
+                let result = handler.handle_streaming_request();
+                let mut storage_stats = Statistics::default();
+                handler.collect_scan_statistics(&mut storage_stats);
 
-                            tracker.on_finish_item(Some(storage_stats));
-                            let exec_details = tracker.get_item_exec_details();
+                tracker.on_finish_item(Some(storage_stats));
+                let exec_details = tracker.get_item_exec_details();
 
-                            let (mut resp, finished) = match result {
-                                Err(e) => (make_error_response(e), true),
-                                Ok((None, _)) => {
-                                    let yielded = Either::Right(tracker);
-                                    let next_state = None;
-                                    return Some(Ok((yielded, next_state)));
-                                }
-                                Ok((Some(resp), finished)) => (resp, finished),
-                            };
-                            COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
-                            resp.set_exec_details(exec_details);
-
-                            let yielded = Either::Left(resp);
-                            let next_state = Some((tracker, handler, finished));
-                            Some(Ok((yielded, next_state)))
-                        }
-                        None => {
-                            // Finished
-                            None
+                match result {
+                    Err(e) => {
+                        let mut resp = make_error_response(e);
+                        resp.set_exec_details(exec_details);
+                        yield resp;
+                        break;
+                    },
+                    Ok((None, _)) => break,
+                    Ok((Some(mut resp), finished)) => {
+                        COPR_RESP_SIZE.inc_by(resp.data.len() as i64);
+                        resp.set_exec_details(exec_details);
+                        yield resp;
+                        if finished {
+                            break;
                         }
                     }
-                })
-                .filter_map(|resp_or_tracker| match resp_or_tracker {
-                    Either::Left(resp) => Some(resp),
-                    Either::Right(mut tracker) => {
-                        tracker.on_finish_all_items();
-                        None
-                    }
-                })
-            })
-            .flatten_stream()
+                }
+            }
+            tracker.on_finish_all_items();
+        }
     }
 
     /// Handle a stream request and run on the read pool.
@@ -508,7 +468,11 @@ impl<E: Engine> Endpoint<E> {
 
         read_pool
             .spawn(move || {
-                Self::handle_stream_request_impl(tracker, handler_builder) // Stream<Resp, Error>
+                // FIXME: This is an unnecessary box just in order to satisfy the Unpin
+                // requirement of compat. Remove it after using a thread pool accepting
+                // !Unpin std Futures.
+                Box::pin(Self::handle_stream_request_impl(tracker, handler_builder))
+                    .compat() // Stream<Resp, Error>
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
             })
@@ -625,8 +589,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl RequestHandler for UnaryFixture {
-        fn handle_request(&mut self) -> Result<coppb::Response> {
+        async fn handle_request(&mut self) -> Result<coppb::Response> {
             thread::sleep(Duration::from_millis(self.handle_duration_millis));
             self.result.take().unwrap()
         }
@@ -1239,14 +1204,9 @@ mod tests {
                 .into_boxed())
             });
             let resp_future_3 = cop
-                .handle_stream_request(req_with_exec_detail.clone(), handler_builder)
+                .handle_stream_request(req_with_exec_detail, handler_builder)
                 .unwrap();
-            let sender = tx.clone();
-            thread::spawn(move || {
-                sender
-                    .send(resp_future_3.collect().wait().unwrap())
-                    .unwrap()
-            });
+            thread::spawn(move || tx.send(resp_future_3.collect().wait().unwrap()).unwrap());
 
             // Response 1
             let resp = &rx.recv().unwrap()[0];
