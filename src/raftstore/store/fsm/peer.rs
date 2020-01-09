@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
 use crate::pd::{PdClient, PdTask};
-use crate::raftstore::{Error, Result};
+use batch_system::{BasicMailbox, Fsm};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Peekable, Snapshot as EngineSnapshot};
@@ -38,8 +38,8 @@ use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
 use crate::raftstore::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, CatchUpLogs, ChangePeer,
-    ExecResult, Fsm, RegionProposal,
+    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangePeer, ExecResult,
+    RegionProposal,
 };
 use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::metrics::*;
@@ -55,6 +55,7 @@ use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
+use crate::raftstore::{Error, Result};
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
