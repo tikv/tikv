@@ -1647,19 +1647,6 @@ impl<E: Engine> GcWorker<E> {
             .ok_or_else(|| box_err!("applied_lock_collector not supported"))
             .and_then(move |c| c.stop_collecting(max_ts, callback))
     }
-
-    pub fn change_io_limit(&self, limit: i64) -> Result<()> {
-        let mut limiter = self.limiter.lock().unwrap();
-        if limit == 0 {
-            limiter.take();
-        } else {
-            limiter
-                .get_or_insert_with(|| RocksIOLimiter::new(limit))
-                .set_bytes_per_second(limit as i64);
-        }
-        info!("GC io limit changed"; "max_write_bytes_per_sec" => limit);
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -2265,7 +2252,9 @@ mod tests {
         assert!(invalid_cfg.validate().is_err());
     }
 
-    fn setup_cfg_controller(cfg: TiKvConfig) -> (GcWorker<crate::storage::kv::RocksEngine>, ConfigController) {
+    fn setup_cfg_controller(
+        cfg: TiKvConfig,
+    ) -> (GcWorker<crate::storage::kv::RocksEngine>, ConfigController) {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut gc_worker = GcWorker::new(engine, None, None, None, cfg.gc.clone());
         gc_worker.start().unwrap();

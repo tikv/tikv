@@ -2,7 +2,7 @@
 
 use keys::origin_key;
 use std::fmt::{self, Debug, Display};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use txn_types::Key;
 
@@ -25,14 +25,17 @@ const MAX_COLLECT_SIZE: usize = 1024;
 #[derive(Default)]
 struct LockObserverState {
     max_ts: AtomicU64,
+
+    /// `is_clean` is true, only it's sure that all applying of stale locks (locks with start_ts <=
+    /// specified max_ts) are monitored and collected. If there are too many stale locks or any
+    /// error happens, `is_clean` must be set to `false`.
+    is_clean: AtomicBool,
 }
 
 #[derive(Debug)]
 enum LockObserverMsg {
     // A lock is applied.
     Locks(Vec<(Key, Lock)>),
-    // A error occurs in the observer,
-    Err(Error),
 }
 
 impl Display for LockObserverMsg {
@@ -120,9 +123,18 @@ impl LockObserver {
                 error!("failed to send lock observer msg"; "msg" => ?m);
             }
             Err(ScheduleError::Full(m)) => {
+                self.mark_dirty();
                 warn!("cannot collect all applied lock because channel is full"; "msg" => ?m);
             }
         }
+    }
+
+    fn mark_dirty(&self) {
+        self.state.is_clean.store(false, Ordering::Release);
+    }
+
+    fn is_clean(&self) -> bool {
+        self.state.is_clean.load(Ordering::Acquire)
     }
 
     fn load_max_ts(&self) -> TimeStamp {
@@ -134,11 +146,16 @@ impl Coprocessor for LockObserver {}
 
 impl QueryObserver for LockObserver {
     fn pre_apply_query(&self, _: &mut ObserverContext<'_>, requests: &[RaftRequest]) {
+        if !self.is_clean() {
+            return;
+        }
+
         let max_ts = self.load_max_ts();
         if max_ts.is_zero() {
             return;
         }
 
+        let mut locks = vec![];
         // For each put in CF_LOCK, collect it if its ts <= max_ts.
         for req in requests {
             if req.get_cmd_type() != CmdType::Put {
@@ -157,15 +174,18 @@ impl QueryObserver for LockObserver {
                         "value" => hex::encode_upper(put_request.get_value()),
                         "err" => ?e
                     );
-                    self.send(LockObserverMsg::Err(ErrorInner::Mvcc(e.into()).into()));
+                    self.mark_dirty();
                     return;
                 }
             };
 
             if lock.ts <= max_ts {
                 let key = Key::from_encoded_slice(put_request.get_key());
-                self.send(LockObserverMsg::Locks(vec![(key, lock)]));
+                locks.push((key, lock));
             }
+        }
+        if !locks.is_empty() {
+            self.send(LockObserverMsg::Locks(locks));
         }
     }
 }
@@ -178,6 +198,10 @@ impl ApplySnapshotObserver for LockObserver {
         kv_pairs: &[(Vec<u8>, Vec<u8>)],
     ) {
         if cf != CF_LOCK {
+            return;
+        }
+
+        if !self.is_clean() {
             return;
         }
 
@@ -202,16 +226,21 @@ impl ApplySnapshotObserver for LockObserver {
             .collect();
 
         match locks {
-            Err(e) => self.send(LockObserverMsg::Err(e)),
+            Err(e) => {
+                error!(
+                    "cannot parse lock";
+                    "err" => ?e
+                );
+                self.mark_dirty()
+            }
             Ok(l) => self.send(LockObserverMsg::Locks(l)),
         }
     }
 
     fn pre_apply_sst(&self, _: &mut ObserverContext<'_>, cf: CfName, _path: &str) {
         if cf == CF_LOCK {
-            let e = box_err!("snapshot of lock cf applied from sst file");
-            error!("cannot collect all applied lock"; "err" => ?e);
-            self.send(LockObserverMsg::Err(e));
+            error!("cannot collect all applied lock: snapshot of lock cf applied from sst file");
+            self.mark_dirty();
         }
     }
 }
@@ -220,12 +249,6 @@ struct LockCollectorRunner {
     observer_state: Arc<LockObserverState>,
 
     collected_locks: Vec<(Key, Lock)>,
-
-    /// `is_clean` is true, only it's sure that all applying of stale locks (locks with start_ts <=
-    /// specified max_ts) are monitored and collected. If there are too many stale locks or any
-    /// error happens, `is_clean` must be set to `false`.
-    /// TODO: when dirty, stop collecting.
-    is_clean: bool,
 }
 
 impl LockCollectorRunner {
@@ -233,25 +256,18 @@ impl LockCollectorRunner {
         Self {
             observer_state,
             collected_locks: vec![],
-            is_clean: true,
         }
     }
 
     fn handle_observer_msg(&mut self, msg: LockObserverMsg) {
-        if !self.collected_locks.len() >= MAX_COLLECT_SIZE {
+        if self.collected_locks.len() >= MAX_COLLECT_SIZE {
             return;
         }
 
         match msg {
-            LockObserverMsg::Err(e) => {
-                if self.is_clean {
-                    self.is_clean = false;
-                    info!("lock collector marked dirty because received error"; "err" => ?e);
-                }
-            }
             LockObserverMsg::Locks(mut locks) => {
-                if locks.len() + self.collected_locks.len() > MAX_COLLECT_SIZE {
-                    self.is_clean = false;
+                if locks.len() + self.collected_locks.len() >= MAX_COLLECT_SIZE {
+                    self.observer_state.is_clean.store(false, Ordering::Release);
                     info!("lock collector marked dirty because received too many locks");
                     locks.truncate(MAX_COLLECT_SIZE - self.collected_locks.len());
                 }
@@ -261,13 +277,16 @@ impl LockCollectorRunner {
     }
 
     fn start_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
-        if self.observer_state.max_ts.load(Ordering::Acquire) == max_ts {
+        if self.observer_state.max_ts.load(Ordering::Acquire) == max_ts.into_inner() {
             // Repeated request. Ignore it.
-            return;
+            return Ok(());
         }
         info!("start collecting locks"; "max_ts" => max_ts);
         self.collected_locks.clear();
-        self.is_clean = true;
+        // TODO: `is_clean` may be unexpectedly set to false here, if any error happens on a
+        // previous observing. It need to be solved, although it's very unlikely to happen and
+        // doesn't affect correctness of data.
+        self.observer_state.is_clean.store(true, Ordering::Release);
         self.observer_state
             .max_ts
             .store(max_ts.into_inner(), Ordering::Release);
@@ -298,7 +317,8 @@ impl LockCollectorRunner {
             })
             .collect();
 
-        Ok((locks?, self.is_clean))
+        let is_clean = self.observer_state.is_clean.load(Ordering::Acquire);
+        Ok((locks?, is_clean))
     }
 
     fn stop_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
@@ -648,7 +668,7 @@ mod tests {
         // Fetch result twice gets the same result.
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
-            (expected_locks, true)
+            (expected_locks.clone(), true)
         );
 
         // When repeated start_collecting request arrives, the previous collected results shouldn't
@@ -722,7 +742,7 @@ mod tests {
         batch_generate_locks(1);
         let (locks, is_clean) = get_collected_locks(&c, 3).unwrap();
         assert_eq!(locks.len(), MAX_COLLECT_SIZE);
-        assert!(is_clean);
+        assert!(!is_clean);
 
         batch_generate_locks(1);
         // If there are more locks, they will be dropped.
