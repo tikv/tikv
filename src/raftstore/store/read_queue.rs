@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn test_read_queue_fold() {
-        let mut queue = ReadIndexQueue::default();
+        let mut queue = ReadIndexQueue::new(&Config::default());
         queue.handled_cnt = 125;
         for _ in 0..100 {
             let id = Uuid::new_v4();
