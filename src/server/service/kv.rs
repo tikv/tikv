@@ -672,6 +672,71 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         ctx.spawn(future);
     }
 
+    fn register_lock_observer(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        mut _req: RegisterLockObserverRequest,
+        _sink: UnarySink<RegisterLockObserverResponse>,
+    ) {
+        unimplemented!();
+    }
+
+    fn check_lock_observer(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        mut _req: CheckLockObserverRequest,
+        _sink: UnarySink<CheckLockObserverResponse>,
+    ) {
+        unimplemented!();
+    }
+
+    fn remove_lock_observer(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        mut _req: RemoveLockObserverRequest,
+        _sink: UnarySink<RemoveLockObserverResponse>,
+    ) {
+        unimplemented!();
+    }
+
+    fn physical_scan_lock(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: PhysicalScanLockRequest,
+        sink: ServerStreamingSink<PhysicalScanLockResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .physical_scan_lock
+            .start_coarse_timer();
+
+        let stream = self
+            .gc_worker
+            .physical_scan_lock(req.take_context(), req.get_max_ts().into())
+            .then(|result| {
+                let mut resp = PhysicalScanLockResponse::default();
+                match result {
+                    Ok(locks) => resp.set_locks(locks.into()),
+                    Err(e) => resp.set_error(format!("{:?}", e)),
+                }
+                Ok::<_, GrpcError>(resp)
+            })
+            .map(|resp| (resp, WriteFlags::default().buffer_hint(true)));
+
+        let future = sink
+            .send_all(stream)
+            .map(|_| timer.observe_duration())
+            .map_err(Error::from)
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "physical_scan_lock",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
         let future = future_cop(&self.cop, req, Some(ctx.peer()))

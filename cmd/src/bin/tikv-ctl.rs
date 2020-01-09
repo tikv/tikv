@@ -36,11 +36,8 @@ use kvproto::tikvpb::TikvClient;
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use tikv::config::TiKvConfig;
-use tikv::raftstore::router::ServerRaftStoreRouter;
 use tikv::raftstore::store::INIT_EPOCH_CONF_VER;
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv::server::RaftKv;
-use tikv::storage::kv::Engine;
 use tikv_util::security::{SecurityConfig, SecurityManager};
 use tikv_util::{escape, unescape};
 use txn_types::Key;
@@ -91,7 +88,7 @@ fn new_debug_executor(
             let raft_db =
                 rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
-            Box::new(Debugger::<RaftKv<ServerRaftStoreRouter>>::new(
+            Box::new(Debugger::new(
                 Engines::new(Arc::new(kv_db), Arc::new(raft_db), cache.is_some()),
                 None,
             )) as Box<dyn DebugExecutor>
@@ -770,7 +767,7 @@ impl DebugExecutor for DebugClient {
     }
 }
 
-impl<E: Engine> DebugExecutor for Debugger<E> {
+impl DebugExecutor for Debugger {
     fn check_local_mode(&self) {}
 
     fn get_all_meta_regions(&self) -> Vec<u64> {
