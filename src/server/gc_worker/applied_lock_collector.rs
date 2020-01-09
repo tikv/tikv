@@ -265,8 +265,8 @@ impl LockCollectorRunner {
     }
 
     fn start_collecting(&mut self, max_ts: TimeStamp) -> Result<()> {
-        if self.observer_state.max_ts.load(Ordering::Acquire) == max_ts.into_inner() {
-            // Repeated request. Ignore it.
+        if self.observer_state.max_ts.load(Ordering::Acquire) >= max_ts.into_inner() {
+            // Stale request. Ignore it.
             return Ok(());
         }
         info!("start collecting locks"; "max_ts" => max_ts);
@@ -521,11 +521,16 @@ mod tests {
         get_collected_locks(&c, 2).unwrap_err();
         stop_collecting(&c, 2).unwrap_err();
 
-        // When start_collecting is invoked twice, the later one will ovewrite the previous one.
+        // When start_collecting is invoked with a larger ts, the later one will ovewrite the
+        // previous one.
         start_collecting(&c, 3).unwrap();
         get_collected_locks(&c, 3).unwrap();
         get_collected_locks(&c, 4).unwrap_err();
         start_collecting(&c, 4).unwrap();
+        get_collected_locks(&c, 3).unwrap_err();
+        get_collected_locks(&c, 4).unwrap();
+        // Do not allow aborting previous observing with a smaller max_ts.
+        start_collecting(&c, 3).unwrap();
         get_collected_locks(&c, 3).unwrap_err();
         get_collected_locks(&c, 4).unwrap();
         stop_collecting(&c, 4).unwrap();
@@ -597,7 +602,7 @@ mod tests {
             (expected_result, true)
         );
 
-        // When start_collecting is double-invoked again on another ts, the previous results are
+        // When start_collecting is double-invoked again with larger ts, the previous results are
         // dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
@@ -659,15 +664,20 @@ mod tests {
             (expected_locks.clone(), true)
         );
 
-        // When repeated start_collecting request arrives, the previous collected results shouldn't
+        // When stale start_collecting request arrives, the previous collected results shouldn't
         // be dropped.
         start_collecting(&c, 100).unwrap();
+        assert_eq!(
+            get_collected_locks(&c, 100).unwrap(),
+            (expected_locks.clone(), true)
+        );
+        start_collecting(&c, 90).unwrap();
         assert_eq!(
             get_collected_locks(&c, 100).unwrap(),
             (expected_locks, true)
         );
 
-        // When start_collecting is double-invoked again on another ts, the previous results are
+        // When start_collecting is double-invoked again with larger ts, the previous results are
         // dropped.
         start_collecting(&c, 110).unwrap();
         assert_eq!(get_collected_locks(&c, 110).unwrap(), (vec![], true));
