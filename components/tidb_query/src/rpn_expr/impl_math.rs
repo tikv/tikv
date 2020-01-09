@@ -32,6 +32,7 @@ pub fn log_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
+#[allow(clippy::float_cmp)]
 pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
     Ok(match (arg0, arg1) {
         (Some(base), Some(n)) => {

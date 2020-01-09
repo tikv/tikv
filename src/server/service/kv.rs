@@ -674,29 +674,107 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
 
     fn register_lock_observer(
         &mut self,
-        _ctx: RpcContext<'_>,
-        mut _req: RegisterLockObserverRequest,
-        _sink: UnarySink<RegisterLockObserverResponse>,
+        ctx: RpcContext<'_>,
+        req: RegisterLockObserverRequest,
+        sink: UnarySink<RegisterLockObserverResponse>,
     ) {
-        unimplemented!();
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .register_lock_observer
+            .start_coarse_timer();
+
+        let (cb, f) = paired_future_callback();
+        let res = self.gc_worker.start_collecting(req.get_max_ts().into(), cb);
+
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
+                let mut resp = RegisterLockObserverResponse::default();
+                if let Err(e) = v {
+                    resp.set_error(format!("{}", e));
+                }
+                sink.success(resp).map_err(Error::from)
+            })
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "register_lock_observer",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
+            });
+
+        ctx.spawn(future);
     }
 
     fn check_lock_observer(
         &mut self,
-        _ctx: RpcContext<'_>,
-        mut _req: CheckLockObserverRequest,
-        _sink: UnarySink<CheckLockObserverResponse>,
+        ctx: RpcContext<'_>,
+        req: CheckLockObserverRequest,
+        sink: UnarySink<CheckLockObserverResponse>,
     ) {
-        unimplemented!();
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .check_lock_observer
+            .start_coarse_timer();
+
+        let (cb, f) = paired_future_callback();
+        let res = self
+            .gc_worker
+            .get_collected_locks(req.get_max_ts().into(), cb);
+
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
+                let mut resp = CheckLockObserverResponse::default();
+                match v {
+                    Ok((locks, is_clean)) => {
+                        resp.set_is_clean(is_clean);
+                        resp.set_locks(locks.into());
+                    }
+                    Err(e) => resp.set_error(format!("{}", e)),
+                }
+                sink.success(resp).map_err(Error::from)
+            })
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "check_lock_observer",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
+            });
+
+        ctx.spawn(future);
     }
 
     fn remove_lock_observer(
         &mut self,
-        _ctx: RpcContext<'_>,
-        mut _req: RemoveLockObserverRequest,
-        _sink: UnarySink<RemoveLockObserverResponse>,
+        ctx: RpcContext<'_>,
+        req: RemoveLockObserverRequest,
+        sink: UnarySink<RemoveLockObserverResponse>,
     ) {
-        unimplemented!();
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .remove_lock_observer
+            .start_coarse_timer();
+
+        let (cb, f) = paired_future_callback();
+        let res = self.gc_worker.stop_collecting(req.get_max_ts().into(), cb);
+
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
+                let mut resp = RemoveLockObserverResponse::default();
+                if let Err(e) = v {
+                    resp.set_error(format!("{}", e));
+                }
+                sink.success(resp).map_err(Error::from)
+            })
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "remove_lock_observer",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
+            });
+
+        ctx.spawn(future);
     }
 
     fn physical_scan_lock(
