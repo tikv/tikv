@@ -672,6 +672,149 @@ impl<T: RaftStoreRouter + 'static, E: Engine, L: LockManager> Tikv for Service<T
         ctx.spawn(future);
     }
 
+    fn register_lock_observer(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RegisterLockObserverRequest,
+        sink: UnarySink<RegisterLockObserverResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .register_lock_observer
+            .start_coarse_timer();
+
+        let (cb, f) = paired_future_callback();
+        let res = self.gc_worker.start_collecting(req.get_max_ts().into(), cb);
+
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
+                let mut resp = RegisterLockObserverResponse::default();
+                if let Err(e) = v {
+                    resp.set_error(format!("{}", e));
+                }
+                sink.success(resp).map_err(Error::from)
+            })
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "register_lock_observer",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.register_lock_observer.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
+    fn check_lock_observer(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: CheckLockObserverRequest,
+        sink: UnarySink<CheckLockObserverResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .check_lock_observer
+            .start_coarse_timer();
+
+        let (cb, f) = paired_future_callback();
+        let res = self
+            .gc_worker
+            .get_collected_locks(req.get_max_ts().into(), cb);
+
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
+                let mut resp = CheckLockObserverResponse::default();
+                match v {
+                    Ok((locks, is_clean)) => {
+                        resp.set_is_clean(is_clean);
+                        resp.set_locks(locks.into());
+                    }
+                    Err(e) => resp.set_error(format!("{}", e)),
+                }
+                sink.success(resp).map_err(Error::from)
+            })
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "check_lock_observer",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.check_lock_observer.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
+    fn remove_lock_observer(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RemoveLockObserverRequest,
+        sink: UnarySink<RemoveLockObserverResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .remove_lock_observer
+            .start_coarse_timer();
+
+        let (cb, f) = paired_future_callback();
+        let res = self.gc_worker.stop_collecting(req.get_max_ts().into(), cb);
+
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(|v| {
+                let mut resp = RemoveLockObserverResponse::default();
+                if let Err(e) = v {
+                    resp.set_error(format!("{}", e));
+                }
+                sink.success(resp).map_err(Error::from)
+            })
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "remove_lock_observer",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.remove_lock_observer.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
+    fn physical_scan_lock(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: PhysicalScanLockRequest,
+        sink: ServerStreamingSink<PhysicalScanLockResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .physical_scan_lock
+            .start_coarse_timer();
+
+        let stream = self
+            .gc_worker
+            .physical_scan_lock(req.take_context(), req.get_max_ts().into())
+            .then(|result| {
+                let mut resp = PhysicalScanLockResponse::default();
+                match result {
+                    Ok(locks) => resp.set_locks(locks.into()),
+                    Err(e) => resp.set_error(format!("{:?}", e)),
+                }
+                Ok::<_, GrpcError>(resp)
+            })
+            .map(|resp| (resp, WriteFlags::default().buffer_hint(true)));
+
+        let future = sink
+            .send_all(stream)
+            .map(|_| timer.observe_duration())
+            .map_err(Error::from)
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "physical_scan_lock",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.physical_scan_lock.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
         let future = future_cop(&self.cop, req, Some(ctx.peer()))
