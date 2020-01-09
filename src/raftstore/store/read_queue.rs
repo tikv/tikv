@@ -73,10 +73,6 @@ pub struct ReadIndexQueue {
 }
 
 impl ReadIndexQueue {
-    pub fn ready_count(&self) -> usize {
-        self.ready_cnt
-    }
-
     /// Clear all commands in the queue. if `notify_removed` contains an `region_id`,
     /// notify the request's callback that the region is removed.
     pub fn clear_all(&mut self, notify_removed: Option<u64>) {
@@ -212,20 +208,11 @@ impl ReadIndexQueue {
         self.reads.pop_front()
     }
 
-    /// Pop first `handled` items from the queue.
-    pub fn pop_front_handeld(&mut self, handled: usize) {
-        debug_assert!(handled <= self.ready_cnt);
-        for _ in 0..handled {
-            drop(self.reads.pop_front());
-        }
-        self.ready_cnt -= handled;
-        self.handled_cnt += handled;
-    }
-}
-
-impl<'a> ReadIndexQueue {
-    pub fn iter_ready(&'a mut self) -> impl Iterator<Item = &'a mut ReadIndexRequest> {
-        self.reads.iter_mut().take(self.ready_cnt)
+    /// Raft could have not been ready to handle the poped task. So put it back into the queue.
+    pub fn push_front(&mut self, read: ReadIndexRequest) {
+        self.reads.push_front(read);
+        self.ready_cnt += 1;
+        self.handled_cnt -= 1;
     }
 }
 

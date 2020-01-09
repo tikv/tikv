@@ -191,7 +191,7 @@ pub struct Peer {
 
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
-    pending_reads: RefCell<ReadIndexQueue>,
+    pending_reads: ReadIndexQueue,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -491,9 +491,7 @@ impl Peer {
             }
         }
 
-        self.pending_reads
-            .borrow_mut()
-            .clear_all(Some(region.get_id()));
+        self.pending_reads.clear_all(Some(region.get_id()));
 
         for proposal in self.apply_proposals.drain(..) {
             apply::notify_req_region_removed(region.get_id(), proposal.cb);
@@ -1383,24 +1381,21 @@ impl Peer {
 
     /// Responses to the ready read index request on the replica, the replica is not a leader.
     fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
-        let mut pending_reads = self.pending_reads.borrow_mut();
-        let mut conti_handeld = None;
-        for (i, read) in pending_reads.iter_ready().enumerate() {
+        while let Some(mut read) = self.pending_reads.pop_front() {
             assert!(read.read_index.is_some());
             let is_read_index_request = read.cmds.len() == 1
                 && read.cmds[0].0.get_requests().len() == 1
                 && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
             if is_read_index_request {
-                self.response_read(read, ctx, false);
+                self.response_read(&mut read, ctx, false);
             } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
-                self.response_read(read, ctx, true);
-            } else if conti_handeld.is_none() {
-                conti_handeld = Some(i);
+                self.response_read(&mut read, ctx, true);
+            } else {
+                self.pending_reads.push_front(read);
+                break;
             }
         }
-        let handled = conti_handeld.unwrap_or_else(|| pending_reads.ready_count());
-        pending_reads.pop_front_handeld(handled);
     }
 
     fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
@@ -1417,21 +1412,16 @@ impl Peer {
         if !self.is_leader() {
             // NOTE: there could still be some pending reads proposed by the peer when it was
             // leader. They will be cleared in `clear_uncommitted` later in the function.
-            self.pending_reads
-                .borrow_mut()
-                .advance_replica_reads(states);
+            self.pending_reads.advance_replica_reads(states);
             self.post_pending_read_index_on_replica(ctx);
         } else if self.ready_to_handle_read() {
             for (uuid, index) in states {
-                let mut read = self
-                    .pending_reads
-                    .borrow_mut()
-                    .advance_leader_read_and_pop(uuid, index);
+                let mut read = self.pending_reads.advance_leader_read_and_pop(uuid, index);
                 propose_time = Some(read.renew_lease_time);
                 self.response_read(&mut read, ctx, false);
             }
         } else {
-            propose_time = self.pending_reads.borrow_mut().advance_leader_reads(states);
+            propose_time = self.pending_reads.advance_leader_reads(states);
         }
 
         // Note that only after handle read_states can we identify what requests are
@@ -1439,7 +1429,7 @@ impl Peer {
         if ready.ss().is_some() {
             let term = self.term();
             // all uncommitted reads will be dropped silently in raft.
-            self.pending_reads.borrow_mut().clear_uncommitted(term);
+            self.pending_reads.clear_uncommitted(term);
         }
 
         if let Some(propose_time) = propose_time {
@@ -1484,11 +1474,11 @@ impl Peer {
         if !self.is_leader() {
             self.post_pending_read_index_on_replica(ctx)
         } else if self.ready_to_handle_read() {
-            while let Some(mut read) = self.pending_reads.borrow_mut().pop_front() {
+            while let Some(mut read) = self.pending_reads.pop_front() {
                 self.response_read(&mut read, ctx, false);
             }
         }
-        self.pending_reads.borrow_mut().gc();
+        self.pending_reads.gc();
 
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
@@ -1914,7 +1904,7 @@ impl Peer {
                 // before or after the previous read index, and the lease can be renewed when get
                 // heartbeat responses.
                 LeaseState::Valid | LeaseState::Expired => {
-                    if let Some(read) = self.pending_reads.borrow_mut().back_mut() {
+                    if let Some(read) = self.pending_reads.back_mut() {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
                         if read.renew_lease_time + max_lease > renew_lease_time {
                             read.push_command(req, cb);
@@ -1964,9 +1954,7 @@ impl Peer {
         }
 
         let read = ReadIndexRequest::with_command(id, req, cb, renew_lease_time);
-        self.pending_reads
-            .borrow_mut()
-            .push_back(read, self.is_leader());
+        self.pending_reads.push_back(read, self.is_leader());
 
         debug!(
             "request to get a read index";
@@ -2285,7 +2273,7 @@ impl Peer {
 
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
-        self.pending_reads.borrow_mut().clear_all(None);
+        self.pending_reads.clear_all(None);
     }
 }
 
