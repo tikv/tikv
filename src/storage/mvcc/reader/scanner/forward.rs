@@ -579,10 +579,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
             load_default_res.map(|default| {
                 HandleRes::Return(TxnEntry::Prewrite {
                     default,
-                    lock: (
-                        cursors.lock.key(&mut statistics.lock).to_owned(),
-                        lock_value.to_owned(),
-                    ),
+                    lock: (current_user_key.into_encoded(), lock_value.to_owned()),
                 })
             })
         };
