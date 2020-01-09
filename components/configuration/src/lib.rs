@@ -75,18 +75,25 @@ impl_into!(String, String);
 impl_into!(ConfigChange, Module);
 
 /// the Configuration trait
-/// There are three type of fields inside derived Configuration struct:
+/// There are four type of fields inside derived Configuration struct:
 /// 1. `#[config(skip)]` field, these fields will not return
 /// by `diff` method and have not effect of `update` method
-/// 2. `#[config(submodule)]` field, these fields represent the
+/// 2. `#[config(hidden)]` field, these fields have the same effect of
+/// `#[config(skip)]` field, in addition, these fields will not appear
+/// at the output of serializing `Self::Encoder`
+/// 3. `#[config(submodule)]` field, these fields represent the
 /// submodule, and should also derive `Configuration`
-/// 3. normal fields, the type of these fields should be implment
+/// 4. normal fields, the type of these fields should be implment
 /// `Into` and `From` for `ConfigValue`
-pub trait Configuration {
+pub trait Configuration<'a> {
+    type Encoder: serde::Serialize;
     /// Compare to other config, return the difference
     fn diff(&self, _: &Self) -> ConfigChange;
     /// Update config with difference returned by `diff`
     fn update(&mut self, _: ConfigChange);
+    /// Get encoder that can be serialize with `serde::Serializer`
+    /// with the disappear of `#[config(hidden)]` field
+    fn get_encoder(&'a self) -> Self::Encoder;
 }
 
 #[cfg(test)]
@@ -190,5 +197,52 @@ mod tests {
             "submodule should be updated"
         );
         assert_eq!(cfg, updated_cfg, "cfg should be updated");
+    }
+
+    #[test]
+    fn test_hidden_field() {
+        use serde::Serialize;
+
+        #[derive(Configuration, Default, Serialize)]
+        #[serde(default)]
+        #[serde(rename_all = "kebab-case")]
+        pub struct TestConfig {
+            #[config(skip)]
+            skip_field: String,
+            #[config(hidden)]
+            hidden_field: u64,
+            #[config(submodule)]
+            submodule_field: SubConfig,
+        }
+
+        #[derive(Configuration, Default, Serialize)]
+        #[serde(default)]
+        #[serde(rename_all = "kebab-case")]
+        pub struct SubConfig {
+            #[serde(rename = "rename_field")]
+            bool_field: bool,
+            #[config(hidden)]
+            hidden_field: usize,
+        }
+
+        let cfg = SubConfig::default();
+        assert_eq!(
+            toml::to_string(&cfg).unwrap(),
+            "rename_field = false\nhidden-field = 0\n"
+        );
+        assert_eq!(
+            toml::to_string(&cfg.get_encoder()).unwrap(),
+            "rename_field = false\n"
+        );
+
+        let cfg = TestConfig::default();
+        assert_eq!(
+            toml::to_string(&cfg).unwrap(),
+            "skip-field = \"\"\nhidden-field = 0\n\n[submodule-field]\nrename_field = false\nhidden-field = 0\n"
+        );
+        assert_eq!(
+            toml::to_string(&cfg.get_encoder()).unwrap(),
+            "skip-field = \"\"\n\n[submodule-field]\nrename_field = false\n"
+        );
     }
 }
