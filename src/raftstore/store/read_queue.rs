@@ -5,7 +5,7 @@ use std::{cmp, u64, usize};
 
 use crate::raftstore::store::fsm::apply;
 use crate::raftstore::store::metrics::*;
-use crate::raftstore::store::Callback;
+use crate::raftstore::store::{Callback, Config};
 
 use engine_rocks::RocksEngine;
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -62,7 +62,6 @@ impl Drop for ReadIndexRequest {
     }
 }
 
-#[derive(Default)]
 pub struct ReadIndexQueue {
     reads: VecDeque<ReadIndexRequest>,
     ready_cnt: usize,
@@ -70,9 +69,41 @@ pub struct ReadIndexQueue {
     handled_cnt: usize,
     // map[uuid] -> offset in `reads`.
     contexts: HashMap<Uuid, usize>,
+
+    retry_timeout: usize,
+    retry_elapsed: usize,
+    last_retried: usize,
 }
 
 impl ReadIndexQueue {
+    pub fn new(cfg: &Config) -> Self {
+        ReadIndexQueue {
+            reads: VecDeque::default(),
+            ready_cnt: 0,
+            handled_cnt: 0,
+            contexts: HashMap::default(),
+            retry_timeout: cfg.raft_election_timeout_ticks,
+            retry_elapsed: 0,
+            last_retried: 0,
+        }
+    }
+
+    pub fn check_needs_retry(&mut self) -> bool {
+        self.retry_elapsed += 1;
+        if self.retry_elapsed < self.retry_timeout {
+            return false;
+        }
+
+        self.retry_elapsed = 0;
+        let total = self.reads.len();
+        if total == self.ready_cnt || total + self.handled_cnt <= self.last_retried {
+            return false;
+        }
+
+        self.last_retried = total + self.handled_cnt - 1;
+        true
+    }
+
     pub fn is_empty(&self) -> bool {
         self.reads.is_empty()
     }
@@ -95,6 +126,7 @@ impl ReadIndexQueue {
         self.contexts.clear();
         self.ready_cnt = 0;
         self.handled_cnt = 0;
+        self.last_retried = 0;
     }
 
     pub fn clear_uncommitted(&mut self, term: u64) {
@@ -115,6 +147,7 @@ impl ReadIndexQueue {
             self.contexts.insert(read.id, offset);
         }
         self.reads.push_back(read);
+        self.retry_elapsed = 0;
     }
 
     pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest> {

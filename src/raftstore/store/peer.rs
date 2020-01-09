@@ -192,8 +192,6 @@ pub struct Peer {
     leader_missing_time: Option<Instant>,
     leader_lease: Lease,
     pub pending_reads: ReadIndexQueue,
-    // Initialized as election_timeout / 3.
-    pub read_index_retry_countdown: usize,
 
     /// If it fails to send messages to leader.
     pub leader_unreachable: bool,
@@ -296,8 +294,7 @@ impl Peer {
             raft_group,
             proposals: Default::default(),
             apply_proposals: vec![],
-            pending_reads: Default::default(),
-            read_index_retry_countdown: cfg.raft_election_timeout_ticks / 3,
+            pending_reads: ReadIndexQueue::new(cfg),
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
