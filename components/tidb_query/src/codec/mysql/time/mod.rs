@@ -662,8 +662,7 @@ impl TimeArgs {
         self.fsp = check_fsp(self.fsp).ok()? as i8;
         let (fsp, time_type) = (self.fsp, self.time_type);
         match self.time_type {
-            TimeType::Date => self.check_date(ctx),
-            TimeType::DateTime => self.check_datetime(ctx),
+            TimeType::Date | TimeType::DateTime => self.check_datetime(ctx),
             TimeType::Timestamp => self.check_timestamp(ctx),
         }
         .map(|datetime| datetime.unwrap_or_else(|| TimeArgs::zero(fsp, time_type)))
@@ -1881,6 +1880,27 @@ mod tests {
             assert_eq!(date.fsp(), 0);
             assert_eq!(expected, date.to_string());
         }
+
+        let should_fail = vec![
+            ("11-12-13 T 12:34:56", 0),
+            ("11:12:13 T12:34:56", 0),
+            ("11:12:13 T12:34:56.12", 7),
+            ("11:12:13T25:34:56.12", 7),
+            ("11:12:13T23:61:56.12", 7),
+            ("11:12:13T23:59:89.12", 7),
+            ("11121311121.1", 2),
+            ("111213111.1", 2),
+            ("11121311.1", 2),
+            ("1112131.1", 2),
+            ("111213.1", 2),
+            ("111213.1", 2),
+            ("11121.1", 2),
+            ("1112", 2),
+        ];
+
+        for (case, fsp) in should_fail {
+            assert!(Time::parse_datetime(&mut ctx, case, fsp, false).is_err());
+        }
         Ok(())
     }
 
@@ -1970,6 +1990,9 @@ mod tests {
             ("11-12-13 T 12:34:56", 0),
             ("11:12:13 T12:34:56", 0),
             ("11:12:13 T12:34:56.12", 7),
+            ("11:12:13T25:34:56.12", 7),
+            ("11:12:13T23:61:56.12", 7),
+            ("11:12:13T23:59:89.12", 7),
             ("11121311121.1", 2),
             ("111213111.1", 2),
             ("11121311.1", 2),
