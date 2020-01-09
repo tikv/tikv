@@ -1,12 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use kvproto::coprocessor::KeyRange;
+use tikv_util::deadline::Deadline;
 use tipb::{self, ExecType, ExecutorExecutionSummary};
 use tipb::{Chunk, DagRequest, EncodeType, SelectResponse};
-
-use tikv_util::deadline::Deadline;
+use yatp::task::future::reschedule;
 
 use super::executors::*;
 use super::interface::{BatchExecutor, ExecuteStats};
@@ -25,6 +26,8 @@ pub const BATCH_MAX_SIZE: usize = 1024;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
+
+const MAX_TIME_SLICE: Duration = Duration::from_millis(1);
 
 pub struct BatchExecutorsRunner<SS> {
     /// The deadline of this handler. For each check point (e.g. each iteration) we need to check
@@ -329,7 +332,12 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut warnings = self.config.new_eval_warnings();
         let mut ctx = EvalContext::new(self.config.clone());
 
+        let mut time_slice_start = Instant::now();
         loop {
+            if time_slice_start.elapsed() > MAX_TIME_SLICE {
+                reschedule().await;
+                time_slice_start = Instant::now();
+            }
             self.deadline.check()?;
 
             let mut result = self.out_most_executor.next_batch(batch_size);

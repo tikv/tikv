@@ -61,6 +61,15 @@ features = ["nightly", "push", "process"]
 git = "https://github.com/pingcap/rust-prometheus.git"
 rev = "d919ccd35976b9b84b8d03c07138c1cc05a36087"
 
+[dependencies.yatp]
+git = "https://github.com/tikv/yatp.git"
+rev = "4e3ac06b948f1c2dffe92986a760ef561d0bdbb9"
+
 [dev-dependencies]
 profiler = { path = "../profiler" }
 panic_hook = { path = "../panic_hook" }
+
+[features]
+default = ["protobuf-codec"]
+protobuf-codec = ["kvproto/protobuf-codec"]
+prost-codec = ["kvproto/prost-codec"]
