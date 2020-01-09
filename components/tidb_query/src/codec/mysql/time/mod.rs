@@ -662,8 +662,7 @@ impl TimeArgs {
         self.fsp = check_fsp(self.fsp).ok()? as i8;
         let (fsp, time_type) = (self.fsp, self.time_type);
         match self.time_type {
-            TimeType::Date => self.check_date(ctx),
-            TimeType::DateTime => self.check_datetime(ctx),
+            TimeType::Date | TimeType::DateTime => self.check_datetime(ctx),
             TimeType::Timestamp => self.check_timestamp(ctx),
         }
         .map(|datetime| datetime.unwrap_or_else(|| TimeArgs::zero(fsp, time_type)))
@@ -922,19 +921,19 @@ impl Time {
         time
     }
 
-    fn new(ctx: &mut EvalContext, mut config: TimeArgs) -> Result<Time> {
-        if config.time_type == TimeType::Date {
-            config.hour = 0;
-            config.minute = 0;
-            config.second = 0;
-            config.micro = 0;
-            config.fsp = 0;
-        }
-
+    fn new(ctx: &mut EvalContext, config: TimeArgs) -> Result<Time> {
         let unchecked_time = Self::unchecked_new(config.clone());
-        Ok(Self::unchecked_new(config.check(ctx).ok_or_else(|| {
-            Error::incorrect_datetime_value(unchecked_time)
-        })?))
+        let mut checked = config
+            .check(ctx)
+            .ok_or_else(|| Error::incorrect_datetime_value(unchecked_time))?;
+        if checked.time_type == TimeType::Date {
+            checked.hour = 0;
+            checked.minute = 0;
+            checked.second = 0;
+            checked.micro = 0;
+            checked.fsp = 0;
+        }
+        Ok(Self::unchecked_new(checked))
     }
 
     fn check_month_and_day(
@@ -1881,6 +1880,29 @@ mod tests {
             assert_eq!(date.fsp(), 0);
             assert_eq!(expected, date.to_string());
         }
+
+        let should_fail = vec![
+            ("11-12-13 T 12:34:56"),
+            ("11:12:13 T12:34:56"),
+            ("11:12:13 T12:34:56.12"),
+            ("11:12:13T25:34:56.12"),
+            ("11:12:13T23:61:56.12"),
+            ("11:12:13T23:59:89.12"),
+            ("11121311121.1"),
+            ("1201012736"),
+            ("1201012736.0"),
+            ("111213111.1"),
+            ("11121311.1"),
+            ("1112131.1"),
+            ("111213.1"),
+            ("111213.1"),
+            ("11121.1"),
+            ("1112"),
+        ];
+
+        for case in should_fail {
+            assert!(Time::parse_date(&mut ctx, case).is_err());
+        }
         Ok(())
     }
 
@@ -1970,7 +1992,12 @@ mod tests {
             ("11-12-13 T 12:34:56", 0),
             ("11:12:13 T12:34:56", 0),
             ("11:12:13 T12:34:56.12", 7),
+            ("11:12:13T25:34:56.12", 7),
+            ("11:12:13T23:61:56.12", 7),
+            ("11:12:13T23:59:89.12", 7),
             ("11121311121.1", 2),
+            ("1201012736", 2),
+            ("1201012736.0", 2),
             ("111213111.1", 2),
             ("11121311.1", 2),
             ("1112131.1", 2),
