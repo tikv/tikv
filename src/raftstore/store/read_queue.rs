@@ -165,7 +165,9 @@ impl ReadIndexQueue {
             );
         }
 
-        self.ready_cnt = cmp::max(self.ready_cnt, max_changed_offset + 1);
+        if min_changed_offset != usize::MAX {
+            self.ready_cnt = cmp::max(self.ready_cnt, max_changed_offset + 1);
+        }
         if max_changed_offset > 0 {
             self.fold(min_changed_offset, max_changed_offset);
         }
@@ -210,6 +212,7 @@ impl ReadIndexQueue {
 
     /// Raft could have not been ready to handle the poped task. So put it back into the queue.
     pub fn push_front(&mut self, read: ReadIndexRequest) {
+        debug_assert!(read.read_index.is_some());
         self.reads.push_front(read);
         self.ready_cnt += 1;
         self.handled_cnt -= 1;
