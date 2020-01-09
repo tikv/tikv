@@ -7,7 +7,6 @@ publish = false
 [features]
 default = ["protobuf-codec"]
 protobuf-codec = [
-  "engine_traits/protobuf-codec",
   "external_storage/protobuf-codec",
   "grpcio/protobuf-codec",
   "keys/protobuf-codec",
@@ -15,7 +14,6 @@ protobuf-codec = [
   "txn_types/protobuf-codec",
 ]
 prost-codec = [
-  "engine_traits/prost-codec",
   "external_storage/prost-codec",
   "grpcio/prost-codec",
   "keys/prost-codec",
@@ -25,7 +23,7 @@ prost-codec = [
 
 [dependencies]
 crc32fast = "1.2"
-engine_traits = { path = "../engine_traits", default-features = false }
+engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage", default-features = false }
 futures = "0.1"
 grpcio = { version = "0.5.0-alpha.5", features = [ "openssl-vendored" ], default-features = false }

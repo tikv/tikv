@@ -13,7 +13,6 @@ default = ["protobuf-codec"]
 protobuf-codec = [
   "engine/protobuf-codec",
   "engine_rocks/protobuf-codec",
-  "engine_traits/protobuf-codec",
   "external_storage/protobuf-codec",
   "grpcio/protobuf-codec",
   "keys/protobuf-codec",
@@ -21,13 +20,11 @@ protobuf-codec = [
   "raft/protobuf-codec",
   "tidb_query/protobuf-codec",
   "tikv/protobuf-codec",
-  "tikv_util/protobuf-codec",
   "txn_types/protobuf-codec",
 ]
 prost-codec = [
   "engine/prost-codec",
   "engine_rocks/prost-codec",
-  "engine_traits/prost-codec",
   "external_storage/prost-codec",
   "grpcio/prost-codec",
   "keys/prost-codec",
@@ -35,7 +32,6 @@ prost-codec = [
   "raft/prost-codec",
   "tidb_query/prost-codec",
   "tikv/prost-codec",
-  "tikv_util/prost-codec",
   "txn_types/prost-codec",
 ]
 
@@ -43,7 +39,7 @@ prost-codec = [
 crc64fast = "0.1"
 engine = { path = "../engine", default-features = false }
 engine_rocks = { path = "../engine_rocks", default-features = false }
-engine_traits = { path = "../engine_traits", default-features = false }
+engine_traits = { path = "../engine_traits" }
 external_storage = { path = "../external_storage", default-features = false }
 failure = "0.1"
 futures = "0.1"
@@ -59,7 +55,7 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 tidb_query = { path = "../tidb_query", default-features = false }
 tikv = { path = "../../", default-features = false }
 tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util", default-features = false }
+tikv_util = { path = "../tikv_util" }
 tokio-threadpool = "0.1"
 txn_types = { path = "../txn_types", default-features = false }
 
@@ -72,6 +68,6 @@ features = ["nightly", "push", "process"]
 [dev-dependencies]
 rand = "0.7"
 tempfile = "3.0"
-test_util = { path = "../test_util", default-features = false }
+test_util = { path = "../test_util" }
 test_raftstore = { path = "../test_raftstore", default-features = false }
 uuid = { version = "0.7", features = [ "serde", "v4" ] }

@@ -6,14 +6,8 @@ edition = "2018"
 
 [features]
 default = ["protobuf-codec"]
-protobuf-codec = [
-  "tidb_query/protobuf-codec",
-  "tikv_util/protobuf-codec",
-]
-prost-codec = [
-  "tidb_query/protobuf-codec",
-  "tikv_util/prost-codec",
-]
+protobuf-codec = ["tidb_query/protobuf-codec"]
+prost-codec = ["tidb_query/protobuf-codec"]
 
 [lib]
 path = "mod.rs"
@@ -22,4 +16,4 @@ path = "mod.rs"
 byteorder = "1"
 failure = "0.1"
 tidb_query = { path = "../../components/tidb_query", default-features = false }
-tikv_util = { path = "../../components/tikv_util", default-features = false }
+tikv_util = { path = "../../components/tikv_util" }

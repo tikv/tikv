@@ -120,6 +120,10 @@
 //!
 //!   // in engine_rust
 //!
+//!   struct RocksEngine;
+//!
+//!   struct RocksIOLimiter;
+//!
 //!   impl IOLimiterExt for RocksEngine {
 //!       type IOLimiter = RocksIOLimiter;
 //!   }

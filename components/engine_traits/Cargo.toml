@@ -4,14 +4,9 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = ["tikv_util/protobuf-codec"]
-prost-codec = ["tikv_util/prost-codec"]
-
 [dependencies]
 hex = "0.3"
 protobuf = "2"
 quick-error = "1.2.2"
 tikv_alloc = { path = "../tikv_alloc" }
-tikv_util = { path = "../tikv_util", default-features = false }
+tikv_util = { path = "../tikv_util" }

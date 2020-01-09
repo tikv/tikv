@@ -4,14 +4,9 @@ version = "0.0.1"
 edition = "2018"
 publish = false
 
-[features]
-default = ["protobuf-codec"]
-protobuf-codec = ["tikv_util/protobuf-codec"]
-prost-codec = ["tikv_util/prost-codec"]
-
 [dependencies]
 rand = "0.6.5"
 rand_isaac = "0.1.1"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-tikv_util = { path = "../tikv_util", default-features = false }
+tikv_util = { path = "../tikv_util" }
 time = "0.1"
