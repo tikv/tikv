@@ -18,7 +18,6 @@
 #![allow(redundant_semicolon)]
 // FIXME: ditto. probably a result of the above
 #![allow(clippy::no_effect)]
-#![allow(clippy::float_cmp)]
 
 #[macro_use]
 extern crate static_assertions;
