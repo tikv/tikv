@@ -5,10 +5,8 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["protobuf-codec"]
-protobuf-codec = ["raft/protobuf-codec"]
-prost-codec = ["raft/prost-codec", "prost"]
 failpoints = ["fail/failpoints"]
+prost-codec = ["prost"]
 
 [dependencies]
 backtrace = "0.3.9"
