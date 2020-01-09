@@ -50,7 +50,7 @@ use engine::rocks::util::{
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use keys::region_raft_prefix_len;
 use pd_client::{Config as PdConfig, PdClient};
-use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, VersionTrack, GB, KB, MB};
 use tikv_util::future_pool;
 use tikv_util::security::SecurityConfig;
 use tikv_util::time::duration_to_sec;
@@ -1544,7 +1544,7 @@ pub struct TiKvConfig {
     pub import: ImportConfig,
     #[config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
-    #[config(skip)]
+    #[config(submodule)]
     pub gc: GcConfig,
 }
 
@@ -1923,6 +1923,16 @@ type CfgResult<T> = Result<T, Box<dyn Error>>;
 
 pub trait ConfigManager: Send {
     fn dispatch(&mut self, _: ConfigChange) -> Result<(), Box<dyn Error>>;
+}
+
+impl<T> ConfigManager for Arc<VersionTrack<T>>
+where
+    T: Configuration + Sync + Send + 'static,
+{
+    fn dispatch(&mut self, change: ConfigChange) -> Result<(), Box<dyn Error>> {
+        self.update(|cfg: &mut T| cfg.update(change));
+        Ok(())
+    }
 }
 
 #[derive(PartialEq, Eq, Hash)]

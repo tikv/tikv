@@ -185,8 +185,13 @@ impl Simulator for ServerCluster {
             .pool_size(1)
             .create();
 
-        let debug_service =
-            DebugService::new(engines.clone(), pool, raft_router, gc_worker.clone(), false);
+        let debug_service = DebugService::new(
+            engines.clone(),
+            pool,
+            raft_router,
+            gc_worker.get_config_manager(),
+            false,
+        );
 
         // Create deadlock service.
         let deadlock_service = lock_mgr.deadlock_service();
