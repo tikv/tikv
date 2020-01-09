@@ -32,9 +32,16 @@ pub fn log_1_arg(arg: &Option<Real>) -> Result<Option<Real>> {
 
 #[inline]
 #[rpn_fn]
+#[allow(clippy::float_cmp)]
 pub fn log_2_arg(arg0: &Option<Real>, arg1: &Option<Real>) -> Result<Option<Real>> {
     Ok(match (arg0, arg1) {
-        (Some(base), Some(n)) => f64_to_real(n.log(**base)),
+        (Some(base), Some(n)) => {
+            if **base <= 0f64 || **base == 1f64 || **n <= 0f64 {
+                None
+            } else {
+                f64_to_real(n.log(**base))
+            }
+        }
         _ => None,
     })
 }
@@ -524,6 +531,9 @@ mod tests {
             (Some(2.0_f64), Some(1.0_f64), Some(Real::from(0.0_f64))),
             (Some(0.5_f64), Some(0.25_f64), Some(Real::from(2.0_f64))),
             (Some(-0.23323_f64), Some(2.0_f64), None),
+            (Some(0_f64), Some(123_f64), None),
+            (Some(1_f64), Some(123_f64), None),
+            (Some(1123_f64), Some(0_f64), None),
             (None, None, None),
             (Some(2.0_f64), None, None),
             (None, Some(2.0_f64), None),
