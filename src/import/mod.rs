@@ -39,7 +39,7 @@ mod sst_service;
 pub mod test_helpers;
 
 pub use self::config::Config;
-pub use self::errors::{Error, Result, error_inc};
+pub use self::errors::{error_inc, Error, Result};
 pub use self::kv_importer::KVImporter;
 pub use self::kv_server::ImportKVServer;
 pub use self::kv_service::ImportKVService;

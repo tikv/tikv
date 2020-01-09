@@ -35,9 +35,9 @@ use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
 };
-use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
+use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
-use crate::raftstore::store::{Callback, Config, PdTask, ReadResponse, RegionSnapshot};
+use crate::raftstore::store::{Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
@@ -1341,8 +1341,8 @@ impl Peer {
 
     fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         let mut propose_time = None;
-        let states = ready.read_states().iter().map(|state| {
-            let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
+        let states = ready.read_states.iter().map(|state| {
+            let uuid = Uuid::from_bytes(state.request_ctx.as_slice()).unwrap();
             (uuid, state.index)
         });
 

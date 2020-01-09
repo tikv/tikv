@@ -21,8 +21,8 @@ use engine::rocks::{IngestExternalFileOptions, SeekKey, SstReader, SstWriter, DB
 use engine::CF_WRITE;
 use external_storage::{create_storage, url_of_backend};
 
-use super::{Error, Result};
 use super::metrics::*;
+use super::{Error, Result};
 use crate::raftstore::store::keys;
 
 /// SSTImporter manages SST files that are waiting for ingesting.
