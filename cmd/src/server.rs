@@ -43,6 +43,7 @@ use tikv::{
             new_compaction_listener, LocalReader, SnapManagerBuilder,
         },
     },
+    read_pool::{ReadPool, ReadPoolRunner},
     server::{
         config::Config as ServerConfig,
         create_raft_storage,
@@ -60,6 +61,10 @@ use tikv_util::{
     security::SecurityManager,
     time::Monitor,
     worker::{FutureWorker, Worker},
+};
+use yatp::{
+    pool::CloneRunnerBuilder,
+    queue::{multilevel, QueueType},
 };
 
 /// Run a TiKV server. Returns when the server is shutdown by the user, in which
@@ -357,6 +362,7 @@ impl TiKVServer {
         gc_worker: &GcWorker<RaftKv<ServerRaftStoreRouter>>,
     ) -> Arc<ServerConfig> {
         let mut cfg_controller = self.cfg_controller.take().unwrap();
+        cfg_controller.register("gc", Box::new(gc_worker.get_config_manager()));
 
         // Create CoprocessorHost.
         let mut coprocessor_host = self.coprocessor_host.take().unwrap();
@@ -403,12 +409,35 @@ impl TiKVServer {
             .max_total_size(self.config.server.snap_max_total_size.0)
             .build(snap_path, Some(self.router.clone()));
 
+        let yatp_read_pool = if self.config.readpool.unify_read_pool {
+            let unified_read_pool_cfg = &self.config.readpool.unified;
+            let mut builder = yatp::Builder::new("yatp-read-pool");
+            builder
+                .min_thread_count(unified_read_pool_cfg.min_thread_count)
+                .max_thread_count(unified_read_pool_cfg.max_thread_count);
+            let multilevel_builder = multilevel::Builder::new(Default::default());
+            let read_pool_runner = ReadPoolRunner::new(engines.engine.clone(), Default::default());
+            let runner_builder =
+                multilevel_builder.runner_builder(CloneRunnerBuilder(read_pool_runner));
+            Some(builder.build_with_queue_and_runner(
+                QueueType::Multilevel(multilevel_builder),
+                runner_builder,
+            ))
+        } else {
+            None
+        };
+
         // Create coprocessor endpoint.
-        let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
-            &self.config.readpool.coprocessor,
-            pd_sender,
-            engines.engine.clone(),
-        );
+        let cop_read_pool = if self.config.readpool.unify_read_pool {
+            ReadPool::from(yatp_read_pool.as_ref().unwrap().remote().clone())
+        } else {
+            let cop_read_pools = coprocessor::readpool_impl::build_read_pool(
+                &self.config.readpool.coprocessor,
+                pd_sender,
+                engines.engine.clone(),
+            );
+            ReadPool::from(cop_read_pools)
+        };
 
         let server_config = Arc::new(self.config.server.clone());
 
@@ -422,6 +451,7 @@ impl TiKVServer {
             self.resolver.clone(),
             snap_mgr.clone(),
             gc_worker.clone(),
+            yatp_read_pool,
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
 
@@ -497,7 +527,7 @@ impl TiKVServer {
             engines.engines.clone(),
             pool.clone(),
             engines.raft_router.clone(),
-            gc_worker,
+            gc_worker.get_config_manager(),
             self.config.dynamic_config,
         );
         if servers
