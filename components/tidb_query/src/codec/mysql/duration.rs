@@ -22,15 +22,20 @@ pub const MICRO_WIDTH: usize = 6;
 const SECS_PER_HOUR: i64 = 3600;
 const SECS_PER_MINUTE: i64 = 60;
 
-const MAX_HOURS: u32 = 838;
-const MAX_MINUTES: u32 = 59;
-const MAX_SECONDS: u32 = 59;
-const MAX_NANOS: u32 = 999_999_999;
-const MAX_DURATION_VALUE: u32 = MAX_HOURS * 10000 + MAX_MINUTES * 100 + MAX_SECONDS;
+const MAX_HOUR_PART: u32 = 838;
+const MAX_MINUTE_PART: u32 = 59;
+const MAX_SECOND_PART: u32 = 59;
+const MAX_NANOS_PART: u32 = 999_999_999;
+const MAX_NANOS: i64 = ((MAX_HOUR_PART as i64 * SECS_PER_HOUR)
+    + MAX_MINUTE_PART as i64 * SECS_PER_MINUTE
+    + MAX_SECOND_PART as i64)
+    * NANOS_PER_SEC
+    + MAX_NANOS_PART as i64;
+const MAX_DURATION_INT_VALUE: u32 = MAX_HOUR_PART * 10000 + MAX_MINUTE_PART * 100 + MAX_SECOND_PART;
 
 #[inline]
-fn check_hour(hour: u32) -> Result<u32> {
-    if hour > MAX_HOURS {
+fn check_hour_part(hour: u32) -> Result<u32> {
+    if hour > MAX_HOUR_PART {
         Err(Error::Eval(
             "DURATION OVERFLOW".to_string(),
             ERR_DATA_OUT_OF_RANGE,
@@ -41,8 +46,8 @@ fn check_hour(hour: u32) -> Result<u32> {
 }
 
 #[inline]
-fn check_minute(minute: u32) -> Result<u32> {
-    if minute > MAX_MINUTES {
+fn check_minute_part(minute: u32) -> Result<u32> {
+    if minute > MAX_MINUTE_PART {
         Err(Error::truncated_wrong_val("MINUTES", minute))
     } else {
         Ok(minute)
@@ -50,8 +55,8 @@ fn check_minute(minute: u32) -> Result<u32> {
 }
 
 #[inline]
-fn check_second(second: u32) -> Result<u32> {
-    if second > MAX_SECONDS {
+fn check_second_part(second: u32) -> Result<u32> {
+    if second > MAX_SECOND_PART {
         Err(Error::truncated_wrong_val("SECONDS", second))
     } else {
         Ok(second)
@@ -59,8 +64,17 @@ fn check_second(second: u32) -> Result<u32> {
 }
 
 #[inline]
-fn check_nanos(nanos: u32) -> Result<u32> {
-    if nanos > MAX_NANOS {
+fn check_nanos_part(nanos: u32) -> Result<u32> {
+    if nanos > MAX_NANOS_PART {
+        Err(Error::truncated_wrong_val("NANOS", nanos))
+    } else {
+        Ok(nanos)
+    }
+}
+
+#[inline]
+fn check_nanos(nanos: i64) -> Result<i64> {
+    if nanos.abs() > MAX_NANOS {
         Err(Error::truncated_wrong_val("NANOS", nanos))
     } else {
         Ok(nanos)
@@ -68,7 +82,9 @@ fn check_nanos(nanos: u32) -> Result<u32> {
 }
 
 mod parser {
-    use super::{check_hour, check_minute, check_second, Error, NANO_WIDTH, TEN_POW};
+    use super::{
+        check_hour_part, check_minute_part, check_second_part, Error, NANO_WIDTH, TEN_POW,
+    };
     use nom::character::complete::{digit1, multispace0, multispace1};
     use nom::{
         alt, call, char, complete, cond, do_parse, eof, map, map_res, opt, peek, preceded, tag,
@@ -202,11 +218,11 @@ mod parser {
     fn hhmmss(input: &[u8]) -> IResult<&[u8], [Option<u32>; 3]> {
         do_parse!(
             input,
-            hour: opt!(map_res!(read_int, check_hour))
+            hour: opt!(map_res!(read_int, check_hour_part))
                 >> has_mintue: separator
-                >> minute: cond!(has_mintue, map_res!(read_int, check_minute))
+                >> minute: cond!(has_mintue, map_res!(read_int, check_minute_part))
                 >> has_second: separator
-                >> second: cond!(has_second, map_res!(read_int, check_second))
+                >> second: cond!(has_second, map_res!(read_int, check_second_part))
                 >> ([hour, minute, second])
         )
     }
@@ -255,10 +271,10 @@ fn round(nanos: i64, fsp: u8) -> i64 {
 }
 
 fn nano_from_parts(hour: u32, minute: u32, second: u32, nanos: u32) -> Result<i64> {
-    check_hour(hour)?;
-    check_minute(minute)?;
-    check_second(second)?;
-    check_nanos(nanos)?;
+    check_hour_part(hour)?;
+    check_minute_part(minute)?;
+    check_second_part(second)?;
+    check_nanos_part(nanos)?;
     let minute = minute as i64 + hour as i64 * 60;
     let second = second as i64 + minute * SECS_PER_MINUTE;
     let nanos = nanos as i64 + second * NANOS_PER_SEC;
@@ -369,12 +385,11 @@ impl Duration {
 
     pub fn from_secs(secs: i64, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        Ok(Duration {
-            nanos: secs.checked_mul(NANOS_PER_SEC).ok_or_else(|| {
-                Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE)
-            })?,
-            fsp,
-        })
+        let nanos = secs
+            .checked_mul(NANOS_PER_SEC)
+            .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
+        check_nanos(nanos)?;
+        Ok(Duration { nanos, fsp })
     }
 
     pub fn from_millis(millis: i64, fsp: i8) -> Result<Duration> {
@@ -383,6 +398,7 @@ impl Duration {
             .checked_mul(NANOS_PER_MILLI)
             .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
         let nanos = round(nanos, fsp);
+        check_nanos(nanos)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -392,11 +408,13 @@ impl Duration {
             .checked_mul(NANOS_PER_MICRO)
             .ok_or_else(|| Error::Eval("DURATION OVERFLOW".to_string(), ERR_DATA_OUT_OF_RANGE))?;
         let nanos = round(nanos, fsp);
+        check_nanos(nanos)?;
         Ok(Duration { nanos, fsp })
     }
 
     pub fn from_nanos(nanos: i64, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
+        check_nanos(nanos)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -412,6 +430,7 @@ impl Duration {
         let signum = if neg { -1 } else { 1 };
         let nanos = signum * nano_from_parts(hour, minute, second, nanos)?;
         let nanos = round(nanos, fsp);
+        check_nanos(nanos)?;
         Ok(Duration { nanos, fsp })
     }
 
@@ -465,22 +484,22 @@ impl Duration {
 
     /// Checked duration addition. Computes self + rhs, returning None if overflow occurred.
     pub fn checked_add(self, rhs: Duration) -> Option<Duration> {
-        let res = Duration {
-            nanos: self.nanos.checked_add(rhs.nanos)?,
+        let nanos = self.nanos.checked_add(rhs.nanos)?;
+        check_nanos(nanos).ok()?;
+        Some(Duration {
+            nanos,
             fsp: self.fsp.max(rhs.fsp),
-        };
-        check_hour(res.hours()).ok()?;
-        Some(res)
+        })
     }
 
     /// Checked duration subtraction. Computes self - rhs, returning None if overflow occurred.
     pub fn checked_sub(self, rhs: Duration) -> Option<Duration> {
-        let res = Duration {
-            nanos: self.nanos.checked_sub(rhs.nanos)?,
+        let nanos = self.nanos.checked_sub(rhs.nanos)?;
+        check_nanos(nanos).ok()?;
+        Some(Duration {
+            nanos,
             fsp: self.fsp.max(rhs.fsp),
-        };
-        check_hour(res.hours()).ok()?;
-        Some(res)
+        })
     }
 
     fn format(self, sep: &str) -> String {
@@ -518,7 +537,7 @@ impl Duration {
     }
 
     pub fn from_i64_without_ctx(n: i64, fsp: i8) -> Result<Duration> {
-        if n > i64::from(MAX_DURATION_VALUE) || n < -i64::from(MAX_DURATION_VALUE) {
+        if n > i64::from(MAX_DURATION_INT_VALUE) || n < -i64::from(MAX_DURATION_INT_VALUE) {
             // FIXME: parse as `DateTime` if `n >= 10000000000`
             return Err(Error::overflow("Duration", n));
         }
@@ -527,7 +546,7 @@ impl Duration {
         let minute = ((abs / 100) % 100) as u32;
         let second = (abs % 100) as u32;
 
-        if hour > MAX_HOURS || minute > MAX_MINUTES || second > MAX_SECONDS {
+        if hour > MAX_HOUR_PART || minute > MAX_MINUTE_PART || second > MAX_SECOND_PART {
             return Err(Error::Eval(
                 format!("invalid time format: '{}'", n),
                 ERR_TRUNCATE_WRONG_VALUE,
@@ -542,7 +561,14 @@ impl Duration {
             if e.is_overflow() {
                 ctx.handle_overflow_err(e)?;
                 // Returns max duration if overflow occurred
-                Self::new_from_parts(n.is_negative(), MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, fsp)
+                Self::new_from_parts(
+                    n.is_negative(),
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
+                    0,
+                    fsp,
+                )
             } else {
                 Err(e)
             }
@@ -743,6 +769,8 @@ mod tests {
             (b"-10:10:10", 0, Some("-10:10:10")),
             (b"-838:59:59", 0, Some("-838:59:59")),
             (b"838:59:59", 0, Some("838:59:59")),
+            (b"839:00:00", 0, None),
+            (b"-839:00:00", 0, None),
             (b"23:60:59", 0, None),
             (b"54:59:59", 0, Some("54:59:59")),
             (b"2011-11-11 00:00:01", 0, None),
@@ -946,9 +974,9 @@ mod tests {
     #[test]
     fn test_checked_add_and_sub_duration() {
         /// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
-        const MAX_TIME_IN_SECS: i64 = MAX_HOURS as i64 * SECS_PER_HOUR as i64
-            + MAX_MINUTES as i64 * SECS_PER_MINUTE
-            + MAX_SECONDS as i64;
+        const MAX_TIME_IN_SECS: i64 = MAX_HOUR_PART as i64 * SECS_PER_HOUR as i64
+            + MAX_MINUTE_PART as i64 * SECS_PER_MINUTE
+            + MAX_SECOND_PART as i64;
 
         let cases = vec![
             ("11:30:45.123456", "00:00:14.876545", "11:31:00.000001"),
@@ -1096,82 +1124,127 @@ mod tests {
             (
                 10000000000,
                 0,
-                Ok(
-                    Duration::new_from_parts(false, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, 0)
-                        .unwrap(),
-                ),
+                Ok(Duration::new_from_parts(
+                    false,
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
+                    0,
+                    0,
+                )
+                .unwrap()),
                 true,
             ),
             (
                 10000235959,
                 0,
-                Ok(
-                    Duration::new_from_parts(false, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, 0)
-                        .unwrap(),
-                ),
+                Ok(Duration::new_from_parts(
+                    false,
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
+                    0,
+                    0,
+                )
+                .unwrap()),
                 true,
             ),
             (
                 10000000001,
                 0,
-                Ok(
-                    Duration::new_from_parts(false, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, 0)
-                        .unwrap(),
-                ),
+                Ok(Duration::new_from_parts(
+                    false,
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
+                    0,
+                    0,
+                )
+                .unwrap()),
                 true,
             ),
             (
                 10000000000,
                 5,
-                Ok(
-                    Duration::new_from_parts(false, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, 5)
-                        .unwrap(),
-                ),
+                Ok(Duration::new_from_parts(
+                    false,
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
+                    0,
+                    5,
+                )
+                .unwrap()),
                 true,
             ),
             (
                 10000235959,
                 5,
-                Ok(
-                    Duration::new_from_parts(false, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, 5)
-                        .unwrap(),
-                ),
+                Ok(Duration::new_from_parts(
+                    false,
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
+                    0,
+                    5,
+                )
+                .unwrap()),
                 true,
             ),
             (
                 10000000001,
                 5,
-                Ok(
-                    Duration::new_from_parts(false, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, 5)
-                        .unwrap(),
-                ),
+                Ok(Duration::new_from_parts(
+                    false,
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
+                    0,
+                    5,
+                )
+                .unwrap()),
                 true,
             ),
             (
                 10000000000,
                 6,
-                Ok(
-                    Duration::new_from_parts(false, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, 6)
-                        .unwrap(),
-                ),
+                Ok(Duration::new_from_parts(
+                    false,
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
+                    0,
+                    6,
+                )
+                .unwrap()),
                 true,
             ),
             (
                 10000235959,
                 6,
-                Ok(
-                    Duration::new_from_parts(false, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, 6)
-                        .unwrap(),
-                ),
+                Ok(Duration::new_from_parts(
+                    false,
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
+                    0,
+                    6,
+                )
+                .unwrap()),
                 true,
             ),
             (
                 10000000001,
                 6,
-                Ok(
-                    Duration::new_from_parts(false, MAX_HOURS, MAX_MINUTES, MAX_SECONDS, 0, 6)
-                        .unwrap(),
-                ),
+                Ok(Duration::new_from_parts(
+                    false,
+                    MAX_HOUR_PART,
+                    MAX_MINUTE_PART,
+                    MAX_SECOND_PART,
+                    0,
+                    6,
+                )
+                .unwrap()),
                 true,
             ),
         ];
