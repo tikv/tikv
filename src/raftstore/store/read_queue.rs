@@ -72,7 +72,6 @@ pub struct ReadIndexQueue {
     contexts: HashMap<Uuid, usize>,
 
     retry_countdown: usize,
-    last_retried: usize,
 }
 
 impl ReadIndexQueue {
@@ -86,10 +85,8 @@ impl ReadIndexQueue {
             return false;
         }
 
-        debug_assert!(self.reads.len() + self.handled_cnt >= self.last_retried);
-        if self.reads.len() + self.handled_cnt > self.last_retried {
-            self.retry_countdown = cfg.raft_election_timeout_ticks;
-            self.last_retried = self.reads.len() + self.handled_cnt;
+        if self.retry_countdown == usize::MAX {
+            self.retry_countdown = cfg.raft_election_timeout_ticks.checked_sub(1).unwrap();
             return false;
         }
 
@@ -97,9 +94,8 @@ impl ReadIndexQueue {
             self.retry_countdown -= 1;
             return false;
         }
-        self.retry_countdown = cfg.raft_election_timeout_ticks;
 
-        self.last_retried = self.reads.len() + self.handled_cnt;
+        self.retry_countdown = cfg.raft_election_timeout_ticks;
         true
     }
 
@@ -121,7 +117,6 @@ impl ReadIndexQueue {
         self.contexts.clear();
         self.ready_cnt = 0;
         self.handled_cnt = 0;
-        self.last_retried = 0;
     }
 
     pub fn clear_uncommitted(&mut self, term: u64) {
@@ -142,6 +137,7 @@ impl ReadIndexQueue {
             self.contexts.insert(read.id, offset);
         }
         self.reads.push_back(read);
+        self.retry_countdown = usize::MAX;
     }
 
     pub fn back_mut(&mut self) -> Option<&mut ReadIndexRequest> {
