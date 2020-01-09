@@ -350,6 +350,7 @@ dependencies = [
  "test_raftstore",
  "test_util",
  "tikv",
+ "tikv_alloc",
  "tikv_util",
  "tokio-threadpool",
  "txn_types",
