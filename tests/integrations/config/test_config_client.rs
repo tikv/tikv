@@ -157,12 +157,13 @@ fn test_update_config() {
 
     // register config
     let mut cfg_handler = pd_client.clone().register(id, validated_cfg());
+    let mut cfg = cfg_handler.get_config().clone();
 
     // refresh local config
     cfg_handler.refresh_config(pd_client.clone()).unwrap();
 
     // nothing change if there are no update on pd side
-    assert_eq!(cfg_handler.get_config(), &validated_cfg());
+    assert_eq!(cfg_handler.get_config(), &cfg);
 
     // update config on pd side
     pd_client.update_cfg(id, |cfg| {
@@ -173,7 +174,6 @@ fn test_update_config() {
     cfg_handler.refresh_config(pd_client).unwrap();
 
     // config update
-    let mut cfg = validated_cfg();
     cfg.refresh_config_interval = ReadableDuration::hours(12);
     assert_eq!(cfg_handler.get_config(), &cfg);
 }
@@ -185,6 +185,7 @@ fn test_update_not_support_config() {
 
     // register config
     let mut cfg_handler = pd_client.clone().register(id, validated_cfg());
+    let cfg = cfg_handler.get_config().clone();
 
     // update not support config on pd side
     pd_client.update_cfg(id, |cfg| {
@@ -195,7 +196,7 @@ fn test_update_not_support_config() {
     cfg_handler.refresh_config(pd_client).unwrap();
 
     // nothing change
-    assert_eq!(cfg_handler.get_config(), &validated_cfg());
+    assert_eq!(cfg_handler.get_config(), &cfg);
 }
 
 #[test]
@@ -237,6 +238,7 @@ fn test_compatible_config() {
 
     // register config
     let mut cfg_handler = pd_client.clone().register(id, validated_cfg());
+    let mut cfg = cfg_handler.get_config().clone();
 
     // update config on pd side with misssing config, new config and exist config
     pd_client.update_raw(id, |cfg| {
@@ -252,9 +254,8 @@ fn test_compatible_config() {
     // refresh local config
     cfg_handler.refresh_config(pd_client).unwrap();
 
-    let mut new_cfg = validated_cfg();
-    new_cfg.raft_store.raft_log_gc_threshold = 2048;
-    assert_eq!(cfg_handler.get_config(), &new_cfg);
+    cfg.raft_store.raft_log_gc_threshold = 2048;
+    assert_eq!(cfg_handler.get_config(), &cfg);
 }
 
 #[test]
