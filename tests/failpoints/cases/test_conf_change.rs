@@ -214,8 +214,8 @@ fn test_stale_peer_cache() {
 // suppose there are 3 peers (1, 2, and 3) in a Raft group, and then
 // 1. propose to add peer 4 on the current leader 1;
 // 2. leader 1 appends entries to peer 3, and peer 3 applys them;
-// 3. leadersip is transfered to peer 2, and a new proposal to remove peer 4 is proposed;
-// 4. peer 2 sends a snapshot with latest configuration [1, 2, 3] to peer 3;
+// 3. a new proposal to remove peer 4 is proposed;
+// 4. peer 1 sends a snapshot with latest configuration [1, 2, 3] to peer 3;
 // 5. peer 3 restores the snapshot into memory;
 // 6. then peer 3 calling `Raft::apply_conf_change` to add peer 4;
 // 7. so the disk configuration `[1, 2, 3]` is different from memory configuration `[1, 2, 3, 4]`.
@@ -227,7 +227,6 @@ fn test_redundant_conf_change_by_snapshot() {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
     cluster.cfg.raft_store.merge_max_log_gap = 4;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    // cluster.cfg.raft_store.hibernate_regions = false;
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -250,18 +249,13 @@ fn test_redundant_conf_change_by_snapshot() {
     );
     cluster.sim.wl().add_recv_filter(3, filter);
 
-    // Transfer leader to peer 2, and append more entries to compact raft logs.
-    cluster.must_transfer_leader(1, new_peer(2, 2));
+    // propose to remove peer 4, and append more entries to compact raft logs.
     cluster.pd_client.must_remove_peer(1, new_peer(4, 4));
     (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
     sleep_ms(50);
 
     // Clear filters on peer 3, so it can receive and restore a snapshot.
     cluster.sim.wl().clear_recv_filters(3);
-    sleep_ms(100);
-
-    // Unpause the fail point, so peer 3 can apply the redundant conf change result.
-    fail::cfg("apply_on_conf_change_3_1", "off").unwrap();
     sleep_ms(100);
 
     // Use a filter to capture messages sent from 3 to 4.
@@ -279,6 +273,10 @@ fn test_redundant_conf_change_by_snapshot() {
             .set_msg_callback(cb),
     );
     cluster.sim.wl().add_send_filter(3, filter);
+
+    // Unpause the fail point, so peer 3 can apply the redundant conf change result.
+    fail::cfg("apply_on_conf_change_3_1", "off").unwrap();
+    sleep_ms(100);
 
     cluster.must_transfer_leader(1, new_peer(3, 3));
     assert!(rx.try_recv().is_err());
